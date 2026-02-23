@@ -405,7 +405,7 @@ void stk_critical_section_exit(void);
 
 // ───── Mutex ─────────────────────────────────────────────────────────────────
 
-/*! \brief     A memory size (multiples of size_t) required for a Mutex instance.
+/*! \brief     A memory size (multiples of size_t) required for Mutex instance.
 */
 #define STK_MUTEX_IMPL_SIZE (10 + (STK_SYNC_DEBUG_NAMES ? 1 : 0))
 
@@ -456,7 +456,7 @@ bool stk_mutex_timed_lock(stk_mutex_t *mtx, int32_t timeout);
 
 // ───── SpinLock ──────────────────────────────────────────────────────────────
 
-/*! \brief     A memory size (multiples of size_t) required for a SpinLock instance.
+/*! \brief     A memory size (multiples of size_t) required for SpinLock instance.
 */
 #define STK_SPINLOCK_IMPL_SIZE (1)
 
@@ -498,7 +498,7 @@ void stk_spinlock_unlock(stk_spinlock_t *lock);
 
 // ───── Condition Variable ────────────────────────────────────────────────────
 
-/*! \brief     A memory size (multiples of size_t) required for a ConditionVariable instance.
+/*! \brief     A memory size (multiples of size_t) required for ConditionVariable instance.
 */
 #define STK_CV_IMPL_SIZE (7 + (STK_SYNC_DEBUG_NAMES ? 1 : 0))
 
@@ -546,7 +546,7 @@ void stk_cv_notify_all(stk_cv_t *cv);
 
 // ───── Event ─────────────────────────────────────────────────────────────────
 
-/*! \brief     A memory size (multiples of size_t) required for an Event instance.
+/*! \brief     A memory size (multiples of size_t) required for Event instance.
 */
 #define STK_EVENT_IMPL_SIZE (8 + (STK_SYNC_DEBUG_NAMES ? 1 : 0))
 
@@ -603,7 +603,7 @@ void stk_event_pulse(stk_event_t *ev);
 
 // ───── Semaphore ─────────────────────────────────────────────────────────────
 
-/*! \brief     A memory size (multiples of size_t) required for a Semaphore instance.
+/*! \brief     A memory size (multiples of size_t) required for Semaphore instance.
 */
 #define STK_SEM_IMPL_SIZE (8 + (STK_SYNC_DEBUG_NAMES ? 1 : 0))
 
@@ -649,7 +649,7 @@ void stk_sem_signal(stk_sem_t *sem);
 */
 #define STK_PIPE_SIZE 16
 
-/*! \brief     A memory size (multiples of size_t) required for a Pipe instance.
+/*! \brief     A memory size (multiples of size_t) required for Pipe instance.
     \note      Sized for Pipe<size_t, 16>. Adjust if template parameters change.
 */
 #define STK_PIPE_IMPL_SIZE ((27 + (STK_SYNC_DEBUG_NAMES ? 3 : 0)) + STK_PIPE_SIZE)
@@ -715,6 +715,87 @@ size_t stk_pipe_read_bulk(stk_pipe_t *pipe, size_t *dst, size_t count, int32_t t
     \return    Current element count.
 */
 size_t stk_pipe_get_size(stk_pipe_t *pipe);
+
+// ───── RWMutex (Reader-Writer Lock) ──────────────────────────────────────────
+
+/*! \brief     A memory size (multiples of size_t) required for RWMutex instance.
+*/
+#define STK_RWMUTEX_IMPL_SIZE (17 + (STK_SYNC_DEBUG_NAMES ? 3 : 0))
+
+/*! \brief     Opaque memory container for an RWMutex instance.
+*/
+typedef struct stk_rwmutex_mem_t {
+    size_t data[STK_RWMUTEX_IMPL_SIZE] __stk_c_stack_attr;
+} stk_rwmutex_mem_t;
+
+/*! \brief     Opaque handle to an RWMutex instance.
+*/
+typedef struct stk_rwmutex_t stk_rwmutex_t;
+
+/*! \brief     Create an RWMutex (using provided memory).
+    \param[in] memory: Pointer to static memory container.
+    \param[in] memory_size: Size of the container (must be >= sizeof(stk_rwmutex_mem_t)).
+    \return    RWMutex handle, or NULL if memory is too small.
+*/
+stk_rwmutex_t *stk_rwmutex_create(stk_rwmutex_mem_t *memory, uint32_t memory_size);
+
+/*! \brief     Destroy an RWMutex.
+    \param[in] rw: RWMutex handle.
+*/
+void stk_rwmutex_destroy(stk_rwmutex_t *rw);
+
+/*! \brief     Acquire the lock for shared reading. Blocks until available.
+    \details   Blocks if a writer is currently active or writers are waiting
+               (Writer Preference Policy).
+    \param[in] rw: RWMutex handle.
+*/
+void stk_rwmutex_read_lock(stk_rwmutex_t *rw);
+
+/*! \brief     Try to acquire the read lock without blocking.
+    \param[in] rw: RWMutex handle.
+    \return    True if the read lock was acquired, False if a writer is active or waiting.
+*/
+bool stk_rwmutex_try_read_lock(stk_rwmutex_t *rw);
+
+/*! \brief     Try to acquire the read lock with a timeout.
+    \param[in] rw: RWMutex handle.
+    \param[in] timeout: Max time to wait (ticks). Use STK_NO_WAIT for non-blocking.
+    \return    True if acquired, False on timeout.
+*/
+bool stk_rwmutex_timed_read_lock(stk_rwmutex_t *rw, int32_t timeout);
+
+/*! \brief     Release the shared reader lock.
+    \details   If this is the last active reader, waiting writers are notified.
+    \param[in] rw: RWMutex handle.
+*/
+void stk_rwmutex_read_unlock(stk_rwmutex_t *rw);
+
+/*! \brief     Acquire the lock for exclusive writing. Blocks until available.
+    \details   Blocks until all active readers have released their locks and no
+               other writer is active.
+    \param[in] rw: RWMutex handle.
+*/
+void stk_rwmutex_lock(stk_rwmutex_t *rw);
+
+/*! \brief     Try to acquire the write lock without blocking.
+    \param[in] rw: RWMutex handle.
+    \return    True if the exclusive lock was acquired, False otherwise.
+*/
+bool stk_rwmutex_trylock(stk_rwmutex_t *rw);
+
+/*! \brief     Try to acquire the write lock with a timeout.
+    \param[in] rw: RWMutex handle.
+    \param[in] timeout: Max time to wait (ticks). Use STK_NO_WAIT for non-blocking.
+    \return    True if acquired, False on timeout.
+*/
+bool stk_rwmutex_timed_lock(stk_rwmutex_t *rw, int32_t timeout);
+
+/*! \brief     Release the exclusive writer lock.
+    \details   Prioritizes waking waiting writers. If none are waiting, all
+               waiting readers are woken (Writer Preference Policy).
+    \param[in] rw: RWMutex handle.
+*/
+void stk_rwmutex_unlock(stk_rwmutex_t *rw);
 
 #ifdef __cplusplus
 }

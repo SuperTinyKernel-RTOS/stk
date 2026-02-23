@@ -67,6 +67,7 @@ public:
 
     /*! \brief     Acquire lock.
         \param[in] timeout: Maximum time to wait (ticks).
+        \note      Maximum number of recursive locks must not exceed 65534 (UINT16_MAX - 1).
         \warning   ISR-unsafe.
         \return    True if lock acquired, false if timeout occurred.
     */
@@ -92,7 +93,7 @@ private:
     bool Tick();
 
     TId      m_owner_tid; //!< thread id of the current owner
-    uint32_t m_count;     //!< recursion depth
+    uint16_t m_count;     //!< recursion depth
 };
 
 inline bool Mutex::TimedLock(Timeout timeout)
@@ -108,8 +109,9 @@ inline bool Mutex::TimedLock(Timeout timeout)
     // already owned by the calling thread (recursive path)
     if ((m_count != 0) && (m_owner_tid == current_tid))
     {
+        STK_ASSERT(m_count <= (UINT16_MAX - 1));
+
         ++m_count;
-        STK_ASSERT(m_count <= UINT16_MAX);
         return true;
     }
 

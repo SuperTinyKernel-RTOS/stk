@@ -11,8 +11,8 @@
 #define STK_SYNC_RWMUTEX_H_
 
 #include "stk_common.h"
+#include "stk_sync_cs.h"
 #include "stk_sync_cv.h"
-#include "stk_sync_mutex.h"
 
 /*! \file  stk_sync_rwmutex.h
     \brief Implementation of synchronization primitive: Read-Write Mutex.
@@ -22,7 +22,7 @@ namespace stk {
 namespace sync {
 
 /*! \class RWMutex
-    \brief Reader-Writer Lock synchronization primitive for shared and exclusive access.
+    \brief Reader-Writer Lock synchronization primitive for non-recursive shared and exclusive access.
 
     RWMutex allows multiple tasks to read a shared resource simultaneously (shared access)
     while ensuring that only one task can write to the resource at a time (exclusive access).
@@ -32,6 +32,10 @@ namespace sync {
     \note  **Writer Preference Policy**: To prevent "writer starvation," this implementation
            prioritizes waiting writers. If a writer is waiting for the lock, new readers
            will be blocked until the writer has completed its operation.
+
+    \note Maximum number of waiting tasks must not exceed 65534 (UINT16_MAX - 1).
+
+    \note It is non-recursive implementation.
 
     \code
     // Example: Protecting app settings
@@ -54,13 +58,19 @@ namespace sync {
 
     \see   Mutex, ConditionVariable, ScopedReadMutex
 */
-class RWMutex : public IMutex
+class RWMutex : public IMutex, public ITraceable
 {
 public:
     /*! \brief     Constructor.
     */
     explicit RWMutex() : m_readers(0), m_writers_waiting(0), m_writer_active(false)
     {}
+
+    /*! \brief     Destructor.
+        \note      If tasks are still waiting at destruction time it is considered a logical error (dangling waiters).
+                   An assertion is triggered in debug builds.
+    */
+    ~RWMutex() { STK_ASSERT((m_readers == 0) && (m_writers_waiting == 0) && !m_writer_active); }
 
     /*! \class ScopedTimedLock
         \brief RAII wrapper for attempting exclusive write access with a timeout.
@@ -107,6 +117,7 @@ public:
 
     /*! \brief     Acquire the lock for shared reading with a timeout.
         \param[in] timeout: Maximum time to wait (ticks).
+        \note      Non-recursive.
         \return    True if lock acquired, false if timeout occurred.
         \warning   ISR-unsafe.
     */
@@ -115,6 +126,7 @@ public:
     /*! \brief     Acquire the lock for shared reading.
         \details   Blocks the calling task if a writer is currently active or if there
                    are writers waiting to acquire the lock.
+        \note      Non-recursive.
         \warning   ISR-unsafe.
     */
     void ReadLock() { (void)TimedReadLock(WAIT_INFINITE); }
@@ -122,6 +134,7 @@ public:
     /*! \brief     Attempt to acquire the lock for shared reading without blocking.
         \details   Checks if a writer is active or waiting. If the resource is available
                    for reading, it increments the reader count and returns immediately.
+        \note      Non-recursive.
         \return    True if the read lock was acquired, false if a writer is active or waiting.
         \warning   ISR-unsafe.
     */
@@ -137,6 +150,7 @@ public:
     /*! \brief     Acquire the lock for exclusive writing with a timeout.
         \param[in] timeout: Maximum time to wait (ticks).
         \return    True if lock acquired, false if timeout occurred.
+        \note      Non-recursive.
         \warning   ISR-unsafe.
     */
     bool TimedLock(Timeout timeout);
@@ -144,12 +158,14 @@ public:
     /*! \brief     Acquire the lock for exclusive writing (IMutex interface).
         \details   Blocks the calling task until all active readers have released their
                    locks and no other writer is active.
+        \note      Non-recursive.
         \warning   ISR-unsafe.
     */
     void Lock() { (void)TimedLock(WAIT_INFINITE); }
 
     /*! \brief     Attempt to acquire the lock for exclusive writing without blocking.
         \details   Checks if any readers are active or if another writer is active.
+        \note      Non-recursive.
         \return    True if the exclusive lock was acquired, false otherwise.
         \warning   ISR-unsafe.
     */
@@ -163,11 +179,10 @@ public:
     void Unlock();
 
 private:
-    Mutex             m_mutex;           //!< protects internal state
     ConditionVariable m_cv_readers;      //!< signaled when readers can proceed
     ConditionVariable m_cv_writers;      //!< signaled when a writer can proceed
-    uint32_t          m_readers;         //!< current active readers
-    uint32_t          m_writers_waiting; //!< count of writers waiting for access
+    uint16_t          m_readers;         //!< current active readers
+    uint16_t          m_writers_waiting; //!< count of writers waiting for access
     bool              m_writer_active;   //!< true if a writer currently holds the lock
 };
 
@@ -176,17 +191,19 @@ inline bool RWMutex::TimedReadLock(Timeout timeout)
     // not supported inside ISR
     STK_ASSERT(!hw::IsInsideISR());
 
-    Mutex::ScopedLock guard(m_mutex);
+    ScopedCriticalSection __cs;
 
     // wait if there is an active writer or if writers are waiting
-    while (m_writer_active || (m_writers_waiting > 0))
+    while (m_writer_active || (m_writers_waiting != 0))
     {
-        if (!m_cv_readers.Wait(m_mutex, timeout))
+        if (!m_cv_readers.Wait(__cs, timeout))
             return false; // timeout
 
         // after waking, the loop re-checks the condition because another writer
         // might have queued up in the meantime (Writer Preference).
     }
+
+    STK_ASSERT(m_readers < (UINT16_MAX - 1));
 
     ++m_readers;
     return true;
@@ -198,7 +215,9 @@ inline void RWMutex::ReadUnlock()
     // mutex operations are not supported inside ISR
     STK_ASSERT(!hw::IsInsideISR());
 
-    Mutex::ScopedLock guard(m_mutex);
+    ScopedCriticalSection __cs;
+
+    STK_ASSERT(m_readers != 0);
 
     // wake a waiting writer if this was the last reader
     if (--m_readers == 0)
@@ -210,14 +229,16 @@ inline bool RWMutex::TimedLock(Timeout timeout)
     // mutex operations are not supported inside ISR
     STK_ASSERT(!hw::IsInsideISR());
 
-    Mutex::ScopedLock guard(m_mutex);
+    ScopedCriticalSection __cs;
+
+    STK_ASSERT(m_writers_waiting < (UINT16_MAX - 1));
 
     ++m_writers_waiting;
 
     // wait until there are no active readers and no active writer
-    while (m_writer_active || m_readers > 0)
+    while (m_writer_active || (m_readers != 0))
     {
-        if (!m_cv_writers.Wait(m_mutex, timeout))
+        if (!m_cv_writers.Wait(__cs, timeout))
         {
             // decrement waiting count on timeout and return
             --m_writers_waiting;
@@ -235,12 +256,12 @@ inline void RWMutex::Unlock()
     // mutex operations are not supported inside ISR
     STK_ASSERT(!hw::IsInsideISR());
 
-    Mutex::ScopedLock guard(m_mutex);
+    ScopedCriticalSection __cs;
 
     m_writer_active = false;
 
     // prioritize waking waiting writers, otherwise wake all readers
-    if (m_writers_waiting > 0)
+    if (m_writers_waiting != 0)
         m_cv_writers.NotifyOne();
     else
         m_cv_readers.NotifyAll();
