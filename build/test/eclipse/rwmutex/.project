@@ -156,14 +156,19 @@
 			<locationURI>PARENT-4-PROJECT_LOC/stk/include/sync/stk_sync_event.h</locationURI>
 		</link>
 		<link>
-			<name>deps/stk/include/sync/stk_sync_rwmutex.h</name>
+			<name>deps/stk/include/sync/stk_sync_mutex.h</name>
 			<type>1</type>
-			<locationURI>PARENT-4-PROJECT_LOC/stk/include/sync/stk_sync_rwmutex.h</locationURI>
+			<locationURI>PARENT-4-PROJECT_LOC/stk/include/sync/stk_sync_mutex.h</locationURI>
 		</link>
 		<link>
 			<name>deps/stk/include/sync/stk_sync_pipe.h</name>
 			<type>1</type>
 			<locationURI>PARENT-4-PROJECT_LOC/stk/include/sync/stk_sync_pipe.h</locationURI>
+		</link>
+		<link>
+			<name>deps/stk/include/sync/stk_sync_rwmutex.h</name>
+			<type>1</type>
+			<locationURI>PARENT-4-PROJECT_LOC/stk/include/sync/stk_sync_rwmutex.h</locationURI>
 		</link>
 		<link>
 			<name>deps/stk/include/sync/stk_sync_semaphore.h</name>

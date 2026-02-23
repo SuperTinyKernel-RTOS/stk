@@ -54,6 +54,7 @@ class ScopedCriticalSection : private IMutex
 {
     friend class Event;
     friend class Mutex;
+    friend class RWMutex;
     friend class Semaphore;
     template <typename T, size_t N> friend class Pipe;
 

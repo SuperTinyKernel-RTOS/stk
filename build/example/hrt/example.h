@@ -13,6 +13,12 @@
 #include <assert.h>
 #include "../driver/led.h"
 
-extern "C" void RunExample();
+#ifdef __cplusplus
+    #define STK_EXTERN extern "C"
+#else
+    #define STK_EXTERN extern
+#endif
+
+STK_EXTERN void RunExample();
 
 #endif /* EXAMPLE_H_ */

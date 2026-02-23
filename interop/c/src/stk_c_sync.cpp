@@ -326,4 +326,84 @@ size_t stk_pipe_get_size(stk_pipe_t *pipe)
     return pipe->handle.GetSize();
 }
 
+// ---------------------------------------------------------------------------
+// RWMutex (Reader-Writer Lock)
+// ---------------------------------------------------------------------------
+struct stk_rwmutex_t
+{
+    sync::RWMutex handle;
+};
+
+stk_rwmutex_t *stk_rwmutex_create(stk_rwmutex_mem_t *memory, uint32_t memory_size)
+{
+    STK_ASSERT(memory != nullptr);
+    STK_ASSERT(memory_size >= sizeof(stk_rwmutex_t));
+    if (memory_size < sizeof(stk_rwmutex_t))
+        return nullptr;
+
+    return (stk_rwmutex_t *)new (memory->data) stk_rwmutex_t{};
+}
+
+void stk_rwmutex_destroy(stk_rwmutex_t *rw)
+{
+    if (rw != nullptr)
+        rw->~stk_rwmutex_t();
+}
+
+void stk_rwmutex_read_lock(stk_rwmutex_t *rw)
+{
+    STK_ASSERT(rw != nullptr);
+
+    rw->handle.ReadLock();
+}
+
+bool stk_rwmutex_try_read_lock(stk_rwmutex_t *rw)
+{
+    STK_ASSERT(rw != nullptr);
+
+    return rw->handle.TryReadLock();
+}
+
+bool stk_rwmutex_timed_read_lock(stk_rwmutex_t *rw, int32_t timeout)
+{
+    STK_ASSERT(rw != nullptr);
+
+    return rw->handle.TimedReadLock(timeout);
+}
+
+void stk_rwmutex_read_unlock(stk_rwmutex_t *rw)
+{
+    STK_ASSERT(rw != nullptr);
+
+    rw->handle.ReadUnlock();
+}
+
+void stk_rwmutex_lock(stk_rwmutex_t *rw)
+{
+    STK_ASSERT(rw != nullptr);
+
+    rw->handle.Lock();
+}
+
+bool stk_rwmutex_trylock(stk_rwmutex_t *rw)
+{
+    STK_ASSERT(rw != nullptr);
+
+    return rw->handle.TryLock();
+}
+
+bool stk_rwmutex_timed_lock(stk_rwmutex_t *rw, int32_t timeout)
+{
+    STK_ASSERT(rw != nullptr);
+
+    return rw->handle.TimedLock(timeout);
+}
+
+void stk_rwmutex_unlock(stk_rwmutex_t *rw)
+{
+    STK_ASSERT(rw != nullptr);
+
+    rw->handle.Unlock();
+}
+
 } // extern "C"
