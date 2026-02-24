@@ -148,7 +148,7 @@ __stk_forceinline int64_t GetMsecFromTicks(int64_t ticks, int32_t resolution)
     \param[in] resolution: Resolution (see IKernelService::GetTickResolution).
     \return    Ticks.
 */
-__stk_forceinline int64_t GetTicksFromMsec(int64_t msec, int32_t resolution)
+__stk_forceinline Ticks GetTicksFromMsec(int64_t msec, int32_t resolution)
 {
     return msec * 1000 / resolution;
 }
@@ -157,7 +157,7 @@ __stk_forceinline int64_t GetTicksFromMsec(int64_t msec, int32_t resolution)
     \note      ISR-safe.
     \return    Ticks.
 */
-__stk_forceinline int64_t GetTicks()
+__stk_forceinline Ticks GetTicks()
 {
     return IKernelService::GetInstance()->GetTicks();
 }
@@ -170,6 +170,15 @@ __stk_forceinline int64_t GetTicks()
 __stk_forceinline int32_t GetTickResolution()
 {
     return IKernelService::GetInstance()->GetTickResolution();
+}
+
+/*! \brief     Get ticks from milliseconds.
+    \param[in] msec: Milliseconds to convert.
+    \return    Ticks.
+*/
+__stk_forceinline Ticks GetTicksFromMsec(int64_t msec)
+{
+    return GetTicksFromMsec(msec, GetTickResolution());
 }
 
 /*! \brief     Get current time in milliseconds.
@@ -212,8 +221,6 @@ __stk_forceinline void Sleep(uint32_t msec)
     // ISR blocks scheduler and will wait indefinitely (deadlock)
     STK_ASSERT(!hw::IsInsideISR());
 
-    hw::CriticalSection::Enter();
-
     IKernelService::GetInstance()->Sleep(msec);
 }
 
@@ -224,8 +231,6 @@ __stk_forceinline void Yield()
 {
     // ISR blocks scheduler and will wait indefinitely (deadlock)
     STK_ASSERT(!hw::IsInsideISR());
-
-    hw::CriticalSection::Enter();
 
     IKernelService::GetInstance()->SwitchToNext();
 }

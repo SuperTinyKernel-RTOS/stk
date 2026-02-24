@@ -68,9 +68,7 @@ extern "C" {
 /*! \def       __stk_c_stack_attr
     \brief     Stack attribute (applies required alignment).
 */
-#ifdef __GNUC__
-    #define __stk_c_stack_attr __attribute__((aligned(16)))
-#elif defined(__ICCARM__)
+#if defined(__GNUC__) || defined(__clang__) || defined(__ICCARM__)
     #define __stk_c_stack_attr __attribute__((aligned(16)))
 #else
     #define __stk_c_stack_attr

@@ -265,7 +265,7 @@ public:
         return m_resolution;
     }
 
-    void Delay(Timeout delay_ms) const
+    void Delay(Timeout delay_ms)
     {
         (void)delay_ms;
     }

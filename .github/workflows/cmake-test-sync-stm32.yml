@@ -1,0 +1,116 @@
+name: Test - All stk::sync (QEMU, Arm Cortex-M0,M4)
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+env:
+  BUILD_TYPE: Release
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        test:
+          - name: sync::Event
+            cmake_flag: TEST_EVENT=ON
+            elf: test-event.elf
+            dir: event
+
+          - name: sync::Mutex
+            cmake_flag: TEST_MUTEX=ON
+            elf: test-mutex.elf
+            dir: mutex
+
+          - name: sync::Pipe
+            cmake_flag: TEST_PIPE=ON
+            elf: test-pipe.elf
+            dir: pipe
+
+          - name: sync::RWMutex
+            cmake_flag: TEST_RWMUTEX=ON
+            elf: test-rwmutex.elf
+            dir: rwmutex
+
+          - name: sync::Semaphore
+            cmake_flag: TEST_SEMAPHORE=ON
+            elf: test-semaphore.elf
+            dir: semaphore
+
+          - name: sync::SpinLock
+            cmake_flag: TEST_SPINLOCK=ON
+            elf: test-spinlock.elf
+            dir: spinlock
+
+          - name: sync::ConditionVariable
+            cmake_flag: TEST_CONDVAR=ON
+            elf: test-condvar.elf
+            dir: condvar
+
+        board:
+          - name: "STM32F0DISCOVERY"
+            cmake_flags: -DVENDOR_STM32=ON -DTARGET_CORTEX_M0=ON -DTARGET_CPU_FAMILY=STM32F051x8
+            cpu: cortex-m0
+            board: STM32F0-Discovery
+
+          - name: "STM32F407DISC1"
+            cmake_flags: -DVENDOR_STM32=ON -DTARGET_CORTEX_M4=ON -DTARGET_CPU_FAMILY=STM32F407xx
+            cpu: cortex-m4
+            board: STM32F4-Discovery
+
+    runs-on: ubuntu-22.04
+
+    name: "${{matrix.test.name}} / ${{matrix.board.name}}"
+
+    steps:
+    - name: Install GCC arm-none-eabi
+      uses: carlosperate/arm-none-eabi-gcc-action@v1
+
+    - name: GCC version
+      run: arm-none-eabi-gcc --version
+
+    - name: Checkout
+      uses: actions/checkout@v3
+
+    - name: Configure CMake
+      run: >
+        cmake -G "Unix Makefiles"
+        -B ${{github.workspace}}/build
+        -DCMAKE_TOOLCHAIN_FILE=build/cmake/toolchain/arm-none-eabi-gcc.cmake
+        ${{matrix.board.cmake_flags}}
+        -DENABLE_LTO=ON
+        -DENABLE_SMALL=ON
+        -DBUILD_LIB=ON
+        -DBUILD_TESTS=ON
+        -DTEST_GENERIC=OFF
+        -D${{matrix.test.cmake_flag}}
+
+    - name: Build
+      run: cmake --build ${{github.workspace}}/build --config ${{env.BUILD_TYPE}} --parallel 4
+
+    - name: Setup Docker Buildx
+      uses: docker/setup-buildx-action@v2
+
+    - name: Docker build
+      uses: docker/build-push-action@v3
+      with:
+        context: .
+        file: build/test/qemu/Dockerfile
+        tags: stk-qemu:latest
+        load: true
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+    - name: Prepare
+      run: chmod +x build/test/qemu/stk-qemu.sh && chmod +x build/test/qemu/test.sh
+
+    - name: Test (${{matrix.test.name}})
+      run: >
+        sh build/test/qemu/test.sh
+        ${{matrix.board.cpu}}
+        ${{matrix.board.board}}
+        ${{github.workspace}}/build/test/${{matrix.test.dir}}
+        ${{matrix.test.elf}}

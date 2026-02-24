@@ -267,6 +267,20 @@
 */
 #define STK_MAX(A, B) ((A) > (B) ? (A) : (B))
 
+/*! \def   STK_ENDIAN_IDX_HI
+    \brief Endian dependent high index value.
+*/
+/*! \def   STK_ENDIAN_IDX_LO
+    \brief Endian dependent low index value.
+*/
+#if defined(__BYTE_ORDER__) && (__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__)
+    #define STK_ENDIAN_IDX_HI (0)
+    #define STK_ENDIAN_IDX_LO (1)
+#else
+    #define STK_ENDIAN_IDX_HI (1)
+    #define STK_ENDIAN_IDX_LO (0)
+#endif
+
 /*! \namespace stk
     \brief     Namespace of STK package.
  */

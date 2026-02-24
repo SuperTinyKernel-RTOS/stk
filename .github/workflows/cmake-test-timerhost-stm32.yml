@@ -1,4 +1,4 @@
-name: Test - sync::SpinLock (QEMU, Arm Cortex-M0,M4)
+name: Test - time::TimerHost (QEMU, Arm Cortex-M0,M4)
 
 on:
   push:
@@ -30,9 +30,6 @@ jobs:
             cpu: cortex-m4
             board: STM32F4-Discovery
 
-    # The CMake configure and build commands are platform agnostic and should work equally well on Windows or Mac.
-    # You can convert this to a matrix build if you need cross-platform coverage.
-    # See: https://docs.github.com/en/free-pro-team@latest/actions/learn-github-actions/managing-complex-workflows#using-a-build-matrix
     runs-on: ubuntu-22.04
 
     steps:
@@ -46,7 +43,7 @@ jobs:
       uses: actions/checkout@v3
 
     - name: ${{matrix.name}}
-      run: cmake -G "Unix Makefiles" -B ${{github.workspace}}/build -DCMAKE_TOOLCHAIN_FILE=build/cmake/toolchain/arm-none-eabi-gcc.cmake ${{matrix.cmake_flags}} -DENABLE_LTO=ON -DENABLE_SMALL=ON -DBUILD_LIB=ON -DBUILD_TESTS=ON -DTEST_GENERIC=OFF -DTEST_SPINLOCK=ON
+      run: cmake -G "Unix Makefiles" -B ${{github.workspace}}/build -DCMAKE_TOOLCHAIN_FILE=build/cmake/toolchain/arm-none-eabi-gcc.cmake ${{matrix.cmake_flags}} -DENABLE_LTO=ON -DENABLE_SMALL=ON -DBUILD_LIB=ON -DBUILD_TESTS=ON -DTEST_GENERIC=OFF -DTEST_TIMERHOST=ON
 
     - name: Build
       run: cmake --build ${{github.workspace}}/build --config ${{env.BUILD_TYPE}} --parallel 4
@@ -67,5 +64,5 @@ jobs:
     - name: Prepare
       run: chmod +x build/test/qemu/stk-qemu.sh && chmod +x build/test/qemu/test.sh
 
-    - name: Test (sync::SpinLock)
-      run: sh build/test/qemu/test.sh ${{matrix.cpu}} ${{matrix.board}} ${{github.workspace}}/build/test/spinlock test-spinlock.elf
+    - name: Test (time::TimerHost)
+      run: sh build/test/qemu/test.sh ${{matrix.cpu}} ${{matrix.board}} ${{github.workspace}}/build/test/timerhost test-timerhost.elf

@@ -188,22 +188,24 @@ private:
             g_TestMutex.Unlock();
         }
         else
+        if (m_task_id == 1)
         {
-            // Task 1: Try to acquire while held
+            // Task 1: Try to acquire while held — must fail immediately
             stk::Sleep(_STK_MUTEX_TEST_SHORT_SLEEP); // Let task 0 acquire first
-            
+
             int64_t start = GetTimeNowMsec();
             bool acquired = g_TestMutex.TryLock();
             int64_t elapsed = GetTimeNowMsec() - start;
-            
-            if (!acquired && (elapsed < _STK_MUTEX_TEST_SHORT_SLEEP)) // Should fail immediately
+
+            if (!acquired && (elapsed < _STK_MUTEX_TEST_SHORT_SLEEP))
                 g_TestResult = 1;
             else
                 g_TestResult = 0;
-            
+
             if (acquired)
                 g_TestMutex.Unlock();
         }
+        // Tasks 2+ are not used by this test
 
         ++g_InstancesDone;
     }
@@ -539,6 +541,25 @@ static void ResetTestState()
 } // namespace test
 } // namespace stk
 
+/*! \fn    NeedsExtendedTasks
+    \brief Returns true if the test requires tasks 3 and 4.
+    \note  TryLock uses only tasks 0-1; TimedLock uses only tasks 0-2.
+*/
+static bool NeedsExtendedTasks(const char *test_name)
+{
+    return  (strcmp(test_name, "TryLock")   != 0) &&
+            (strcmp(test_name, "TimedLock") != 0);
+}
+
+/*! \fn    NeedsThreeTasks
+    \brief Returns true if the test requires at least 3 tasks (0-2).
+    \note  TryLock uses only tasks 0-1, so task 2 is also unnecessary.
+*/
+static bool NeedsThreeTasks(const char *test_name)
+{
+    return  (strcmp(test_name, "TryLock") != 0);
+}
+
 /*! \fn    RunTest
     \brief Helper function to run a single test case.
 */
@@ -548,24 +569,30 @@ static int32_t RunTest(const char *test_name, int32_t param = 0)
     using namespace stk;
     using namespace stk::test;
     using namespace stk::test::mutex;
-    
+
     printf("Test: %s\n", test_name);
-    
+
     ResetTestState();
 
     // Create tasks based on test type
-    static TaskType task0(0, param);
-    static TaskType task1(1, param);
-    static TaskType task2(2, param);
-    static TaskType task3(3, param);
-    static TaskType task4(4, param);
+    TaskType task0(0, param);
+    TaskType task1(1, param);
+    TaskType task2(2, param);
+    TaskType task3(3, param);
+    TaskType task4(4, param);
 
     g_Kernel.AddTask(&task0);
     g_Kernel.AddTask(&task1);
-    g_Kernel.AddTask(&task2);
-    g_Kernel.AddTask(&task3);
-    g_Kernel.AddTask(&task4);
-    
+
+    if (NeedsThreeTasks(test_name))
+        g_Kernel.AddTask(&task2);
+
+    if (NeedsExtendedTasks(test_name))
+    {
+        g_Kernel.AddTask(&task3);
+        g_Kernel.AddTask(&task4);
+    }
+
     g_Kernel.Start();
     
     int32_t result = (g_TestResult ? TestContext::SUCCESS_EXIT_CODE : TestContext::DEFAULT_FAILURE_EXIT_CODE);

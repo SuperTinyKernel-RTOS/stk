@@ -65,4 +65,9 @@ __stk_forceinline void SetTls(uintptr_t tp)
 
 } // namespace stk
 
+/*! \def   __stk_dmb
+    \brief Data memory barrier.
+*/
+#define __stk_dmb() __asm volatile("dmb sy" ::: "memory")
+
 #endif /* STK_ARCH_ARM_CORTEX_M_H_ */

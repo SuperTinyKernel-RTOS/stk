@@ -27,7 +27,7 @@
 
 using namespace stk;
 
-#if defined(__clang__) && defined(__ARMCOMPILER_VERSION)
+#if (defined(__clang__) && defined(__ARMCOMPILER_VERSION)) || defined(__ICCARM__)
 #define STK_CORTEX_M_DISABLE_INTERRUPTS() __asm volatile("cpsid i" : : : "memory")
 #define STK_CORTEX_M_ENABLE_INTERRUPTS() __asm volatile("cpsie i" : : : "memory")
 #else
@@ -207,7 +207,7 @@ __stk_attr_naked uint32_t SVC_EnterCritical()
 {
     STK_CORTEX_M_UNPRIV_ENTER_CRITICAL();
     STK_CORTEX_M_EXIT_FUNCTION();
-#if !(defined(__clang__) && defined(__ARMCOMPILER_VERSION))
+#if !((defined(__clang__) && defined(__ARMCOMPILER_VERSION)) || defined(__ICCARM__))
     __builtin_unreachable();
 #endif
 }
