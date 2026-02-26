@@ -29,9 +29,9 @@ namespace stk {
 
     Usage example:
     \code
-    static Kernel<KERNEL_STATIC, 3> kernel;
-    static PlatformArmCortexM platform;
-    static SwitchStrategyRoundRobin tsstrategy;
+    static stk::Kernel<KERNEL_STATIC, 3> kernel;
+    static stk::PlatformArmCortexM platform;
+    static stk::SwitchStrategyRoundRobin tsstrategy;
 
     static Task<ACCESS_PRIVILEGED> task1;
     static Task<ACCESS_USER> task2;

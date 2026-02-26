@@ -20,14 +20,14 @@ using namespace stk::test;
 
 STK_TEST_DECL_ASSERT;
 
-#define _STK_TIMER_TEST_TASKS_MAX   5
 #define _STK_TIMER_TEST_TIMEOUT     1000
 #define _STK_TIMER_TEST_SHORT_SLEEP 10
 #define _STK_TIMER_TEST_LONG_SLEEP  100
+#define _STK_TIMER_STACK_SIZE       256 // min stack size required
 #ifdef __ARM_ARCH_6M__
-#define _STK_TIMER_STACK_SIZE       128 // ARM Cortex-M0
+#define _STK_TIMER_TEST_TASKS_MAX   2
 #else
-#define _STK_TIMER_STACK_SIZE       256
+#define _STK_TIMER_TEST_TASKS_MAX   5
 #endif
 
 namespace stk {
@@ -609,9 +609,11 @@ private:
     {
         static TestTimer timer0(0);
         static TestTimer timer1(1);
+    #if (_STK_TIMER_TEST_TASKS_MAX > 2)
         static TestTimer timer2(2);
         static TestTimer timer3(3);
         static TestTimer timer4(4);
+    #endif
         static volatile int32_t g_PerTaskCount[_STK_TIMER_TEST_TASKS_MAX] = {0};
 
         TestTimer *my_timer = nullptr;
@@ -619,9 +621,11 @@ private:
         {
         case 0: my_timer = &timer0; break;
         case 1: my_timer = &timer1; break;
+    #if (_STK_TIMER_TEST_TASKS_MAX > 2)
         case 2: my_timer = &timer2; break;
         case 3: my_timer = &timer3; break;
         case 4: my_timer = &timer4; break;
+    #endif
         }
 
         for (int32_t i = 0; i < m_iterations; ++i)
@@ -725,19 +729,23 @@ static int32_t RunTest(const char *test_name, int32_t param = 0)
     // Create tasks based on test type
     TaskType task0(0, param);
     TaskType task1(1, param);
+#if (_STK_TIMER_TEST_TASKS_MAX > 2)
     TaskType task2(2, param);
     TaskType task3(3, param);
     TaskType task4(4, param);
+#endif
 
     g_Kernel.AddTask(&task0);
     g_Kernel.AddTask(&task1);
 
+#if (_STK_TIMER_TEST_TASKS_MAX > 2)
     if (NeedsExtendedTasks(test_name))
     {
         g_Kernel.AddTask(&task2);
         g_Kernel.AddTask(&task3);
         g_Kernel.AddTask(&task4);
     }
+#endif
 
     g_Kernel.Start();
 
