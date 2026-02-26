@@ -210,7 +210,8 @@ private:
                 g_TestRWMutex.ReadUnlock();
             }
         }
-        else if (m_task_id == 4)
+        else
+        if (m_task_id == 4)
         {
             // Writer: wait briefly then attempt write lock (should not starve)
             stk::Sleep(_STK_RWMUTEX_TEST_SHORT_SLEEP);
@@ -564,7 +565,7 @@ private:
             stk::Sleep(_STK_RWMUTEX_TEST_SHORT_SLEEP * 2);
 
             g_TestRWMutex.ReadLock();
-            
+
             // If writer preference is enforced, writer should have acquired first
             if (g_WriterCount == 1)
                 ++g_SharedCounter; // 2: writer got priority
@@ -741,6 +742,16 @@ static void ResetTestState()
 } // namespace test
 } // namespace stk
 
+/*! \fn    NeedsExtendedTasks
+    \brief Returns true if the test requires tasks 3 and 4 (i.e. uses more than 3 tasks).
+*/
+static bool NeedsExtendedTasks(const char *test_name)
+{
+    return  (strcmp(test_name, "TimedReadLock")      != 0) &&
+            (strcmp(test_name, "TimedWriteLock")     != 0) &&
+            (strcmp(test_name, "TryReadWhileWriter") != 0);
+}
+
 /*! \fn    RunTest
     \brief Helper function to run a single test case.
 */
@@ -756,17 +767,21 @@ static int32_t RunTest(const char *test_name, int32_t param = 0)
     ResetTestState();
 
     // Create tasks based on test type
-    static TaskType task0(0, param);
-    static TaskType task1(1, param);
-    static TaskType task2(2, param);
-    static TaskType task3(3, param);
-    static TaskType task4(4, param);
+    TaskType task0(0, param);
+    TaskType task1(1, param);
+    TaskType task2(2, param);
+    TaskType task3(3, param);
+    TaskType task4(4, param);
 
     g_Kernel.AddTask(&task0);
     g_Kernel.AddTask(&task1);
     g_Kernel.AddTask(&task2);
-    g_Kernel.AddTask(&task3);
-    g_Kernel.AddTask(&task4);
+
+    if (NeedsExtendedTasks(test_name))
+    {
+        g_Kernel.AddTask(&task3);
+        g_Kernel.AddTask(&task4);
+    }
 
     g_Kernel.Start();
 

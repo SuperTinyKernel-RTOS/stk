@@ -256,6 +256,11 @@
 			<locationURI>PARENT-6-PROJECT_LOC/interop/c/include/stk_c.h</locationURI>
 		</link>
 		<link>
+			<name>deps/stk/interop/c/include/stk_c_time.h</name>
+			<type>1</type>
+			<locationURI>PARENT-6-PROJECT_LOC/interop/c/include/stk_c_time.h</locationURI>
+		</link>
+		<link>
 			<name>deps/stk/interop/c/src/stk_c.cpp</name>
 			<type>1</type>
 			<locationURI>PARENT-6-PROJECT_LOC/interop/c/src/stk_c.cpp</locationURI>
@@ -264,6 +269,11 @@
 			<name>deps/stk/interop/c/src/stk_c_sync.cpp</name>
 			<type>1</type>
 			<locationURI>PARENT-6-PROJECT_LOC/interop/c/src/stk_c_sync.cpp</locationURI>
+		</link>
+		<link>
+			<name>deps/stk/interop/c/src/stk_c_time.cpp</name>
+			<type>1</type>
+			<locationURI>PARENT-6-PROJECT_LOC/interop/c/src/stk_c_time.cpp</locationURI>
 		</link>
 		<link>
 			<name>deps/stk/src/arch/arm/cortex-m</name>

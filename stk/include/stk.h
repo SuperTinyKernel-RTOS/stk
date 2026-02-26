@@ -29,9 +29,9 @@ namespace stk {
 
     Usage example:
     \code
-    static Kernel<KERNEL_STATIC, 3> kernel;
-    static PlatformArmCortexM platform;
-    static SwitchStrategyRoundRobin tsstrategy;
+    static stk::Kernel<KERNEL_STATIC, 3> kernel;
+    static stk::PlatformArmCortexM platform;
+    static stk::SwitchStrategyRoundRobin tsstrategy;
 
     static Task<ACCESS_PRIVILEGED> task1;
     static Task<ACCESS_USER> task2;
@@ -444,13 +444,13 @@ class Kernel : public IKernel, private IPlatform::IEventHandler
     public:
         TId GetTid() const { return m_platform->GetTid(); }
 
-        int64_t GetTicks() const { return m_ticks; }
+        Ticks GetTicks() const { return hw::ReadVolatileMemory(&m_ticks); }
 
         int32_t GetTickResolution() const  { return m_platform->GetTickResolution(); }
 
-        __stk_attr_noinline void Delay(Timeout msec) const
+        __stk_attr_noinline void Delay(Timeout msec)
         {
-            int64_t deadline = GetTicks() + GetTicksFromMsec(msec, GetTickResolution());
+            Ticks deadline = GetTicks() + GetTicksFromMsec(msec, GetTickResolution());
             while (GetTicks() < deadline)
             {
                 __stk_relax_cpu();
@@ -502,11 +502,12 @@ class Kernel : public IKernel, private IPlatform::IEventHandler
         }
 
         /*! \brief     Increment tick by 1.
+            \note      Modified always from ISR (guaranteed) therefore hw::WriteSafe64() is not required.
         */
         void IncrementTick() { ++m_ticks; }
 
-        _TyPlatform     *m_platform; //!< platform
-        volatile int64_t m_ticks;    //!< CPU ticks elapsed (volatile to reload value from the memory by the consumer)
+        _TyPlatform   *m_platform; //!< platform
+        volatile Ticks m_ticks;    //!< CPU ticks elapsed (volatile to reload value from the memory by the consumer)
     };
 
 public:
@@ -804,7 +805,7 @@ protected:
 
         // switch out and wait for completion (due to context switch request could be processed here)
         if (caller->m_srt[0].add_task_req != nullptr)
-            m_platform.SwitchToNext();
+            m_service.SwitchToNext();
 
         STK_ASSERT(caller->m_srt[0].add_task_req == nullptr);
     }
@@ -960,15 +961,17 @@ protected:
         KernelTask *task = FindTaskBySP(caller_SP);
         STK_ASSERT(task != nullptr);
 
-        if (_Mode & KERNEL_HRT)
+        // make change to HRT state and sleep time atomic
         {
-            task->HrtOnWorkCompleted();
+            hw::CriticalSection::ScopedLock __cs;
+
+            if (_Mode & KERNEL_HRT)
+            {
+                task->HrtOnWorkCompleted();
+            }
+
+            task->ScheduleSleep(ticks);
         }
-
-        task->ScheduleSleep(ticks);
-
-        // caller entered critical section before calling Sleep/Yield, we can exit it now and wait
-        hw::CriticalSection::Exit();
 
         // note: we do not spin long here, kernel will switch this task out from scheduling on the next tick
         while (task->IsSleeping())

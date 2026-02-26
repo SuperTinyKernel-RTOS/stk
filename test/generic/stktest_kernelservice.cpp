@@ -289,11 +289,9 @@ TEST(KernelService, SwitchToNext)
     CHECK_EQUAL(active->SP, (size_t)task2.GetStack());
 
     // task2 calls SwitchToNext
-    hw::CriticalSection::Enter();
     platform->EventTaskSwitch(active->SP);
 
     // task1 calls SwitchToNext (task1 = active, task2 = idle)
-    hw::CriticalSection::Enter();
     platform->EventTaskSwitch(active->SP + 1); // add shift to test IsMemoryOfSP
 
     // after a switch task 2 is active again
@@ -327,7 +325,6 @@ TEST(KernelService, SwitchToNextInactiveTask)
     g_SwitchToNextRelaxCpuContext.task1    = nullptr;
     g_SwitchToNextRelaxCpuContext.task2    = nullptr;
 
-    hw::CriticalSection::Enter();
     platform->EventTaskSwitch(platform->m_stack_idle->SP + 1); // add shift to test IsMemoryOfSP
 }
 

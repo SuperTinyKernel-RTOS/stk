@@ -79,6 +79,11 @@ __stk_forceinline void SetTls(uintptr_t tp)
 
 } // namespace stk
 
+/*! \def   __stk_dmb
+    \brief Data memory barrier.
+*/
+#define __stk_dmb() __asm volatile("fence rw, rw" ::: "memory")
+
 /*! \def   _STK_SYSTEM_CLOCK_VAR
     \brief Definition of the system clock variable holding frequency of the CPU.
 */

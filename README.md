@@ -1,20 +1,22 @@
 ![Logo](docs/img/stk_logo_200px.png)
-# SuperTinyKernel™ (STK)
+# SuperTinyKernel™ RTOS
 
 **Lightweight High-Performance Deterministic C++ RTOS for Embedded Systems**
 
 ---
 
-[![MIT License](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/SuperTinyKernel-RTOS/stk/blob/main/LICENSE)
+[![MIT License](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/SuperTinyKernel-RTOS/stk/blob/main/LICENSE)
 [![Build Status](https://img.shields.io/github/actions/workflow/status/SuperTinyKernel-RTOS/stk/cmake-test-generic-stm32.yml)](https://github.com/SuperTinyKernel-RTOS/stk/actions)
 [![Test Coverage](https://img.shields.io/badge/coverage-100%25-brightgreen)](https://github.com/SuperTinyKernel-RTOS/stk)
+[![Platform: Arm Cortex-M](https://img.shields.io/badge/Platform-Arm%20Cortex--M-blue.svg)](https://developer.arm.com/ip-products/processors/cortex-m)
+[![Platform: RISC-V](https://img.shields.io/badge/Platform-RISC--V-blue.svg)](https://riscv.org/)
 [![membrowse](https://membrowse.com/badge.svg)](https://membrowse.com/public/supertinykernel-rtos/stk)
 
 ---
 
 ## Overview
 
-**SuperTinyKernel™ (STK)** is a high-performance, deterministic, bare-metal C++ RTOS designed for resource-constrained embedded systems. By focusing on a preemptive and deterministic thread scheduler rather than peripheral abstraction (HAL), STK provides a lightweight yet robust foundation for multitasking embedded applications where timing and minimal overhead are critical.
+**SuperTinyKernel™ RTOS** (STK) is a high-performance, deterministic, bare-metal C++ real-time operating system designed for resource-constrained embedded systems. By focusing on a preemptive and deterministic thread scheduler rather than peripheral abstraction (HAL), STK provides a lightweight yet robust foundation for multitasking embedded applications where timing and minimal overhead are critical.
 
 STK is implemented in C++ with a clean **Object-Oriented Design** while remaining friendly to embedded developers:
 * No aggressive namespace usage
@@ -23,7 +25,7 @@ STK is implemented in C++ with a clean **Object-Oriented Design** while remainin
 * Transparent and readable implementation
 * Fully-featured C interface for C-only development
 
-It is an [open-source project](https://github.com/SuperTinyKernel-RTOS), navigate its code for more details.
+It is an [open-source project](https://github.com/SuperTinyKernel-RTOS), navigate its internals for more details.
 
 ---
 
@@ -290,7 +292,7 @@ STK has been tested on the following development boards:
 Board: STM32F407G-DISC1, MCU: STM32F407VG (Cortex-M4 168MHz).
 Update: Feb 2026
 
-This table compares **SuperTinyKernel (STK) v.1.04.2** and **FreeRTOS V10.3.1** across two compiler optimization levels: `-Os` and `-Ofast`. The workload consists of a CRC32-based synthetic task running across multiple tasks/threads to measure scheduling overhead and timing determinism. Benchmark projects are located in `build/benchmark/eclipse` and the benchmark suite is located in `build/benchmark/perf`.
+This table compares **SuperTinyKernel RTOS v.1.04.2** and **FreeRTOS V10.3.1** across two compiler optimization levels: `-Os` and `-Ofast`. The workload consists of a CRC32-based synthetic task running across multiple tasks/threads to measure scheduling overhead and timing determinism. Benchmark projects are located in `build/benchmark/eclipse` and the benchmark suite is located in `build/benchmark/perf`.
 
 The benchmark suite uses CRC32 hash calculations as the task payload. The score represents the number of CRC32 calculations performed by the task within a fixed time window. A higher score indicates a more efficient scheduler, meaning the tasks have more available CPU time.
 
@@ -700,7 +702,7 @@ You may freely use it in projects of any type:
 
 ## 🚀 Professional Services & Commercial Licensing
 
-While **SuperTinyKernel™ (STK)** is provided under the permissive MIT license, we offer dedicated professional services for organizations integrating STK into production-grade, mission-critical, or regulated environments.
+While **SuperTinyKernel™ RTOS** is provided under the permissive MIT license, we offer dedicated professional services for organizations integrating STK into production-grade, mission-critical, or regulated environments.
 
 ### 🛡️ Legal & Compliance
 * **Warranty of Title:** Full intellectual property (IP) indemnification and provenance guarantees required by corporate legal departments.

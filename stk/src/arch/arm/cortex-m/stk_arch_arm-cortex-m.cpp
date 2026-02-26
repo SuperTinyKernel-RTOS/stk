@@ -27,9 +27,9 @@
 
 using namespace stk;
 
-#if defined(__clang__) && defined(__ARMCOMPILER_VERSION)
-#define STK_CORTEX_M_DISABLE_INTERRUPTS() __asm volatile("cpsid i" : : : "memory")
-#define STK_CORTEX_M_ENABLE_INTERRUPTS() __asm volatile("cpsie i" : : : "memory")
+#if (defined(__clang__) && defined(__ARMCOMPILER_VERSION)) || defined(__ICCARM__)
+#define STK_CORTEX_M_DISABLE_INTERRUPTS() __asm volatile("CPSID i" : : : "memory")
+#define STK_CORTEX_M_ENABLE_INTERRUPTS() __asm volatile("CPSIE i" : : : "memory")
 #else
 #define STK_CORTEX_M_DISABLE_INTERRUPTS() __disable_irq()
 #define STK_CORTEX_M_ENABLE_INTERRUPTS() __enable_irq()
@@ -207,7 +207,7 @@ __stk_attr_naked uint32_t SVC_EnterCritical()
 {
     STK_CORTEX_M_UNPRIV_ENTER_CRITICAL();
     STK_CORTEX_M_EXIT_FUNCTION();
-#if !(defined(__clang__) && defined(__ARMCOMPILER_VERSION))
+#if !((defined(__clang__) && defined(__ARMCOMPILER_VERSION)) || defined(__ICCARM__))
     __builtin_unreachable();
 #endif
 }
@@ -238,12 +238,11 @@ static __stk_forceinline size_t GetCallerSP()
 #endif
 }
 
-/*! \brief Switch context via the PendSV interrupt.
+/*! \brief Schedule context switch via the PendSV interrupt.
 */
 static __stk_forceinline void ScheduleContextSwitch()
 {
-    SCB->ICSR |= SCB_ICSR_PENDSVSET_Msk; // schedule PendSV interrupt
-    __ISB();                             // flush instructions cache
+    SCB->ICSR |= SCB_ICSR_PENDSVSET_Msk;
 }
 
 /*! \brief Clear FPU state.
@@ -456,8 +455,8 @@ extern "C" void _STK_SYSTICK_HANDLER()
 */
 #define STK_ASM_BLOCK_PRIVILEGE_MODE\
     "LDR        r1, %[st_active]\n" /* r1 = Stack* (m_stack_active) */ \
-    "LDR        r2, [r1, #4]    \n" /* r2 = m_stack_active->mode (offset 4) */ \
-    "CMP        r2, %[priv_val] \n" /* compare with ACCESS_PRIVILEGED */ \
+    "LDR        r1, [r1, #4]    \n" /* r1 = m_stack_active->mode (offset 4), reuse r1 */ \
+    "CMP        r1, %[priv_val] \n" /* compare with ACCESS_PRIVILEGED */ \
     "BEQ        1f              \n" /* if equal, privileged mode */\
     /* unprivileged mode: set CONTROL.nPRIV = 1 */\
     "MRS        r0, CONTROL     \n"\
@@ -473,10 +472,10 @@ extern "C" void _STK_SYSTICK_HANDLER()
 
 extern "C" __stk_attr_naked void _STK_PENDSV_HANDLER()
 {
-    STK_CORTEX_M_DISABLE_INTERRUPTS();
-
     __asm volatile(
     ".syntax unified             \n"
+
+    "CPSID      i                \n" /* inline STK_CORTEX_M_DISABLE_INTERRUPTS */
 
     // save stack to inactive (idle) task
     "MRS        r0, psp          \n"
@@ -540,21 +539,19 @@ extern "C" __stk_attr_naked void _STK_PENDSV_HANDLER()
     "VLDMIAEQ   r0!, {s16-s31}  \n" /* restore FP registers */
 #endif
 
-    // restore psp
-    "MSR        psp, r0         \n"
+    "MSR        psp, r0         \n" /* restore psp */
+
+    "CPSIE      i               \n" /* inline STK_CORTEX_M_ENABLE_INTERRUPTS */
+    "BX         LR              \n" /* inline STK_CORTEX_M_EXIT_FUNCTION */
 
     : /* output: none */
     : [st_idle]   "m" (GetContext().m_stack_idle),\
       [st_active] "m" (GetContext().m_stack_active),\
       [priv_val]  "i" (ACCESS_PRIVILEGED)\
-    : "r0", "r1", "r2", "r4", "r5", "r6", "r8", "r9", "r10", "r11", "lr");
-
-    STK_CORTEX_M_ENABLE_INTERRUPTS();
-
-    STK_CORTEX_M_EXIT_FUNCTION();
+    : "r0", "r1" /* only r0, r1 are used as a scratchpad */ );
 }
 
-__stk_forceinline void OnTaskRun()
+__stk_attr_naked void OnTaskRun()
 {
     // note: STK_CORTEX_M_DISABLE_INTERRUPTS() must be called prior calling this function
 
@@ -596,18 +593,18 @@ __stk_forceinline void OnTaskRun()
 
 #ifndef STK_CORTEX_M_MANAGE_LR
     // M0: set LR to Thread mode, use PSP state and stack
-    "LDR        r0, =%[exc_ret]  \n"
-    "MOV        LR, r0           \n"
+    "LDR        r0, =%[exc_ret] \n"
+    "MOV        LR, r0          \n"
 #endif
+
+    "CPSIE      i               \n" /* inline STK_CORTEX_M_ENABLE_INTERRUPTS */
+    "BX         LR              \n" /* inline STK_CORTEX_M_EXIT_FUNCTION */
+
     : /* output: none */
     : [st_active] "m" (GetContext().m_stack_active),
       [priv_val]  "i" (ACCESS_PRIVILEGED),
       [exc_ret]   "i" (STK_CORTEX_M_EXC_RETURN_THREAD_PSP)
-    : "r0", "r1", "r2", "r4", "r5", "r6", "r8", "r9", "r10", "r11", "lr");
-
-    STK_CORTEX_M_ENABLE_INTERRUPTS();
-
-    STK_CORTEX_M_EXIT_FUNCTION();
+    : "r0", "r1" /* only r0, r1 are used as a scratchpad */ );
 }
 
 void Context::OnStart()
@@ -787,7 +784,6 @@ static void OnTaskExit()
     {
         __DSB();
         __WFI(); // enter standby mode until time slot expires
-        __ISB();
     }
 }
 
@@ -802,7 +798,6 @@ static void OnSchedulerSleep()
         SCB->SCR &= ~SCB_SCR_SLEEPDEEP_Msk; // disable deep-sleep, go into a WAIT mode (sleep)
         __DSB();                            // ensure store takes effect (see ARM info)
         __WFI();                            // enter sleep mode
-        __ISB();
     }
 }
 

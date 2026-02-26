@@ -114,6 +114,11 @@ const Timeout WAIT_INFINITE = INT32_MAX;
 */
 const Timeout NO_WAIT = 0;
 
+/*! \typedef Ticks
+    \brief   Ticks value.
+*/
+typedef int64_t Ticks;
+
 /*! \class StackMemoryDef
     \brief Stack memory type definition.
     \note  This descriptor provides an encapsulated type only on basis of which you can declare
@@ -785,7 +790,7 @@ public:
     /*! \brief     Get number of ticks elapsed since kernel start.
         \return    Ticks.
     */
-    virtual int64_t GetTicks() const = 0;
+    virtual Ticks GetTicks() const = 0;
 
     /*! \brief     Get number of microseconds in one tick.
         \note      Tick is a periodicity of the system timer expressed in microseconds.
@@ -798,7 +803,7 @@ public:
         \note      Use with care in HRT mode to avoid missed deadline (see stk::KERNEL_HRT, ITask::OnDeadlineMissed).
         \param[in] msec: Delay time (milliseconds).
     */
-    virtual void Delay(Timeout msec) const = 0;
+    virtual void Delay(Timeout msec) = 0;
 
     /*! \brief     Put calling process into a sleep state.
         \note      Unlike Delay this function does not waste CPU cycles and allows kernel to put CPU into a low-power state.

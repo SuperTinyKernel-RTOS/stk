@@ -313,12 +313,12 @@ namespace stk
         int32_t resolution;
 
         static IKernelService *GetInstance() { return NULL; }
-        virtual size_t GetTid() const { return 0; }
-        virtual int64_t GetTicks() const { return ticks; }
-        virtual int32_t GetTickResolution() const { return resolution; }
-        virtual void Delay(Timeout msec) const { (void)msec; }
-        virtual void Sleep(Timeout msec) { (void)msec; }
-        virtual void SwitchToNext() {}
+        TId GetTid() const { return 0; }
+        Ticks GetTicks() const { return ticks; }
+        int32_t GetTickResolution() const { return resolution; }
+        void Delay(Timeout msec) { (void)msec; }
+        void Sleep(Timeout msec) { (void)msec; }
+        void SwitchToNext() {}
         IWaitObject *StartWaiting(ISyncObject *sobj, IMutex *mutex, Timeout timeout)
         {
         	(void)sobj;

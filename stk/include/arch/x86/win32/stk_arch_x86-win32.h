@@ -43,4 +43,14 @@ typedef PlatformX86Win32 PlatformDefault;
 
 } // namespace stk
 
+/*! \def   __stk_dmb
+    \brief Data memory barrier.
+*/
+#if defined(_MSC_VER)
+    #include <intrin.h>
+    #define __stk_dmb() MemoryBarrier()
+#elif defined(__GNUC__)
+    #define __stk_dmb() __asm volatile("mfence" ::: "memory")
+#endif
+
 #endif /* STK_ARCH_X86_WIN32_H_ */

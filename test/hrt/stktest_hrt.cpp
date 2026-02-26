@@ -79,6 +79,12 @@ private:
     }
 };
 
+//! Kernel.
+static Kernel<KERNEL_DYNAMIC | KERNEL_HRT, _STK_HRT_TEST_TASKS_MAX, SwitchStrategyRoundRobin, PlatformDefault> kernel;
+
+//! Tasks (threads).
+static TestTask<ACCESS_PRIVILEGED> task1(0), task2(1), task3(2);
+
 } // namespace sleep
 } // namespace test
 } // namespace stk
@@ -90,15 +96,12 @@ int main(int argc, char **argv)
 {
     (void)argc;
     (void)argv;
-    
+
     TestContext::ShowTestSuitePrologue();
 
     using namespace stk;
     using namespace stk::test;
     using namespace stk::test::hrt;
-
-    static Kernel<KERNEL_DYNAMIC | KERNEL_HRT, _STK_HRT_TEST_TASKS_MAX, SwitchStrategyRoundRobin, PlatformDefault> kernel;
-    static TestTask<ACCESS_PRIVILEGED> task1(0), task2(1), task3(2);
 
     kernel.Initialize();
 

@@ -566,11 +566,11 @@ static int32_t RunTest(const char *test_name, int32_t param = 0)
     ResetTestState();
 
     // Create tasks based on test type
-    static TaskType task0(0, param);
-    static TaskType task1(1, param);
-    static TaskType task2(2, param);
-    static TaskType task3(3, param);
-    static TaskType task4(4, param);
+    TaskType task0(0, param);
+    TaskType task1(1, param);
+    TaskType task2(2, param);
+    TaskType task3(3, param);
+    TaskType task4(4, param);
 
     g_Kernel.AddTask(&task0);
     g_Kernel.AddTask(&task1);

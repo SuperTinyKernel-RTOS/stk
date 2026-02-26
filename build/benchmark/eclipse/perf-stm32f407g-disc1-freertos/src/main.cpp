@@ -56,9 +56,7 @@ extern "C" void vApplicationIdleHook(void)
 {
     SCB->SCR &= ~SCB_SCR_SLEEPDEEP_Msk; // disable deep-sleep, go into a WAIT mode (sleep)
     __DSB();                            // ensure store takes effect (see ARM info)
-
     __WFI();                            // enter sleep mode
-    __ISB();
 }
 
 static void BenchTask(void *pvParameter)

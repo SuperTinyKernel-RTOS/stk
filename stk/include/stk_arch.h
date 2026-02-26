@@ -168,6 +168,30 @@ protected:
 #endif
 };
 
+/*! \brief     Read volatile value atomically.
+    \param[in] addr: Pointer to the volatile memory location.
+    \return    Value.
+    \see       WriteVolatileMemory
+*/
+template <typename _ValueType>
+__stk_forceinline _ValueType ReadVolatileMemory(volatile const _ValueType *addr)
+{
+    hw::CriticalSection::ScopedLock __cs;
+    return (*addr);
+}
+
+/*! \brief     Writes value to a volatile memory region.
+    \param[in] addr: Pointer to the volatile memory location.
+    \param[in] value: Value to be written.
+    \see       ReadVolatileMemory
+*/
+template <typename _ValueType>
+__stk_forceinline void WriteVolatileMemory(volatile _ValueType *addr, uint64_t value)
+{
+    hw::CriticalSection::ScopedLock __cs;
+    (*addr) = value;
+}
+
 } // namespace hw
 } // namespace stk
 
