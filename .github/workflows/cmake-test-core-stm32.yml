@@ -10,7 +10,37 @@ env:
   BUILD_TYPE: Release
 
 jobs:
+  docker-build:
+    runs-on: ubuntu-22.04
+    name: "Build QEMU Docker image"
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v3
+
+    - name: Setup Docker Buildx
+      uses: docker/setup-buildx-action@v2
+
+    - name: Docker build
+      uses: docker/build-push-action@v3
+      with:
+        context: .
+        file: build/test/qemu/Dockerfile
+        tags: stk-qemu:latest
+        load: false
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        outputs: type=docker,dest=/tmp/stk-qemu.tar
+
+    - name: Upload Docker image artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: stk-qemu-image
+        path: /tmp/stk-qemu.tar
+        retention-days: 1
+
   build:
+    needs: docker-build
     strategy:
       fail-fast: false
       matrix:
@@ -81,18 +111,14 @@ jobs:
     - name: Build
       run: cmake --build ${{github.workspace}}/build --config ${{env.BUILD_TYPE}} --parallel 4
 
-    - name: Setup Docker Buildx
-      uses: docker/setup-buildx-action@v2
-
-    - name: Docker build
-      uses: docker/build-push-action@v3
+    - name: Download Docker image artifact
+      uses: actions/download-artifact@v4
       with:
-        context: .
-        file: build/test/qemu/Dockerfile
-        tags: stk-qemu:latest
-        load: true
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
+        name: stk-qemu-image
+        path: /tmp
+
+    - name: Load Docker image
+      run: docker load --input /tmp/stk-qemu.tar
 
     - name: Prepare
       run: chmod +x build/test/qemu/stk-qemu.sh && chmod +x build/test/qemu/test.sh
