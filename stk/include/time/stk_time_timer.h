@@ -20,25 +20,25 @@
 namespace stk {
 namespace time {
 
-/*! \def   _STK_TIMER_THREADS_COUNT
+/*! \def   STK_TIMER_THREADS_COUNT
     \brief Number of threads handling timers in TimerHost (default: 1).
 */
-#ifndef _STK_TIMER_THREADS_COUNT
-    #define _STK_TIMER_THREADS_COUNT 1
+#ifndef STK_TIMER_THREADS_COUNT
+    #define STK_TIMER_THREADS_COUNT 1
 #endif
 
-/*! \def   _STK_TIMER_HANDLER_STACK_SIZE
-    \brief The default stack size of the timer handler, increase (default: 256).
+/*! \def   STK_TIMER_HANDLER_STACK_SIZE
+    \brief Stack size of the timer handler, increase if your timers consume more (default: 256).
 */
-#ifndef _STK_TIMER_HANDLER_STACK_SIZE
-    #define _STK_TIMER_HANDLER_STACK_SIZE 256
+#ifndef STK_TIMER_HANDLER_STACK_SIZE
+    #define STK_TIMER_HANDLER_STACK_SIZE 256
 #endif
 
-/*! \def   _STK_TIMER_COUNT_MAX
+/*! \def   STK_TIMER_COUNT_MAX
     \brief Max number of timers handled by TimerHost (default: 32).
 */
-#ifndef _STK_TIMER_COUNT_MAX
-    #define _STK_TIMER_COUNT_MAX 32
+#ifndef STK_TIMER_COUNT_MAX
+    #define STK_TIMER_COUNT_MAX 32
 #endif
 
 /*! \class TimerHost
@@ -48,7 +48,7 @@ namespace time {
     TimerHost internally runs two categories of tasks:
     - One \e tick task that maintains the active timer list, evaluates deadlines every wake
       cycle, and queues expired timers for dispatch.
-    - One or more \e handler tasks (see \a _STK_TIMER_THREADS_COUNT) that dequeue expired
+    - One or more \e handler tasks (see \a STK_TIMER_THREADS_COUNT) that dequeue expired
       timers and invoke their OnExpired() callbacks.
 
     All timers share the same tick and handler tasks, so the total kernel task overhead is
@@ -59,7 +59,7 @@ namespace time {
     - <b>Periodic</b>: fires every \a period ticks until explicitly stopped.
 
     \note  TimerHost must be initialized before use by calling Initialize().
-           The maximum number of concurrently active timers is _STK_TIMER_COUNT_MAX (default: 32).
+           The maximum number of concurrently active timers is STK_TIMER_COUNT_MAX (default: 32).
            The maximum timer period is bounded by \c uint32_t (~49 days at 1 ms resolution).
 
     \code
@@ -105,15 +105,21 @@ namespace time {
     }
     \endcode
 
-    \see TimerHost::Timer, _STK_TIMER_THREADS_COUNT, _STK_TIMER_HANDLER_STACK_SIZE, _STK_TIMER_COUNT_MAX
+    \see TimerHost::Timer, STK_TIMER_THREADS_COUNT, STK_TIMER_HANDLER_STACK_SIZE, STK_TIMER_COUNT_MAX
 */
 class TimerHost
 {
 public:
     enum EConsts
     {
-        TASK_COUNT            = (1 + _STK_TIMER_THREADS_COUNT),  //!< total number of tasks serving this instance
-        TASK_TICK_MEMORY_SIZE = STK_MAX(256, STK_STACK_SIZE_MIN) //!< stack memory size of the tick task
+        //!< total number of tasks serving this instance
+        TASK_COUNT = (1 + STK_TIMER_THREADS_COUNT),
+
+        //!< stack memory size of the tick task
+        TASK_TICK_MEMORY_SIZE = STK_MAX(256, STK_STACK_SIZE_MIN),
+
+        //!< stack memory size of the timer handler task
+        TASK_HANDLER_STACK_SIZE = STK_MAX(STK_TIMER_HANDLER_STACK_SIZE, STK_STACK_SIZE_MIN)
     };
 
     /*! \class Timer
@@ -320,19 +326,19 @@ private:
     bool ProcessCommands(Timeout next_sleep);
     bool PushCommand(TimerCommand cmd);
 
-    typedef StackMemoryDef<TASK_TICK_MEMORY_SIZE>::Type         TaskTickMemory;
-    typedef StackMemoryDef<_STK_TIMER_HANDLER_STACK_SIZE>::Type TimerHostMemory;
-    typedef sync::Pipe<Timer *, _STK_TIMER_COUNT_MAX>           ReadyQueue;
-    typedef sync::Pipe<TimerCommand, _STK_TIMER_COUNT_MAX>      CommandQueue;
+    typedef StackMemoryDef<TASK_TICK_MEMORY_SIZE>::Type   TaskTickMemory;
+    typedef StackMemoryDef<TASK_HANDLER_STACK_SIZE>::Type TimerHostMemory;
+    typedef sync::Pipe<Timer *, STK_TIMER_COUNT_MAX>      ReadyQueue;
+    typedef sync::Pipe<TimerCommand, STK_TIMER_COUNT_MAX> CommandQueue;
 
-    TaskTickMemory                m_task_tick_memory;                              //!< tick task memory
-    TimerHostMemory               m_task_handler_memory[_STK_TIMER_THREADS_COUNT]; //!< handler task memory
-    TimerWorkerTask               m_task_tick;                                     //!< timer task
-    TimerWorkerTask               m_task_process[_STK_TIMER_THREADS_COUNT];        //!< handler tasks
-    util::DListHead<Timer, false> m_active;                                        //!< active timers (tick task only)
-    ReadyQueue                    m_queue;                                         //!< queue of timers ready for handling
-    CommandQueue                  m_commands;                                      //!< command queue
-    Ticks                         m_now;                                           //!< last known current time (ticks)
+    TaskTickMemory                m_task_tick_memory;                             //!< tick task memory
+    TimerHostMemory               m_task_handler_memory[STK_TIMER_THREADS_COUNT]; //!< handler task memory
+    TimerWorkerTask               m_task_tick;                                    //!< timer task
+    TimerWorkerTask               m_task_process[STK_TIMER_THREADS_COUNT];        //!< handler tasks
+    util::DListHead<Timer, false> m_active;                                       //!< active timers (tick task only)
+    ReadyQueue                    m_queue;                                        //!< queue of timers ready for handling
+    CommandQueue                  m_commands;                                     //!< command queue
+    Ticks                         m_now;                                          //!< last known current time (ticks)
 };
 
 // ---------------------------------------------------------------------------
@@ -357,9 +363,9 @@ inline uint32_t TimerHost::Timer::GetRemainingTime() const
 
 inline void TimerHost::Initialize(IKernel *kernel, EAccessMode mode)
 {
-    for (int32_t i = 0; i < _STK_TIMER_THREADS_COUNT; ++i)
+    for (int32_t i = 0; i < STK_TIMER_THREADS_COUNT; ++i)
     {
-        m_task_process[i].Initialize(this, m_task_handler_memory[i], _STK_TIMER_HANDLER_STACK_SIZE, mode, [](void *p) {
+        m_task_process[i].Initialize(this, m_task_handler_memory[i], TASK_HANDLER_STACK_SIZE, mode, [](void *p) {
             static_cast<TimerHost *>(p)->ProcessTimers();
         });
         kernel->AddTask(&m_task_process[i]);
@@ -734,7 +740,7 @@ inline bool TimerHost::ProcessCommands(Timeout next_sleep)
 
         case TimerCommand::CMD_SHUTDOWN: {
             // wake all handler tasks with shutdown sentinels
-            for (int32_t i = 0; i < _STK_TIMER_THREADS_COUNT; ++i)
+            for (int32_t i = 0; i < STK_TIMER_THREADS_COUNT; ++i)
                 m_queue.Write(nullptr, NO_WAIT);
 
             // signal UpdateTime() to exit its loop

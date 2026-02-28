@@ -325,6 +325,7 @@ size_t  stk_tid(void)             { return stk::GetTid(); }
 int64_t stk_ticks(void)           { return stk::GetTicks(); }
 int32_t stk_tick_resolution(void) { return stk::GetTickResolution(); }
 int64_t stk_time_now_ms(void)     { return stk::GetTimeNowMsec(); }
+int64_t stk_ticks_from_ms(int64_t msec) { return stk_ticks_from_ms_r(msec, stk_tick_resolution()); }
 void    stk_delay_ms(uint32_t ms) { stk::Delay(ms); }
 void    stk_sleep_ms(uint32_t ms) { stk::Sleep(ms); }
 void    stk_yield(void)           { stk::Yield(); }
