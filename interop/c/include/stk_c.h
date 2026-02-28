@@ -306,6 +306,28 @@ int64_t stk_ticks(void);
 */
 int32_t stk_tick_resolution(void);
 
+/*! \brief     Get ticks from milliseconds using current kernel tick resolution.
+    \param[in] msec: Milliseconds to convert.
+    \return    Ticks.
+    \note      Equivalent to stk::GetTicksFromMsec(msec).
+               Requires the kernel to be initialized before calling
+               (stk_tick_resolution() must return a valid non-zero value).
+*/
+int64_t stk_ticks_from_ms(int64_t msec);
+
+/*! \brief     Get ticks from milliseconds using an explicit tick resolution.
+    \param[in] msec: Milliseconds to convert.
+    \param[in] resolution: Microseconds per tick (see stk_tick_resolution()).
+    \return    Ticks.
+    \note      Equivalent to stk::GetTicksFromMsec(msec, resolution).
+               Use this overload when the resolution is already cached to avoid
+               a repeated call to stk_tick_resolution().
+*/
+static inline int64_t stk_ticks_from_ms_r(int64_t msec, int32_t resolution)
+{
+    return msec * 1000 / resolution;
+}
+
 /*! \brief     Returns current time in milliseconds since kernel start.
     \return    Time in milliseconds.
 */
