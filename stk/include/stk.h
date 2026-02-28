@@ -444,7 +444,7 @@ class Kernel : public IKernel, private IPlatform::IEventHandler
     public:
         TId GetTid() const { return m_platform->GetTid(); }
 
-        Ticks GetTicks() const { return hw::ReadVolatileMemory(&m_ticks); }
+        Ticks GetTicks() const { return hw::ReadAtomic64(&m_ticks); }
 
         int32_t GetTickResolution() const  { return m_platform->GetTickResolution(); }
 
@@ -504,7 +504,10 @@ class Kernel : public IKernel, private IPlatform::IEventHandler
         /*! \brief     Increment tick by 1.
             \note      Modified always from ISR (guaranteed) therefore hw::WriteSafe64() is not required.
         */
-        void IncrementTick() { ++m_ticks; }
+        void IncrementTick()
+        {
+            hw::WriteAtomic64(&m_ticks, m_ticks + 1);
+        }
 
         _TyPlatform   *m_platform; //!< platform
         volatile Ticks m_ticks;    //!< CPU ticks elapsed (volatile to reload value from the memory by the consumer)

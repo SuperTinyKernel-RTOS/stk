@@ -182,7 +182,7 @@ static struct Context : public PlatformContext
     
     __stk_forceinline void EnterCriticalSection()
     {
-        Win32ScopedCriticalSection __cs(m_cs);
+        STK_X86_WIN32_CRITICAL_SECTION_START(&m_cs);
 
         if (m_csu_nesting == 0)
         {
@@ -196,8 +196,6 @@ static struct Context : public PlatformContext
     
     __stk_forceinline void ExitCriticalSection()
     {
-        Win32ScopedCriticalSection __cs(m_cs);
-
         STK_ASSERT(m_csu_nesting != 0);
 
         --m_csu_nesting;
@@ -208,6 +206,8 @@ static struct Context : public PlatformContext
             if (GetCurrentThreadId() != m_timer_tid)
                 ResumeThread(m_timer_thread);
         }
+
+        STK_X86_WIN32_CRITICAL_SECTION_END(&m_cs);
     }
 
     IPlatform::IEventOverrider    *m_overrider;
@@ -322,13 +322,20 @@ void Context::Cleanup()
     // close thread handles of all tasks
     for (std::list<TaskContext *>::iterator itr = m_tasks.begin(); itr != m_tasks.end(); ++itr)
     {
-        CloseHandle((*itr)->m_thread);
-        (*itr)->m_thread = NULL;
+        if ((*itr)->m_thread != NULL)
+        {
+            CloseHandle((*itr)->m_thread);
+            (*itr)->m_thread = NULL;
+        }
     }
+    m_tasks.clear();
 
     // close timer thread
-    CloseHandle(m_timer_thread);
-    m_timer_thread = NULL;
+    if (m_timer_thread != NULL)
+    {
+        CloseHandle(m_timer_thread);
+        m_timer_thread = NULL;
+    }
 
     // reset stop signal
     m_stop_signal = false;

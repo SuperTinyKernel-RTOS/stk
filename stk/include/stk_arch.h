@@ -168,28 +168,69 @@ protected:
 #endif
 };
 
-/*! \brief     Read volatile value atomically.
+/*! \brief     Read 64-bit volatile value atomically.
     \param[in] addr: Pointer to the volatile memory location.
     \return    Value.
-    \see       WriteVolatileMemory
+    \see       WriteAtomic64
 */
-template <typename _ValueType>
-__stk_forceinline _ValueType ReadVolatileMemory(volatile const _ValueType *addr)
+template <typename T>
+__stk_forceinline T ReadAtomic64(volatile const T *addr)
 {
-    hw::CriticalSection::ScopedLock __cs;
-    return (*addr);
+    // only for 64-bit value
+    STK_STATIC_ASSERT(sizeof(T) == 8);
+
+    if (sizeof(void *) == 8) // atomic on 64-bit arch
+    {
+        return (*addr);
+    }
+    else
+    {
+        volatile const uint32_t *plo = &((volatile const uint32_t *)addr)[STK_ENDIAN_IDX_LO];
+        volatile const uint32_t *phi = &((volatile const uint32_t *)addr)[STK_ENDIAN_IDX_HI];
+
+        uint32_t hi, lo;
+        do
+        {
+            hi = (*phi);
+            __stk_full_memfence();
+
+            lo = (*plo);
+            __stk_full_memfence();
+        }
+        while (hi != (*phi)); // make sure phi did not tick when read plo
+
+        return ((uint64_t)hi << 32) | lo;
+    }
 }
 
-/*! \brief     Writes value to a volatile memory region.
+/*! \brief     Writes 64-bit value atomically.
     \param[in] addr: Pointer to the volatile memory location.
     \param[in] value: Value to be written.
-    \see       ReadVolatileMemory
+    \warning   It is safe only for cases where a single writer sets an arbitrary value and no other
+               writer touches the same address concurrently, not for a read-modify-write increment.
+    \see       ReadAtomic64
 */
-template <typename _ValueType>
-__stk_forceinline void WriteVolatileMemory(volatile _ValueType *addr, uint64_t value)
+template <typename T>
+__stk_forceinline void WriteAtomic64(volatile T *addr, T value)
 {
-    hw::CriticalSection::ScopedLock __cs;
-    (*addr) = value;
+    // only for 64-bit value
+    STK_STATIC_ASSERT(sizeof(T) == 8);
+
+    if (sizeof(void *) == 8) // atomic on 64-bit arch
+    {
+        (*addr) = value;
+    }
+    else
+    {
+        volatile uint32_t *plo = &((volatile uint32_t *)addr)[STK_ENDIAN_IDX_LO];
+        volatile uint32_t *phi = &((volatile uint32_t *)addr)[STK_ENDIAN_IDX_HI];
+
+        // write hi first (reader reads hi first, see ReadAtomic64)
+        (*phi) = (uint32_t)(value >> 32);
+        __stk_full_memfence();
+
+        (*plo) = (uint32_t)value;
+    }
 }
 
 } // namespace hw
