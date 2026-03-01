@@ -169,15 +169,18 @@ protected:
 };
 
 /*! \brief     Read 64-bit volatile value atomically.
-    \param[in] addr: Pointer to the volatile memory location.
+    \note      On 32-bit architectures uses a lock-free hi-lo retry protocol.
+               Requires a single writer using WriteVolatile64 to guarantee correctness.
+               Not C++ memory-model compliant, intended for bare-metal embedded use only.
+    \param[in] addr: Pointer to the volatile memory location. Must be 4-byte aligned.
     \return    Value.
-    \see       WriteAtomic64
+    \see       WriteVolatile64
 */
 template <typename T>
 __stk_forceinline T ReadVolatile64(volatile const T *addr)
 {
     STK_STATIC_ASSERT_N(sz, sizeof(T) == 8); // only for 64-bit value
-    STK_STATIC_ASSERT_N(al, alignof(uint32_t) >= 4); // must be aligned to at least 4 bytes
+    STK_STATIC_ASSERT_N(al, alignof(T) >= 4); // must be aligned to at least 4 bytes
 
     if (sizeof(void *) == 8) // atomic on 64-bit arch
     {
@@ -203,19 +206,22 @@ __stk_forceinline T ReadVolatile64(volatile const T *addr)
     }
 }
 
-/*! \brief     Writes 64-bit value to the address using lock-free operation.
-    \param[in] addr: Pointer to the volatile memory location.
+/*! \brief     Write 64-bit volatile value atomically.
+    \note      On 32-bit architectures uses a lock-free hi-lo write protocol compatible
+               with ReadVolatile64. Not C++ memory-model compliant, intended for
+               bare-metal embedded use only.
+    \param[in] addr: Pointer to the volatile memory location. Must be 4-byte aligned.
     \param[in] value: Value to be written.
-    \warning   It is safe only for cases where a single writer sets an arbitrary value and no other
-               writer touches the same address concurrently, not for a read-modify-write increment.
-               Does not use critical section, safe for ISR.
-    \see       ReadAtomic64
+    \warning   Safe only when a single writer sets an arbitrary value - concurrent writers
+               on the same address are not supported. Not safe for read-modify-write
+               operations such as increment. Does not use a critical section, ISR-safe.
+    \see       ReadVolatile64
 */
 template <typename T>
 __stk_forceinline void WriteVolatile64(volatile T *addr, T value)
 {
     STK_STATIC_ASSERT_N(sz, sizeof(T) == 8); // only for 64-bit value
-    STK_STATIC_ASSERT_N(al, alignof(uint32_t) >= 4); // must be aligned to at least 4 bytes
+    STK_STATIC_ASSERT_N(al, alignof(T) >= 4); // must be aligned to at least 4 bytes
 
     if (sizeof(void *) == 8) // atomic on 64-bit arch
     {
@@ -226,7 +232,7 @@ __stk_forceinline void WriteVolatile64(volatile T *addr, T value)
         volatile uint32_t *plo = &((volatile uint32_t *)addr)[STK_ENDIAN_IDX_LO];
         volatile uint32_t *phi = &((volatile uint32_t *)addr)[STK_ENDIAN_IDX_HI];
 
-        // write hi first (reader reads hi first, see ReadAtomic64)
+        // write hi first (reader reads hi first, see ReadVolatile64)
         (*phi) = (uint32_t)(value >> 32);
         __stk_full_memfence();
 
