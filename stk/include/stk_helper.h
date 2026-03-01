@@ -22,7 +22,10 @@ namespace stk {
 /*! \class Task
     \brief Partial implementation of the user task.
 
-    To implement final concrete version of the user task inherit your implementation from this class.
+    Provides stack storage and default implementations of all optional ITask methods.
+    Inherit from this class and implement GetFunc() and GetFuncUserData() to make a
+    schedulable task. Use ACCESS_USER for unprivileged tasks and ACCESS_PRIVILEGED
+    for tasks requiring full hardware access.
 
     Usage example:
     \code
@@ -30,7 +33,7 @@ namespace stk {
     class MyTask : public stk::Task<256, _AccessMode>
     {
     public:
-        stk::RunFuncT GetFunc() { return &Run; }
+        stk::RunFuncType GetFunc() { return &Run; }
         void *GetFuncUserData() { return this; }
 
     private:
@@ -43,7 +46,7 @@ namespace stk {
         {
             while (true)
             {
-                // do dome work here ...
+                // do some work here ...
             }
         }
     };
@@ -55,98 +58,151 @@ template <uint32_t _StackSize, EAccessMode _AccessMode>
 class Task : public ITask
 {
 public:
-    enum { STACK_SIZE = _StackSize };
+    enum { STACK_SIZE = _StackSize }; //!< Stack size in elements of size_t, mirrors the _StackSize template parameter.
+
     size_t *GetStack() const { return const_cast<size_t *>(m_stack); }
     uint32_t GetStackSize() const { return _StackSize; }
     uint32_t GetStackSizeBytes() const { return _StackSize * sizeof(size_t); }
     EAccessMode GetAccessMode() const { return _AccessMode; }
+
+    /*! \brief Default no-op handler. Override in subclass to log or handle missed deadlines.
+        \note  HRT deadline misses are only possible when the kernel is started with KERNEL_HRT.
+    */
     virtual void OnDeadlineMissed(uint32_t duration) { (void)duration; }
+
+    /*! \brief Default weight of 1. Override in subclass if custom scheduling weight is needed.
+        \note  Only relevant when using SwitchStrategySmoothWeightedRoundRobin. Prefer TaskW for
+               compile-time weight assignment.
+    */
     virtual int32_t GetWeight() const { return 1; }
-    virtual size_t GetId() const  { return reinterpret_cast<size_t>(this); }
-    virtual const char *GetTraceName() const  { return NULL; }
+
+    /*! \brief Get object's own address as its Id. Unique per task instance, requires no manual assignment.
+    */
+    virtual size_t GetId() const { return reinterpret_cast<size_t>(this); }
+
+    /*! \brief Override in subclass to supply a name for SEGGER SystemView tracing. Returns NULL by default.
+    */
+    virtual const char *GetTraceName() const { return NULL; }
 
 private:
-    typename StackMemoryDef<_StackSize>::Type m_stack; //!< memory region
+    typename StackMemoryDef<_StackSize>::Type m_stack; //!< Stack memory region, 16-byte aligned.
 };
 
 /*! \class TaskW
-    \brief Partial implementation of the user task. Use for SwitchStrategySmoothWeightedRoundRobin.
+    \brief Partial implementation of the user task with a compile-time scheduling weight.
+           Use when the kernel is configured with SwitchStrategySmoothWeightedRoundRobin.
 
-    See implementation details and example in Task.
+    \tparam _Weight:     Static scheduling weight (positive, non-zero 24-bit integer).
+                         Higher values cause this task to receive proportionally more CPU time.
+    \tparam _StackSize:  Stack size in elements of size_t.
+    \tparam _AccessMode: Hardware access mode (ACCESS_USER or ACCESS_PRIVILEGED).
+
+    \note  Hard Real-Time mode (KERNEL_HRT) is not supported for weighted tasks.
+           OnDeadlineMissed() will trigger an assertion if HRT scheduling is attempted.
+
+    See Task for full usage example and implementation guidance.
 */
 template <int32_t _Weight, uint32_t _StackSize, EAccessMode _AccessMode>
 class TaskW : public ITask
 {
 public:
-    enum { STACK_SIZE = _StackSize };
+    enum { STACK_SIZE = _StackSize }; //!< Stack size in elements of size_t, mirrors the _StackSize template parameter.
+
     size_t *GetStack() const { return const_cast<size_t *>(m_stack); }
     uint32_t GetStackSize() const { return _StackSize; }
     uint32_t GetStackSizeBytes() const { return _StackSize * sizeof(size_t); }
     EAccessMode GetAccessMode() const { return _AccessMode; }
-    virtual void OnDeadlineMissed(uint32_t duration) { STK_ASSERT(false); /* HRT is unsupported */ (void)duration; }
+
+    /*! \brief Hard Real-Time mode is unsupported for weighted tasks. Triggers an assertion if called.
+        \warning Do not use TaskW with KERNEL_HRT. Use Task instead.
+    */
+    virtual void OnDeadlineMissed(uint32_t duration) { STK_ASSERT(false); (void)duration; }
+
+    /*! \brief Returns the compile-time weight _Weight.
+    */
     virtual int32_t GetWeight() const { return _Weight; }
-    virtual size_t GetId() const  { return reinterpret_cast<size_t>(this); }
-    virtual const char *GetTraceName() const  { return NULL; }
+
+    /*! \brief Get object's own address as its Id. Unique per task instance, requires no manual assignment.
+    */
+    virtual size_t GetId() const { return reinterpret_cast<size_t>(this); }
+
+    /*! \brief Override in subclass to supply a name for SEGGER SystemView tracing. Returns NULL by default.
+    */
+    virtual const char *GetTraceName() const { return NULL; }
 
 private:
-    typename StackMemoryDef<_StackSize>::Type m_stack; //!< memory region
+    typename StackMemoryDef<_StackSize>::Type m_stack; //!< Stack memory region, 16-byte aligned.
 };
 
 /*! \class StackMemoryWrapper
-    \brief Stack memory wrapper for IStackMemory interface.
-    \note  Wrapper design pattern.
+    \brief Adapts an externally-owned stack memory array to the IStackMemory interface.
+    \note  Wrapper (Adapter) design pattern. Use when the stack memory is declared separately
+           from the task object (e.g. in a linker section or shared buffer) and needs to be
+           passed to the kernel via the IStackMemory interface.
+    \tparam _StackSize Stack size in elements of size_t. Must be >= STACK_SIZE_MIN.
 */
 template <uint32_t _StackSize>
 class StackMemoryWrapper : public IStackMemory
 {
 public:
     /*! \typedef MemoryType
-        \brief   Memory type which can be wrapped.
+        \brief   The concrete array type that this wrapper accepts, equivalent to StackMemoryDef<_StackSize>::Type.
     */
     typedef typename StackMemoryDef<_StackSize>::Type MemoryType;
 
-    /*! \brief Constructor .
+    /*! \brief     Construct a wrapper around an existing stack memory array.
+        \param[in] stack: Pointer to the externally-owned memory array. Must remain valid for the
+                   lifetime of this wrapper and of any kernel task using it.
+        \note      _StackSize must be >= STACK_SIZE_MIN; enforced by a compile-time assertion.
     */
     explicit StackMemoryWrapper(MemoryType *stack) : m_stack(stack)
     {
-        // note: stack size must be STACK_SIZE_MIN or bigger
         STK_STATIC_ASSERT(_StackSize >= STACK_SIZE_MIN);
     }
 
+    /*! \brief Get pointer to the first element of the wrapped stack array.
+    */
     size_t *GetStack() const { return (*m_stack); }
+
+    /*! \brief Get number of elements in the wrapped stack array.
+    */
     uint32_t GetStackSize() const { return _StackSize; }
+
+    /*! \brief Get size of the wrapped stack array in bytes.
+    */
     uint32_t GetStackSizeBytes() const { return _StackSize * sizeof(size_t); }
 
 private:
-    MemoryType *m_stack; //!< pointer to the wrapped memory region
+    MemoryType *m_stack; //!< Pointer to the externally-owned stack memory array.
 };
 
-/*! \brief     Get task/thread Id.
-    \warning   ISR-unsafe.
+/*! \brief     Get task/thread Id of the calling task.
     \return    Id of the calling task/thread.
+    \warning   ISR-unsafe. Calling from an ISR context is not permitted and will trigger an assertion.
 */
 __stk_forceinline TId GetTid()
 {
-    // Kernel will not locate a task inside ISR
     STK_ASSERT(!hw::IsInsideISR());
 
     return IKernelService::GetInstance()->GetTid();
 }
 
-/*! \brief     Get milliseconds from ticks.
-    \param[in] ticks: Ticks to convert.
-    \param[in] resolution: Resolution (see IKernelService::GetTickResolution).
-    \return    Milliseconds.
+/*! \brief     Convert ticks to milliseconds.
+    \param[in] ticks: Tick count to convert.
+    \param[in] resolution: Microseconds per tick, as returned by IKernelService::GetTickResolution().
+    \return    Equivalent time in milliseconds.
+    \note      ISR-safe (performs only arithmetic, no kernel calls).
 */
 __stk_forceinline int64_t GetMsecFromTicks(int64_t ticks, int32_t resolution)
 {
     return (ticks * resolution) / 1000;
 }
 
-/*! \brief     Get ticks from milliseconds.
-    \param[in] msec: Milliseconds to convert.
-    \param[in] resolution: Resolution (see IKernelService::GetTickResolution).
-    \return    Ticks.
+/*! \brief     Convert milliseconds to ticks.
+    \param[in] msec: Time in milliseconds to convert.
+    \param[in] resolution: Microseconds per tick, as returned by IKernelService::GetTickResolution().
+    \return    Equivalent tick count.
+    \note      ISR-safe (performs only arithmetic, no kernel calls).
 */
 __stk_forceinline Ticks GetTicksFromMsec(int64_t msec, int32_t resolution)
 {
@@ -172,39 +228,43 @@ __stk_forceinline int32_t GetTickResolution()
     return IKernelService::GetInstance()->GetTickResolution();
 }
 
-/*! \brief     Get ticks from milliseconds.
-    \param[in] msec: Milliseconds to convert.
-    \return    Ticks.
+/*! \brief     Convert milliseconds to ticks using the current kernel tick resolution.
+    \param[in] msec: Time in milliseconds to convert.
+    \return    Equivalent tick count.
+    \note      Convenience overload that queries GetTickResolution() automatically.
+               Use the two-argument form GetTicksFromMsec(msec, resolution) in ISR context.
+    \warning   ISR-unsafe (internally calls GetTickResolution() which accesses the kernel service).
 */
 __stk_forceinline Ticks GetTicksFromMsec(int64_t msec)
 {
     return GetTicksFromMsec(msec, GetTickResolution());
 }
 
-/*! \brief     Get current time in milliseconds.
+/*! \brief     Get current time in milliseconds since kernel start.
+    \return    Milliseconds elapsed since IKernel::Start() was called.
     \note      ISR-safe.
-    \return    Milliseconds.
+    \note      When the tick resolution is exactly 1000 µs (1 ms, the default PERIODICITY_DEFAULT),
+               the tick count is returned directly without multiplication, avoiding a 64-bit multiply.
 */
 __stk_forceinline int64_t GetTimeNowMsec()
 {
     IKernelService *service = IKernelService::GetInstance();
     int32_t resolution = service->GetTickResolution();
 
-    if (1000 == resolution)
+    if (resolution == 1000) // fast path: tick == 1 ms, no conversion needed
         return service->GetTicks();
     else
         return (service->GetTicks() * resolution) / 1000;
 }
 
-/*! \brief     Delay calling process.
+/*! \brief     Delay calling process by busy-waiting until the deadline expires.
     \note      Unlike Sleep this function delays code execution by spinning in a loop until deadline expiry.
     \note      Use with care in HRT mode to avoid missed deadline (see stk::KERNEL_HRT, ITask::OnDeadlineMissed).
     \param[in] msec: Delay time (milliseconds).
-    \warning   ISR-unsafe.
+    \warning   ISR-unsafe. Calling from an ISR would spin indefinitely, deadlocking the system.
 */
 __stk_forceinline void Delay(uint32_t msec)
 {
-    // ISR blocks scheduler and will wait indefinitely (deadlock)
     STK_ASSERT(!hw::IsInsideISR());
 
     IKernelService::GetInstance()->Delay(msec);
@@ -212,24 +272,23 @@ __stk_forceinline void Delay(uint32_t msec)
 
 /*! \brief     Put calling process into a sleep state.
     \note      Unlike Delay this function does not waste CPU cycles and allows kernel to put CPU into a low-power state.
-    \note      Unsupported in HRT mode (see stk::KERNEL_HRT), instead task will sleep automatically according its periodicity and workload.
+    \note      Unsupported in HRT mode (see stk::KERNEL_HRT); in HRT mode tasks sleep automatically according to their periodicity and workload.
     \param[in] msec: Sleep time (milliseconds).
-    \warning   ISR-unsafe.
+    \warning   ISR-unsafe. Calling from an ISR would block the scheduler indefinitely, deadlocking the system.
 */
 __stk_forceinline void Sleep(uint32_t msec)
 {
-    // ISR blocks scheduler and will wait indefinitely (deadlock)
     STK_ASSERT(!hw::IsInsideISR());
 
     IKernelService::GetInstance()->Sleep(msec);
 }
 
-/*! \brief     Notify scheduler that it can switch to a next task.
-    \warning   ISR-unsafe.
+/*! \brief     Notify scheduler to switch to the next runnable task.
+    \note      A cooperative scheduling mechanism. In HRT mode acts as a cooperation point (see stk::KERNEL_HRT).
+    \warning   ISR-unsafe. Calling from an ISR would block the scheduler indefinitely, deadlocking the system.
 */
 __stk_forceinline void Yield()
 {
-    // ISR blocks scheduler and will wait indefinitely (deadlock)
     STK_ASSERT(!hw::IsInsideISR());
 
     IKernelService::GetInstance()->SwitchToNext();
@@ -238,11 +297,15 @@ __stk_forceinline void Yield()
 /*! \class PeriodicTimer
     \brief Lightweight periodic time accumulator with callback notification.
 
-    \tparam _PeriodMsec Period value in milliseconds which defines the timer interval.
+    \tparam PeriodMsec  Timer interval in milliseconds. Must be > 0.
 
     \note  This timer accumulates elapsed time between consecutive Update() calls
            using stk::GetTimeNowMsec(). When the accumulated time reaches or exceeds
            the configured period, a user-provided callback is invoked.
+    \note  The callback fires at most once per Update() call. If Update() is called
+           infrequently and multiple periods have elapsed, only one callback is fired
+           and the remainder is preserved for the next period. Call Update() frequently
+           enough relative to PeriodMsec to avoid drift accumulation.
 
     Usage example:
     \code
@@ -256,8 +319,8 @@ __stk_forceinline void Yield()
 template <uint32_t PeriodMsec>
 struct PeriodicTimer
 {
-    int64_t  prev;    //!< timestamp of the previous Update() call in milliseconds
-    uint32_t elapsed; //!< accumulated elapsed time in milliseconds
+    int64_t  prev;    //!< Timestamp of the most recent Update() call in milliseconds (from stk::GetTimeNowMsec()).
+    uint32_t elapsed; //!< Accumulated elapsed time in milliseconds since the last callback invocation.
 
     /*! \brief Construct a periodic timer and initialize the reference timestamp.
     */
@@ -277,15 +340,15 @@ struct PeriodicTimer
         elapsed = 0;
     }
 
-    /*! \brief     Update the timer and invoke callback when the period is reached.
-        \tparam    _Callback: Callable type accepting (int64_t now, uint32_t elapsed).
-        \param[in] cb: User callback invoked when accumulated time reaches the period.
-        \note      The callback is called with:
-                   - \c now: current timestamp returned by stk::GetTimeNowMsec().
-                   - \c elapsed: accumulated elapsed time in milliseconds.
-        \note      If accumulated time exceeds the period, the remainder is preserved
-                   to maintain timing accuracy across updates.
-        \warning   This method assumes monotonic behavior of stk::GetTimeNowMsec().
+    /*! \brief     Update the timer and invoke the callback if the period has been reached.
+        \tparam    _Callback: Any callable accepting (int64_t now, uint32_t elapsed).
+                   \c now is the current timestamp in milliseconds (from stk::GetTimeNowMsec()).
+                   \c elapsed is the total accumulated time in milliseconds at the moment of the callback.
+        \param[in] cb: Callback invoked when accumulated time reaches or exceeds PeriodMsec.
+        \note      The callback is invoked at most once per call, regardless of how many periods have elapsed.
+                   Any excess time beyond one period is retained in \c elapsed for the next call.
+        \warning   Assumes stk::GetTimeNowMsec() is monotonically non-decreasing. Backwards time
+                   (e.g. after a counter overflow or clock adjustment) will cause undefined accumulation behavior.
     */
     template <typename _Callback>
     void Update(_Callback&& cb)

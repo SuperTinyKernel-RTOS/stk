@@ -18,84 +18,126 @@
 #include "strategy/stk_strategy_fpriority.h"
 
 /*! \file  stk.h
-    \brief Contains core implementation (Kernel) of the task scheduler.
+    \brief Top-level STK include. Provides the Kernel class template and all built-in
+           task-switching strategies.
+
+    Include this single header in user application code. It transitively pulls in:
+     - stk_helper.h    — Task, TaskW, StackMemoryWrapper, and time/synchronization utilities.
+     - stk_strategy_rrobin.h    — SwitchStrategyRoundRobin.
+     - stk_strategy_swrrobin.h  — SwitchStrategySmoothWeightedRoundRobin.
+     - stk_strategy_monotonic.h — SwitchStrategyMonotonic (SRT rate-monotonic).
+     - stk_strategy_edf.h       — SwitchStrategyEdf (Earliest Deadline First).
+     - stk_strategy_fpriority.h — SwitchStrategyFixedPriority.
 */
 
 namespace stk {
 
 /*! \class Kernel
-    \brief Concrete implementation of IKernel (thread scheduling kernel).
-    \note  Kernel expects at least 1 task, e.g. Kernel<N> where N != 0.
+    \brief Concrete implementation of IKernel.
+
+    All configuration is expressed as template parameters. No virtual dispatch, no heap
+    allocation - the entire kernel, tasks, and traps live in statically reserved storage.
+
+    \tparam _Mode:       Bitmask of EKernelMode flags that configures kernel features:
+                         - stk::KERNEL_STATIC  — fixed task list, no add/remove after Start().
+                         - stk::KERNEL_DYNAMIC — tasks may be added or removed at runtime.
+                         - stk::KERNEL_HRT     — Hard Real-Time mode (must combine with STATIC or DYNAMIC).
+                         - stk::KERNEL_SYNC    — enables synchronization primitives (Mutex, Event, etc.).
+                         KERNEL_STATIC and KERNEL_DYNAMIC are mutually exclusive.
+    \tparam _Size:       Maximum number of concurrent tasks. Must be > 0.
+    \tparam _TyStrategy: Task-switching strategy type (e.g. SwitchStrategyRoundRobin).
+                         Must inherit ITaskSwitchStrategy.
+    \tparam _TyPlatform: Platform driver type (e.g. PlatformArmCortexM, or PlatformDefault).
+                         Must inherit IPlatform.
+
+    \note  At least 1 task is required: _Size must be > 0 (enforced by compile-time assertion).
+    \note  KERNEL_HRT is incompatible with weighted scheduling strategies (WEIGHT_API == true),
+           also enforced by a compile-time assertion.
 
     Usage example:
     \code
-    static stk::Kernel<KERNEL_STATIC, 3> kernel;
-    static stk::PlatformArmCortexM platform;
-    static stk::SwitchStrategyRoundRobin tsstrategy;
+    static stk::Kernel<KERNEL_STATIC, 3,
+                       SwitchStrategyRoundRobin,
+                       PlatformDefault> kernel;
 
-    static Task<ACCESS_PRIVILEGED> task1;
-    static Task<ACCESS_USER> task2;
-    static Task<ACCESS_USER> task3;
+    static MyTask1<256, ACCESS_PRIVILEGED> task1;
+    static MyTask2<512, ACCESS_USER>       task2;
+    static MyTask3<512, ACCESS_USER>       task3;
 
-    kernel.Initialize(&platform, &tsstrategy);
-
+    kernel.Initialize();
     kernel.AddTask(&task1);
     kernel.AddTask(&task2);
     kernel.AddTask(&task3);
-
-    kernel.Start(PERIODICITY_DEFAULT);
+    kernel.Start();
     \endcode
 */
 template <int32_t _Mode, uint32_t _Size, class _TyStrategy, class _TyPlatform>
 class Kernel : public IKernel, private IPlatform::IEventHandler
 {
     /*! \typedef SleepTrapStackMemory
-        \brief   Stack memory wrapper type for a Sleep trap.
+        \brief   Stack memory wrapper type for the sleep trap.
+        \see     SleepTrapStack, STK_SLEEP_TRAP_STACK_SIZE
     */
     typedef StackMemoryWrapper<STK_SLEEP_TRAP_STACK_SIZE> SleepTrapStackMemory;
 
     /*! \typedef ExitTrapStackMemory
-        \brief   Stack memory wrapper type for an Exit trap.
+        \brief   Stack memory wrapper type for the exit trap.
+        \see     ExitTrapStack, STACK_SIZE_MIN
     */
     typedef StackMemoryWrapper<STACK_SIZE_MIN> ExitTrapStackMemory;
 
     /*! \enum  ERequest
-        \brief Request flags.
+        \brief Bitmask flags for pending inter-task requests that must be processed
+               by the kernel on the next tick (in UpdateTaskRequest()).
     */
     enum ERequest : uint8_t
     {
-        REQUEST_NONE     = 0,       //!< none
-        REQUEST_ADD_TASK = (1 << 0) //!< request for Kernel::AddTask is pending from some of the tasks
+        REQUEST_NONE     = 0,       //!< No pending requests.
+        REQUEST_ADD_TASK = (1 << 0) //!< An AddTask() request is pending from a running task (KERNEL_DYNAMIC only).
     };
 
     /*! \class KernelTask
-        \brief Concrete implementation of the IKernelTask interface.
+        \brief Internal per-slot kernel descriptor that wraps a user ITask instance.
+
+        Holds the kernel-side state for one task slot: the Stack descriptor, sleep timer,
+        HRT or SRT scheduling metadata, optional wait object (KERNEL_SYNC), and optional
+        weight (weighted strategies). The task-switching strategy operates on KernelTask
+        pointers rather than ITask pointers directly.
+
+        A slot is "free" when m_user == NULL (IsBusy() == false). The Kernel pre-allocates
+        _Size slots in m_task_storage; AddTask() finds a free slot and calls Bind().
     */
     class KernelTask : public IKernelTask
     {
         friend class Kernel;
 
         /*! \enum  EStateFlags
-            \brief Task state flags.
+            \brief Bitmask of transient state flags. Set by the task or the kernel and
+                   consumed (cleared) during UpdateTaskState() on the next tick.
         */
         enum EStateFlags
         {
-            STATE_NONE           = 0,        //!< none
-            STATE_REMOVE_PENDING = (1 << 0), //!< task signaled that it exited
-            STATE_SLEEP_PENDING  = (1 << 1)  //!< task signaled that it wants to sleep
+            STATE_NONE           = 0,        //!< No pending state flags.
+            STATE_REMOVE_PENDING = (1 << 0), //!< Task returned from its Run function; slot will be freed on the next tick (KERNEL_DYNAMIC only).
+            STATE_SLEEP_PENDING  = (1 << 1)  //!< Task called Sleep/Yield; strategy's OnTaskSleep() will be invoked on the next tick (sleep-aware strategies only).
         };
 
     public:
         /*! \class AddTaskRequest
-            \brief Serialized add task request.
-            \note  Related to stk::KERNEL_STATIC or stk::KERNEL_DYNAMIC modes only.
+            \brief Payload for an in-flight AddTask() request issued by a running task.
+            \note  Used in KERNEL_DYNAMIC mode only, when AddTask() is called after Start().
+                   The requesting task stores this struct on its own stack and yields, the
+                   kernel reads it on the next tick in UpdateTaskRequest() then clears the
+                   pointer to signal completion. The struct must remain valid until then.
         */
         struct AddTaskRequest
         {
-            ITask *user_task; //!< user task to add
+            ITask *user_task; //!< User task to add. Must remain valid for the lifetime of its kernel slot.
         };
 
-        /*! \brief Default initializer.
+        /*! \brief Construct a free (unbound) task slot. All fields set to zero/null.
+            \note  In KERNEL_SYNC mode the embedded WaitObject back-pointer is wired to this
+                   KernelTask at construction so the wait object can wake its owning task.
         */
         explicit KernelTask() : m_user(nullptr), m_stack(), m_state(STATE_NONE), m_time_sleep(0),
             m_srt(), m_hrt(), m_rt_weight()
@@ -105,16 +147,35 @@ class Kernel : public IKernel, private IPlatform::IEventHandler
                 m_wait_obj->m_task = this;
         }
 
+        /*! \brief  Get bound user task.
+            \return Pointer to the ITask, or \c NULL if the slot is free (IsBusy() == false).
+        */
         ITask *GetUserTask() { return m_user; }
 
+        /*! \brief  Get stack descriptor for this task slot.
+            \return Pointer to the Stack (SP register value and access mode flags).
+        */
         Stack *GetUserStack() { return &m_stack; }
 
+        /*! \brief  Check whether this slot is bound to a user task.
+            \return \c true if a user task is assigned (m_user != NULL); \c false if the slot is free.
+        */
         bool IsBusy() const { return (m_user != nullptr); }
 
+        /*! \brief  Check whether this task is currently sleeping (waiting for a tick or a wake event).
+            \return \c true if m_time_sleep < 0 (negative value encodes remaining sleep ticks).
+        */
         bool IsSleeping() const { return (m_time_sleep < 0); }
 
+        /*! \brief  Get task identifier.
+            \return TId derived from the bound ITask pointer address (unique per task instance).
+        */
         TId GetTid() const { return reinterpret_cast<TId>(m_user); }
 
+        /*! \brief  Wake this task on the next scheduling tick.
+            \note   Sets m_time_sleep to -1 (one tick remaining) so the task exits sleep state
+                    on the next UpdateTaskState() pass. Asserts that the task is currently sleeping.
+        */
         void Wake()
         {
             STK_ASSERT(IsSleeping());
@@ -123,15 +184,31 @@ class Kernel : public IKernel, private IPlatform::IEventHandler
             m_time_sleep = -1;
         }
 
+        /*! \brief     Update the run-time scheduling weight (weighted strategies only).
+            \param[in] weight: New current weight. Ignored unless _TyStrategy::WEIGHT_API is true.
+        */
         void SetCurrentWeight(int32_t weight)
         {
             if (_TyStrategy::WEIGHT_API)
                 m_rt_weight[0] = weight;
         }
 
+        /*! \brief  Get static scheduling weight from the user task.
+            \return ITask::GetWeight() if WEIGHT_API is true; 1 otherwise.
+        */
         int32_t GetWeight() const { return (_TyStrategy::WEIGHT_API ? m_user->GetWeight() : 1); }
+
+        /*! \brief  Get current (run-time) scheduling weight.
+            \return m_rt_weight[0] if WEIGHT_API is true; 1 otherwise.
+            \note   The run-time weight is decremented each tick by the weighted strategy and
+                    reset to GetWeight() when exhausted.
+        */
         int32_t GetCurrentWeight() const { return (_TyStrategy::WEIGHT_API ? m_rt_weight[0] : 1); }
 
+        /*! \brief  Get HRT scheduling periodicity.
+            \return Period in ticks between successive activations of this task.
+            \note   KERNEL_HRT mode only. Asserts if called outside HRT mode.
+        */
         Timeout GetHrtPeriodicity() const
         {
             STK_ASSERT(_Mode & KERNEL_HRT);
@@ -139,6 +216,11 @@ class Kernel : public IKernel, private IPlatform::IEventHandler
             return (_Mode & KERNEL_HRT ? m_hrt[0].periodicity : 0);
         }
 
+        /*! \brief  Get absolute HRT deadline (ticks elapsed since task was activated).
+            \return Deadline in ticks. The task must complete its work within this many ticks
+                    of being switched in, or OnDeadlineMissed() is invoked.
+            \note   KERNEL_HRT mode only. Asserts if called outside HRT mode.
+        */
         Timeout GetHrtDeadline() const
         {
             STK_ASSERT(_Mode & KERNEL_HRT);
@@ -146,6 +228,11 @@ class Kernel : public IKernel, private IPlatform::IEventHandler
             return (_Mode & KERNEL_HRT ? m_hrt[0].deadline : 0);
         }
 
+        /*! \brief  Get remaining HRT deadline (ticks left before the deadline expires).
+            \return deadline - duration: ticks remaining before the task must call Yield().
+                    A negative or zero value means the deadline has been missed.
+            \note   KERNEL_HRT mode only. Asserts if called outside HRT mode or while sleeping.
+        */
         Timeout GetHrtRelativeDeadline() const
         {
             STK_ASSERT(_Mode & KERNEL_HRT);
@@ -156,34 +243,40 @@ class Kernel : public IKernel, private IPlatform::IEventHandler
 
     private:
         /*! \class SrtInfo
-            \brief Soft Real-Time info of the bound task.
-            \note  Related to non stk::KERNEL_HRT mode only.
+            \brief Per-task soft real-time (SRT) metadata.
+            \note  Allocated only when _Mode does not include KERNEL_HRT. Zero-size in HRT mode
+                   (STK_ALLOCATE_COUNT resolves to 0 on GCC/Clang).
         */
         struct SrtInfo
         {
             SrtInfo() : add_task_req(nullptr)
             {}
 
-            /*! \brief     Clear values.
+            /*! \brief Clear all fields, ready for slot re-use.
             */
             void Clear()
             {
                 add_task_req = nullptr;
             }
 
-            AddTaskRequest *add_task_req; //!< add task request made from another active task (see Kernel::AddTask)
+            /*! Pointer to a pending AddTaskRequest stored on the requesting task's stack.
+                Non-null while the request is in flight, cleared to null by UpdateTaskRequest()
+                once the new task has been added, signalling completion to the requesting task.
+                \see AddTaskRequest, RequestAddTask, UpdateTaskRequest
+            */
+            AddTaskRequest *add_task_req;
         };
 
         /*! \class HrtInfo
-            \brief Hard Real-Time info of the bound task.
-            \note  Related to stk::KERNEL_HRT mode only.
+            \brief Per-task Hard Real-Time (HRT) scheduling metadata.
+            \note  Allocated only when _Mode includes KERNEL_HRT. Zero-size in SRT mode.
         */
         struct HrtInfo
         {
             HrtInfo() : periodicity(0), deadline(0), duration(0), done(false)
             {}
 
-            /*! \brief     Clear values.
+            /*! \brief Clear all fields, ready for slot re-use or re-activation.
             */
             void Clear()
             {
@@ -193,15 +286,17 @@ class Kernel : public IKernel, private IPlatform::IEventHandler
                 done        = false;
             }
 
-            Timeout periodicity; //!< scheduling periodicity (ticks)
-            Timeout deadline;    //!< work deadline (ticks)
-            Timeout duration;    //!< current duration of the active state when work is being carried out by the task (ticks)
-            volatile bool done;  //!< true if task completed its work and called Yield()
+            Timeout periodicity; //!< Activation period in ticks: the task is re-activated every this many ticks.
+            Timeout deadline;    //!< Maximum allowed active duration in ticks (relative to switch-in). Exceeding this triggers OnDeadlineMissed().
+            Timeout duration;    //!< Ticks spent in the active (non-sleeping) state in the current period. Incremented by UpdateTaskState(); reset to 0 on switch-out.
+            volatile bool done;  //!< Set to true when the task signals work completion (via Yield() or on exit). Triggers HrtOnSwitchedOut() at the next context switch.
         };
 
         /*! \class WaitObject
-            \brief Concrete implementation of the IWaitObject interface.
-            \note  Related to stk::KERNEL_SYNC mode only.
+            \brief Concrete implementation of IWaitObject, embedded in each KernelTask slot.
+            \note  Allocated only when _Mode includes KERNEL_SYNC. Zero-size otherwise.
+            \note  One WaitObject per KernelTask, the back-pointer m_task is wired at
+                   KernelTask construction and never changes.
         */
         struct WaitObject : public IWaitObject
         {
@@ -209,18 +304,30 @@ class Kernel : public IKernel, private IPlatform::IEventHandler
             {}
 
             /*! \class WaitRequest
-                \brief Serialized request for registration of ISyncObject.
-                \note  Related to stk::KERNEL_SYNC mode only.
+                \brief Payload stored in the sync object's kernel-side list entry while a task is waiting.
+                \note  KERNEL_SYNC mode only. Holds the sync object to register with the kernel's
+                       m_sync_list so it receives per-tick Tick() calls for timeout tracking.
             */
             struct WaitRequest
             {
-                ISyncObject *sync_obj; //!< sync object to register
+                ISyncObject *sync_obj; //!< Sync object whose Tick() will be called each kernel tick.
             };
 
+            /*! \brief  Get the TId of the task that owns this wait object.
+                \return TId of m_task.
+            */
             TId GetTid() const { return m_task->GetTid(); }
 
+            /*! \brief  Check whether the wait expired due to timeout.
+                \return \c true if the wait timed out before being signalled, \c false if woken by Wake().
+            */
             bool IsTimeout() const { return m_timeout; }
 
+            /*! \brief     Wake the waiting task (called by ISyncObject when it signals).
+                \param[in] timeout: \c true if woken because the timeout expired, \c false if signalled.
+                \note      Clears m_time_wait, records the timeout flag, removes this object from
+                           m_sync_obj's wait list, nulls m_sync_obj, then calls m_task->Wake().
+            */
             void Wake(bool timeout)
             {
                 STK_ASSERT(m_sync_obj != nullptr);
@@ -234,6 +341,12 @@ class Kernel : public IKernel, private IPlatform::IEventHandler
                 return m_task->Wake();
             }
 
+            /*! \brief  Advance the timeout countdown by one tick.
+                \return \c true if the wait is still active (not yet timed out),
+                        \c false if the timeout just expired (caller should stop ticking this object).
+                \note   Called by UpdateSyncObjects() each kernel tick.
+                        WAIT_INFINITE waits never time out and always return \c true.
+            */
             bool Tick()
             {
                 if ((m_time_wait != WAIT_INFINITE) && !m_timeout)
@@ -247,6 +360,13 @@ class Kernel : public IKernel, private IPlatform::IEventHandler
                 return !m_timeout;
             }
 
+            /*! \brief     Configure and arm this wait object for a new wait operation.
+                \param[in] sync_obj: The synchronization object to wait on. Must not already
+                           have this wait object registered (asserted).
+                \param[in] timeout: Maximum ticks to wait, or WAIT_INFINITE for no timeout.
+                \note      Registers this object with sync_obj's wait list via AddWaitObject().
+                           Must be paired with a matching Wake() or timeout expiry.
+            */
             void SetupWait(ISyncObject *sync_obj, Timeout timeout)
             {
                 STK_ASSERT(m_sync_obj == nullptr);
@@ -258,13 +378,15 @@ class Kernel : public IKernel, private IPlatform::IEventHandler
                 sync_obj->AddWaitObject(this);
             }
 
-            KernelTask   *m_task;      //!< waiting task
-            ISyncObject  *m_sync_obj;  //!< synchronization object which caused waiting
-            volatile bool m_timeout;   //!< true if timeout happened due to waiting
-            Timeout       m_time_wait; //!< number of ticks left till timeout
+            KernelTask   *m_task;      //!< Back-pointer to the owning KernelTask. Set once at construction; never changes.
+            ISyncObject  *m_sync_obj;  //!< Sync object this wait is registered with, or \c NULL when not waiting.
+            volatile bool m_timeout;   //!< \c true if the wait expired due to timeout rather than a Wake() signal.
+            Timeout       m_time_wait; //!< Ticks remaining until timeout. Decremented each tick; WAIT_INFINITE means no timeout.
         };
 
-        /*! \brief     Release variables from info about previous task.
+        /*! \brief     Bind this slot to a user task: set access mode, task ID, and initialise the stack.
+            \param[in] platform: Platform driver used to initialise the stack frame.
+            \param[in] user_task: User task to bind. Asserts that the stack is successfully initialised.
         */
         void Bind(_TyPlatform *platform, ITask *user_task)
         {
@@ -286,7 +408,8 @@ class Kernel : public IKernel, private IPlatform::IEventHandler
             m_user = user_task;
         }
 
-        /*! \brief     Release variables from info about previous task.
+        /*! \brief Reset this slot to the free (unbound) state, clearing all scheduling metadata.
+            \note  Called by RemoveTask(). After Unbind() the slot is available for the next AddTask().
         */
         void Unbind()
         {
@@ -406,8 +529,14 @@ class Kernel : public IKernel, private IPlatform::IEventHandler
         */
         bool HrtIsDeadlineMissed(Timeout duration) const { return (duration > m_hrt[0].deadline); }
 
-        /*! \brief     Schedule task to sleep.
-            \param[in] ticks: Number of ticks to sleep.
+        /*! \brief     Put the task into a sleeping state for the specified number of ticks.
+            \param[in] ticks: Number of ticks to sleep. Must be > 0.
+            \note      Stores \c -ticks in m_time_sleep (negative values indicate sleeping;
+                       UpdateTaskState() increments toward 0 each tick until the task wakes).
+            \note      If the strategy uses SLEEP_EVENT_API and the task is not already sleeping,
+                       sets STATE_SLEEP_PENDING so OnTaskSleep() is delivered on the next tick.
+            \note      A full memory fence is emitted after the assignment so that the ISR-side
+                       scheduler sees the updated value without delay.
         */
         void ScheduleSleep(Timeout ticks)
         {
@@ -424,30 +553,51 @@ class Kernel : public IKernel, private IPlatform::IEventHandler
             __stk_full_memfence();
         }
 
-        ITask            *m_user;       //!< user task
-        Stack             m_stack;      //!< stack descriptor
-        volatile uint32_t m_state;      //!< state flags
-        volatile Timeout  m_time_sleep; //!< time to sleep (ticks)
-        SrtInfo           m_srt[STK_ALLOCATE_COUNT(_Mode, KERNEL_HRT, 0, 1)];       //!< Soft Real-Time info (does not occupy memory if kernel operation mode is stk::KERNEL_HRT)
-        HrtInfo           m_hrt[STK_ALLOCATE_COUNT(_Mode, KERNEL_HRT, 1, 0)];       //!< Hard Real-Time info (does not occupy memory if kernel operation mode is not stk::KERNEL_HRT)
-        int32_t           m_rt_weight[_TyStrategy::WEIGHT_API ? 1 : 0];             //!< current (run-time) weight, see SwitchStrategySmoothWeightedRoundRobin
-        WaitObject        m_wait_obj[STK_ALLOCATE_COUNT(_Mode, KERNEL_SYNC, 1, 0)]; //!< wait object (synchronization support)
+        ITask            *m_user;       //!< Bound user task, or \c NULL when slot is free.
+        Stack             m_stack;      //!< Stack descriptor (SP register value + access mode + optional tid).
+        volatile uint32_t m_state;      //!< Bitmask of EStateFlags. Written by task thread, read/cleared by kernel tick.
+        volatile Timeout  m_time_sleep; //!< Sleep countdown: negative while sleeping (absolute value = ticks remaining), zero when awake.
+        SrtInfo           m_srt[STK_ALLOCATE_COUNT(_Mode, KERNEL_HRT, 0, 1)];       //!< SRT metadata. Zero-size (no memory) in KERNEL_HRT mode.
+        HrtInfo           m_hrt[STK_ALLOCATE_COUNT(_Mode, KERNEL_HRT, 1, 0)];       //!< HRT metadata. Zero-size (no memory) in non-HRT mode.
+        int32_t           m_rt_weight[_TyStrategy::WEIGHT_API ? 1 : 0];             //!< Run-time weight for weighted-round-robin scheduling. Zero-size for unweighted strategies.
+        WaitObject        m_wait_obj[STK_ALLOCATE_COUNT(_Mode, KERNEL_SYNC, 1, 0)]; //!< Embedded wait object for synchronization. Zero-size (no memory) if KERNEL_SYNC is not set.
     };
 
     /*! \class KernelService
-        \brief Concrete implementation of the IKernelService interface.
+        \brief Concrete implementation of IKernelService exposed to running tasks.
+
+        Holds the global tick counter (m_ticks, updated atomically by IncrementTick() each
+        SysTick) and a typed pointer to the platform driver. Tasks access this object via
+        IKernelService::GetInstance() which returns the singleton registered at Initialize().
     */
     class KernelService : public IKernelService
     {
         friend class Kernel;
 
     public:
+        /*! \brief  Get the TId of the calling task.
+            \return TId via platform->GetTid(), which resolves by stack pointer.
+            \warning ISR-unsafe. Asserted in the helper-layer wrapper stk::GetTid().
+        */
         TId GetTid() const { return m_platform->GetTid(); }
 
+        /*! \brief  Get the current tick count since kernel start.
+            \return Atomically-read 64-bit tick counter (via hw::ReadVolatile64).
+            \note   ISR-safe.
+        */
         Ticks GetTicks() const { return hw::ReadVolatile64(&m_ticks); }
 
+        /*! \brief  Get the tick resolution.
+            \return Microseconds per tick, as configured by Initialize(resolution_us).
+            \note   ISR-safe.
+        */
         int32_t GetTickResolution() const  { return m_platform->GetTickResolution(); }
 
+        /*! \brief     Busy-wait until \a msec milliseconds have elapsed.
+            \param[in] msec: Delay in milliseconds.
+            \note      Spins calling __stk_relax_cpu() in a loop. Does not yield the CPU.
+            \warning   ISR-unsafe. In HRT mode, long busy-waits will cause deadline misses.
+        */
         __stk_attr_noinline void Delay(Timeout msec)
         {
             Ticks deadline = GetTicks() + GetTicksFromMsec(msec, GetTickResolution());
@@ -457,6 +607,13 @@ class Kernel : public IKernel, private IPlatform::IEventHandler
             }
         }
 
+        /*! \brief     Yield the CPU for \a msec milliseconds, allowing the scheduler to run other tasks.
+            \param[in] msec: Sleep time in milliseconds.
+            \note      Converts msec to ticks and calls platform->Sleep() which schedules the calling
+                       task to sleep and spins until the kernel switches it back in.
+            \warning   ISR-unsafe. Asserts (never returns) in KERNEL_HRT mode — HRT tasks sleep
+                       automatically according to their periodicity, not via explicit Sleep() calls.
+        */
         __stk_attr_noinline void Sleep(Timeout msec)
         {
             if ((_Mode & KERNEL_HRT) == 0)
@@ -470,8 +627,20 @@ class Kernel : public IKernel, private IPlatform::IEventHandler
             }
         }
 
+        /*! \brief Yield the CPU to the next runnable task.
+            \note  Internally calls OnTaskSleep with a 2-tick sleep so the scheduler selects
+                   another task on the very next tick. The calling task is rescheduled promptly.
+            \warning ISR-unsafe.
+        */
         void SwitchToNext() { m_platform->SwitchToNext(); }
 
+        /*! \brief     Block the calling task until a synchronization object signals or the timeout expires.
+            \param[in] sobj: Sync object to wait on. Must belong to this kernel's m_sync_list or be unregistered.
+            \param[in] mutex: Mutex currently held by the caller. Unlocked before waiting, re-locked on return.
+            \param[in] ticks: Maximum ticks to wait, or WAIT_INFINITE.
+            \return    Pointer to the WaitObject on wakeup (check IsTimeout() to distinguish signal vs. timeout).
+            \note      KERNEL_SYNC mode only. Asserts (returns NULL) if KERNEL_SYNC is not set.
+        */
         IWaitObject *Wait(ISyncObject *sobj, IMutex *mutex, Timeout ticks)
         {
             if (_Mode & KERNEL_SYNC)
@@ -486,7 +655,8 @@ class Kernel : public IKernel, private IPlatform::IEventHandler
         }
 
     private:
-        /*! \brief     Default initializer.
+        /*! \brief Construct an uninitialised service instance (m_platform = null, m_ticks = 0).
+            \note  Fully initialised by Initialize(). Private; constructed only as a member of Kernel.
         */
         explicit KernelService() : m_platform(0), m_ticks(0)
         {}
@@ -509,8 +679,8 @@ class Kernel : public IKernel, private IPlatform::IEventHandler
             hw::WriteVolatile64(&m_ticks, m_ticks + 1);
         }
 
-        _TyPlatform   *m_platform; //!< platform
-        volatile Ticks m_ticks;    //!< CPU ticks elapsed (volatile to reload value from the memory by the consumer)
+        _TyPlatform   *m_platform; //!< Typed platform driver pointer, set at Initialize().
+        volatile Ticks m_ticks;    //!< Global tick counter. Written via hw::WriteVolatile64() by IncrementTick() (ISR context); read via hw::ReadVolatile64() by GetTicks() (task context) for a lock-free consistent 64-bit read on 32-bit CPUs.
     };
 
 public:
@@ -518,10 +688,14 @@ public:
     */
     enum EConsts
     {
-        TASKS_MAX = _Size //!< Maximum number of tasks supported by the instance of the Kernel.
+        TASKS_MAX = _Size //!< Maximum number of concurrently registered tasks. Fixed at compile time. Exceeding this limit in AddTask() triggers a compile-time assert (TASKS_MAX > 0) and a runtime STK_ASSERT.
     };
 
-    /*! \brief Default initializer.
+    /*! \brief Construct the kernel with all storage zero-initialised and the request flag set to ~0
+               (indicating uninitialized state; cleared to REQUEST_NONE by Initialize()).
+        \note  Performs a compile-time assertion that KERNEL_HRT is not combined with a weighted
+               scheduling strategy (WEIGHT_API). In debug builds also verifies that _TyPlatform
+               derives from IPlatform and _TyStrategy from ITaskSwitchStrategy.
     */
     explicit Kernel() : m_platform(), m_strategy(), m_task_now(nullptr), m_task_storage(), m_sleep_trap(),
         m_exit_trap(), m_fsm_state(FSM_STATE_NONE), m_request(~0)
@@ -541,6 +715,12 @@ public:
     #endif
     }
 
+    /*! \brief     Prepare kernel for use: reset state, configure the platform, and register the service singleton.
+        \param[in] resolution_us: System tick resolution in microseconds per tick (default: PERIODICITY_DEFAULT).
+                   Valid range: 1 .. PERIODICITY_MAX. Asserts if 0 or out of range.
+        \note      Must be called before AddTask() or Start(). Calling twice without an intervening
+                   Stop() asserts (IsInitialized() is false until this call completes).
+    */
     __stk_attr_noinline void Initialize(uint32_t resolution_us = PERIODICITY_DEFAULT)
     {
         STK_ASSERT(resolution_us != 0);
@@ -555,6 +735,14 @@ public:
         m_platform.Initialize(this, &m_service, resolution_us, (_Mode & KERNEL_DYNAMIC ? &m_exit_trap[0].stack : nullptr));
     }
 
+    /*! \brief     Register task for a soft real-time (SRT) scheduling.
+        \param[in] user_task: User task to add. Must not already be registered. Must not be \c nullptr.
+        \note      Before Start(): allocates a free KernelTask slot and adds it to the strategy immediately.
+        \note      After Start() (KERNEL_DYNAMIC only): serialises the request via RequestAddTask() —
+                   the calling task yields and the kernel processes the request on the next tick.
+        \warning   Asserts if called in KERNEL_HRT mode (use the HRT overload instead),
+                   if called after Start() without KERNEL_DYNAMIC, or if TASKS_MAX is exceeded.
+    */
     __stk_attr_noinline void AddTask(ITask *user_task)
     {
         if ((_Mode & KERNEL_HRT) == 0)
@@ -586,6 +774,14 @@ public:
         }
     }
 
+    /*! \brief     Register a task for hard real-time (HRT) scheduling.
+        \param[in] user_task:  User task to add. Must not already be registered. Must not be \c nullptr.
+        \param[in] periodicity_tc: Activation period in ticks. Must be > 0 and < INT32_MAX.
+        \param[in] deadline_tc: Maximum allowed active duration in ticks. Must be > 0 and < INT32_MAX.
+        \param[in] start_delay_tc: Initial sleep delay in ticks before the first activation. 0 means activate immediately.
+        \note      Must be called before Start(). Dynamic (post-Start) HRT task addition is not supported.
+        \warning   Asserts if called outside KERNEL_HRT mode (use the SRT overload instead) or after Start().
+    */
     __stk_attr_noinline void AddTask(ITask *user_task, Timeout periodicity_tc, Timeout deadline_tc, Timeout start_delay_tc)
     {
         if (_Mode & KERNEL_HRT)
@@ -602,6 +798,14 @@ public:
         }
     }
 
+    /*! \brief     Remove a previously added task from the kernel before Start().
+        \param[in] user_task: User task to remove. Must not be \c nullptr.
+        \note      Only valid before Start() (i.e. while the kernel is not running).
+                   To remove tasks after Start() the task should return from its Run function
+                   (in KERNEL_DYNAMIC mode the slot is freed automatically on the next tick).
+        \warning   KERNEL_DYNAMIC mode only. Asserts if called in KERNEL_STATIC or KERNEL_HRT mode,
+                   or if called after Start().
+    */
     __stk_attr_noinline void RemoveTask(ITask *user_task)
     {
         if (_Mode & KERNEL_DYNAMIC)
@@ -620,6 +824,14 @@ public:
         }
     }
 
+    /*! \brief     Start the scheduler. This call does not return until all tasks have exited
+                   (KERNEL_DYNAMIC mode) or indefinitely (KERNEL_STATIC mode).
+        \note      Re-initialises trap stacks on every call so Start() can be called again
+                   after a previous scheduling session ended.
+        \note      If STK_SEGGER_SYSVIEW is enabled, starts tracing and registers all pre-added tasks.
+        \warning   At least one task must have been added via AddTask() before calling Start().
+                   Asserts if called before Initialize().
+    */
     __stk_attr_noinline void Start()
     {
         STK_ASSERT(IsInitialized());
@@ -643,36 +855,48 @@ public:
         m_platform.Start();
     }
 
+    /*! \brief  Check whether scheduler is currently running.
+        \return \c true if Start() has been called and the first task switch has occurred
+                (m_task_now != nullptr), \c false before Start() or after all tasks exit.
+    */
     bool IsStarted() const { return (m_task_now != nullptr); }
 
+    /*! \brief  Get platform driver instance owned by this kernel.
+        \return Pointer to the internal _TyPlatform cast to IPlatform*.
+    */
     IPlatform *GetPlatform() { return &m_platform; }
 
+    /*! \brief  Get task-switching strategy instance owned by this kernel.
+        \return Pointer to the internal _TyStrategy cast to ITaskSwitchStrategy*.
+    */
     ITaskSwitchStrategy *GetSwitchStrategy() { return &m_strategy; }
 
 protected:
     /*! \enum  EFsmState
-        \brief Finite-state machine (FSM) state.
+        \brief Finite-state machine (FSM) state. Encodes what the kernel is currently doing
+               between two consecutive tick events.
     */
     enum EFsmState : int8_t
     {
-        FSM_STATE_NONE = -1,
-        FSM_STATE_SWITCHING,
-        FSM_STATE_SLEEPING,
-        FSM_STATE_WAKING,
-        FSM_STATE_EXITING,
-        FSM_STATE_MAX
+        FSM_STATE_NONE      = -1, //!< Sentinel / uninitialized value. Set by the constructor, replaced by FSM_STATE_SWITCHING on the first tick.
+        FSM_STATE_SWITCHING,      //!< Normal operation: switching between runnable tasks each tick.
+        FSM_STATE_SLEEPING,       //!< All tasks are sleeping, the sleep trap is executing (CPU in low-power state).
+        FSM_STATE_WAKING,         //!< At least one task woke up, transitioning from sleep trap back to a user task.
+        FSM_STATE_EXITING,        //!< All tasks exited (KERNEL_DYNAMIC only), executing the exit trap to return from Start().
+        FSM_STATE_MAX             //!< Sentinel: number of valid states (used to size the FSM table).
     };
 
     /*! \enum  EFsmEvent
-        \brief Finite-state machine (FSM) event.
+        \brief Finite-state machine (FSM) event. Computed by FetchNextEvent() each tick based
+               on strategy output and current kernel state.
     */
     enum EFsmEvent : int8_t
     {
-        FSM_EVENT_SWITCH = 0,
-        FSM_EVENT_SLEEP,
-        FSM_EVENT_WAKE,
-        FSM_EVENT_EXIT,
-        FSM_EVENT_MAX
+        FSM_EVENT_SWITCH = 0, //!< Strategy returned a runnable task, perform a context switch.
+        FSM_EVENT_SLEEP,      //!< No runnable tasks, enter sleep trap.
+        FSM_EVENT_WAKE,       //!< A task became runnable while the kernel was sleeping, wake from sleep trap.
+        FSM_EVENT_EXIT,       //!< No tasks remain (KERNEL_DYNAMIC), exit scheduling and return from Start().
+        FSM_EVENT_MAX         //!< Sentinel: number of valid events (used to size the FSM table).
     };
 
     /*! \brief     Initialize stack of the traps.
@@ -1408,12 +1632,15 @@ protected:
         return false;
     }
 
-    /*! \brief     Check if kernel was initialized with IKernel::Initialize().
-        \return    True if initialized, otherwise false.
+    /*! \brief     Check whether Initialize() has been called and completed successfully.
+        \return    \c true if m_request == REQUEST_NONE (set by Initialize()), \c false if the
+                   kernel is in the pre-Initialize state (m_request == ~0, set by the constructor).
     */
     bool IsInitialized() const { return (m_request == REQUEST_NONE); }
 
-    /*! \brief     Schedule processing of the add task request.
+    /*! \brief     Signal the kernel to process a pending AddTask request on the next tick.
+        \note      Sets the REQUEST_ADD_TASK bit in m_request and emits a full memory fence
+                   so the ISR-side tick handler observes the flag without delay.
     */
     void ScheduleAddTask()
     {
@@ -1422,8 +1649,9 @@ protected:
     }
 
 #if STK_SEGGER_SYSVIEW
-    /*! \brief      Send task trace info.
-        \param[in]  task: Pointer to the kernel task.
+    /*! \brief      Emit SEGGER SystemView task registration info for a kernel task.
+        \param[in]  task: Kernel task to register. Must be bound (IsBusy() == true).
+        \note       Only compiled when STK_SEGGER_SYSVIEW is enabled.
     */
     void SendTaskTraceInfo(KernelTask *task)
     {
@@ -1445,14 +1673,14 @@ protected:
     STK_STATIC_ASSERT_N(TASKS_MAX, TASKS_MAX > 0);
 
     // If hit here: Kernel mode must be assigned.
-    STK_STATIC_ASSERT_N(KENREL_MODE_MUST_BE_SET, (_Mode != 0));
+    STK_STATIC_ASSERT_N(KERNEL_MODE_MUST_BE_SET, (_Mode != 0));
 
     // If hit here: KERNEL_STATIC and KERNEL_DYNAMIC can not be mixed, either one of these is possible.
-    STK_STATIC_ASSERT_N(KENREL_MODE_MIX_NOT_ALLOWED,
+    STK_STATIC_ASSERT_N(KERNEL_MODE_MIX_NOT_ALLOWED,
         (((_Mode & KERNEL_STATIC) & (_Mode & KERNEL_DYNAMIC)) == 0));
 
     // If hit here: KERNEL_HRT must accompany KERNEL_STATIC or KERNEL_DYNAMIC.
-    STK_STATIC_ASSERT_N(KENREL_MODE_HRT_ALONE, ((_Mode & KERNEL_HRT) == 0) ||
+    STK_STATIC_ASSERT_N(KERNEL_MODE_HRT_ALONE, ((_Mode & KERNEL_HRT) == 0) ||
         ((_Mode & KERNEL_HRT) && ((_Mode & KERNEL_STATIC) || (_Mode & KERNEL_DYNAMIC))));
 
     /*! \typedef TaskStorageType
@@ -1461,48 +1689,53 @@ protected:
     typedef KernelTask TaskStorageType[TASKS_MAX];
 
     /*! \class SleepTrapStack
-        \brief Trap stack is used to execute the sleep trap when required.
+        \brief Storage bundle for the sleep trap: a Stack descriptor paired with its backing memory.
 
-        \note  Sleep trap - used to execute a sleep procedure of the driver when all user tasks are currently
-               in a sleep state.
+        \note  The sleep trap executes when all user tasks are simultaneously sleeping, putting the
+               CPU into a low-power WFI state until the next tick wakes a task.
+        \note  Exactly one sleep trap is always allocated regardless of kernel mode.
     */
     struct SleepTrapStack
     {
         typedef SleepTrapStackMemory::MemoryType Memory;
 
-        Stack  stack;  //!< stack information
-        Memory memory; //!< stack memory
+        Stack  stack;  //!< Stack descriptor (SP register value + access mode). Initialised by InitTraps() on every Start().
+        Memory memory; //!< Backing stack memory array. Size: STK_SLEEP_TRAP_STACK_SIZE elements of size_t.
     };
 
     /*! \class ExitTrapStack
-        \brief Trap stack is used to execute the exit trap when required.
+        \brief Storage bundle for the exit trap: a Stack descriptor paired with its backing memory.
 
-        \note  Exit trap - used for an exit into the main process from which IKernel::Start() was called
-               when all tasks completed their processing and exited by returning from their Run function.
+        \note  The exit trap executes when all user tasks have exited (KERNEL_DYNAMIC only),
+               restoring the CPU context to the point immediately after IKernel::Start() was called
+               so the application can continue after scheduling ends.
+        \note  Allocated only in KERNEL_DYNAMIC mode (zero-size otherwise, via STK_ALLOCATE_COUNT).
     */
     struct ExitTrapStack
     {
         typedef ExitTrapStackMemory::MemoryType Memory;
 
-        Stack  stack;  //!< stack information
-        Memory memory; //!< stack memory
+        Stack  stack;  //!< Stack descriptor (SP register value + access mode). Initialised by InitTraps() on every Start().
+        Memory memory; //!< Backing stack memory array. Size: STACK_SIZE_MIN elements of size_t.
     };
 
-    /*! \typedef WaitObjectList
-        \brief   List of wait objects.
+    /*! \typedef SyncObjectList
+        \brief   Intrusive list of active ISyncObject instances registered with this kernel.
+                 Each sync object in this list receives a Tick() call every kernel tick for
+                 timeout tracking. Allocated only when KERNEL_SYNC is set (zero-size otherwise).
     */
     typedef ISyncObject::ListHeadType SyncObjectList;
 
-    KernelService     m_service;         //!< run-time kernel service
-    _TyPlatform       m_platform;        //!< platform driver
-    _TyStrategy       m_strategy;        //!< task switching strategy
-    KernelTask       *m_task_now;        //!< current task task
-    TaskStorageType   m_task_storage;    //!< task storage
-    SleepTrapStack    m_sleep_trap[1];   //!< sleep trap
-    ExitTrapStack     m_exit_trap[STK_ALLOCATE_COUNT(_Mode, KERNEL_DYNAMIC, 1, 0)]; //!< exit trap (does not occupy memory if kernel operation mode is not KERNEL_DYNAMIC)
-    EFsmState         m_fsm_state;       //!< FSM state
-    volatile uint32_t m_request;         //!< pending requests from the tasks
-    SyncObjectList    m_sync_list[STK_ALLOCATE_COUNT(_Mode, KERNEL_SYNC, 1, 0)]; //!< list of sync objects
+    KernelService     m_service;         //!< Kernel service singleton exposed to running tasks via IKernelService::GetInstance().
+    _TyPlatform       m_platform;        //!< Platform driver (SysTick, PendSV, context switch implementation).
+    _TyStrategy       m_strategy;        //!< Task-switching strategy (determines which task runs next).
+    KernelTask       *m_task_now;        //!< Currently executing task, or \c nullptr before Start() or after all tasks exit.
+    TaskStorageType   m_task_storage;    //!< Static pool of _Size KernelTask slots (free slots have m_user == nullptr).
+    SleepTrapStack    m_sleep_trap[1];   //!< Sleep trap (always present): executed when all tasks are sleeping.
+    ExitTrapStack     m_exit_trap[STK_ALLOCATE_COUNT(_Mode, KERNEL_DYNAMIC, 1, 0)]; //!< Exit trap: zero-size in KERNEL_STATIC mode; one entry in KERNEL_DYNAMIC mode.
+    EFsmState         m_fsm_state;       //!< Current FSM state. Drives context-switch decision on every tick.
+    volatile uint32_t m_request;         //!< Bitmask of pending ERequest flags from running tasks. Written by tasks, read/cleared by UpdateTaskRequest() in tick context.
+    SyncObjectList    m_sync_list[STK_ALLOCATE_COUNT(_Mode, KERNEL_SYNC, 1, 0)]; //!< List of active sync objects. Zero-size (no memory) if KERNEL_SYNC is not set.
 
     const EFsmState m_fsm[FSM_STATE_MAX][FSM_EVENT_MAX] = {
     //    FSM_EVENT_SWITCH     FSM_EVENT_SLEEP     FSM_EVENT_WAKE    FSM_EVENT_EXIT
@@ -1510,7 +1743,9 @@ protected:
         { FSM_STATE_NONE,      FSM_STATE_NONE,     FSM_STATE_WAKING, FSM_STATE_EXITING }, // FSM_STATE_SLEEPING
         { FSM_STATE_SWITCHING, FSM_STATE_SLEEPING, FSM_STATE_NONE,   FSM_STATE_EXITING }, // FSM_STATE_WAKING
         { FSM_STATE_NONE,      FSM_STATE_NONE,     FSM_STATE_NONE,   FSM_STATE_NONE }     // FSM_STATE_EXITING
-    }; //!< FSM state table (Kernel implements table-based FSM)
+    }; //!< Compile-time FSM transition table. Indexed as m_fsm[current_state][event] -> next_state.
+       //!< FSM_STATE_NONE as a next-state means "no transition": the FSM stays in the current state.
+       //!< Updated by UpdateFsmState() each tick via GetNewFsmState() -> FetchNextEvent().
 };
 
 } // namespace stk

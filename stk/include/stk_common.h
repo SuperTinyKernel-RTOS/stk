@@ -67,7 +67,7 @@ enum EConsts
 {
     PERIODICITY_MAX      = 99000,             //!< Maximum periodicity (microseconds), 99 milliseconds (note: this value is the highest working on a real hardware and QEMU).
     PERIODICITY_DEFAULT  = 1000,              //!< Default periodicity (microseconds), 1 millisecond.
-    STACK_SIZE_MIN       = STK_STACK_SIZE_MIN //!< Stack memory size of the Exit trap (see: StackMemoryDef, StackMemoryWrapper).
+    STACK_SIZE_MIN       = STK_STACK_SIZE_MIN //!< Minimum stack size in elements of size_t. Used as a lower bound for all stack allocations (user task, sleep trap, exit trap). See: StackMemoryDef, StackMemoryWrapper.
 };
 
 /*! \enum  ESystemTaskId
@@ -94,8 +94,9 @@ enum ETraceEventId
 */
 typedef size_t TId;
 
-/*! \typedef TID_ISR
-    \brief   Task/thread id of ISR routine.
+/*! \var     TID_ISR
+    \brief   Reserved task/thread id representing an ISR context.
+    \note    Returned by GetTid() when called from an interrupt service routine.
 */
 const TId TID_ISR = (TId)~0;
 
@@ -104,13 +105,15 @@ const TId TID_ISR = (TId)~0;
 */
 typedef int32_t Timeout;
 
-/*! \typedef WAIT_INFINITE
-    \brief   Infinite timeout time (ticks).
+/*! \var     WAIT_INFINITE
+    \brief   Timeout value: block indefinitely until the synchronization object is signaled.
+    \note    Pass as the \a timeout argument to IKernelService::Wait().
 */
 const Timeout WAIT_INFINITE = INT32_MAX;
 
-/*! \typedef NO_WAIT
-    \brief   No timeout (ticks).
+/*! \var     NO_WAIT
+    \brief   Timeout value: return immediately if the synchronization object is not yet signaled (non-blocking poll).
+    \note    Pass as the \a timeout argument to IKernelService::Wait().
 */
 const Timeout NO_WAIT = 0;
 
@@ -192,7 +195,10 @@ public:
     virtual TId GetTid() const = 0;
 
     /*! \brief     Wake task.
-        \param[in] timeout: Set \a true if task is waking due to a timeout, otherwise \a false.
+        \param[in] timeout: Pass \a true if the task is waking due to timeout expiry. 
+                   \a false if waking due to a successful signal.
+        \note      The implementation is responsible for removing this wait object from the synchronization
+                   object's wait list (via ISyncObject::RemoveWaitObject) as part of the wake sequence.
     */
     virtual void Wake(bool timeout) = 0;
 
@@ -220,7 +226,7 @@ public:
 #endif
 
     /*! \brief     Set name.
-        \param[in] name: Null-terminated string or \c nullptr.
+        \param[in] name: Null-terminated string or \c NULL.
         \note      If STK_SYNC_DEBUG_NAMES is 0 then calling this function has no effect.
     */
     void SetTraceName(const char *name)
@@ -233,13 +239,12 @@ public:
     }
 
     /*! \brief     Get name.
-        \return    Name string or NULL if not set.
-        \note      If STK_SYNC_DEBUG_NAMES is 0 then it will always return nullptr.
+        \return    Name string, or \c NULL if not set or if STK_SYNC_DEBUG_NAMES is 0.
     */
     const char *GetTraceName() const
     {
     #if STK_SYNC_DEBUG_NAMES
-        return (m_trace_name != nullptr ? m_trace_name : nullptr);
+        return m_trace_name;
     #else
         return nullptr;
     #endif
@@ -286,8 +291,10 @@ public:
     }
 
     /*! \brief     Called by kernel on every system tick to handle timeout logic of waiting tasks.
-        \return    \c true if this synchronization object still needs tick processing (i.e. has waiters with finite timeout),
-                   \c false if no further tick calls are required.
+        \return    \c true if this synchronization object still has waiters with a finite timeout and
+                   requires further tick calls. \c false if the wait list is empty or all remaining
+                   waiters have infinite timeouts, signalling to the kernel that it may stop calling
+                   Tick() for this object until a new waiter is added.
     */
     virtual bool Tick()
     {
@@ -313,12 +320,20 @@ protected:
     explicit ISyncObject() : m_wait_list()
     {}
 
+    /*! \brief     Wake the first task in the wait list (FIFO order).
+        \note      The woken task is notified with timeout=false, indicating a successful signal (not a timeout expiry).
+        \note      Does nothing if no tasks are currently waiting.
+    */
     void WakeOne()
     {
         if (!m_wait_list.IsEmpty())
             static_cast<IWaitObject *>(m_wait_list.GetFirst())->Wake(false);
     }
 
+    /*! \brief     Wake all tasks currently in the wait list.
+        \note      Each woken task is notified with timeout=false, indicating a successful signal (not a timeout expiry).
+        \note      Does nothing if no tasks are currently waiting.
+    */
     void WakeAll()
     {
         while (!m_wait_list.IsEmpty())
@@ -399,14 +414,14 @@ public:
     virtual int32_t GetWeight() const = 0;
 
     /*! \brief     Get task Id set by application.
-        \return    Task Id.
-        \note      For debugging purposes, can be omitted and return 0 if not used.
+        \return    Application-defined task identifier. Return 0 if unused.
+        \note      Used for debugging and tracing only. The kernel does not interpret this value.
     */
     virtual size_t GetId() const = 0;
 
     /*! \brief     Get task trace name set by application.
-        \return    Task name.
-        \note      For debugging purposes, can be omitted and return NULL if not used.
+        \return    Null-terminated name string, or \c NULL if unused.
+        \note      Used for debugging and tracing only (e.g. SEGGER SystemView). The kernel does not interpret this value.
     */
     virtual const char *GetTraceName() const = 0;
 };
@@ -456,7 +471,7 @@ public:
         \see       SwitchStrategySmoothWeightedRoundRobin
         \note      Weight API
     */
-    virtual Timeout GetCurrentWeight() const = 0;
+    virtual int32_t GetCurrentWeight() const = 0;
 
     /*! \brief     Get HRT task execution periodicity.
         \return    Periodicity of the task (ticks).
@@ -574,12 +589,13 @@ public:
         \param[in] service: Kernel service.
         \param[in] resolution_us: Tick resolution in microseconds (for example 1000 equals to 1 millisecond resolution).
         \param[in] exit_trap: Stack of the Exit trap (optional, provided if kernel is operating in KERNEL_DYNAMIC mode).
-        \note      This function never returns!
+        \note      Must be called once before Start().
     */
     virtual void Initialize(IEventHandler *event_handler, IKernelService *service, uint32_t resolution_us, Stack *exit_trap) = 0;
 
     /*! \brief     Start scheduling.
-        \note      This function never returns!
+        \note      This function never returns if kernel is initialized as KERNEL_STATIC.
+                   Must be called after Initialize().
     */
     virtual void Start() = 0;
 
@@ -592,6 +608,7 @@ public:
         \param[in] stack: Stack descriptor.
         \param[in] stack_memory: Stack memory.
         \param[in] user_task: User task to which Stack belongs.
+        \return    \c true on success, \c false if the stack memory is too small, misaligned, or the stack type is unsupported.
     */
     virtual bool InitStack(EStackType stack_type, Stack *stack, IStackMemory *stack_memory, ITask *user_task) = 0;
 
@@ -647,10 +664,12 @@ public:
 
 /*! \class ITaskSwitchStrategy
     \brief Interface for a task switching strategy implementation.
-    \note Combines Strategy and minimal Iterator design patterns.
-
-    Concrete classes inheriting this interface define how the kernel selects
-    the next task to run (round-robin, EDF, rate/deadline-monotonic, etc.).
+    \note  Combines the Strategy and Iterator design patterns.
+           - Strategy: concrete subclasses encapsulate the scheduling policy (round-robin, EDF,
+             rate-monotonic, weighted round-robin, etc.) independently of the kernel.
+           - Iterator: GetFirst() and GetNext() expose a stateful forward-iterator over the
+             runnable task set. The cursor is owned by the concrete implementation and is
+             not exposed directly, iteration is therefore not re-entrant.
 
     Implementation must declare the following compile-time constants for reporting
     its capabilities to the kernel (place inside EConfig enum):
@@ -680,13 +699,15 @@ public:
     virtual void RemoveTask(IKernelTask *task) = 0;
 
     /*! \brief     Get first task.
+        \return    Pointer to the first task in the managed set, or \c NULL if no tasks have been added.
     */
     virtual IKernelTask *GetFirst() const = 0;
 
-    /*! \brief     Get next linked task.
-        \return    Pointer to the next active task.
-        \note      Implementations may return NULL when no runnable tasks are available,
-                   in this case kernel shall start sleeping (\a FSM_STATE_SLEEPING).
+    /*! \brief     Advance the internal iterator and return the next runnable task.
+        \return    Pointer to the next active task to schedule, or \c NULL if no runnable tasks are available
+                   (in which case the kernel transitions to \a FSM_STATE_SLEEPING).
+        \note      Implementations maintain an internal cursor. This method is not re-entrant, concurrent
+                   calls from multiple contexts are not supported.
     */
     virtual IKernelTask *GetNext() = 0;
 
@@ -716,6 +737,12 @@ class IKernel
 {
 public:
     /*! \brief     Initialize kernel.
+        \param[in] resolution_us: Resolution of the system tick (SysTick) timer in microseconds.
+                   Defaults to PERIODICITY_DEFAULT (1000 µs = 1 ms).
+        \note      Must be called before AddTask() and Start().
+        \note      If running on an STM32 device with HAL driver or on QEMU, do not change the default
+                   resolution (PERIODICITY_DEFAULT). STM32's HAL expects 1 millisecond resolution and
+                   QEMU does not have enough resolution on Windows to operate correctly at sub-millisecond resolution.
     */
     virtual void Initialize(uint32_t resolution_us = PERIODICITY_DEFAULT) = 0;
 
@@ -739,11 +766,8 @@ public:
     */
     virtual void RemoveTask(ITask *user_task) = 0;
 
-    /*! \brief     Start kernel.
-        \param[in] resolution_us: Resolution of the system tick (SysTick) timer in microseconds, (see IPlatform::GetSysTickResolution).
-        \note      If running on STM32 device with HAL driver or on QEMU do not change the default resolution (PERIODICITY_DEFAULT).
-                   STM32's HAL expects 1 millisecond resolution and QEMU does not have enough resolution on Windows
-                   platform to operate correctly on a sub-millisecond resolution.
+    /*! \brief     Start kernel scheduling.
+        \note      This function never returns. Must be called after Initialize() and AddTask().
     */
     virtual void Start() = 0;
 
@@ -773,7 +797,10 @@ public:
 /*! \class IKernelService
     \brief Interface for the kernel services exposed to the user processes during
            run-time when Kernel started scheduling the processes.
-    \note  State design pattern.
+    \note  State design pattern: this interface represents the kernel's active running state.
+           It becomes valid only after IKernel::Start() is called. Before that point the kernel
+           is in an idle/unstarted state and this interface must not be used.
+           Obtain the CPU-local instance via IKernelService::GetInstance().
 */
 class IKernelService
 {
@@ -782,18 +809,21 @@ public:
     */
     static IKernelService *GetInstance();
 
-    /*! \brief     Get thread Id.
+    /*! \brief     Get thread Id of the currently running task.
         \return    Thread Id.
+        \warning   ISR-unsafe. Calling from an ISR context will trigger an assertion.
     */
     virtual TId GetTid() const = 0;
 
     /*! \brief     Get number of ticks elapsed since kernel start.
         \return    Ticks.
+        \note      ISR-safe.
     */
     virtual Ticks GetTicks() const = 0;
 
     /*! \brief     Get number of microseconds in one tick.
         \note      Tick is a periodicity of the system timer expressed in microseconds.
+        \note      ISR-safe.
         \return    Microseconds in one tick.
     */
     virtual int32_t GetTickResolution() const = 0;
@@ -802,13 +832,15 @@ public:
         \note      Unlike Sleep this function delays code execution by spinning in a loop until deadline expiry.
         \note      Use with care in HRT mode to avoid missed deadline (see stk::KERNEL_HRT, ITask::OnDeadlineMissed).
         \param[in] msec: Delay time (milliseconds).
+        \warning   ISR-unsafe.
     */
     virtual void Delay(Timeout msec) = 0;
 
     /*! \brief     Put calling process into a sleep state.
         \note      Unlike Delay this function does not waste CPU cycles and allows kernel to put CPU into a low-power state.
-        \note      Unsupported in HRT mode (see stk::KERNEL_HRT), instead task will sleep automatically according its periodicity and workload.
+        \note      Unsupported in HRT mode (see stk::KERNEL_HRT); in HRT mode tasks sleep automatically according to their periodicity and workload.
         \param[in] msec: Sleep time (milliseconds).
+        \warning   ISR-unsafe.
         \warning   Caller must lock the hw::CriticalSection with hw::CriticalSection::Enter() before calling this function.
                    Kernel will exit the hw::CriticalSection with hw::CriticalSection::Exit() upon return from this function.
     */
@@ -816,6 +848,7 @@ public:
 
     /*! \brief     Notify scheduler to switch to the next task (yield).
         \note      A cooperation mechanism in HRT mode (see stk::KERNEL_HRT).
+        \warning   ISR-unsafe.
         \warning   Caller must lock the hw::CriticalSection with hw::CriticalSection::Enter() before calling this function.
                    Kernel will exit the hw::CriticalSection with hw::CriticalSection::Exit() upon return from this function.
     */
@@ -824,10 +857,14 @@ public:
     /*! \brief     Put calling process into a waiting state until synchronization object is signaled or timeout occurs.
         \note      This function implements core blocking logic using the Monitor pattern to ensure atomicity between state check and suspension.
         \note      The kernel automatically unlocks the provided \a mutex before the task is suspended and re-locks it before this function returns.
-        \param[in] sobj:  Synchronization object to wait on.
+        \param[in] sobj: Synchronization object to wait on.
         \param[in] mutex: Mutex protecting the state of the synchronization object.
-        \param[in] timeout: Maximum wait time (ticks). Use \c WAIT_INFINITE for infinite waiting (no timeout).
-        \return    Pointer to the wait object handle representing this wait operation (always non NULL).
+        \param[in] timeout: Maximum wait time (ticks). Use \c WAIT_INFINITE to block indefinitely, use \c NO_WAIT to poll without blocking.
+        \return    Pointer to the wait object representing this wait operation (always non-NULL).
+                   The caller must check IWaitObject::IsTimeout() after this function returns to determine whether
+                   the wake was caused by a signal or by timeout expiry. The returned pointer is valid until
+                   the calling task re-enters a wait or the wait object is explicitly released by the kernel.
+        \warning   ISR-unsafe.
     */
     virtual IWaitObject *Wait(ISyncObject *sobj, IMutex *mutex, Timeout timeout) = 0;
 };

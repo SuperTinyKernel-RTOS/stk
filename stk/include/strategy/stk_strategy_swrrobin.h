@@ -59,8 +59,7 @@ public:
     {
         STK_ASSERT(task != nullptr);
 
-        int32_t weight = task->GetWeight();
-        STK_ASSERT((weight > 0) && (weight <= 0x7FFFFF)); // must not be negative, max 24-bit number
+        STK_ASSERT((task->GetWeight() > 0) && (task->GetWeight() <= 0x7FFFFF)); // must not be negative, max 24-bit number
 
         task->SetCurrentWeight(0);
 
