@@ -64,8 +64,7 @@ public:
 
         task->SetCurrentWeight(0);
 
-        m_tasks.LinkBack(task);
-        m_total_weight += weight;
+        AddActive(task);
     }
 
     void RemoveTask(IKernelTask *task)
@@ -74,14 +73,9 @@ public:
         STK_ASSERT(task->GetHead() == &m_tasks || task->GetHead() == &m_sleep);
 
         if (task->GetHead() == &m_tasks)
-        {
-            m_total_weight -= task->GetWeight();
-            m_tasks.Unlink(task);
-        }
+            RemoveActive(task);
         else
-        {
             m_sleep.Unlink(task);
-        }
     }
 
     IKernelTask *GetNext()
@@ -134,9 +128,7 @@ public:
         STK_ASSERT(task->IsSleeping());
         STK_ASSERT(task->GetHead() == &m_tasks);
 
-        m_tasks.Unlink(task);
-        m_total_weight -= task->GetWeight();
-
+        RemoveActive(task);
         m_sleep.LinkBack(task);
     }
 
@@ -152,11 +144,22 @@ public:
         // with tasks having equal weights
         task->SetCurrentWeight(m_total_weight);
 
+        AddActive(task);
+    }
+
+private:
+    void AddActive(IKernelTask *task)
+    {
         m_tasks.LinkBack(task);
         m_total_weight += task->GetWeight();
     }
 
-private:
+    void RemoveActive(IKernelTask *task)
+    {
+        m_tasks.Unlink(task);
+        m_total_weight -= task->GetWeight();
+    }
+
     IKernelTask::ListHeadType m_tasks;        //!< runnable tasks
     IKernelTask::ListHeadType m_sleep;        //!< sleeping tasks
     int32_t                   m_total_weight; //!< total weight

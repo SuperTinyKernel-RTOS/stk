@@ -444,7 +444,7 @@ class Kernel : public IKernel, private IPlatform::IEventHandler
     public:
         TId GetTid() const { return m_platform->GetTid(); }
 
-        Ticks GetTicks() const { return hw::ReadAtomic64(&m_ticks); }
+        Ticks GetTicks() const { return hw::ReadVolatile64(&m_ticks); }
 
         int32_t GetTickResolution() const  { return m_platform->GetTickResolution(); }
 
@@ -461,7 +461,7 @@ class Kernel : public IKernel, private IPlatform::IEventHandler
         {
             if ((_Mode & KERNEL_HRT) == 0)
             {
-                m_platform->SleepTicks((Timeout)GetTicksFromMsec(msec, GetTickResolution()));
+                m_platform->Sleep((Timeout)GetTicksFromMsec(msec, GetTickResolution()));
             }
             else
             {
@@ -472,11 +472,11 @@ class Kernel : public IKernel, private IPlatform::IEventHandler
 
         void SwitchToNext() { m_platform->SwitchToNext(); }
 
-        IWaitObject *StartWaiting(ISyncObject *sobj, IMutex *mutex, Timeout ticks)
+        IWaitObject *Wait(ISyncObject *sobj, IMutex *mutex, Timeout ticks)
         {
             if (_Mode & KERNEL_SYNC)
             {
-                return m_platform->StartWaiting(sobj, mutex, ticks);
+                return m_platform->Wait(sobj, mutex, ticks);
             }
             else
             {
@@ -502,11 +502,11 @@ class Kernel : public IKernel, private IPlatform::IEventHandler
         }
 
         /*! \brief     Increment tick by 1.
-            \note      Modified always from ISR (guaranteed) therefore hw::WriteSafe64() is not required.
         */
         void IncrementTick()
         {
-            hw::WriteAtomic64(&m_ticks, m_ticks + 1);
+            // using WriteVolatile64() to guarantee correct lockless reading order by ReadVolatile64
+            hw::WriteVolatile64(&m_ticks, m_ticks + 1);
         }
 
         _TyPlatform   *m_platform; //!< platform

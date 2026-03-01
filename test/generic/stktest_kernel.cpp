@@ -1065,7 +1065,7 @@ TEST(Kernel, SyncNotEnabledFailsOnWait)
     try
     {
         g_TestContext.ExpectAssert(true);
-        IKernelService::GetInstance()->StartWaiting(nullptr, nullptr, 0);
+        IKernelService::GetInstance()->Wait(nullptr, nullptr, 0);
         CHECK_TEXT(false, "kernel does not support waiting without KERNEL_SYNC");
     }
     catch (TestAssertPassed &pass)
@@ -1077,7 +1077,7 @@ TEST(Kernel, SyncNotEnabledFailsOnWait)
     // test return NULL
     g_TestContext.ExpectAssert(true);
     g_TestContext.RethrowAssertException(false);
-    IWaitObject *wo = IKernelService::GetInstance()->StartWaiting(nullptr, nullptr, 0);
+    IWaitObject *wo = IKernelService::GetInstance()->Wait(nullptr, nullptr, 0);
     g_TestContext.RethrowAssertException(true);
     g_TestContext.ExpectAssert(false);
     CHECK_TRUE_TEXT(wo == nullptr, "expect NULL");
@@ -1117,7 +1117,7 @@ TEST(Kernel, SyncNoNullSyncObj)
     try
     {
         g_TestContext.ExpectAssert(true);
-        IKernelService::GetInstance()->StartWaiting(nullptr, &mutex, 10);
+        IKernelService::GetInstance()->Wait(nullptr, &mutex, 10);
         CHECK_TEXT(false, "sync object must not be NULL");
     }
     catch (TestAssertPassed &pass)
@@ -1141,7 +1141,7 @@ TEST(Kernel, SyncNoNullMutex)
     try
     {
         g_TestContext.ExpectAssert(true);
-        IKernelService::GetInstance()->StartWaiting(&sobj, nullptr, 10);
+        IKernelService::GetInstance()->Wait(&sobj, nullptr, 10);
         CHECK_TEXT(false, "mutex must not be NULL");
     }
     catch (TestAssertPassed &pass)
@@ -1166,7 +1166,7 @@ TEST(Kernel, SyncNoZeroWait)
     try
     {
         g_TestContext.ExpectAssert(true);
-        IKernelService::GetInstance()->StartWaiting(&sobj, &mutex, 0);
+        IKernelService::GetInstance()->Wait(&sobj, &mutex, 0);
         CHECK_TEXT(false, "must not be zero wait");
     }
     catch (TestAssertPassed &pass)
@@ -1191,7 +1191,7 @@ TEST(Kernel, SyncMutexMustBeLocked)
     try
     {
         g_TestContext.ExpectAssert(true);
-        IKernelService::GetInstance()->StartWaiting(&sobj, &mutex, 10);
+        IKernelService::GetInstance()->Wait(&sobj, &mutex, 10);
         CHECK_TEXT(false, "mutex must be locked");
     }
     catch (TestAssertPassed &pass)
@@ -1243,13 +1243,13 @@ TEST(Kernel, SyncWait)
 
     MutexMock::ScopedLock guard(mutex);
 
-    IWaitObject *wo = IKernelService::GetInstance()->StartWaiting(&sobj, &mutex, 2);
+    IWaitObject *wo = IKernelService::GetInstance()->Wait(&sobj, &mutex, 2);
 
     CHECK_EQUAL(GetTid(), wo->GetTid()); // expect the same thread id as WaitObject belongs to the caller's task
     CHECK_TRUE(wo != nullptr); // expect wait object in return after timeout
     CHECK_TRUE(wo->IsTimeout()); // expect timeout
     CHECK_EQUAL(2, g_SyncWaitRelaxCpuContext.counter); // expect 2 ticks after timeout
-    CHECK_EQUAL(true, mutex.m_locked); // expect locked mutex after StartWaiting return
+    CHECK_EQUAL(true, mutex.m_locked); // expect locked mutex after Wait return
 }
 
 } // namespace stk

@@ -174,10 +174,10 @@ protected:
     \see       WriteAtomic64
 */
 template <typename T>
-__stk_forceinline T ReadAtomic64(volatile const T *addr)
+__stk_forceinline T ReadVolatile64(volatile const T *addr)
 {
-    // only for 64-bit value
-    STK_STATIC_ASSERT(sizeof(T) == 8);
+    STK_STATIC_ASSERT_N(sz, sizeof(T) == 8); // only for 64-bit value
+    STK_STATIC_ASSERT_N(al, alignof(uint32_t) >= 4); // must be aligned to at least 4 bytes
 
     if (sizeof(void *) == 8) // atomic on 64-bit arch
     {
@@ -203,18 +203,19 @@ __stk_forceinline T ReadAtomic64(volatile const T *addr)
     }
 }
 
-/*! \brief     Writes 64-bit value atomically.
+/*! \brief     Writes 64-bit value to the address using lock-free operation.
     \param[in] addr: Pointer to the volatile memory location.
     \param[in] value: Value to be written.
     \warning   It is safe only for cases where a single writer sets an arbitrary value and no other
                writer touches the same address concurrently, not for a read-modify-write increment.
+               Does not use critical section, safe for ISR.
     \see       ReadAtomic64
 */
 template <typename T>
-__stk_forceinline void WriteAtomic64(volatile T *addr, T value)
+__stk_forceinline void WriteVolatile64(volatile T *addr, T value)
 {
-    // only for 64-bit value
-    STK_STATIC_ASSERT(sizeof(T) == 8);
+    STK_STATIC_ASSERT_N(sz, sizeof(T) == 8); // only for 64-bit value
+    STK_STATIC_ASSERT_N(al, alignof(uint32_t) >= 4); // must be aligned to at least 4 bytes
 
     if (sizeof(void *) == 8) // atomic on 64-bit arch
     {

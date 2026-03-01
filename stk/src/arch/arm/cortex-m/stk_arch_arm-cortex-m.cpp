@@ -934,12 +934,12 @@ void PlatformArmCortexM::SwitchToNext()
     GetContext().m_handler->OnTaskSwitch(::GetCallerSP());
 }
 
-void PlatformArmCortexM::SleepTicks(Timeout ticks)
+void PlatformArmCortexM::Sleep(Timeout ticks)
 {
     GetContext().m_handler->OnTaskSleep(::GetCallerSP(), ticks);
 }
 
-IWaitObject *PlatformArmCortexM::StartWaiting(ISyncObject *sync_obj, IMutex *mutex, Timeout timeout)
+IWaitObject *PlatformArmCortexM::Wait(ISyncObject *sync_obj, IMutex *mutex, Timeout timeout)
 {
     return GetContext().m_handler->OnTaskWait(::GetCallerSP(), sync_obj, mutex, timeout);
 }

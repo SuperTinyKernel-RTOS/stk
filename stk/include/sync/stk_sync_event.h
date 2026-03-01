@@ -55,7 +55,7 @@ namespace sync {
     }
     \endcode
 
-    \see  ISyncObject, IWaitObject, IKernelService::StartWaiting
+    \see  ISyncObject, IWaitObject, IKernelService::Wait
     \note Only available when kernel is compiled with \a KERNEL_SYNC mode enabled.
 */
 class Event : public ITraceable, private ISyncObject
@@ -132,6 +132,10 @@ private:
     bool m_signaled;     //!< current signaled state of the event
 };
 
+// ---------------------------------------------------------------------------
+// Set
+// ---------------------------------------------------------------------------
+
 inline bool Event::Set()
 {
     ScopedCriticalSection __cs;
@@ -150,6 +154,10 @@ inline bool Event::Set()
     return true;
 }
 
+// ---------------------------------------------------------------------------
+// Reset
+// ---------------------------------------------------------------------------
+
 inline bool Event::Reset()
 {
     ScopedCriticalSection __cs;
@@ -161,6 +169,10 @@ inline bool Event::Reset()
 
     return prev;
 }
+
+// ---------------------------------------------------------------------------
+// Pulse
+// ---------------------------------------------------------------------------
 
 inline void Event::Pulse()
 {
@@ -184,9 +196,13 @@ inline void Event::Pulse()
     __stk_full_memfence();
 }
 
+// ---------------------------------------------------------------------------
+// Wait
+// ---------------------------------------------------------------------------
+
 inline bool Event::Wait(Timeout timeout)
 {
-    // not supported inside ISR, may call StartWaiting
+    // not supported inside ISR, may call Wait
     STK_ASSERT(!hw::IsInsideISR());
 
     ScopedCriticalSection __cs;
@@ -203,8 +219,12 @@ inline bool Event::Wait(Timeout timeout)
         return true;
     }
 
-    return !IKernelService::GetInstance()->StartWaiting(this, &__cs, timeout)->IsTimeout();
+    return !IKernelService::GetInstance()->Wait(this, &__cs, timeout)->IsTimeout();
 }
+
+// ---------------------------------------------------------------------------
+// TryWait
+// ---------------------------------------------------------------------------
 
 inline bool Event::TryWait()
 {
@@ -224,6 +244,10 @@ inline bool Event::TryWait()
     return false;
 }
 
+// ---------------------------------------------------------------------------
+// RemoveWaitObject
+// ---------------------------------------------------------------------------
+
 inline void Event::RemoveWaitObject(IWaitObject *wobj)
 {
     ISyncObject::RemoveWaitObject(wobj);
@@ -236,6 +260,10 @@ inline void Event::RemoveWaitObject(IWaitObject *wobj)
         __stk_full_memfence();
     }
 }
+
+// ---------------------------------------------------------------------------
+// Tick
+// ---------------------------------------------------------------------------
 
 inline bool Event::Tick()
 {

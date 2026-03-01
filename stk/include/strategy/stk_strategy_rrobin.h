@@ -36,12 +36,12 @@ public:
         STK_ASSERT(task != nullptr);
         STK_ASSERT(task->GetHead() == nullptr);
 
-        bool is_tail = (m_prev == m_tasks.GetLast());
+        bool tail = (m_prev == m_tasks.GetLast());
 
         m_tasks.LinkBack(task);
 
         // if pointer was pointing to the tail, become a tail
-        if (is_tail)
+        if (tail)
             m_prev = task;
     }
 
@@ -52,21 +52,9 @@ public:
         STK_ASSERT((task->GetHead() == &m_tasks) || (task->GetHead() == &m_sleep));
 
         if (task->GetHead() == &m_tasks)
-        {
-            IKernelTask *next = (*task->GetNext());
-
-            m_tasks.Unlink(task);
-
-            // update pointer
-            if (next != task)
-                m_prev = (*next->GetPrev());
-            else
-                m_prev = nullptr;
-        }
+            RemoveActive(task);
         else
-        {
             m_sleep.Unlink(task);
-        }
     }
 
     IKernelTask *GetNext()
@@ -103,16 +91,8 @@ public:
         STK_ASSERT(task->IsSleeping());
         STK_ASSERT(task->GetHead() == &m_tasks);
 
-        IKernelTask *next = (*task->GetNext());
-
-        m_tasks.Unlink(task);
+        RemoveActive(task);
         m_sleep.LinkBack(task);
-
-        // update pointer
-        if (next != task)
-            m_prev = (*next->GetPrev());
-        else
-            m_prev = nullptr;
     }
 
     void OnTaskWake(IKernelTask *task)
@@ -122,14 +102,35 @@ public:
         STK_ASSERT(task->GetHead() == &m_sleep);
 
         m_sleep.Unlink(task);
+        AddActive(task);
+    }
+
+protected:
+    void AddActive(IKernelTask *task)
+    {
         m_tasks.LinkBack(task);
 
-        // update pointer
+        // update pointer: if all tasks were sleeping, this task will change state
+        // of the kernel to active
         if (m_prev == nullptr)
             m_prev = task;
     }
 
-protected:
+    void RemoveActive(IKernelTask *task)
+    {
+        IKernelTask *next = (*task->GetNext());
+
+        m_tasks.Unlink(task);
+
+        // update pointer: set to previous task so that GetNext() could return next,
+        // if there are no tasks left GetNext() will return nullptr causing a sleep
+        // state for the kernel
+        if (next != task)
+            m_prev = (*next->GetPrev());
+        else
+            m_prev = nullptr;
+    }
+
     IKernelTask::ListHeadType m_tasks; //!< runnable tasks
     IKernelTask::ListHeadType m_sleep; //!< sleeping tasks
     IKernelTask              *m_prev;  //!< pointer to the previous task

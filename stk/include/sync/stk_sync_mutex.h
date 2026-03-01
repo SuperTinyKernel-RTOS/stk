@@ -49,7 +49,7 @@ namespace sync {
     \endcode
 
     \note Only available when kernel is compiled with \a KERNEL_SYNC mode enabled.
-    \see  ISyncObject, IWaitObject, IKernelService::StartWaiting
+    \see  ISyncObject, IWaitObject, IKernelService::Wait
 */
 class Mutex : public IMutex, public ITraceable, private ISyncObject
 {
@@ -96,9 +96,13 @@ private:
     uint16_t m_count;     //!< recursion depth
 };
 
+// ---------------------------------------------------------------------------
+// TimedLock
+// ---------------------------------------------------------------------------
+
 inline bool Mutex::TimedLock(Timeout timeout)
 {
-    // not supported inside ISR, may call StartWaiting
+    // not supported inside ISR, may call Wait
     STK_ASSERT(!hw::IsInsideISR());
 
     IKernelService *svc = IKernelService::GetInstance();
@@ -130,7 +134,7 @@ inline bool Mutex::TimedLock(Timeout timeout)
         return false;
 
     // mutex owned by another thread (slow path/blocking)
-    IWaitObject *wo = svc->StartWaiting(this, &__cs, timeout);
+    IWaitObject *wo = svc->Wait(this, &__cs, timeout);
     STK_ASSERT(wo != nullptr);
 
     if (wo->IsTimeout())
@@ -142,6 +146,10 @@ inline bool Mutex::TimedLock(Timeout timeout)
 
     return true;
 }
+
+// ---------------------------------------------------------------------------
+// Unlock
+// ---------------------------------------------------------------------------
 
 inline void Mutex::Unlock()
 {
@@ -175,6 +183,10 @@ inline void Mutex::Unlock()
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Tick
+// ---------------------------------------------------------------------------
 
 inline bool Mutex::Tick()
 {

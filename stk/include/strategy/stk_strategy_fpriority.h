@@ -58,7 +58,7 @@ public:
 
         bool is_tail = (m_prev[prio] == m_tasks[prio].GetLast());
 
-        AddReady(task);
+        AddActive(task);
 
         // if pointer was pointing to the tail, become a tail
         if (is_tail)
@@ -74,7 +74,7 @@ public:
         if (task->GetHead() == &m_sleep)
             m_sleep.Unlink(task);
         else
-            RemoveReady(task);
+            RemoveActive(task);
     }
 
     IKernelTask *GetNext()
@@ -116,7 +116,7 @@ public:
         STK_ASSERT(task->IsSleeping());
         STK_ASSERT(task->GetHead() == &m_tasks[(uint8_t)task->GetWeight()]);
 
-        RemoveReady(task);
+        RemoveActive(task);
         m_sleep.LinkBack(task);
     }
 
@@ -127,11 +127,11 @@ public:
         STK_ASSERT(task->GetHead() == &m_sleep);
 
         m_sleep.Unlink(task);
-        AddReady(task);
+        AddActive(task);
     }
 
 protected:
-    void AddReady(IKernelTask *task)
+    void AddActive(IKernelTask *task)
     {
         const uint8_t prio = (uint8_t)task->GetWeight();
 
@@ -146,7 +146,7 @@ protected:
         }
     }
 
-    void RemoveReady(IKernelTask *task)
+    void RemoveActive(IKernelTask *task)
     {
         const uint8_t prio = (uint8_t)task->GetWeight();
         IKernelTask *next = (*task->GetNext());

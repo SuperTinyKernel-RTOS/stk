@@ -186,6 +186,10 @@ private:
     bool              m_writer_active;   //!< true if a writer currently holds the lock
 };
 
+// ---------------------------------------------------------------------------
+// TimedReadLock
+// ---------------------------------------------------------------------------
+
 inline bool RWMutex::TimedReadLock(Timeout timeout)
 {
     // not supported inside ISR
@@ -209,6 +213,9 @@ inline bool RWMutex::TimedReadLock(Timeout timeout)
     return true;
 }
 
+// ---------------------------------------------------------------------------
+// ReadUnlock
+// ---------------------------------------------------------------------------
 
 inline void RWMutex::ReadUnlock()
 {
@@ -223,6 +230,10 @@ inline void RWMutex::ReadUnlock()
     if (--m_readers == 0)
         m_cv_writers.NotifyOne();
 }
+
+// ---------------------------------------------------------------------------
+// TimedLock
+// ---------------------------------------------------------------------------
 
 inline bool RWMutex::TimedLock(Timeout timeout)
 {
@@ -250,6 +261,10 @@ inline bool RWMutex::TimedLock(Timeout timeout)
     m_writer_active = true;
     return true;
 }
+
+// ---------------------------------------------------------------------------
+// Unlock
+// ---------------------------------------------------------------------------
 
 inline void RWMutex::Unlock()
 {

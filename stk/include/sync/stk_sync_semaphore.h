@@ -49,7 +49,7 @@ namespace sync {
     }
     \endcode
 
-    \see  ISyncObject, IWaitObject, IKernelService::StartWaiting
+    \see  ISyncObject, IWaitObject, IKernelService::Wait
     \note Only available when kernel is compiled with \a KERNEL_SYNC mode enabled.
 */
 class Semaphore : public ITraceable, private ISyncObject
@@ -93,9 +93,13 @@ private:
     uint32_t m_count; //!< Internal resource counter
 };
 
+// ---------------------------------------------------------------------------
+// Wait
+// ---------------------------------------------------------------------------
+
 inline bool Semaphore::Wait(Timeout timeout)
 {
-    // not supported inside ISR, may call StartWaiting
+    // not supported inside ISR, may call Wait
     STK_ASSERT(!hw::IsInsideISR());
 
     ScopedCriticalSection __cs;
@@ -115,8 +119,12 @@ inline bool Semaphore::Wait(Timeout timeout)
     // slow path: block until Signal() or timeout
     // note: after waking, if not a timeout, we effectively own the resource that Signal() produced
     // but didn't put into m_count (see logic of if (m_wait_list.IsEmpty()) in Signal())
-    return !IKernelService::GetInstance()->StartWaiting(this, &__cs, timeout)->IsTimeout();
+    return !IKernelService::GetInstance()->Wait(this, &__cs, timeout)->IsTimeout();
 }
+
+// ---------------------------------------------------------------------------
+// Signal
+// ---------------------------------------------------------------------------
 
 inline void Semaphore::Signal()
 {
@@ -134,6 +142,10 @@ inline void Semaphore::Signal()
         WakeOne();
     }
 }
+
+// ---------------------------------------------------------------------------
+// Tick
+// ---------------------------------------------------------------------------
 
 inline bool Semaphore::Tick()
 {

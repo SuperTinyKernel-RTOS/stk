@@ -38,8 +38,8 @@ public:
     bool InitStack(EStackType stack_type, Stack *stack, IStackMemory *stack_memory, ITask *user_task);
     int32_t GetTickResolution() const;
     void SwitchToNext();
-    void SleepTicks(Timeout ticks);
-    IWaitObject *StartWaiting(ISyncObject *sync_obj, IMutex *mutex, Timeout timeout);
+    void Sleep(Timeout ticks);
+    IWaitObject *Wait(ISyncObject *sync_obj, IMutex *mutex, Timeout timeout);
     void ProcessTick();
     void ProcessHardFault();
     void SetEventOverrider(IEventOverrider *overrider);
