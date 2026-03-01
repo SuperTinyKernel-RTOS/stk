@@ -1003,12 +1003,12 @@ void PlatformRiscV::SwitchToNext()
     GetContext().m_handler->OnTaskSwitch(::HW_GetCallerSP());
 }
 
-void PlatformRiscV::SleepTicks(Timeout ticks)
+void PlatformRiscV::Sleep(Timeout ticks)
 {
     GetContext().m_handler->OnTaskSleep(::HW_GetCallerSP(), ticks);
 }
 
-IWaitObject *PlatformRiscV::StartWaiting(ISyncObject *sync_obj, IMutex *mutex, Timeout timeout)
+IWaitObject *PlatformRiscV::Wait(ISyncObject *sync_obj, IMutex *mutex, Timeout timeout)
 {
     return GetContext().m_handler->OnTaskWait(::HW_GetCallerSP(), sync_obj, mutex, timeout);
 }

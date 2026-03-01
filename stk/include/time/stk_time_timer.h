@@ -253,7 +253,7 @@ public:
     /*! \brief  Get current time.
         \return Current time (ticks).
     */
-    Ticks GetTimeNow() const { return hw::ReadAtomic64(&m_now); }
+    Ticks GetTimeNow() const { return hw::ReadVolatile64(&m_now); }
 
 private:
     /*! \class TimerWorkerTask
@@ -512,7 +512,9 @@ inline void TimerHost::UpdateTime()
         next_sleep = WAIT_INFINITE;
 
         Ticks now = GetTicks();
-        hw::WriteAtomic64(&m_now, now);
+
+        // using WriteVolatile64() to guarantee correct lockless reading order by ReadVolatile64
+        hw::WriteVolatile64(&m_now, now);
 
         Timer *timer = static_cast<Timer *>(m_active.GetFirst());
         while (timer != nullptr)

@@ -96,25 +96,25 @@ TEST(Sync, SyncWait_Wake)
     MutexMock::ScopedLock guard(mutex);
 
     // short wait in order to get wait object for a Wake testing
-    IWaitObject *wo = IKernelService::GetInstance()->StartWaiting(&sobj, &mutex, 10);
+    IWaitObject *wo = IKernelService::GetInstance()->Wait(&sobj, &mutex, 10);
     CHECK_TRUE(wo != nullptr); // expect wait object in return after timeout
 
     // woken by WakeOne() on 5th tick, became active on 6th (see SyncWaitWakeRelaxCpuContext::Process)
     CHECK_EQUAL(6, g_SyncWaitWakeRelaxCpuContext.counter);
     CHECK_FALSE(wo->IsTimeout()); // expect no timeout
-    CHECK_EQUAL(true, mutex.m_locked); // expect locked mutex after StartWaiting return
+    CHECK_EQUAL(true, mutex.m_locked); // expect locked mutex after Wait return
 
     g_SyncWaitWakeRelaxCpuContext.counter  = 0;
     g_SyncWaitWakeRelaxCpuContext.wake_all = true;
 
     // repeat for WakeAll()
-    wo = IKernelService::GetInstance()->StartWaiting(&sobj, &mutex, 10);
+    wo = IKernelService::GetInstance()->Wait(&sobj, &mutex, 10);
     CHECK_TRUE(wo != nullptr); // expect wait object in return after timeout
 
     // woken by WakeAll() on 7th tick, became active on 8th (see SyncWaitWakeRelaxCpuContext::Process)
     CHECK_EQUAL(8, g_SyncWaitWakeRelaxCpuContext.counter);
     CHECK_FALSE(wo->IsTimeout()); // expect no timeout
-    CHECK_EQUAL(true, mutex.m_locked); // expect locked mutex after StartWaiting return
+    CHECK_EQUAL(true, mutex.m_locked); // expect locked mutex after Wait return
 }
 
 } // namespace stk

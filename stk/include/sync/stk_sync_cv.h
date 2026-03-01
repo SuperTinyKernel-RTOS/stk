@@ -61,7 +61,7 @@ namespace sync {
     }
     \endcode
 
-    \see  Mutex, ISyncObject, IWaitObject, IKernelService::StartWaiting
+    \see  Mutex, ISyncObject, IWaitObject, IKernelService::Wait
     \note Only available when kernel is compiled with \a KERNEL_SYNC mode enabled.
 */
 class ConditionVariable : private ISyncObject, public ITraceable
@@ -97,16 +97,24 @@ private:
     bool Tick();
 };
 
+// ---------------------------------------------------------------------------
+// Wait
+// ---------------------------------------------------------------------------
+
 inline bool ConditionVariable::Wait(IMutex &mutex, Timeout timeout)
 {
     if (timeout == NO_WAIT)
         return false;
 
-    // not supported inside ISR, calls StartWaiting
+    // not supported inside ISR, calls Wait
     STK_ASSERT(!hw::IsInsideISR());
 
-    return !IKernelService::GetInstance()->StartWaiting(this, &mutex, timeout)->IsTimeout();
+    return !IKernelService::GetInstance()->Wait(this, &mutex, timeout)->IsTimeout();
 }
+
+// ---------------------------------------------------------------------------
+// NotifyOne
+// ---------------------------------------------------------------------------
 
 inline void ConditionVariable::NotifyOne()
 {
@@ -114,11 +122,19 @@ inline void ConditionVariable::NotifyOne()
     WakeOne();
 }
 
+// ---------------------------------------------------------------------------
+// NotifyAll
+// ---------------------------------------------------------------------------
+
 inline void ConditionVariable::NotifyAll()
 {
     ScopedCriticalSection __cs;
     WakeAll();
 }
+
+// ---------------------------------------------------------------------------
+// Tick
+// ---------------------------------------------------------------------------
 
 inline bool ConditionVariable::Tick()
 {

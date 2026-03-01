@@ -91,6 +91,10 @@ private:
     uint16_t     m_recursion_count; //!< nesting depth
 };
 
+// ---------------------------------------------------------------------------
+// Lock
+// ---------------------------------------------------------------------------
+
 inline void SpinLock::Lock()
 {
     TId current_tid = GetTid();
@@ -102,6 +106,10 @@ inline void SpinLock::Lock()
         MakeLocked(current_tid);
     }
 }
+
+// ---------------------------------------------------------------------------
+// TryLock
+// ---------------------------------------------------------------------------
 
 inline bool SpinLock::TryLock()
 {
@@ -118,6 +126,10 @@ inline bool SpinLock::TryLock()
 
     return true;
 }
+
+// ---------------------------------------------------------------------------
+// Unlock
+// ---------------------------------------------------------------------------
 
 inline void SpinLock::Unlock()
 {
@@ -136,6 +148,10 @@ inline void SpinLock::Unlock()
     }
 }
 
+// ---------------------------------------------------------------------------
+// LockRecursively
+// ---------------------------------------------------------------------------
+
 inline bool SpinLock::LockRecursively(TId locking_tid)
 {
     if ((m_owner_tid == locking_tid) && (m_recursion_count != 0))
@@ -147,6 +163,10 @@ inline bool SpinLock::LockRecursively(TId locking_tid)
 
     return false;
 }
+
+// ---------------------------------------------------------------------------
+// MakeLocked
+// ---------------------------------------------------------------------------
 
 inline void SpinLock::MakeLocked(TId locking_tid)
 {

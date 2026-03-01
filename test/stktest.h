@@ -150,12 +150,12 @@ public:
         ++m_switch_to_next_nr;
     }
 
-    void SleepTicks(Timeout ticks)
+    void Sleep(Timeout ticks)
     {
         m_event_handler->OnTaskSleep(GetCallerSP(), ticks);
     }
 
-    IWaitObject *StartWaiting(ISyncObject *sobj, IMutex *mutex, Timeout timeout)
+    IWaitObject *Wait(ISyncObject *sobj, IMutex *mutex, Timeout timeout)
     {
         return m_event_handler->OnTaskWait(GetCallerSP(), sobj, mutex, timeout);
     }
@@ -265,14 +265,14 @@ public:
         return m_resolution;
     }
 
-    void Delay(Timeout delay_ms)
+    void Delay(Timeout ticks)
     {
-        (void)delay_ms;
+        (void)ticks;
     }
 
-    void Sleep(Timeout sleep_ms)
+    void Sleep(Timeout ticks)
     {
-        (void)sleep_ms;
+        (void)ticks;
     }
 
     void SwitchToNext()
@@ -280,7 +280,7 @@ public:
         m_switch_to_next = true;
     }
 
-    IWaitObject *StartWaiting(ISyncObject *sobj, IMutex *mutex, Timeout timeout)
+    IWaitObject *Wait(ISyncObject *sobj, IMutex *mutex, Timeout timeout)
     {
         (void)sobj;
         (void)mutex;

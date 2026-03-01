@@ -164,8 +164,8 @@ static struct Context : public PlatformContext
     void ProcessTick();
     void SwitchContext();
     void SwitchToNext();
-    void SleepTicks(Timeout ticks);
-    IWaitObject *StartWaiting(ISyncObject *sync_obj, IMutex *mutex, Timeout timeout);
+    void Sleep(Timeout ticks);
+    IWaitObject *Wait(ISyncObject *sync_obj, IMutex *mutex, Timeout timeout);
     void Stop();
     size_t GetCallerSP() const;
     TId GetTid() const;
@@ -414,12 +414,12 @@ void Context::SwitchToNext()
     m_handler->OnTaskSwitch(GetCallerSP());
 }
 
-void Context::SleepTicks(Timeout ticks)
+void Context::Sleep(Timeout ticks)
 {
     m_handler->OnTaskSleep(GetCallerSP(), ticks);
 }
 
-IWaitObject *Context::StartWaiting(ISyncObject *sync_obj, IMutex *mutex, Timeout timeout)
+IWaitObject *Context::Wait(ISyncObject *sync_obj, IMutex *mutex, Timeout timeout)
 {
     return m_handler->OnTaskWait(GetCallerSP(), sync_obj, mutex, timeout);
 }
@@ -494,14 +494,14 @@ void PlatformX86Win32::SwitchToNext()
     g_Context.SwitchToNext();
 }
 
-void PlatformX86Win32::SleepTicks(Timeout ticks)
+void PlatformX86Win32::Sleep(Timeout ticks)
 {
-    g_Context.SleepTicks(ticks);
+    g_Context.Sleep(ticks);
 }
 
-IWaitObject *PlatformX86Win32::StartWaiting(ISyncObject *sync_obj, IMutex *mutex, Timeout timeout)
+IWaitObject *PlatformX86Win32::Wait(ISyncObject *sync_obj, IMutex *mutex, Timeout timeout)
 {
-    return g_Context.StartWaiting(sync_obj, mutex, timeout);
+    return g_Context.Wait(sync_obj, mutex, timeout);
 }
 
 void PlatformX86Win32::ProcessTick()

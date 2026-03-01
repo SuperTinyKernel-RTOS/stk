@@ -319,7 +319,7 @@ namespace stk
         void Delay(Timeout msec) { (void)msec; }
         void Sleep(Timeout msec) { (void)msec; }
         void SwitchToNext() {}
-        IWaitObject *StartWaiting(ISyncObject *sobj, IMutex *mutex, Timeout timeout)
+        IWaitObject *Wait(ISyncObject *sobj, IMutex *mutex, Timeout timeout)
         {
         	(void)sobj;
         	(void)mutex;

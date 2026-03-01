@@ -537,8 +537,8 @@ public:
 
         /*! \brief      Called from the Thread process when task needs to wait.
             \param[in]  caller_SP: Value of Stack Pointer (SP) register (for locating the calling process inside the kernel).
-            \param[in]  sync_obj: ISyncObject instance (passed by StartWaiting).
-            \param[in]  mutex: IMutex instance (passed by StartWaiting).
+            \param[in]  sync_obj: ISyncObject instance (passed by Wait).
+            \param[in]  mutex: IMutex instance (passed by Wait).
             \param[in]  timeout: Time to sleep (ticks).
         */
         virtual IWaitObject *OnTaskWait(size_t caller_SP, ISyncObject *sync_obj, IMutex *mutex, Timeout timeout) = 0;
@@ -609,7 +609,7 @@ public:
         \note      Unlike Delay this function does not waste CPU cycles and allows kernel to put CPU into a low-power state.
         \param[in] ticks: Time to sleep (ticks).
     */
-    virtual void SleepTicks(Timeout ticks) = 0;
+    virtual void Sleep(Timeout ticks) = 0;
 
     /*! \brief     Process one tick.
         \note      Normally system tick is processed by the platform driver implementation.
@@ -829,7 +829,7 @@ public:
         \param[in] timeout: Maximum wait time (ticks). Use \c WAIT_INFINITE for infinite waiting (no timeout).
         \return    Pointer to the wait object handle representing this wait operation (always non NULL).
     */
-    virtual IWaitObject *StartWaiting(ISyncObject *sobj, IMutex *mutex, Timeout timeout) = 0;
+    virtual IWaitObject *Wait(ISyncObject *sobj, IMutex *mutex, Timeout timeout) = 0;
 };
 
 } // namespace stk
