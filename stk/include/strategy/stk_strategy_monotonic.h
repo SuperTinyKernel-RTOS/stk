@@ -36,10 +36,10 @@ enum EMonotonicSwitchStrategyType
            selected at compile time by the \a _Type template parameter.
 
     \tparam _Type: Policy selector (EMonotonicSwitchStrategyType):
-                   - \c MSS_TYPE_RATE     — Rate-Monotonic: tasks with a \e shorter scheduling
+                   - \c MSS_TYPE_RATE     - Rate-Monotonic: tasks with a \e shorter scheduling
                      period receive higher priority. The most frequently activating task always
                      runs first.
-                   - \c MSS_TYPE_DEADLINE — Deadline-Monotonic: tasks with a \e shorter execution
+                   - \c MSS_TYPE_DEADLINE - Deadline-Monotonic: tasks with a \e shorter execution
                      deadline receive higher priority.
 
     \par Sorted-list design
@@ -48,11 +48,11 @@ enum EMonotonicSwitchStrategyType
     front: the first non-sleeping task it encounters is always the highest-priority runnable task.
     No re-sorting occurs at runtime after a task is added.
 
-    \par Sleep handling — no separate sleep list
+    \par Sleep handling - no separate sleep list
     Unlike RR, SWRR, EDF, and FP strategies, this strategy does \b not maintain a separate sleep
     list (SLEEP_EVENT_API = 0). Sleeping tasks remain in \c m_tasks in their sorted position and
     are skipped by GetNext() via IKernelTask::IsSleeping(). OnTaskSleep() and OnTaskWake() assert
-    unconditionally — the kernel must not be configured to deliver these events to this strategy.
+    unconditionally, the kernel must not be configured to deliver these events to this strategy.
 
     \par HRT mode requirement
     This strategy reads GetHrtPeriodicity() and GetHrtDeadline() from each task during AddTask()
@@ -209,9 +209,9 @@ public:
         return (*m_tasks.GetFirst());
     }
 
-    /*! \brief    Get the total number of tasks managed by this strategy.
-        \return   Number of tasks in \c m_tasks. Includes both runnable and sleeping tasks
-                  since this strategy does not maintain a separate sleep list.
+    /*! \brief     Get the total number of tasks managed by this strategy.
+        \return    Number of tasks in \c m_tasks. Includes both runnable and sleeping tasks
+                   since this strategy does not maintain a separate sleep list.
     */
     size_t GetSize() const
     {
@@ -258,27 +258,22 @@ class SchedulabilityCheck
 {
 public:
     /*! \class TaskTiming
-        \brief Scheduling period and execution deadline for a single periodic HRT task,
+        \brief Execution deadline and scheduling period for a single periodic HRT task,
                used as input to CalculateWCRT() and GetTaskCpuLoad().
 
-        Populated by IsSchedulableWCRT() from each kernel task via GetHrtPeriodicity() and
-        GetHrtDeadline(). Entries must be in descending priority order (index 0 = highest).
+        Populated by IsSchedulableWCRT() from each kernel task via GetHrtDeadline() and
+        GetHrtPeriodicity() respectively. Entries must be in descending priority order
+        (index 0 = highest-priority task).
 
-        \note  **Field naming vs. algorithm convention:** In standard WCRT notation, C
-               denotes a task's Worst-Case Execution Time and T denotes its period.
-               In this implementation the local variable \c Cx in CalculateWCRT() is assigned
-               from \c periodicity (= GetHrtPeriodicity() = period T), and \c Tx from
-               \c deadline (= GetHrtDeadline() = deadline D). The algorithm's interference
-               sum then uses \c tasks[i].deadline as the period divisor and
-               \c tasks[i].periodicity as the WCET multiplier. This is self-consistent
-               \b only under the Rate-Monotonic assumption that each task's deadline equals
-               its period (D = T = C upper-bound). Do not use this class with task sets
-               where D ≠ T.
+        \note  In standard WCRT notation: C is the Worst-Case Execution Time, T is the
+               period, and D is the deadline. \c duration maps to C (= GetHrtDeadline(),
+               the maximum allowed execution time per activation) and \c period maps to T
+               (= GetHrtPeriodicity(), the activation interval).
     */
     struct TaskTiming
     {
-        uint32_t periodicity; //!< Scheduling period T of the task (ticks), from GetHrtPeriodicity(). Used as the WCET multiplier in CalculateWCRT() under the D=T assumption.
-        uint32_t deadline;    //!< Execution deadline D of the task (ticks), from GetHrtDeadline(). Used as the period divisor in CalculateWCRT() under the D=T assumption.
+        uint32_t duration; //!< Worst-Case Execution Time C of the task (ticks), from GetHrtDeadline(). Used as the base cost and interference multiplier Cj in CalculateWCRT().
+        uint32_t period;   //!< Scheduling period T of the task (ticks), from GetHrtPeriodicity(). Used as the interference divisor Tj in CalculateWCRT() and the CPU load denominator in GetTaskCpuLoad().
     };
 
     /*! \class TaskCpuLoad
@@ -286,7 +281,7 @@ public:
     */
     struct TaskCpuLoad
     {
-        uint16_t task;  //!< CPU load contributed by this task alone, in percent: floor(periodicity × 100 / deadline). Equals floor(C/T × 100) under the D=T assumption.
+        uint16_t task;  //!< CPU load contributed by this task alone, in percent: floor(C / T * 100) = floor(duration * 100 / period).
         uint16_t total; //!< Cumulative CPU load of this task plus all higher-priority tasks, in percent (running sum from index 0).
     };
 
@@ -296,7 +291,7 @@ public:
     struct TaskInfo
     {
         TaskCpuLoad cpu_load; //!< Per-task and cumulative CPU utilisation (see TaskCpuLoad).
-        uint32_t    wcrt;     //!< Worst-Case Response Time in ticks. Task is schedulable if wcrt ≤ deadline.
+        uint32_t    wcrt;     //!< Worst-Case Response Time in ticks. Task is schedulable if wcrt <= period (T).
     };
 
     /*! \class SchedulabilityCheckResult
@@ -317,7 +312,7 @@ public:
     template <uint32_t _TaskCount>
     struct SchedulabilityCheckResult
     {
-        bool     schedulable;      //!< \c true if every task's WCRT ≤ its deadline; \c false if any task misses its deadline.
+        bool     schedulable;      //!< \c true if every task's WCRT <= its period (T); \c false if any task misses its deadline.
         TaskInfo info[_TaskCount]; //!< Per-task analysis results, ordered highest priority first (index 0 = highest priority task).
 
         /*! \brief  Check whether the full task set is schedulable.
@@ -326,19 +321,17 @@ public:
         operator bool() const { return schedulable; }
     };
 
-    /*! \brief              Perform WCRT schedulability analysis on the task set registered with \a strategy.
-        \tparam _TaskCount  Number of tasks to analyse. Must equal the number of tasks currently
-                            registered with \a strategy (asserted at runtime: idx == _TaskCount).
-        \param[in] strategy Pointer to the monotonic scheduling strategy whose task list is analysed.
-                            Must not be \c nullptr and must have at least one task registered.
-        \return             A SchedulabilityCheckResult<_TaskCount> containing the schedulability
-                            verdict and per-task CPU load and WCRT values.
-        \note               Tasks are read from the strategy's sorted \c m_tasks list in priority
-                            order (index 0 = highest priority), populating the internal TaskTiming
-                            array via GetHrtPeriodicity() and GetHrtDeadline() before invoking
-                            GetTaskCpuLoad() and CalculateWCRT().
-        \note               Results are valid only when all tasks satisfy D = T (deadline equals
-                            period). See TaskTiming for the full explanation of this constraint.
+    /*! \brief               Perform WCRT schedulability analysis on the task set registered with \a strategy.
+        \tparam _TaskCount:  Number of tasks to analyse. Must equal the number of tasks currently
+                             registered with \a strategy (asserted at runtime: idx == _TaskCount).
+        \param[in] strategy: Pointer to the monotonic scheduling strategy whose task list is analysed.
+                             Must not be \c nullptr and must have at least one task registered.
+        \return              A SchedulabilityCheckResult<_TaskCount> containing the schedulability
+                             verdict and per-task CPU load and WCRT values.
+        \note                Tasks are read from the strategy's sorted \c m_tasks list in priority
+                             order (index 0 = highest priority). For each task, \c period is
+                             populated from GetHrtPeriodicity() and \c duration from GetHrtDeadline()
+                             before invoking GetTaskCpuLoad() and CalculateWCRT().
      */
     template <uint32_t _TaskCount>
     static inline SchedulabilityCheckResult<_TaskCount> IsSchedulableWCRT(const ITaskSwitchStrategy *strategy)
@@ -360,7 +353,9 @@ public:
         do
         {
             STK_ASSERT(idx < _TaskCount);
-            tasks[idx++] = { (uint32_t)itr->GetHrtPeriodicity(), (uint32_t)itr->GetHrtDeadline() };
+            tasks[idx].period   = (uint32_t)itr->GetHrtPeriodicity();
+            tasks[idx].duration = (uint32_t)itr->GetHrtDeadline();
+            ++idx;
         }
         while ((itr = (*itr->GetNext())) != start);
         STK_ASSERT(idx == _TaskCount);
@@ -377,51 +372,52 @@ public:
     /*! \brief     Compute the Worst-Case Response Time (WCRT) for each task in a fixed-priority
                    periodic task set and determine schedulability.
 
-       Evaluates schedulability using the iterative WCRT recurrence. Assumptions:
+       Evaluates schedulability using standard iterative WCRT recurrence. Assumptions:
          - Fixed priorities, tasks ordered by descending priority (index 0 = highest priority =
            shortest period for RM, or shortest deadline for DM).
-         - Periodic activation with \b deadline equal to period (D = T) for all tasks.
          - Fully preemptive execution with no resource-sharing blocking.
 
-       \note  **Variable naming:** within this function, \c Cx = tasks[t].periodicity (period T,
-              used as WCET C) and \c Tx = tasks[t].deadline (deadline D, used as period T in the
-              interference sum). This is consistent only under the D = T assumption, see TaskTiming.
+       Within this function, local variable \c Cx holds \c tasks[t].duration (WCET C) and
+       \c Tx holds \c tasks[t].period (period T), matching standard WCRT notation directly.
 
-       For each task \e t the recurrence is initialised as W₀ = Cₓ and iterated:
+       For each task \e t the recurrence is initialised as W(0) = Cx and iterated:
 
-            Wₙ₊₁ = Cₓ + Σⱼ﹤ₜ ⌈Wₙ / Tⱼ⌉ × Cⱼ
+       \code
+           W(n+1) = Cx + sum( ceil(W(n) / Tj) * Cj,  for all j < t )
+       \endcode
 
-       where the sum is over all higher-priority tasks j (index < t). Iteration continues
-       until convergence (Wₙ₊₁ = Wₙ) or Wₙ₊₁ > Tₓ (deadline miss confirmed). A \c goto
+       where the sum runs over all higher-priority tasks j (index < t). Cj =
+       tasks[j].duration and Tj = tasks[j].period. Iteration continues until
+       convergence (W(n+1) == W(n)) or W(n+1) > Tx (deadline miss confirmed). A \c goto
        is used for the iteration step to avoid re-initialising loop variables inside the
        outer \c for block.
 
-       The highest-priority task (index 0) has no higher-priority interference, its WCRT
-       is set directly to its own WCET (\c tasks[0].periodicity) without iteration.
+       The highest-priority task (index 0) has no higher-priority interference; its WCRT
+       is set directly to its own WCET (\c tasks[0].duration) without iteration.
 
-       \param[in]  tasks Array of TaskTiming in descending priority order (index 0 = highest priority).
-       \param[in]  count Number of tasks in \a tasks.
-       \param[out] info  Array of TaskInfo of size \a count. \c info[i].wcrt receives the computed
-                         WCRT for task \e i on return.
-       \return     \c true if every task's WCRT ≤ its deadline; \c false if any task misses.
+       \param[in]  tasks: Array of TaskTiming in descending priority order (index 0 = highest).
+       \param[in]  count: Number of tasks in \a tasks.
+       \param[out] info:  Array of TaskInfo of size \a count. \c info[i].wcrt receives the
+                         computed WCRT for task \e i on return.
+       \return     \c true if every task's WCRT <= its period (Tx); \c false if any task misses.
      */
     static inline bool CalculateWCRT(const TaskTiming *tasks, const uint32_t count, TaskInfo *info)
     {
         bool schedulable = true;
-        info[0].wcrt = tasks[0].periodicity;
+        info[0].wcrt = tasks[0].duration;
 
         for (uint32_t t = 1; t < count; )
         {
             uint32_t w,
-            Cx = tasks[t].periodicity,
-            Tx = tasks[t].deadline,
+            Cx = tasks[t].duration,
+            Tx = tasks[t].period,
             w0 = Cx;
 
         next_itr:
 
             w = Cx;
             for (uint32_t i = 0; i < t; ++i)
-                w += idiv_ceil(w0, tasks[i].deadline) * tasks[i].periodicity;
+                w += idiv_ceil(w0, tasks[i].period) * tasks[i].duration;
 
             if ((w != w0) && (w <= Tx))
             {
@@ -438,13 +434,13 @@ public:
         return schedulable;
     }
 
-    /*! \brief      Compute per-task and cumulative CPU utilisation, in percent.
-        \param[in]  tasks Array of TaskTiming in descending priority order (index 0 = highest priority).
+    /*! \brief      Compute per-task and cumulative CPU utilisation, in whole percent.
+        \param[in]  tasks Array of TaskTiming in descending priority order (index 0 = highest).
         \param[in]  count Number of tasks in \a tasks.
         \param[out] info  Array of TaskInfo of size \a count. \c info[i].cpu_load is populated on return.
-        \note       Per-task load = \c floor(periodicity × 100 / deadline), computed with integer
-                    arithmetic (truncating division). Equals \c floor(C/T × 100) under the D = T
-                    assumption. Cumulative load is the running sum from index 0 to \a count − 1.
+        \note       Per-task load = floor(C / T * 100) = floor(duration * 100 / period),
+                    computed with integer arithmetic (truncating division). Cumulative load
+                    is the running sum from index 0 to \a count - 1.
     */
     static inline void GetTaskCpuLoad(const TaskTiming *tasks, const uint32_t count, TaskInfo *info)
     {
@@ -452,7 +448,7 @@ public:
 
         for (uint32_t t = 0; t < count; ++t)
         {
-            uint16_t task_load = (uint16_t)(tasks[t].periodicity * 100 / tasks[t].deadline);
+            uint16_t task_load = (uint16_t)(tasks[t].period * 100 / tasks[t].duration);
             total += task_load;
 
             info[t].cpu_load.task  = task_load;
@@ -461,7 +457,7 @@ public:
     }
 
 private:
-    //! Integer ceiling division: returns ⌈x / y⌉ = x/y + (x%y > 0 ? 1 : 0).
+    //! Integer ceiling division: returns ceil(x / y) = x/y + (x%y > 0 ? 1 : 0).
     //! Equivalent to (int32_t)ceil((float)x / y) but exact and branch-free for integers.
     //! Reference: http://stackoverflow.com/questions/2745074/fast-ceiling-of-an-integer-division-in-c-c
     static __stk_forceinline int32_t idiv_ceil(uint32_t x, uint32_t y)
