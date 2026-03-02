@@ -206,6 +206,11 @@
 			<locationURI>PARENT-4-PROJECT_LOC/test/generic/stktest_sync.cpp</locationURI>
 		</link>
 		<link>
+			<name>src/test/generic/stktest_time.cpp</name>
+			<type>1</type>
+			<locationURI>PARENT-4-PROJECT_LOC/test/generic/stktest_time.cpp</locationURI>
+		</link>
+		<link>
 			<name>deps/cpputest/include/CppUTest/CommandLineArguments.h</name>
 			<type>1</type>
 			<locationURI>PARENT-4-PROJECT_LOC/deps/cpputest/include/CppUTest/CommandLineArguments.h</locationURI>

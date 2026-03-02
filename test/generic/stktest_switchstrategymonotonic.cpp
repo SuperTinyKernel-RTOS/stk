@@ -230,13 +230,14 @@ TEST(SwitchStrategyMonotonic, FailedWCRT)
 
     // Overload CPU: C/T > RMUB
     kernel.AddTask(&task1, 50, 50, 0); // 100% CPU
-    kernel.AddTask(&task2, 30, 60, 0); // additional load
+    kernel.AddTask(&task2, 60, 30, 0); // additional load
 
     auto result = SchedulabilityCheck::IsSchedulableWCRT<2>(strategy);
-    CHECK_FALSE_TEXT(result, "Task set should be unschedulable according to WCRT");
 
-    CHECK_EQUAL(50, result.info[0].cpu_load.total);
+    CHECK_EQUAL(100, result.info[0].cpu_load.total);
     CHECK_EQUAL(150, result.info[1].cpu_load.total);
+
+    CHECK_FALSE_TEXT(result, "Task set should be unschedulable according to WCRT");
 }
 
 TEST(SwitchStrategyMonotonic, SchedulableWCRT)
@@ -249,16 +250,16 @@ TEST(SwitchStrategyMonotonic, SchedulableWCRT)
 
     // --- Stage 1: Schedulable tasks ---------------------------------------
 
-    // Task parameters: periodicity = execution time, deadline = task period
-    kernel.AddTask(&task1, 20, 40, 0);  // task1: C=20, T=40
-    kernel.AddTask(&task2, 30, 100, 0); // task2: C=30, T=100
-    kernel.AddTask(&task3, 10, 200, 0); // task3: C=10, T=200
+    // Task parameters: T = task period, C = execution time
+    kernel.AddTask(&task1, 40, 20, 0);  // task1: C=20, T=40
+    kernel.AddTask(&task2, 100, 30, 0); // task2: C=30, T=100
+    kernel.AddTask(&task3, 200, 10, 0); // task3: C=10, T=200
 
     auto result = SchedulabilityCheck::IsSchedulableWCRT<3>(strategy);
     CHECK_TEXT(result, "Task set should be schedulable according to WCRT");
 
-    CHECK_EQUAL(5, result.info[0].cpu_load.total);
-    CHECK_EQUAL(55, result.info[1].cpu_load.total);
+    CHECK_EQUAL(50, result.info[0].cpu_load.total);
+    CHECK_EQUAL(80, result.info[1].cpu_load.total);
     CHECK_EQUAL(85, result.info[2].cpu_load.total);
 }
 

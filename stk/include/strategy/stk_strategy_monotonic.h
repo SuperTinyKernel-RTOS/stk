@@ -434,7 +434,7 @@ public:
         return schedulable;
     }
 
-    /*! \brief      Compute per-task and cumulative CPU utilisation, in whole percent.
+    /*! \brief      Compute per-task and cumulative CPU utilization, in whole percent.
         \param[in]  tasks Array of TaskTiming in descending priority order (index 0 = highest).
         \param[in]  count Number of tasks in \a tasks.
         \param[out] info  Array of TaskInfo of size \a count. \c info[i].cpu_load is populated on return.
@@ -448,7 +448,7 @@ public:
 
         for (uint32_t t = 0; t < count; ++t)
         {
-            uint16_t task_load = (uint16_t)(tasks[t].period * 100 / tasks[t].duration);
+            uint16_t task_load = (uint16_t)(tasks[t].duration * 100 / tasks[t].period);
             total += task_load;
 
             info[t].cpu_load.task  = task_load;
