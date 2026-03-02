@@ -38,6 +38,7 @@ static inline void __stktest_relax_cpu()
 #include <stk.h>
 #include <arch/stk_arch_common.h>
 #include <sync/stk_sync.h>
+#include <time/stk_time.h>
 
 #include "stktest_context.h"
 

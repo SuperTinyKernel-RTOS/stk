@@ -9,6 +9,7 @@
 
 #include <stk_config.h>
 #include <stk.h>
+#include <time/stk_time.h>
 #include "example.h"
 
 // R2350 requires larger stack due to stack-memory heavy SDK API
@@ -31,19 +32,14 @@ public:
     HwLedTask(uint8_t task_id) : m_task_id(task_id)
     {}
 
-#if 0
-    stk::RunFuncType GetFunc() { return stk::forced_cast<stk::RunFuncType>(&HwLedTask::RunInner); }
-#else
-    stk::RunFuncType GetFunc() { return &Run; }
-#endif
+    stk::RunFuncType GetFunc() {
+        return [](void *user_data) {
+            ((HwLedTask *)user_data)->RunInner();
+        };
+    }
     void *GetFuncUserData() { return this; }
 
 private:
-    static void Run(void *user_data)
-    {
-        ((HwLedTask *)user_data)->RunInner();
-    }
-
     void RunInner()
     {
         for (;;)
@@ -101,15 +97,17 @@ private:
     void RunInner()
     {
         uint8_t led = 0;
-        stk::PeriodicTimer<1000> timer;
+        stk::time::PeriodicTrigger trigger(1000);
 
         for (;;)
         {
-            timer.Update([&led](int64_t /*now*/, int64_t /*period*/) {
+            if (trigger.Poll())
+            {
                 led = (led + 1) % 3;
                 g_Led = led;
-            });
+            }
 
+            // wait for a next turn
             stk::Yield();
         }
     }
@@ -161,11 +159,12 @@ void RunExample()
     enum { TASK_COUNT = 4 };
 
 #if USE_EDF
-    static Kernel<KERNEL_STATIC | KERNEL_HRT, TASK_COUNT, SwitchStrategyEDF, PlatformDefault> kernel;
+    typedef SwitchStrategyEDF SchedulerType;
 #else
-    static Kernel<KERNEL_STATIC | KERNEL_HRT, TASK_COUNT, SwitchStrategyRM, PlatformDefault> kernel;
+    typedef SwitchStrategyRM SchedulerType;
 #endif
-    static PlatformEventHandler overrider;
+
+    static Kernel<KERNEL_STATIC | KERNEL_HRT, TASK_COUNT, SchedulerType, PlatformDefault> kernel;
 
     // assume that hardware LED tasks have highest priority
     static HwLedTask<ACCESS_PRIVILEGED> hwt0(0), hwt1(1), hwt2(2);
@@ -176,15 +175,16 @@ void RunExample()
     kernel.Initialize();
 
     // optional: you can override sleep and hard fault default behaviors
-    kernel.GetPlatform()->SetEventOverrider(&overrider);
+    static PlatformEventHandler event_overrider;
+    kernel.GetPlatform()->SetEventOverrider(&event_overrider);
 
 #define MSEC(MS) GetTicksFromMsec(MS, PERIODICITY_DEFAULT)
 
     //                    periodicity  deadline   start delay
-    kernel.AddTask(&ctrl, MSEC(100),   MSEC(200), MSEC(0));
-    kernel.AddTask(&hwt0, MSEC(10),    MSEC(100), MSEC(0));
-    kernel.AddTask(&hwt1, MSEC(10),    MSEC(100), MSEC(0));
-    kernel.AddTask(&hwt2, MSEC(10),    MSEC(100), MSEC(0));
+    kernel.AddTask(&ctrl, MSEC(200),   MSEC(100), MSEC(0));
+    kernel.AddTask(&hwt0, MSEC(200),   MSEC(20), MSEC(0));
+    kernel.AddTask(&hwt1, MSEC(200),   MSEC(20), MSEC(0));
+    kernel.AddTask(&hwt2, MSEC(200),   MSEC(20), MSEC(0));
 
 #if !USE_EDF
     auto wcrt_sched = SchedulabilityCheck::IsSchedulableWCRT<TASK_COUNT>(kernel.GetSwitchStrategy());
