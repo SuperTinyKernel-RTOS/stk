@@ -10,38 +10,90 @@
 #ifndef STK_STRATEGY_RM_H_
 #define STK_STRATEGY_RM_H_
 
+/*! \file  stk_strategy_monotonic.h
+    \brief Rate-Monotonic (RM) and Deadline-Monotonic (DM) task-switching strategies
+           (SwitchStrategyMonotonic / SwitchStrategyRM / SwitchStrategyDM), and the
+           SchedulabilityCheck utility for Worst-Case Response Time (WCRT) analysis.
+*/
+
 #include "stk_common.h"
 #include "stk_strategy_rrobin.h"
 
 namespace stk {
 
 /*! \enum  EMonotonicSwitchStrategyType
-    \brief Types for SwitchStrategyMonotonic.
+    \brief Policy selector for SwitchStrategyMonotonic: determines the timing attribute
+           used to assign fixed priorities to tasks at AddTask() time.
 */
 enum EMonotonicSwitchStrategyType
 {
-    MSS_TYPE_RATE,    //!< Rate-Monotonic (RM) type (smaller periodicity means higher priority, higher priority task is served first)
-    MSS_TYPE_DEADLINE //!< Deadline-Monotonic (DM) type (shorter deadline means higher priority, higher priority task is served first)
+    MSS_TYPE_RATE,    //!< Rate-Monotonic (RM): shorter scheduling period -> higher priority. Priority is derived from GetHrtPeriodicity() and is fixed at task registration.
+    MSS_TYPE_DEADLINE //!< Deadline-Monotonic (DM): shorter execution deadline -> higher priority. Priority is derived from GetHrtDeadline() and is fixed at task registration.
 };
 
 /*! \class SwitchStrategyMonotonic
-    \brief Monotonic scheduling strategy, Rate-Monotonic (RM) or Deadline-Monotonic (DM).
+    \brief Monotonic scheduling strategy: Rate-Monotonic (RM) or Deadline-Monotonic (DM),
+           selected at compile time by the \a _Type template parameter.
 
-    Tasks are scheduled by fixed priority according to the selected monotonic policy (shorter execution time for RM,
-    shorter deadline for DM).
+    \tparam _Type: Policy selector (EMonotonicSwitchStrategyType):
+                   - \c MSS_TYPE_RATE     — Rate-Monotonic: tasks with a \e shorter scheduling
+                     period receive higher priority. The most frequently activating task always
+                     runs first.
+                   - \c MSS_TYPE_DEADLINE — Deadline-Monotonic: tasks with a \e shorter execution
+                     deadline receive higher priority.
 
-    \note Use SchedulabilityCheck to check CPU schedulability using Worst-Case Response Time (WCRT) analysis.
+    \par Sorted-list design
+    \c m_tasks is maintained as a priority-sorted intrusive list. AddTask() inserts each new task
+    at the correct sorted position (O(n) insertion sort) so that GetNext() need only scan from the
+    front: the first non-sleeping task it encounters is always the highest-priority runnable task.
+    No re-sorting occurs at runtime after a task is added.
+
+    \par Sleep handling — no separate sleep list
+    Unlike RR, SWRR, EDF, and FP strategies, this strategy does \b not maintain a separate sleep
+    list (SLEEP_EVENT_API = 0). Sleeping tasks remain in \c m_tasks in their sorted position and
+    are skipped by GetNext() via IKernelTask::IsSleeping(). OnTaskSleep() and OnTaskWake() assert
+    unconditionally — the kernel must not be configured to deliver these events to this strategy.
+
+    \par HRT mode requirement
+    This strategy reads GetHrtPeriodicity() and GetHrtDeadline() from each task during AddTask()
+    to determine its priority. These values are only populated in \c KERNEL_HRT mode; using this
+    strategy without \c KERNEL_HRT produces undefined priority ordering.
+
+    \note  Does not use per-task weights (WEIGHT_API = 0). Priority is derived entirely from HRT
+           timing parameters set via \c IKernel::AddTask(periodicity_tc, deadline_tc, ...).
+    \note  For schedulability analysis of the configured task set use
+           SchedulabilityCheck::IsSchedulableWCRT().
+    \see   SwitchStrategyRM, SwitchStrategyDM, SchedulabilityCheck, ITaskSwitchStrategy
 */
 template <EMonotonicSwitchStrategyType _Type>
 class SwitchStrategyMonotonic : public ITaskSwitchStrategy
 {
 public:
+    /*! \enum  EConfig
+        \brief Compile-time capability flags reported to the kernel.
+    */
     enum EConfig
     {
-        WEIGHT_API      = 0, // strategy does not need Weight API of the kernel task
-        SLEEP_EVENT_API = 0  // strategy does not support OnTaskSleep/OnTaskWake events
+        WEIGHT_API      = 0, //!< This strategy does not use per-task weights. Priority is derived from HRT timing parameters (GetHrtPeriodicity() for RM, GetHrtDeadline() for DM) at AddTask() time.
+        SLEEP_EVENT_API = 0  //!< This strategy does not use OnTaskSleep() / OnTaskWake() events. Sleeping tasks remain in \c m_tasks and are skipped by GetNext() via IKernelTask::IsSleeping(). Delivering these events will trigger an assertion.
     };
 
+    /*! \brief     Add a task to the priority-sorted runnable list.
+        \param[in] task: Task to add. Must not be \c NULL and must not already be in any list.
+        \note      Performs an O(n) insertion sort into \c m_tasks so that higher-priority tasks
+                   appear closer to the head. The sort key depends on \a _Type:
+                   - \c MSS_TYPE_RATE:     key = GetHrtPeriodicity() (smaller -> nearer to head).
+                   - \c MSS_TYPE_DEADLINE: key = GetHrtDeadline()    (smaller -> nearer to head).
+        \note      Three insertion cases handled:
+                   -# Empty list: insert at front (LinkFront).
+                   -# New task has a strictly smaller key than the current head: insert at front
+                      (LinkFront), becoming the new highest-priority task.
+                   -# Otherwise: scan forward until a task with a larger-or-equal key is found,
+                      then insert immediately before it (Link), or append at back (LinkBack) if
+                      the scan reaches the end of the list.
+        \note      Tasks with equal keys are ordered by registration time: later-added tasks go
+                   behind earlier-added tasks with the same key.
+    */
     void AddTask(IKernelTask *task)
     {
         STK_ASSERT(task != nullptr);
@@ -93,6 +145,12 @@ public:
         }
     }
 
+    /*! \brief     Remove a task from the list.
+        \param[in] task: Task to remove. Must not be \c NULL. Must be in \c m_tasks (asserted).
+        \note      Unlike RR, SWRR, EDF, and FP strategies there is no separate sleep list:
+                   all tasks, runnable and sleeping, reside in \c m_tasks, so this method
+                   simply unlinks the task unconditionally without a list-membership check.
+    */
     void RemoveTask(IKernelTask *task)
     {
         STK_ASSERT(task != nullptr);
@@ -102,6 +160,17 @@ public:
         m_tasks.Unlink(task);
     }
 
+    /*! \brief     Select and return the highest-priority non-sleeping task.
+        \return    The first non-sleeping task in \c m_tasks, or \c NULL if every task in
+                   the list is currently sleeping (kernel will sleep until the next activation).
+        \note      Because \c m_tasks is sorted in descending priority order by AddTask(), a
+                   linear scan from the head is sufficient: the first task for which
+                   IsSleeping() returns \c false is always the highest-priority runnable task.
+                   Complexity is O(k) where k is the number of sleeping tasks at the front of
+                   the list (i.e. higher-priority tasks currently between activations).
+        \note      Asserts if \c m_tasks is empty; at least one task must be registered before
+                   GetNext() is called.
+    */
     IKernelTask *GetNext()
     {
         STK_ASSERT(!m_tasks.IsEmpty());
@@ -109,24 +178,30 @@ public:
         IKernelTask *itr = (*m_tasks.GetFirst()), * const start = itr;
         IKernelTask *next = nullptr;
 
-        // highest priority = first in sorted list (shortest period (RM) or deadline (DM)), thus
-        // we always iterate from the start of the list and skip higher priority tasks when they
-        // gave up processing by sleeping
+        // Scan from head (highest priority). Skip tasks that are sleeping between
+        // periodic activations; return the first task ready to run.
         do
         {
-            // skip tasks waiting for their execution time
             if (!itr->IsSleeping())
             {
                 next = itr;
-                break; // list is sorted by priority
+                break; // list is sorted by priority; no need to continue
             }
         }
         while ((itr = (*itr->GetNext())) != start);
 
-        // if nullptr returned (all tasks are sleeping) then idle
+        // nullptr means all tasks are sleeping, return idle signal to kernel
         return next;
     }
 
+    /*! \brief     Get the first task in the managed set (used by the kernel for initial scheduling).
+        \return    The first task in \c m_tasks (highest priority due to sort order).
+                   Asserts if \c m_tasks is empty.
+        \note      Because all tasks (runnable and sleeping) reside in \c m_tasks there is no
+                   sleep-list fallback path, unlike RR, SWRR, EDF, and FP strategies. The
+                   returned task may be sleeping; the kernel uses it only to seed the initial
+                   context before the first GetNext() call.
+    */
     IKernelTask *GetFirst() const
     {
         STK_ASSERT(m_tasks.GetSize() != 0);
@@ -134,111 +209,136 @@ public:
         return (*m_tasks.GetFirst());
     }
 
+    /*! \brief    Get the total number of tasks managed by this strategy.
+        \return   Number of tasks in \c m_tasks. Includes both runnable and sleeping tasks
+                  since this strategy does not maintain a separate sleep list.
+    */
     size_t GetSize() const
     {
         return m_tasks.GetSize();
     }
 
+    /*! \brief     Not supported, asserts unconditionally.
+        \note      This strategy uses SLEEP_EVENT_API = 0. Sleeping tasks remain in \c m_tasks
+                   in their sorted position and are detected by IsSleeping() in GetNext().
+                   Calling this method indicates a kernel/strategy configuration mismatch.
+    */
     void OnTaskSleep(IKernelTask */*task*/)
     {
-        // Sleep API unsupported, RM keeps sorted non-volatile list
+        // Sleep API unsupported: RM/DM keeps a single sorted non-volatile list.
         STK_ASSERT(false);
     }
 
+    /*! \brief     Not supported, asserts unconditionally.
+        \note      This strategy uses SLEEP_EVENT_API = 0. See OnTaskSleep() for rationale.
+    */
     void OnTaskWake(IKernelTask */*task*/)
     {
-        // Sleep API unsupported, RM keeps sorted non-volatile list
+        // Sleep API unsupported: RM/DM keeps a single sorted non-volatile list.
         STK_ASSERT(false);
     }
 
 private:
-    IKernelTask::ListHeadType m_tasks; //!< tasks for scheduling
+    IKernelTask::ListHeadType m_tasks; //!< All tasks (runnable and sleeping) in priority order. GetNext() skips sleeping tasks via IsSleeping(). AddTask() maintains sort order.
 };
 
 /*! \class SchedulabilityCheck
-    \brief Worst-Case Response Time (WCRT) analysis and CPU load calculation.
+    \brief Utility class providing static methods for Worst-Case Response Time (WCRT)
+           schedulability analysis of a monotonic HRT task set.
+
+    Determines whether a set of periodic tasks can meet all their deadlines under
+    Rate-Monotonic or Deadline-Monotonic scheduling, assuming fully preemptive execution
+    and no resource-sharing blocking.
+
+    \note  All methods are \c static. This class is not instantiated, call its methods directly
+           as \c SchedulabilityCheck::IsSchedulableWCRT<N>(strategy).
+    \see   SwitchStrategyMonotonic, IsSchedulableWCRT, CalculateWCRT
 */
 class SchedulabilityCheck
 {
 public:
     /*! \class TaskTiming
-        \brief Period and execution time parameters used for WCRT analysis.
+        \brief Scheduling period and execution deadline for a single periodic HRT task,
+               used as input to CalculateWCRT() and GetTaskCpuLoad().
 
-        Provides the minimal timing information required by CalculateWCRT(). Each entry corresponds
-        to a single periodic task in the system, where:
+        Populated by IsSchedulableWCRT() from each kernel task via GetHrtPeriodicity() and
+        GetHrtDeadline(). Entries must be in descending priority order (index 0 = highest).
 
-          - \a periodicity  represents the execution time C of the task.
-          - \a deadline     represents the task's deadline T.
-
-        The task array must be ordered by priority before WCRT analysis is performed (see Rate-Monotonic, Deadline-Monotonic).
+        \note  **Field naming vs. algorithm convention:** In standard WCRT notation, C
+               denotes a task's Worst-Case Execution Time and T denotes its period.
+               In this implementation the local variable \c Cx in CalculateWCRT() is assigned
+               from \c periodicity (= GetHrtPeriodicity() = period T), and \c Tx from
+               \c deadline (= GetHrtDeadline() = deadline D). The algorithm's interference
+               sum then uses \c tasks[i].deadline as the period divisor and
+               \c tasks[i].periodicity as the WCET multiplier. This is self-consistent
+               \b only under the Rate-Monotonic assumption that each task's deadline equals
+               its period (D = T = C upper-bound). Do not use this class with task sets
+               where D ≠ T.
     */
     struct TaskTiming
     {
-        uint32_t periodicity; //!< Execution time C of the task
-        uint32_t deadline;    //!< Deadline T of the task
+        uint32_t periodicity; //!< Scheduling period T of the task (ticks), from GetHrtPeriodicity(). Used as the WCET multiplier in CalculateWCRT() under the D=T assumption.
+        uint32_t deadline;    //!< Execution deadline D of the task (ticks), from GetHrtDeadline(). Used as the period divisor in CalculateWCRT() under the D=T assumption.
     };
 
     /*! \class TaskCpuLoad
-        \brief Calculated CPU load of the task.
+        \brief CPU utilisation values for a single task, in whole percent.
     */
     struct TaskCpuLoad
     {
-        uint16_t task;  //!< CPU load of the task
-        uint16_t total; //!< total CPU load reached by this task
+        uint16_t task;  //!< CPU load contributed by this task alone, in percent: floor(periodicity × 100 / deadline). Equals floor(C/T × 100) under the D=T assumption.
+        uint16_t total; //!< Cumulative CPU load of this task plus all higher-priority tasks, in percent (running sum from index 0).
     };
 
     /*! \class TaskInfo
-        \brief Calculated task details (CPU load, WCRT).
+        \brief Analysis results for a single task: CPU load and computed WCRT.
     */
     struct TaskInfo
     {
-        TaskCpuLoad cpu_load; //!< CPU load
-        uint32_t    wcrt;     //!< WCRT of the tasks
+        TaskCpuLoad cpu_load; //!< Per-task and cumulative CPU utilisation (see TaskCpuLoad).
+        uint32_t    wcrt;     //!< Worst-Case Response Time in ticks. Task is schedulable if wcrt ≤ deadline.
     };
 
     /*! \class SchedulabilityCheckResult
-        \brief The schedulability result with calculated WCRT of the tasks.
+        \brief Result of a WCRT schedulability test: overall verdict plus per-task details.
+
+        The number of tasks is fixed at compile time through the \a _TaskCount template
+        parameter, which must equal the number of tasks registered with the kernel strategy.
+        Array indices match the priority-sorted task order: index 0 = highest-priority task.
 
         Usage example:
         \code
-        // for 3 tasks added to the kernel
-        auto wcrt_sched = static_cast<SwitchStrategyRM *>(kernel.GetSwitchStrategy())->IsSchedulableWCRT<3>();
-        STK_ASSERT(wcrt_sched == true);
-        \endcode
-    */
-
-    /*! \class SchedulabilityCheckResult
-        \brief Holds the result of a Worst-Case Response Time (WCRT) schedulability test.
-
-        This structure stores:
-          - the boolean schedulability result for the full task set
-          - the computed WCRT value for each task
-
-        The number of tasks is fixed at compile time through the template parameter \a _TaskCount.
-
-        Usage example:
-        \code
-        // for 3 tasks added to the kernel
-        auto wcrt_sched = static_cast<SwitchStrategyRM *>(kernel.GetSwitchStrategy())->IsSchedulableWCRT<3>();
-        STK_ASSERT(wcrt_sched == true);
+        // Analyse 3 HRT tasks registered with a Rate-Monotonic kernel.
+        auto *rm = static_cast<stk::SwitchStrategyRM *>(kernel.GetSwitchStrategy());
+        auto result = stk::SchedulabilityCheck::IsSchedulableWCRT<3>(rm);
+        STK_ASSERT(result); // assert all tasks meet their deadlines
         \endcode
     */
     template <uint32_t _TaskCount>
     struct SchedulabilityCheckResult
     {
-        bool     schedulable;      //!< schedulability test result
-        TaskInfo info[_TaskCount]; //!< computed task info (CPU load, WCRT)
+        bool     schedulable;      //!< \c true if every task's WCRT ≤ its deadline; \c false if any task misses its deadline.
+        TaskInfo info[_TaskCount]; //!< Per-task analysis results, ordered highest priority first (index 0 = highest priority task).
 
-        /*! \brief  Check if tasks are schedulable.
-            \return True schedulable, false otherwise.
+        /*! \brief  Check whether the full task set is schedulable.
+            \return \c true if all tasks meet their deadlines; \c false otherwise.
          */
         operator bool() const { return schedulable; }
     };
 
-    /*! \brief             Check if tasks can be scheduled using the Worst-Case Response Time (WCRT) analysis.
-        \tparam _TaskCount Number of tasks to analyze. Must match the number of tasks added to the kernel.
-        \param strategy    Pointer to the implementation of scheduling strategy.
-        \return            A SchedulabilityCheckResult containing WCRT values for tasks and the schedulability result.
+    /*! \brief              Perform WCRT schedulability analysis on the task set registered with \a strategy.
+        \tparam _TaskCount  Number of tasks to analyse. Must equal the number of tasks currently
+                            registered with \a strategy (asserted at runtime: idx == _TaskCount).
+        \param[in] strategy Pointer to the monotonic scheduling strategy whose task list is analysed.
+                            Must not be \c nullptr and must have at least one task registered.
+        \return             A SchedulabilityCheckResult<_TaskCount> containing the schedulability
+                            verdict and per-task CPU load and WCRT values.
+        \note               Tasks are read from the strategy's sorted \c m_tasks list in priority
+                            order (index 0 = highest priority), populating the internal TaskTiming
+                            array via GetHrtPeriodicity() and GetHrtDeadline() before invoking
+                            GetTaskCpuLoad() and CalculateWCRT().
+        \note               Results are valid only when all tasks satisfy D = T (deadline equals
+                            period). See TaskTiming for the full explanation of this constraint.
      */
     template <uint32_t _TaskCount>
     static inline SchedulabilityCheckResult<_TaskCount> IsSchedulableWCRT(const ITaskSwitchStrategy *strategy)
@@ -274,30 +374,36 @@ public:
         return ret;
     }
 
-    /*! \brief     Calculate the Worst-Case Response Time (WCRT) for a set of fixed-priority periodic tasks.
+    /*! \brief     Compute the Worst-Case Response Time (WCRT) for each task in a fixed-priority
+                   periodic task set and determine schedulability.
 
-       This routine evaluates the schedulability of a fixed-priority monotonic task set using iterative
-       Worst-Case Response Time analysis. Tasks are assumed to have:
-         - fixed priorities (shorter period = higher priority)
-         - periodic activation with deadline equal to their period
-         - fully preemptive execution
-         - no blocking from resource sharing
+       Evaluates schedulability using the iterative WCRT recurrence. Assumptions:
+         - Fixed priorities, tasks ordered by descending priority (index 0 = highest priority =
+           shortest period for RM, or shortest deadline for DM).
+         - Periodic activation with \b deadline equal to period (D = T) for all tasks.
+         - Fully preemptive execution with no resource-sharing blocking.
 
-       For each task x, the WCRT value is computed iteratively according to:
+       \note  **Variable naming:** within this function, \c Cx = tasks[t].periodicity (period T,
+              used as WCET C) and \c Tx = tasks[t].deadline (deadline D, used as period T in the
+              interference sum). This is consistent only under the D = T assumption, see TaskTiming.
 
-            W = Cx + Σ ceil(W / Tj) * Cj
+       For each task \e t the recurrence is initialised as W₀ = Cₓ and iterated:
 
-       where the summation runs over all tasks j with higher priority (as defined by the active monotonic policy).
-       The iteration terminates when the response time converges or when W exceeds the task deadline.
+            Wₙ₊₁ = Cₓ + Σⱼ﹤ₜ ⌈Wₙ / Tⱼ⌉ × Cⱼ
 
-       The input array must be ordered by increasing period (highest priority first). The computed WCRT
-       values are written into the output array.
+       where the sum is over all higher-priority tasks j (index < t). Iteration continues
+       until convergence (Wₙ₊₁ = Wₙ) or Wₙ₊₁ > Tₓ (deadline miss confirmed). A \c goto
+       is used for the iteration step to avoid re-initialising loop variables inside the
+       outer \c for block.
 
-       \param[in]  tasks Pointer to an array of TaskTiming structures ordered by increasing period (highest priority first).
-       \param[in]  count Number of tasks in the task set.
-       \param[out] info  Pointer to an array of TaskInfo of size \a count that receives the computed WCRT values.
+       The highest-priority task (index 0) has no higher-priority interference, its WCRT
+       is set directly to its own WCET (\c tasks[0].periodicity) without iteration.
 
-       \return     True if all tasks meet their deadlines (W ≤ deadline), false if any task violates its deadline.
+       \param[in]  tasks Array of TaskTiming in descending priority order (index 0 = highest priority).
+       \param[in]  count Number of tasks in \a tasks.
+       \param[out] info  Array of TaskInfo of size \a count. \c info[i].wcrt receives the computed
+                         WCRT for task \e i on return.
+       \return     \c true if every task's WCRT ≤ its deadline; \c false if any task misses.
      */
     static inline bool CalculateWCRT(const TaskTiming *tasks, const uint32_t count, TaskInfo *info)
     {
@@ -332,10 +438,13 @@ public:
         return schedulable;
     }
 
-    /*! \brief      Calculate CPU load of the task set (in %).
-        \param[in]  tasks Pointer to an array of TaskTiming structures.
-        \param[in]  count Number of tasks in the task set.
-        \param[out] info  Pointer to an array of TaskInfo of size \a count that receives the computed CPU load values.
+    /*! \brief      Compute per-task and cumulative CPU utilisation, in percent.
+        \param[in]  tasks Array of TaskTiming in descending priority order (index 0 = highest priority).
+        \param[in]  count Number of tasks in \a tasks.
+        \param[out] info  Array of TaskInfo of size \a count. \c info[i].cpu_load is populated on return.
+        \note       Per-task load = \c floor(periodicity × 100 / deadline), computed with integer
+                    arithmetic (truncating division). Equals \c floor(C/T × 100) under the D = T
+                    assumption. Cumulative load is the running sum from index 0 to \a count − 1.
     */
     static inline void GetTaskCpuLoad(const TaskTiming *tasks, const uint32_t count, TaskInfo *info)
     {
@@ -352,21 +461,26 @@ public:
     }
 
 private:
-    //! Integer division with ceiling, equivalent to: (int32_t)ceil((float)x / y).
+    //! Integer ceiling division: returns ⌈x / y⌉ = x/y + (x%y > 0 ? 1 : 0).
+    //! Equivalent to (int32_t)ceil((float)x / y) but exact and branch-free for integers.
+    //! Reference: http://stackoverflow.com/questions/2745074/fast-ceiling-of-an-integer-division-in-c-c
     static __stk_forceinline int32_t idiv_ceil(uint32_t x, uint32_t y)
     {
-        // http://stackoverflow.com/questions/2745074/fast-ceiling-of-an-integer-division-in-c-c
         return x / y + (x % y > 0);
     }
 };
 
 /*! \typedef SwitchStrategyRM
-    \brief   Rate-Monotonic (RM) switching strategy. A shortcut for SwitchStrategyMonotonic<MSS_TYPE_RATE>.
+    \brief   Shorthand alias for SwitchStrategyMonotonic<MSS_TYPE_RATE>: Rate-Monotonic scheduling
+             (shorter scheduling period -> higher priority).
+    \see     SwitchStrategyMonotonic, SchedulabilityCheck
 */
 typedef SwitchStrategyMonotonic<MSS_TYPE_RATE> SwitchStrategyRM;
 
 /*! \typedef SwitchStrategyDM
-    \brief   Deadline-Monotonic (RM) switching strategy. A shortcut for SwitchStrategyMonotonic<MSS_TYPE_DEADLINE>.
+    \brief   Shorthand alias for SwitchStrategyMonotonic<MSS_TYPE_DEADLINE>: Deadline-Monotonic
+             scheduling (shorter execution deadline -> higher priority).
+    \see     SwitchStrategyMonotonic, SchedulabilityCheck
 */
 typedef SwitchStrategyMonotonic<MSS_TYPE_DEADLINE> SwitchStrategyDM;
 
