@@ -23,5 +23,6 @@ namespace time {
 } // namespace stk
 
 #include "stk_time_timer.h"
+#include "stk_time_util.h"
 
 #endif /* STK_TIME_H_ */
