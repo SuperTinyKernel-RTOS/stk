@@ -140,9 +140,9 @@ public:
 
         do
         {
-            itr->SetCurrentWeight(itr->GetCurrentWeight() + itr->GetWeight());
+            const int32_t candidate_weight = itr->GetCurrentWeight() + itr->GetWeight();
+            itr->SetCurrentWeight(candidate_weight);
 
-            int32_t candidate_weight = itr->GetCurrentWeight();
             if (candidate_weight > max_weight)
             {
                 max_weight = candidate_weight;

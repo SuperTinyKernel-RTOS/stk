@@ -82,22 +82,18 @@ template <stk::EAccessMode _AccessMode>
 class CtrlTask : public stk::Task<TASK_STACK_SIZE, _AccessMode>
 {
 public:
-    CtrlTask()
-    {}
-
-    stk::RunFuncType GetFunc() { return &Run; }
+    stk::RunFuncType GetFunc() {
+        return [](void *user_data) {
+            ((CtrlTask *)user_data)->RunInner();
+        };
+    }
     void *GetFuncUserData() { return this; }
 
 private:
-    static void Run(void *user_data)
-    {
-        ((CtrlTask *)user_data)->RunInner();
-    }
-
     void RunInner()
     {
         uint8_t led = 0;
-        stk::time::PeriodicTrigger trigger(1000);
+        stk::time::PeriodicTrigger trigger(1000, true);
 
         for (;;)
         {

@@ -60,9 +60,28 @@ TEST_GROUP(PeriodicTrigger)
     }
 };
 
+TEST(PeriodicTrigger, MustBeArmed)
+{
+    time::PeriodicTrigger trigger(PERIOD, false);
+
+    stk::SetTimeNowMsec(50);
+
+    try
+    {
+        g_TestContext.ExpectAssert(true);
+        CHECK_FALSE(trigger.Poll());
+        CHECK_TRUE(false); // Poll() must fail
+    }
+    catch (TestAssertPassed &pass)
+    {
+        CHECK(true);
+        g_TestContext.ExpectAssert(false);
+    }
+}
+
 TEST(PeriodicTrigger, DoesNotFireBeforePeriod)
 {
-    time::PeriodicTrigger trigger(PERIOD);
+    time::PeriodicTrigger trigger(PERIOD, true);
 
     stk::SetTimeNowMsec(50);
     CHECK_FALSE(trigger.Poll());
@@ -70,7 +89,7 @@ TEST(PeriodicTrigger, DoesNotFireBeforePeriod)
 
 TEST(PeriodicTrigger, FiresAtExactPeriod)
 {
-    time::PeriodicTrigger trigger(PERIOD);
+    time::PeriodicTrigger trigger(PERIOD, true);
 
     stk::SetTimeNowMsec(100);
     CHECK_TRUE(trigger.Poll());
@@ -78,7 +97,7 @@ TEST(PeriodicTrigger, FiresAtExactPeriod)
 
 TEST(PeriodicTrigger, PreservesRemainderAfterFire)
 {
-    time::PeriodicTrigger trigger(PERIOD);
+    time::PeriodicTrigger trigger(PERIOD, true);
 
     // 1. Move to 150ms.
     // m_elapsed becomes 150. Poll() returns true.
@@ -101,7 +120,7 @@ TEST(PeriodicTrigger, PreservesRemainderAfterFire)
 
 TEST(PeriodicTrigger, AccumulatesAcrossMultiplePolls)
 {
-    time::PeriodicTrigger trigger(PERIOD);
+    time::PeriodicTrigger trigger(PERIOD, true);
 
     stk::SetTimeNowMsec(40);
     CHECK_FALSE(trigger.Poll());
@@ -115,14 +134,14 @@ TEST(PeriodicTrigger, AccumulatesAcrossMultiplePolls)
 
 TEST(PeriodicTrigger, ManualResetSyncsToCurrentTime)
 {
-    time::PeriodicTrigger trigger(PERIOD);
+    time::PeriodicTrigger trigger(PERIOD, true);
 
     stk::SetTimeNowMsec(80);
     CHECK_FALSE(trigger.Poll()); // Accumulated 80ms
 
     // Re-constructing or manually resetting m_prev/m_elapsed
     // allows a "hard reset" to the current mock time.
-    trigger = time::PeriodicTrigger(PERIOD);
+    trigger = time::PeriodicTrigger(PERIOD, true);
 
     stk::SetTimeNowMsec(150);
     // Delta is only 70ms (150 - 80) since m_prev was set to 80 during reset/re-init.
