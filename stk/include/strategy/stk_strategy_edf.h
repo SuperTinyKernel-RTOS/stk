@@ -65,8 +65,9 @@ public:
     */
     enum EConfig
     {
-        WEIGHT_API      = 0, //!< This strategy does not use per-task weights. Deadline tracking is handled by the kernel in KERNEL_HRT mode via GetHrtRelativeDeadline().
-        SLEEP_EVENT_API = 1  //!< This strategy requires OnTaskSleep() / OnTaskWake() events to move tasks between the runnable and sleeping lists.
+        WEIGHT_API          = 0, //!< This strategy does not use per-task weights. Deadline tracking is handled by the kernel in KERNEL_HRT mode via GetHrtRelativeDeadline().
+        SLEEP_EVENT_API     = 1, //!< This strategy requires OnTaskSleep() / OnTaskWake() events to move tasks between the runnable and sleeping lists.
+        DEADLINE_MISSED_API = 0  //!< This strategy does not use OnTaskDeadlineMissed() events.
     };
 
     /*! \brief     Add task to the runnable set.
@@ -194,6 +195,16 @@ public:
 
         m_sleep.Unlink(task);
         m_tasks.LinkBack(task);
+    }
+
+    /*! \brief     Not supported, asserts unconditionally.
+        \note      This strategy uses DEADLINE_MISSED_API = 0. See OnTaskDeadlineMissed() for rationale.
+    */
+    bool OnTaskDeadlineMissed(IKernelTask */*task*/)
+    {
+        // Budget Overrun API unsupported
+        STK_ASSERT(false);
+        return false;
     }
 
 protected:

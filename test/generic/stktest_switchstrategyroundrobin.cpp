@@ -19,7 +19,11 @@ namespace test {
 TEST_GROUP(SwitchStrategyRoundRobin)
 {
     void setup() {}
-    void teardown() {}
+    void teardown()
+    {
+        g_TestContext.ExpectAssert(false);
+        g_TestContext.RethrowAssertException(true);
+    }
 };
 
 TEST(SwitchStrategyRoundRobin, GetFirstEmpty)
@@ -55,9 +59,36 @@ TEST(SwitchStrategyRoundRobin, GetNextEmpty)
     CHECK_EQUAL(0, strategy->GetNext());
 }
 
+TEST(SwitchStrategyRoundRobin, OnTaskDeadlineMissedNotSupported)
+{
+    Kernel<KERNEL_DYNAMIC, 1, SwitchStrategyRR, PlatformTestMock> kernel;
+    TaskMock<ACCESS_USER> task1;
+    ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
+
+    kernel.Initialize();
+    kernel.AddTask(&task1);
+
+    try
+    {
+        g_TestContext.ExpectAssert(true);
+        strategy->OnTaskDeadlineMissed(strategy->GetFirst());
+        CHECK_TEXT(false, "expecting assertion - OnTaskDeadlineMissed not supported");
+    }
+    catch (TestAssertPassed &pass)
+    {
+        CHECK(true);
+        g_TestContext.ExpectAssert(false);
+    }
+
+    // we need this workaround to pass 100% coverage test by blocking the exception
+    g_TestContext.ExpectAssert(true);
+    g_TestContext.RethrowAssertException(false);
+    strategy->OnTaskDeadlineMissed(strategy->GetFirst());
+}
+
 TEST(SwitchStrategyRoundRobin, EndlessNext)
 {
-    Kernel<KERNEL_DYNAMIC, 3, SwitchStrategyRoundRobin, PlatformTestMock> kernel;
+    Kernel<KERNEL_DYNAMIC, 3, SwitchStrategyRR, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task1, task2, task3;
     ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
 

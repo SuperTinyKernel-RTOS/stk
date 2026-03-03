@@ -90,20 +90,21 @@ AddTask(ITask *user_task, Timeout periodicity_tc, Timeout deadline_tc, Timeout s
 ---
 
 ### Built-in Scheduling Strategies
+STK is the only known RTOS that offers all popular switching strategies to match any usage scenario, see [stk/strategy](https://github.com/SuperTinyKernel-RTOS/stk/tree/main/stk/include/strategy) for more details.
 
-STK is the only one known RTOS which offers all popular switching strategies which can match any usage scenario:
+| Strategy Name                            | Mode       | Description                                                                                                                                                                                                                      |
+|------------------------------------------|------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `SwitchStrategyRoundRobin`               | Soft / HRT | Round-Robin scheduling strategy (Default). Each runnable task receives one time slice per tick in turn. Allows 100% CPU utilization.                                                                                             |
+| `SwitchStrategySmoothWeightedRoundRobin` | Soft / HRT | Smooth Weighted Round-Robin (SWRR). Distributes CPU time proportionally to per-task weights with burst-free interleaving. Includes a wake-up priority boost to prevent I/O-bound task starvation.                                |
+| `SwitchStrategyFixedPriority`            | Soft / HRT | Fixed-Priority Round-Robin. Tasks have fixed priorities (up to 32 levels); same-priority tasks are scheduled in Round-Robin order. Behavior is similar to FreeRTOS's scheduler.                                                  |
+| `SwitchStrategyRM`                       | HRT        | Rate-Monotonic (RM). Assigns fixed priorities based on task periodicity — shorter period means higher priority. Optimal among all fixed-priority policies for independent periodic tasks. Includes WCRT schedulability analysis. |
+| `SwitchStrategyDM`                       | HRT        | Deadline-Monotonic (DM). Assigns fixed priorities based on task deadlines — shorter deadline means higher priority. Generalizes RM; optimal when deadlines ≤ periods. Includes WCRT schedulability analysis.                     |
+| `SwitchStrategyEDF`                      | HRT        | Earliest Deadline First (EDF). Always runs the task closest to its deadline. Provably optimal for single-processor systems — if a feasible schedule exists, EDF will find it.                                                    |
+| `SwitchStrategyMCAS` 🔒                  | HRT        | Mixed-Criticality Adaptive Scheduler (2-level). SWRR within each criticality group (LO / HI) with automatic escalation to a protected HI-only mode on budget overrun. **Commercial License**                                     |
+| `SwitchStrategyMCAS4` 🔒                 | HRT        | Mixed-Criticality Adaptive Scheduler (4-level). Extends MCAS with four criticality levels, cascade escalation/recovery, and elastic CPU share adaptation via per-group EWMA pressure estimation. **Commercial License**          |
+| **Custom**                               | Soft / HRT | Custom algorithm implemented via the `ITaskSwitchStrategy` interface. By implementing the `ITaskSwitchStrategy` interface you can provide your own unique scheduling strategy without changing anything inside the kernel.       |
 
-| Strategy Name                            | Mode       | Description                                                                                                                                                                        |
-|------------------------------------------|------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `SwitchStrategyRoundRobin`               | Soft / HRT | Round-Robin scheduling strategy (Default). Allows 100% CPU utilization by tasks.                                                                                                   |
-| `SwitchStrategySmoothWeightedRoundRobin` | Soft       | Smooth Weighted Round-Robin (SWRR). Distributes CPU time proportionally to task weights and avoids execution bursts.                                                               |
-| `SwitchStrategyFixedPriority`            | Soft       | Fixed-Priority Round-Robin. Tasks have fixed priorities assigned, same priority tasks are scheduled in a Round-Robin manner. Behavior is similar to FreeRTOS's scheduler.          |
-| `SwitchStrategyRM`                       | HRT        | Rate-Monotonic (RM). Prioritizes tasks based on their periodicity (rate).                                                                                                          |
-| `SwitchStrategyDM`                       | HRT        | Deadline-Monotonic (DM). Prioritizes tasks based on their deadlines.                                                                                                               |
-| `SwitchStrategyEDF`                      | HRT        | Earliest Deadline First (EDF). If a set of tasks can be scheduled to meet their deadlines, EDF will find the way. Supports unpredictable task arrival times with strict deadlines. |
-| Custom                                   | Soft / HRT | Custom algorithm implemented via the `ITaskSwitchStrategy` interface.                                                                                                              |
-
-By implementing `ITaskSwitchStrategy` interface you can provide your own unique scheduling strategy without changing anything inside the kernel.
+> 🔒 Commercial strategies are available to commercial licensees. See the bottom of `README.md` for contact details.
 
 ---
 
@@ -700,7 +701,7 @@ You may freely use it in projects of any type:
 
 ---
 
-## 🚀 Professional Services & Commercial Licensing
+## 🔒 Professional Services & Commercial Licensing
 
 While **SuperTinyKernel™ RTOS** is provided under the permissive MIT license, we offer dedicated professional services for organizations integrating STK into production-grade, mission-critical, or regulated environments.
 

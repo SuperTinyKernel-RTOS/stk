@@ -83,6 +83,33 @@ TEST(SwitchStrategyMonotonic, SleepNotSupported)
     strategy->OnTaskWake(strategy->GetFirst());
 }
 
+TEST(SwitchStrategyMonotonic, OnTaskDeadlineMissedNotSupported)
+{
+    Kernel<KERNEL_DYNAMIC, 1, SwitchStrategyRM, PlatformTestMock> kernel;
+    TaskMock<ACCESS_USER> task1;
+    ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
+
+    kernel.Initialize();
+    kernel.AddTask(&task1);
+
+    try
+    {
+        g_TestContext.ExpectAssert(true);
+        strategy->OnTaskDeadlineMissed(strategy->GetFirst());
+        CHECK_TEXT(false, "expecting assertion - OnTaskDeadlineMissed not supported");
+    }
+    catch (TestAssertPassed &pass)
+    {
+        CHECK(true);
+        g_TestContext.ExpectAssert(false);
+    }
+
+    // we need this workaround to pass 100% coverage test by blocking the exception
+    g_TestContext.ExpectAssert(true);
+    g_TestContext.RethrowAssertException(false);
+    strategy->OnTaskDeadlineMissed(strategy->GetFirst());
+}
+
 TEST(SwitchStrategyMonotonic, GetNextEmpty)
 {
     Kernel<KERNEL_DYNAMIC, 1, SwitchStrategyRM, PlatformTestMock> kernel;

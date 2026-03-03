@@ -46,8 +46,9 @@ public:
     */
     enum EConfig
     {
-        WEIGHT_API      = 0, //!< This strategy does not use per-task weights; all tasks are treated equally.
-        SLEEP_EVENT_API = 1  //!< This strategy requires OnTaskSleep() / OnTaskWake() events to maintain the active/sleep list split.
+        WEIGHT_API          = 0, //!< This strategy does not use per-task weights; all tasks are treated equally.
+        SLEEP_EVENT_API     = 1, //!< This strategy requires OnTaskSleep() / OnTaskWake() events to maintain the active/sleep list split.
+        DEADLINE_MISSED_API = 0  //!< This strategy does not use OnTaskDeadlineMissed() events.
     };
 
     /*! \brief Construct an empty strategy with no tasks and a null cursor.
@@ -169,6 +170,16 @@ public:
 
         m_sleep.Unlink(task);
         AddActive(task);
+    }
+
+    /*! \brief     Not supported, asserts unconditionally.
+        \note      This strategy uses DEADLINE_MISSED_API = 0. See OnTaskDeadlineMissed() for rationale.
+    */
+    bool OnTaskDeadlineMissed(IKernelTask */*task*/)
+    {
+        // Budget Overrun API unsupported
+        STK_ASSERT(false);
+        return false;
     }
 
 protected:

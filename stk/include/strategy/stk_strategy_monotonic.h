@@ -74,8 +74,9 @@ public:
     */
     enum EConfig
     {
-        WEIGHT_API      = 0, //!< This strategy does not use per-task weights. Priority is derived from HRT timing parameters (GetHrtPeriodicity() for RM, GetHrtDeadline() for DM) at AddTask() time.
-        SLEEP_EVENT_API = 0  //!< This strategy does not use OnTaskSleep() / OnTaskWake() events. Sleeping tasks remain in \c m_tasks and are skipped by GetNext() via IKernelTask::IsSleeping(). Delivering these events will trigger an assertion.
+        WEIGHT_API          = 0, //!< This strategy does not use per-task weights. Priority is derived from HRT timing parameters (GetHrtPeriodicity() for RM, GetHrtDeadline() for DM) at AddTask() time.
+        SLEEP_EVENT_API     = 0, //!< This strategy does not use OnTaskSleep() / OnTaskWake() events. Sleeping tasks remain in \c m_tasks and are skipped by GetNext() via IKernelTask::IsSleeping(). Delivering these events will trigger an assertion.
+        DEADLINE_MISSED_API = 0  //!< This strategy does not use OnTaskDeadlineMissed() events.
     };
 
     /*! \brief     Add a task to the priority-sorted runnable list.
@@ -236,6 +237,16 @@ public:
     {
         // Sleep API unsupported: RM/DM keeps a single sorted non-volatile list.
         STK_ASSERT(false);
+    }
+
+    /*! \brief     Not supported, asserts unconditionally.
+        \note      This strategy uses DEADLINE_MISSED_API = 0. See OnTaskDeadlineMissed() for rationale.
+    */
+    bool OnTaskDeadlineMissed(IKernelTask */*task*/)
+    {
+        // Budget Overrun API unsupported
+        STK_ASSERT(false);
+        return false;
     }
 
 private:

@@ -1344,7 +1344,17 @@ protected:
 
                     // check if deadline is missed (HRT failure)
                     if (task->HrtIsDeadlineMissed(task->m_hrt[0].duration))
-                        task->HrtHardFailDeadline(&m_platform);
+                    {
+                        bool can_recover = false;
+
+                        // report deadline overrun to a strategy which supports overrun recovery
+                        if (_TyStrategy::DEADLINE_MISSED_API)
+                            can_recover = m_strategy.OnTaskDeadlineMissed(task);
+
+                        // report failure if it could not be recovered by a scheduling strategy
+                        if (!can_recover)
+                            task->HrtHardFailDeadline(&m_platform);
+                    }
                 }
             }
         }
