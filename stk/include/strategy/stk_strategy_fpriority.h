@@ -63,8 +63,9 @@ public:
     */
     enum EConfig
     {
-        WEIGHT_API      = 1, //!< This strategy interprets GetWeight() as the task's fixed priority level (0 .. MAX_PRIORITIES - 1). Dynamic weight functions are not used.
-        SLEEP_EVENT_API = 1  //!< This strategy requires OnTaskSleep() / OnTaskWake() events to maintain per-priority runnable lists and keep \c m_ready_bitmap accurate.
+        WEIGHT_API          = 1, //!< This strategy interprets GetWeight() as the task's fixed priority level (0 .. MAX_PRIORITIES - 1). Dynamic weight functions are not used.
+        SLEEP_EVENT_API     = 1, //!< This strategy requires OnTaskSleep() / OnTaskWake() events to maintain per-priority runnable lists and keep \c m_ready_bitmap accurate.
+        DEADLINE_MISSED_API = 0  //!< This strategy does not use OnTaskDeadlineMissed() events.
     };
 
     /*! \enum  EPriority
@@ -225,6 +226,16 @@ public:
 
         m_sleep.Unlink(task);
         AddActive(task);
+    }
+
+    /*! \brief     Not supported, asserts unconditionally.
+        \note      This strategy uses DEADLINE_MISSED_API = 0. See OnTaskDeadlineMissed() for rationale.
+    */
+    bool OnTaskDeadlineMissed(IKernelTask */*task*/)
+    {
+        // Budget Overrun API unsupported
+        STK_ASSERT(false);
+        return false;
     }
 
 protected:

@@ -19,7 +19,11 @@ namespace test {
 TEST_GROUP(SwitchStrategyFixedPriority)
 {
     void setup() {}
-    void teardown() {}
+    void teardown()
+    {
+        g_TestContext.ExpectAssert(false);
+        g_TestContext.RethrowAssertException(true);
+    }
 };
 
 TEST(SwitchStrategyFixedPriority, GetFirstEmpty)
@@ -53,6 +57,33 @@ TEST(SwitchStrategyFixedPriority, GetNextEmpty)
 
     // expect to return NULL which puts core into a sleep mode, current is ignored by this strategy
     CHECK_EQUAL(0, strategy->GetNext());
+}
+
+TEST(SwitchStrategyFixedPriority, OnTaskDeadlineMissedNotSupported)
+{
+    Kernel<KERNEL_DYNAMIC, 1, SwitchStrategyFP32, PlatformTestMock> kernel;
+    TaskMock<ACCESS_USER> task1;
+    ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
+
+    kernel.Initialize();
+    kernel.AddTask(&task1);
+
+    try
+    {
+        g_TestContext.ExpectAssert(true);
+        strategy->OnTaskDeadlineMissed(strategy->GetFirst());
+        CHECK_TEXT(false, "expecting assertion - OnTaskDeadlineMissed not supported");
+    }
+    catch (TestAssertPassed &pass)
+    {
+        CHECK(true);
+        g_TestContext.ExpectAssert(false);
+    }
+
+    // we need this workaround to pass 100% coverage test by blocking the exception
+    g_TestContext.ExpectAssert(true);
+    g_TestContext.RethrowAssertException(false);
+    strategy->OnTaskDeadlineMissed(strategy->GetFirst());
 }
 
 TEST(SwitchStrategyFixedPriority, EndlessNext)

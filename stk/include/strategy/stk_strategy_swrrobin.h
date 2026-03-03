@@ -67,8 +67,9 @@ public:
     */
     enum EConfig
     {
-        WEIGHT_API      = 1, //!< This strategy uses per-task static and dynamic weights; the kernel must expose the Weight API on each IKernelTask.
-        SLEEP_EVENT_API = 1  //!< This strategy requires OnTaskSleep() / OnTaskWake() events to keep \c m_total_weight accurate as tasks move between the runnable and sleeping sets.
+        WEIGHT_API          = 1, //!< This strategy uses per-task static and dynamic weights; the kernel must expose the Weight API on each IKernelTask.
+        SLEEP_EVENT_API     = 1, //!< This strategy requires OnTaskSleep() / OnTaskWake() events to keep \c m_total_weight accurate as tasks move between the runnable and sleeping sets.
+        DEADLINE_MISSED_API = 0  //!< This strategy does not use OnTaskDeadlineMissed() events.
     };
 
     /*! \brief Construct an empty strategy with no tasks and a zero total weight.
@@ -223,6 +224,16 @@ public:
         task->SetCurrentWeight(m_total_weight);
 
         AddActive(task);
+    }
+
+    /*! \brief     Not supported, asserts unconditionally.
+        \note      This strategy uses DEADLINE_MISSED_API = 0. See OnTaskDeadlineMissed() for rationale.
+    */
+    bool OnTaskDeadlineMissed(IKernelTask */*task*/)
+    {
+        // Budget Overrun API unsupported
+        STK_ASSERT(false);
+        return false;
     }
 
 private:
