@@ -326,4 +326,62 @@ uint32_t stk_timer_get_remaining_time(const stk_timer_t *timer)
     return timer->handle.GetRemainingTime();
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// PeriodicTrigger
+// ─────────────────────────────────────────────────────────────────────────────
+
+#include <time/stk_time_util.h>
+
+struct stk_periodic_trigger_t
+{
+    time::PeriodicTrigger handle;
+};
+
+stk_periodic_trigger_t *stk_periodic_trigger_create(stk_periodic_trigger_mem_t *memory,
+                                                    uint32_t                    memory_size,
+                                                    uint32_t                    period,
+                                                    bool                        started)
+{
+    STK_ASSERT(memory != nullptr);
+    STK_ASSERT(memory_size >= sizeof(stk_periodic_trigger_t));
+    if (memory == nullptr || memory_size < sizeof(stk_periodic_trigger_t))
+        return nullptr;
+
+    return new (memory->data) stk_periodic_trigger_t{ time::PeriodicTrigger(static_cast<Ticks>(period), started) };
+}
+
+void stk_periodic_trigger_destroy(stk_periodic_trigger_t *trig)
+{
+    if (trig != nullptr)
+        trig->~stk_periodic_trigger_t();
+}
+
+bool stk_periodic_trigger_poll(stk_periodic_trigger_t *trig)
+{
+    STK_ASSERT(trig != nullptr);
+
+    return trig->handle.Poll();
+}
+
+void stk_periodic_trigger_set_period(stk_periodic_trigger_t *trig, uint32_t period)
+{
+    STK_ASSERT(trig != nullptr);
+
+    trig->handle.SetPeriod(static_cast<Ticks>(period));
+}
+
+void stk_periodic_trigger_restart(stk_periodic_trigger_t *trig)
+{
+    STK_ASSERT(trig != nullptr);
+
+    trig->handle.Restart();
+}
+
+uint32_t stk_periodic_trigger_get_period(const stk_periodic_trigger_t *trig)
+{
+    STK_ASSERT(trig != nullptr);
+
+    return static_cast<uint32_t>(trig->handle.GetPeriod());
+}
+
 } // extern "C"

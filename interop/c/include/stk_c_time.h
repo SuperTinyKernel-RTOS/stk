@@ -261,6 +261,102 @@ int64_t stk_timer_get_timestamp(const stk_timer_t *timer);
 */
 uint32_t stk_timer_get_remaining_time(const stk_timer_t *timer);
 
+// ─────────────────────────────────────────────────────────────────────────────
+// PeriodicTrigger — lightweight in-place periodic polling helper
+// ─────────────────────────────────────────────────────────────────────────────
+
+/*! \defgroup c_api_periodic_trigger STK C PeriodicTrigger API
+    \brief    Pure C interface for stk::time::PeriodicTrigger.
+
+    Typical usage:
+    \code
+    static stk_periodic_trigger_mem_t mem;
+    stk_periodic_trigger_t *trig = stk_periodic_trigger_create(&mem, sizeof(mem), 500, true);
+
+    // Inside a task loop:
+    if (stk_periodic_trigger_poll(trig))
+    {
+        // executed once per 500-tick period
+    }
+    \endcode
+    @{
+*/
+
+/*! \brief  A memory size (multiples of size_t) required for PeriodicTrigger instance.
+*/
+#define STK_PERIODIC_TRIGGER_IMPL_SIZE 16
+
+/*! \brief  Opaque memory container for a \a stk_periodic_trigger_t instance.
+    \note   Declare as \c static or on the stack (not on the heap).
+*/
+typedef struct stk_periodic_trigger_mem_t {
+    size_t data[STK_PERIODIC_TRIGGER_IMPL_SIZE];
+} stk_periodic_trigger_mem_t;
+
+/*! \brief  Opaque handle to a \a stk::time::PeriodicTrigger instance.
+*/
+typedef struct stk_periodic_trigger_t stk_periodic_trigger_t;
+
+/*! \brief     Construct PeriodicTrigger instance in the supplied memory buffer.
+    \param[in] memory: Pointer to the caller-supplied memory container.
+    \param[in] memory_size: Size of the container in bytes (must be >= sizeof(stk_periodic_trigger_mem_t)).
+    \param[in] period: Trigger period in ticks. Must be > 0.
+    \param[in] started: \a true to create instance in a started state, \a false otherwise.
+    \return    Trigger handle on success, or \c NULL if \a memory is \c NULL
+               or \a memory_size is too small.
+    \note      The trigger is created in a stopped state.
+               Call \a stk_periodic_trigger_restart() before polling.
+*/
+stk_periodic_trigger_t *stk_periodic_trigger_create(stk_periodic_trigger_mem_t *memory,
+                                                     uint32_t                   memory_size,
+                                                     uint32_t                   period,
+                                                     bool                       started);
+
+/*! \brief     Destroy instance (calls the C++ destructor in-place).
+    \param[in] trig: Trigger handle. May be \c NULL (no-op).
+*/
+void stk_periodic_trigger_destroy(stk_periodic_trigger_t *trig);
+
+/*! \brief     Check whether the scheduled trigger time has been reached.
+    \param[in] trig: Trigger handle (must be started).
+    \return    \c true once when the current tick count reaches or exceeds
+               the scheduled trigger time, \c false otherwise.
+    \note      Implements absolute-time scheduling. When firing occurs,
+               the internal next-trigger time is advanced by exactly one
+               period (not reset to the current time), preserving long-term
+               frequency stability.
+    \note      At most one \c true is returned per call. If multiple full
+               periods have elapsed since the previous call, subsequent
+               calls will continue advancing one period at a time until
+               the schedule catches up.
+*/
+bool stk_periodic_trigger_poll(stk_periodic_trigger_t *trig);
+
+/*! \brief     Change the trigger period while preserving phase.
+    \param[in] trig: Trigger handle.
+    \param[in] period: New trigger period in ticks. Must be > 0.
+    \note      Adjusts the internally stored next-trigger time so that the
+               relative progress toward the next firing is preserved.
+               Takes effect immediately.
+*/
+void stk_periodic_trigger_set_period(stk_periodic_trigger_t *trig, uint32_t period);
+
+/*! \brief     Reset and start the trigger from the current tick count.
+    \param[in] trig: Trigger handle.
+    \note      Sets the internal next-trigger time to (current ticks + period).
+               The next firing occurs no earlier than \a period ticks after this call.
+               Does not change the configured period.
+*/
+void stk_periodic_trigger_restart(stk_periodic_trigger_t *trig);
+
+/*! \brief     Get currently configured trigger period.
+    \param[in] trig: Trigger handle.
+    \return    Period in ticks.
+*/
+uint32_t stk_periodic_trigger_get_period(const stk_periodic_trigger_t *trig);
+
+/** @} */
+
 #ifdef __cplusplus
 }
 #endif
