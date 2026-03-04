@@ -156,11 +156,6 @@
 			<locationURI>virtual:/virtual</locationURI>
 		</link>
 		<link>
-			<name>deps/stk/src/stk.cpp</name>
-			<type>1</type>
-			<locationURI>PARENT-4-PROJECT_LOC/stk/src/stk.cpp</locationURI>
-		</link>
-		<link>
 			<name>src/test/generic/stktest_kernel.cpp</name>
 			<type>1</type>
 			<locationURI>PARENT-4-PROJECT_LOC/test/generic/stktest_kernel.cpp</locationURI>

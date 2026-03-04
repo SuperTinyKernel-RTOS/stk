@@ -101,11 +101,6 @@
 			<locationURI>virtual:/virtual</locationURI>
 		</link>
 		<link>
-			<name>deps/stk/src/stk.cpp</name>
-			<type>1</type>
-			<locationURI>PARENT-4-PROJECT_LOC/stk/src/stk.cpp</locationURI>
-		</link>
-		<link>
 			<name>deps/stk/include/arch/arm</name>
 			<type>2</type>
 			<locationURI>virtual:/virtual</locationURI>

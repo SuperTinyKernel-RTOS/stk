@@ -640,15 +640,12 @@ stk/src
 
 Minimum required sources:
 ```
-stk/src/stk.cpp
 stk/src/arch/<your-platform>/...
 ```
 
 Example (GCC, ARM Cortex-M MCU):
 ```make
-SRCS += \
-  libs/stk/src/stk.cpp \
-  libs/stk/src/arch/arm/cortex-m/stk_arch_arm-cortex-m.cpp
+SRCS += libs/stk/src/arch/arm/cortex-m/stk_arch_arm-cortex-m.cpp
 ```
 
 #### 4. Build
