@@ -40,17 +40,15 @@ class LedTask : public stk::Task<TASK_STACK_SIZE, _AccessMode>
 public:
     LedTask(LedState task_id) : m_task_id(task_id) {}
 
-    stk::RunFuncType GetFunc() { return &Run; }
+    stk::RunFuncType GetFunc() {
+        return [](void *user_data) {
+            ((LedTask *)user_data)->Run();
+        };
+    }
     void *GetFuncUserData() { return this; }
 
 private:
-    // thread function provided to scheduler by GetFunc()
-    static void Run(void *user_data)
-    {
-        ((LedTask *)user_data)->RunInner();
-    }
-
-    void RunInner()
+    void Run()
     {
         LedState task_id = m_task_id;
 

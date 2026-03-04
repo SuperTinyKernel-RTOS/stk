@@ -508,27 +508,6 @@ TEST(Kernel, ContextSwitchAccessModeChange)
     CHECK_EQUAL(ACCESS_PRIVILEGED, platform->m_stack_active->mode);
 }
 
-TEST(Kernel, AbiCompatibility)
-{
-    class TaskMockAbiCheck : public Task<32, ACCESS_USER>
-    {
-    public:
-        TaskMockAbiCheck() : m_result(0) {}
-        RunFuncType GetFunc() { return forced_cast<stk::RunFuncType>(&TaskMockAbiCheck::Run); }
-        void *GetFuncUserData() { return this; }
-        uint32_t m_result;
-    private:
-        void Run() { ++m_result; }
-    };
-
-    TaskMockAbiCheck mock;
-
-    mock.GetFunc()(mock.GetFuncUserData());
-    mock.GetFunc()(mock.GetFuncUserData());
-
-    CHECK_EQUAL(2, mock.m_result);
-}
-
 TEST(Kernel, SingleTask)
 {
     Kernel<KERNEL_STATIC, 1, SwitchStrategyRR, PlatformTestMock> kernel;

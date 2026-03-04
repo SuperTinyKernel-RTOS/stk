@@ -34,13 +34,13 @@ public:
 
     stk::RunFuncType GetFunc() {
         return [](void *user_data) {
-            ((HwLedTask *)user_data)->RunInner();
+            ((HwLedTask *)user_data)->Run();
         };
     }
     void *GetFuncUserData() { return this; }
 
 private:
-    void RunInner()
+    void Run()
     {
         for (;;)
         {

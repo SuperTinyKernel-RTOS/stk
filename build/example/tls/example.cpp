@@ -64,28 +64,22 @@ template <uint8_t _TaskId, stk::EAccessMode _AccessMode>
 class MyTask : public stk::Task<TASK_STACK_SIZE, _AccessMode>
 {
 public:
-#if 0
-    stk::RunFuncType GetFunc() { return stk::forced_cast<stk::RunFuncType>(&MyTask::RunInner); }
-#else
-    stk::RunFuncType GetFunc() { return &Run; }
-#endif
-    void *GetFuncUserData() { return this; }
-
     MyTask()
     {
         m_tls.task_id = _TaskId;
     }
+    
+    stk::RunFuncType GetFunc() {
+        return [](void *user_data) {
+            ((MyTask *)user_data)->Run();
+        };
+    }
+    void *GetFuncUserData() { return this; }
 
 private:
     MyTls m_tls; // task-local TLS, you can provide your own implementation
 
-    // thread function provided to scheduler by GetFunc()
-    static void Run(void *user_data)
-    {
-        ((MyTask *)user_data)->RunInner();
-    }
-
-    void RunInner()
+    void Run()
     {
         // set your TLS (it can host any complex implementation of your choice)
         stk::SetTlsPtr(&m_tls);

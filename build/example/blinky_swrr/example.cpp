@@ -34,16 +34,15 @@ public:
     LedTask(uint8_t id) : m_led_id(id)
     {}
 
-    stk::RunFuncType GetFunc() override { return &Run; }
+    stk::RunFuncType GetFunc() {
+        return [](void *p) {
+            static_cast<LedTask *>(p)->Run();
+        };
+    }
     void *GetFuncUserData() override { return this; }
 
 private:
-    static void Run(void *user_data)
-    {
-        ((LedTask *)user_data)->RunInner();
-    }
-
-    void RunInner()
+    void Run()
     {
         bool led_state = false;
 

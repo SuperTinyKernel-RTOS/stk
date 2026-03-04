@@ -374,27 +374,6 @@ namespace stk {
  */
 namespace util {}
 
-/*! \brief     Reinterpret the bit pattern of \a from as type \c _To without invoking undefined
-               behaviour from \c reinterpret_cast on unrelated pointer types.
-    \tparam    _To: Target type. Must be trivially copyable.
-    \tparam    _From: Source type. Must be trivially copyable.
-    \param[in] from: Source value to reinterpret.
-    \return    The same bit pattern as \a from, interpreted as \c _To.
-    \warning   \c sizeof(_To) must equal \c sizeof(_From); no compile-time check is performed here.
-               Mismatched sizes will read uninitialised union bytes, producing undefined behaviour.
-    \warning   Not valid for pointer-to-pointer conversions between unrelated types in strict C++.
-               Intended for bare-metal embedded use only where the target type layout is known.
-    \note      Declared \c static to give each translation unit its own copy and avoid ODR issues
-               with the anonymous union across compilation units.
-*/
-template <class _To, class _From>
-static __stk_forceinline _To forced_cast(const _From &from)
-{
-    union { _From from; _To to; } cast;
-    cast.from = from;
-    return cast.to;
-}
-
 } // namespace stk
 
 #endif /* STK_DEFS_H_ */

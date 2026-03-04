@@ -29,20 +29,15 @@ public:
     MyTask(uint8_t task_id) : m_task_id(task_id)
     { }
 
-#if 0
-    stk::RunFuncType GetFunc() { return stk::forced_cast<stk::RunFuncType>(&MyTask::RunInner); }
-#else
-    stk::RunFuncType GetFunc() { return &Run; }
-#endif
+    stk::RunFuncType GetFunc() {
+        return [](void *user_data) {
+            ((MyTask *)user_data)->Run();
+        };
+    }
     void *GetFuncUserData() { return this; }
 
 private:
-    static void Run(void *user_data)
-    {
-        ((MyTask *)user_data)->RunInner();
-    }
-
-    void RunInner()
+    void Run()
     {
         uint8_t task_id = m_task_id;
 
