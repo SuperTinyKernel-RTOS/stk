@@ -307,18 +307,10 @@ public:
     TaskMock() : m_deadline_missed(0)
     {}
 
-    RunFuncType GetFunc() { return &Run; }
-    void *GetFuncUserData() { return this; }
-
     uint32_t m_deadline_missed; //!< duration of workload if deadline is missed in HRT mode
 
 private:
-    static void Run(void *user_data)
-    {
-        ((TaskMock *)user_data)->RunInner();
-    }
-
-    void RunInner() {}
+    void Run() {}
 
     void OnDeadlineMissed(uint32_t duration)
     {
@@ -336,13 +328,8 @@ private:
 template <int32_t _Weight, EAccessMode _AccessMode>
 class TaskMockW : public TaskW<_Weight, STACK_SIZE_MIN, _AccessMode>
 {
-public:
-    RunFuncType GetFunc() { return &Run; }
-    void *GetFuncUserData() { return this; }
-
 private:
-    static void Run(void *user_data) { ((TaskMockW *)user_data)->RunInner(); }
-    void RunInner() {}
+    void Run() {}
 };
 
 struct MutexMock : public IMutex

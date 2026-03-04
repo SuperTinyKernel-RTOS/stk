@@ -32,13 +32,6 @@ public:
     HwLedTask(uint8_t task_id) : m_task_id(task_id)
     {}
 
-    stk::RunFuncType GetFunc() {
-        return [](void *user_data) {
-            ((HwLedTask *)user_data)->Run();
-        };
-    }
-    void *GetFuncUserData() { return this; }
-
 private:
     void Run()
     {
@@ -81,16 +74,8 @@ private:
 template <stk::EAccessMode _AccessMode>
 class CtrlTask : public stk::Task<TASK_STACK_SIZE, _AccessMode>
 {
-public:
-    stk::RunFuncType GetFunc() {
-        return [](void *user_data) {
-            ((CtrlTask *)user_data)->RunInner();
-        };
-    }
-    void *GetFuncUserData() { return this; }
-
 private:
-    void RunInner()
+    void Run()
     {
         uint8_t led = 0;
         stk::time::PeriodicTrigger trigger(1000, true);

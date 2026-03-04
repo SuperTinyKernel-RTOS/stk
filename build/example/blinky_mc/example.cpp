@@ -31,17 +31,11 @@ class LedTask : public stk::Task<2048, _AccessMode>
     LedState m_task_id;
 
 public:
-    LedTask(LedState task_id) : m_task_id(task_id) {}
-
-    stk::RunFuncType GetFunc() {
-        return [](void *p) {
-            static_cast<LedTask *>(p)->Run();
-        };
-    }
-    void *GetFuncUserData() { return this; }
+    LedTask(LedState task_id) : m_task_id(task_id)
+    {}
 
 private:
-    void RunInner()
+    void Run()
     {
         LedState task_id = m_task_id;
 
@@ -82,16 +76,6 @@ enum { TASK_STACK_SIZE = 256 };
 template <stk::EAccessMode _AccessMode>
 class CtrlTask : public stk::Task<TASK_STACK_SIZE, _AccessMode>
 {
-public:
-    CtrlTask() {}
-
-    stk::RunFuncType GetFunc() {
-        return [](void *p) {
-            static_cast<CtrlTask *>(p)->Run();
-        };
-    }
-    void *GetFuncUserData() { return this; }
-
 private:
     void Run()
     {

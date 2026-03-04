@@ -72,11 +72,8 @@ public:
     BasicWriteReadTask(uint8_t task_id, int32_t iterations) : m_task_id(task_id), m_iterations(iterations)
     {}
 
-    RunFuncType GetFunc() { return forced_cast<RunFuncType>(&BasicWriteReadTask::RunInner); }
-    void *GetFuncUserData() { return this; }
-
 private:
-    void RunInner()
+    void Run()
     {
         if (m_task_id == 0)
         {
@@ -122,11 +119,8 @@ public:
     WriteBlocksWhenFullTask(uint8_t task_id, int32_t) : m_task_id(task_id)
     {}
 
-    RunFuncType GetFunc() { return forced_cast<RunFuncType>(&WriteBlocksWhenFullTask::RunInner); }
-    void *GetFuncUserData() { return this; }
-
 private:
-    void RunInner()
+    void Run()
     {
         if (m_task_id == 0)
         {
@@ -176,11 +170,8 @@ public:
     ReadBlocksWhenEmptyTask(uint8_t task_id, int32_t) : m_task_id(task_id)
     {}
 
-    RunFuncType GetFunc() { return forced_cast<RunFuncType>(&ReadBlocksWhenEmptyTask::RunInner); }
-    void *GetFuncUserData() { return this; }
-
 private:
-    void RunInner()
+    void Run()
     {
         if (m_task_id == 0)
         {
@@ -223,11 +214,8 @@ public:
     TimeoutTask(uint8_t task_id, int32_t) : m_task_id(task_id)
     {}
 
-    RunFuncType GetFunc() { return forced_cast<RunFuncType>(&TimeoutTask::RunInner); }
-    void *GetFuncUserData() { return this; }
-
 private:
-    void RunInner()
+    void Run()
     {
         if (m_task_id == 1)
         {
@@ -290,11 +278,8 @@ public:
     BulkWriteReadTask(uint8_t task_id, int32_t iterations) : m_task_id(task_id), m_iterations(iterations)
     {}
 
-    RunFuncType GetFunc() { return forced_cast<RunFuncType>(&BulkWriteReadTask::RunInner); }
-    void *GetFuncUserData() { return this; }
-
 private:
-    void RunInner()
+    void Run()
     {
         if (m_task_id == 0)
         {
@@ -356,11 +341,8 @@ public:
     GetSizeIsEmptyTask(uint8_t task_id, int32_t) : m_task_id(task_id)
     {}
 
-    RunFuncType GetFunc() { return forced_cast<RunFuncType>(&GetSizeIsEmptyTask::RunInner); }
-    void *GetFuncUserData() { return this; }
-
 private:
-    void RunInner()
+    void Run()
     {
         if (m_task_id == 1)
         {
@@ -432,11 +414,8 @@ public:
     MultiProducerConsumerTask(uint8_t task_id, int32_t iterations) : m_task_id(task_id), m_iterations(iterations)
     {}
 
-    RunFuncType GetFunc() { return forced_cast<RunFuncType>(&MultiProducerConsumerTask::RunInner); }
-    void *GetFuncUserData() { return this; }
-
 private:
-    void RunInner()
+    void Run()
     {
         if (m_task_id == 1 || m_task_id == 2)
         {
@@ -493,11 +472,8 @@ public:
     StressTestTask(uint8_t task_id, int32_t iterations) : m_task_id(task_id), m_iterations(iterations)
     {}
 
-    RunFuncType GetFunc() { return forced_cast<RunFuncType>(&StressTestTask::RunInner); }
-    void *GetFuncUserData() { return this; }
-
 private:
-    void RunInner()
+    void Run()
     {
         int32_t written  = 0;
         int32_t consumed = 0;

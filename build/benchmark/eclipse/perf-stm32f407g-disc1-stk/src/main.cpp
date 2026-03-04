@@ -34,19 +34,17 @@ class BenchTask : public Task<_STK_BENCH_STACK_SIZE, ACCESS_PRIVILEGED>
 {
 public:
     BenchTask() : m_id(~0), m_exited(false) {}
-    RunFuncType GetFunc() { return forced_cast<RunFuncType>(&BenchTask::RunInner); }
-    void *GetFuncUserData() { return this; }
 
     void Initialize(uint8_t id) { m_id = id; }
     bool IsExited() const { return m_exited; }
 
 private:
-    void RunInner()
+    void Run()
     {
         uint32_t index = m_id;
 
+        // do processing
         g_Enable = true;
-
         while (g_Ticks < _STK_BENCH_WINDOW)
         {
             g_Bench[index].Process();
@@ -63,12 +61,8 @@ static BenchTask g_Tasks[_STK_BENCH_TASK_MAX];
 
 class ResultTask : public Task<_STK_BENCH_STACK_SIZE, ACCESS_PRIVILEGED>
 {
-public:
-    RunFuncType GetFunc() { return forced_cast<RunFuncType>(&ResultTask::RunInner); }
-    void *GetFuncUserData() { return this; }
-
 private:
-    void RunInner()
+    void Run()
     {
         while (g_Ticks < _STK_BENCH_WINDOW + 2)
         {

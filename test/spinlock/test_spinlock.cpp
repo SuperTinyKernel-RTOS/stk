@@ -67,11 +67,8 @@ public:
     MutualExclusionTask(uint8_t task_id, int32_t iterations) : m_task_id(task_id), m_iterations(iterations)
     {}
 
-    RunFuncType GetFunc() { return forced_cast<RunFuncType>(&MutualExclusionTask::RunInner); }
-    void *GetFuncUserData() { return this; }
-
 private:
-    void RunInner()
+    void Run()
     {
         int32_t workload = 0;
 
@@ -123,11 +120,8 @@ public:
     TryLockFreeTask(uint8_t task_id, int32_t) : m_task_id(task_id)
     {}
 
-    RunFuncType GetFunc() { return forced_cast<RunFuncType>(&TryLockFreeTask::RunInner); }
-    void *GetFuncUserData() { return this; }
-
 private:
-    void RunInner()
+    void Run()
     {
         if (m_task_id == 1)
         {
@@ -196,11 +190,8 @@ public:
     TryLockContendedTask(uint8_t task_id, int32_t) : m_task_id(task_id)
     {}
 
-    RunFuncType GetFunc() { return forced_cast<RunFuncType>(&TryLockContendedTask::RunInner); }
-    void *GetFuncUserData() { return this; }
-
 private:
-    void RunInner()
+    void Run()
     {
         if (m_task_id == 0)
         {
@@ -260,9 +251,6 @@ public:
     RecursiveLockTask(uint8_t task_id, int32_t) : m_task_id(task_id)
     {}
 
-    RunFuncType GetFunc() { return forced_cast<RunFuncType>(&RecursiveLockTask::RunInner); }
-    void *GetFuncUserData() { return this; }
-
 private:
     void AcquireRecursive(int32_t depth)
     {
@@ -275,7 +263,7 @@ private:
         g_TestSpinLock.Unlock();
     }
 
-    void RunInner()
+    void Run()
     {
         AcquireRecursive(DEPTH);
 
@@ -313,11 +301,8 @@ public:
     RecursiveTryLockTask(uint8_t task_id, int32_t) : m_task_id(task_id)
     {}
 
-    RunFuncType GetFunc() { return forced_cast<RunFuncType>(&RecursiveTryLockTask::RunInner); }
-    void *GetFuncUserData() { return this; }
-
 private:
-    void RunInner()
+    void Run()
     {
         if (m_task_id == 1)
         {
@@ -386,11 +371,8 @@ public:
     YieldUnderContentionTask(uint8_t task_id, int32_t iterations) : m_task_id(task_id), m_iterations(iterations)
     {}
 
-    RunFuncType GetFunc() { return forced_cast<RunFuncType>(&YieldUnderContentionTask::RunInner); }
-    void *GetFuncUserData() { return this; }
-
 private:
-    void RunInner()
+    void Run()
     {
         // All tasks hammer the lock simultaneously; low spin count forces frequent Yield()
         for (int32_t i = 0; i < m_iterations; ++i)
@@ -434,11 +416,8 @@ public:
     UnlockTransferTask(uint8_t task_id, int32_t iterations) : m_task_id(task_id), m_iterations(iterations)
     {}
 
-    RunFuncType GetFunc() { return forced_cast<RunFuncType>(&UnlockTransferTask::RunInner); }
-    void *GetFuncUserData() { return this; }
-
 private:
-    void RunInner()
+    void Run()
     {
         for (int32_t i = 0; i < m_iterations; ++i)
         {
@@ -485,11 +464,8 @@ public:
     StressTestTask(uint8_t task_id, int32_t iterations) : m_task_id(task_id), m_iterations(iterations)
     {}
 
-    RunFuncType GetFunc() { return forced_cast<RunFuncType>(&StressTestTask::RunInner); }
-    void *GetFuncUserData() { return this; }
-
 private:
-    void RunInner()
+    void Run()
     {
         for (int32_t i = 0; i < m_iterations; ++i)
         {

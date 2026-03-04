@@ -68,11 +68,8 @@ public:
     ConcurrentReadersTask(uint8_t task_id, int32_t) : m_task_id(task_id)
     {}
 
-    RunFuncType GetFunc() { return forced_cast<RunFuncType>(&ConcurrentReadersTask::RunInner); }
-    void *GetFuncUserData() { return this; }
-
 private:
-    void RunInner()
+    void Run()
     {
         if (m_task_id == 0)
         {
@@ -125,11 +122,8 @@ public:
     WriterExclusivityTask(uint8_t task_id, int32_t iterations) : m_task_id(task_id), m_iterations(iterations)
     {}
 
-    RunFuncType GetFunc() { return forced_cast<RunFuncType>(&WriterExclusivityTask::RunInner); }
-    void *GetFuncUserData() { return this; }
-
 private:
-    void RunInner()
+    void Run()
     {
         int32_t workload = 0;
 
@@ -181,11 +175,8 @@ public:
     WriterStarvationTask(uint8_t task_id, int32_t) : m_task_id(task_id)
     {}
 
-    RunFuncType GetFunc() { return forced_cast<RunFuncType>(&WriterStarvationTask::RunInner); }
-    void *GetFuncUserData() { return this; }
-
 private:
-    void RunInner()
+    void Run()
     {
         if (m_task_id == 0)
         {
@@ -246,11 +237,8 @@ public:
     TimedReadLockTask(uint8_t task_id, int32_t) : m_task_id(task_id)
     {}
 
-    RunFuncType GetFunc() { return forced_cast<RunFuncType>(&TimedReadLockTask::RunInner); }
-    void *GetFuncUserData() { return this; }
-
 private:
-    void RunInner()
+    void Run()
     {
         if (m_task_id == 1)
         {
@@ -317,11 +305,8 @@ public:
     TimedWriteLockTask(uint8_t task_id, int32_t) : m_task_id(task_id)
     {}
 
-    RunFuncType GetFunc() { return forced_cast<RunFuncType>(&TimedWriteLockTask::RunInner); }
-    void *GetFuncUserData() { return this; }
-
 private:
-    void RunInner()
+    void Run()
     {
         if (m_task_id == 1)
         {
@@ -387,11 +372,8 @@ public:
     TryReadLockWhileWriterTask(uint8_t task_id, int32_t) : m_task_id(task_id)
     {}
 
-    RunFuncType GetFunc() { return forced_cast<RunFuncType>(&TryReadLockWhileWriterTask::RunInner); }
-    void *GetFuncUserData() { return this; }
-
 private:
-    void RunInner()
+    void Run()
     {
         if (m_task_id == 1)
         {
@@ -457,11 +439,8 @@ public:
     ReadUnlockWakesWriterTask(uint8_t task_id, int32_t) : m_task_id(task_id)
     {}
 
-    RunFuncType GetFunc() { return forced_cast<RunFuncType>(&ReadUnlockWakesWriterTask::RunInner); }
-    void *GetFuncUserData() { return this; }
-
 private:
-    void RunInner()
+    void Run()
     {
         if ((m_task_id == 1) || (m_task_id == 2))
         {
@@ -526,11 +505,8 @@ public:
     WriterPriorityTask(uint8_t task_id, int32_t) : m_task_id(task_id)
     {}
 
-    RunFuncType GetFunc() { return forced_cast<RunFuncType>(&WriterPriorityTask::RunInner); }
-    void *GetFuncUserData() { return this; }
-
 private:
-    void RunInner()
+    void Run()
     {
         if (m_task_id == 1)
         {
@@ -600,11 +576,8 @@ public:
     ReaderWriterAlternationTask(uint8_t task_id, int32_t) : m_task_id(task_id)
     {}
 
-    RunFuncType GetFunc() { return forced_cast<RunFuncType>(&ReaderWriterAlternationTask::RunInner); }
-    void *GetFuncUserData() { return this; }
-
 private:
-    void RunInner()
+    void Run()
     {
         if ((m_task_id >= 1) && (m_task_id <= 3))
         {
@@ -679,11 +652,8 @@ public:
     StressTestTask(uint8_t task_id, int32_t iterations) : m_task_id(task_id), m_iterations(iterations)
     {}
 
-    RunFuncType GetFunc() { return forced_cast<RunFuncType>(&StressTestTask::RunInner); }
-    void *GetFuncUserData() { return this; }
-
 private:
-    void RunInner()
+    void Run()
     {
         for (int32_t i = 0; i < m_iterations; ++i)
         {

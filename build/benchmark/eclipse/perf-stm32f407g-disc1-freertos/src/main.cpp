@@ -63,8 +63,8 @@ static void BenchTask(void *pvParameter)
 {
     uint32_t index = (uint32_t)pvParameter;
 
+    // do processing
     g_Enable = true;
-
     while (g_Ticks < _STK_BENCH_WINDOW)
     {
         g_Bench[index].Process();

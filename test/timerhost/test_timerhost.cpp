@@ -84,11 +84,8 @@ public:
     OneShotTimerTask(uint8_t task_id, int32_t) : m_task_id(task_id)
     {}
 
-    RunFuncType GetFunc() { return forced_cast<RunFuncType>(&OneShotTimerTask::RunInner); }
-    void *GetFuncUserData() { return this; }
-
 private:
-    void RunInner()
+    void Run()
     {
         static TestTimer timer(1);
 
@@ -143,11 +140,8 @@ public:
     PeriodicTimerTask(uint8_t task_id, int32_t) : m_task_id(task_id)
     {}
 
-    RunFuncType GetFunc() { return forced_cast<RunFuncType>(&PeriodicTimerTask::RunInner); }
-    void *GetFuncUserData() { return this; }
-
 private:
-    void RunInner()
+    void Run()
     {
         static TestTimer timer(1);
 
@@ -200,11 +194,8 @@ public:
     MultipleTimersTask(uint8_t task_id, int32_t) : m_task_id(task_id)
     {}
 
-    RunFuncType GetFunc() { return forced_cast<RunFuncType>(&MultipleTimersTask::RunInner); }
-    void *GetFuncUserData() { return this; }
-
 private:
-    void RunInner()
+    void Run()
     {
         static TestTimer timer1(1); // 20ms periodic
         static TestTimer timer2(2); // 35ms periodic
@@ -256,11 +247,8 @@ public:
     StopTimerTask(uint8_t task_id, int32_t) : m_task_id(task_id)
     {}
 
-    RunFuncType GetFunc() { return forced_cast<RunFuncType>(&StopTimerTask::RunInner); }
-    void *GetFuncUserData() { return this; }
-
 private:
-    void RunInner()
+    void Run()
     {
         static TestTimer timer(1);
 
@@ -305,11 +293,8 @@ public:
     ResetPeriodicTimerTask(uint8_t task_id, int32_t) : m_task_id(task_id)
     {}
 
-    RunFuncType GetFunc() { return forced_cast<RunFuncType>(&ResetPeriodicTimerTask::RunInner); }
-    void *GetFuncUserData() { return this; }
-
 private:
-    void RunInner()
+    void Run()
     {
         static TestTimer timer(1);
 
@@ -367,11 +352,8 @@ public:
     RestartTimerTask(uint8_t task_id, int32_t) : m_task_id(task_id)
     {}
 
-    RunFuncType GetFunc() { return forced_cast<RunFuncType>(&RestartTimerTask::RunInner); }
-    void *GetFuncUserData() { return this; }
-
 private:
-    void RunInner()
+    void Run()
     {
         static TestTimer timer(1);
 
@@ -434,11 +416,8 @@ public:
     StartOrResetTask(uint8_t task_id, int32_t) : m_task_id(task_id)
     {}
 
-    RunFuncType GetFunc() { return forced_cast<RunFuncType>(&StartOrResetTask::RunInner); }
-    void *GetFuncUserData() { return this; }
-
 private:
-    void RunInner()
+    void Run()
     {
         static TestTimer timer(1);
 
@@ -516,11 +495,8 @@ public:
     SetPeriodTask(uint8_t task_id, int32_t) : m_task_id(task_id)
     {}
 
-    RunFuncType GetFunc() { return forced_cast<RunFuncType>(&SetPeriodTask::RunInner); }
-    void *GetFuncUserData() { return this; }
-
 private:
-    void RunInner()
+    void Run()
     {
         static TestTimer timer(1);
         int64_t elapsed;
@@ -601,11 +577,8 @@ public:
     StressTestTask(uint8_t task_id, int32_t iterations) : m_task_id(task_id), m_iterations(iterations)
     {}
 
-    RunFuncType GetFunc() { return forced_cast<RunFuncType>(&StressTestTask::RunInner); }
-    void *GetFuncUserData() { return this; }
-
 private:
-    void RunInner()
+    void Run()
     {
         static TestTimer timer0(0);
         static TestTimer timer1(1);

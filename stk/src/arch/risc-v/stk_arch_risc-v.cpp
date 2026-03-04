@@ -702,7 +702,7 @@ static __stk_forceinline void LoadIsrSP()
     : /* clobbers: none */);
 }
 
-__stk_forceinline void OnTaskRun()
+__stk_forceinline void OnTaskStart()
 {
     LoadContext();
 
@@ -830,7 +830,7 @@ STK_RISCV_ISR void _STK_SVC_HANDLER()
         {
             // schedule first task
             StartScheduling();
-            OnTaskRun();
+            OnTaskStart();
         }
     }
     else
@@ -853,6 +853,11 @@ STK_RISCV_ISR void _STK_SVC_HANDLER()
             }
         }
     }
+}
+
+static void OnTaskRun(ITask *task)
+{
+    task->Run();
 }
 
 static void OnTaskExit()
@@ -943,19 +948,19 @@ bool PlatformRiscV::InitStack(EStackType stack_type, Stack *stack, IStackMemory 
     switch (stack_type)
     {
     case STACK_USER_TASK: {
-        MEPC = (size_t)user_task->GetFunc();
-        RA   = (size_t)OnTaskExit;
-        X10  = (size_t)user_task->GetFuncUserData();
+        MEPC = (size_t)&OnTaskRun;
+        RA   = (size_t)&OnTaskExit;
+        X10  = (size_t)user_task;
         break; }
 
     case STACK_SLEEP_TRAP: {
-        MEPC = (size_t)(GetContext().m_overrider != NULL ? OnSchedulerSleepOverride : OnSchedulerSleep);
+        MEPC = (size_t)(GetContext().m_overrider != NULL ? &OnSchedulerSleepOverride : &OnSchedulerSleep);
         RA   = (size_t)STK_STACK_MEMORY_FILLER; // should not attempt to exit
         X10  = 0;
         break; }
 
     case STACK_EXIT_TRAP: {
-        MEPC = (size_t)OnSchedulerExit;
+        MEPC = (size_t)&OnSchedulerExit;
         RA   = (size_t)STK_STACK_MEMORY_FILLER; // should not attempt to exit
         X10  = 0;
         break; }

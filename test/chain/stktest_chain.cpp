@@ -46,12 +46,11 @@ class TestTask : public Task<256, _AccessMode>
     uint8_t m_task_id;
 
 public:
-    TestTask(uint8_t task_id) : m_task_id(task_id) {}
-    RunFuncType GetFunc() { return forced_cast<RunFuncType>(&TestTask::RunInner); }
-    void *GetFuncUserData() { return this; }
+    TestTask(uint8_t task_id) : m_task_id(task_id)
+    {}
 
 private:
-    void RunInner();
+    void Run();
 };
 
 //! Kernel.
@@ -63,7 +62,7 @@ static TestTask<ACCESS_PRIVILEGED> task1(0), task2(1), task3(2);
 //! Execution time of the task.
 static int64_t g_Time[_STK_CHAIN_TEST_TASKS_MAX] = {};
 
-template<> void TestTask<ACCESS_PRIVILEGED>::RunInner()
+template<> void TestTask<ACCESS_PRIVILEGED>::Run()
 {
     uint8_t task_id = m_task_id;
 

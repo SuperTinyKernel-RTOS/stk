@@ -30,7 +30,7 @@ static void InitLEDs()
 static void SwitchOnLED()
 {
     // for demonstration purpose we get task_id from our TLS and switch on corresponding LED
-    uint8_t task_id = stk::GetTlsPtr<MyTls>()->task_id;
+    uint8_t task_id = stk::hw::GetTlsPtr<MyTls>()->task_id;
 
     switch (task_id)
     {
@@ -63,26 +63,19 @@ enum { TASK_STACK_SIZE = 256 };
 template <uint8_t _TaskId, stk::EAccessMode _AccessMode>
 class MyTask : public stk::Task<TASK_STACK_SIZE, _AccessMode>
 {
+    MyTls m_tls; // task-local TLS, you can provide your own implementation
+
 public:
     MyTask()
     {
         m_tls.task_id = _TaskId;
     }
-    
-    stk::RunFuncType GetFunc() {
-        return [](void *user_data) {
-            ((MyTask *)user_data)->Run();
-        };
-    }
-    void *GetFuncUserData() { return this; }
 
 private:
-    MyTls m_tls; // task-local TLS, you can provide your own implementation
-
     void Run()
     {
         // set your TLS (it can host any complex implementation of your choice)
-        stk::SetTlsPtr(&m_tls);
+        stk::hw::SetTlsPtr(&m_tls);
 
         // just fake counters to demonstrate that scheduler is saving/restoring context correctly
         // preserving values of floating-point and 64 bit variables

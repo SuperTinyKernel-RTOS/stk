@@ -77,11 +77,8 @@ public:
     NotifyOneWakesTask(uint8_t task_id, int32_t iterations) : m_task_id(task_id), m_iterations(iterations)
     {}
 
-    RunFuncType GetFunc() { return forced_cast<RunFuncType>(&NotifyOneWakesTask::RunInner); }
-    void *GetFuncUserData() { return this; }
-
 private:
-    void RunInner()
+    void Run()
     {
         if (m_task_id == 0)
         {
@@ -134,11 +131,8 @@ public:
     NotifyAllWakesTask(uint8_t task_id, int32_t) : m_task_id(task_id)
     {}
 
-    RunFuncType GetFunc() { return forced_cast<RunFuncType>(&NotifyAllWakesTask::RunInner); }
-    void *GetFuncUserData() { return this; }
-
 private:
-    void RunInner()
+    void Run()
     {
         if (m_task_id == 0)
         {
@@ -185,11 +179,8 @@ public:
     TimeoutExpiresTask(uint8_t task_id, int32_t) : m_task_id(task_id)
     {}
 
-    RunFuncType GetFunc() { return forced_cast<RunFuncType>(&TimeoutExpiresTask::RunInner); }
-    void *GetFuncUserData() { return this; }
-
 private:
-    void RunInner()
+    void Run()
     {
         if (m_task_id == 1)
         {
@@ -256,11 +247,8 @@ public:
     MutexReacquiredTask(uint8_t task_id, int32_t) : m_task_id(task_id)
     {}
 
-    RunFuncType GetFunc() { return forced_cast<RunFuncType>(&MutexReacquiredTask::RunInner); }
-    void *GetFuncUserData() { return this; }
-
 private:
-    void RunInner()
+    void Run()
     {
         if (m_task_id == 1)
         {
@@ -325,11 +313,8 @@ public:
     PredicateLoopTask(uint8_t task_id, int32_t) : m_task_id(task_id)
     {}
 
-    RunFuncType GetFunc() { return forced_cast<RunFuncType>(&PredicateLoopTask::RunInner); }
-    void *GetFuncUserData() { return this; }
-
 private:
-    void RunInner()
+    void Run()
     {
         if (m_task_id == 0)
         {
@@ -389,11 +374,8 @@ public:
     NotifyOneOrderTask(uint8_t task_id, int32_t) : m_task_id(task_id)
     {}
 
-    RunFuncType GetFunc() { return forced_cast<RunFuncType>(&NotifyOneOrderTask::RunInner); }
-    void *GetFuncUserData() { return this; }
-
 private:
-    void RunInner()
+    void Run()
     {
         if (m_task_id == 0)
         {
@@ -465,11 +447,8 @@ public:
     NoWaitTimeoutTask(uint8_t task_id, int32_t) : m_task_id(task_id)
     {}
 
-    RunFuncType GetFunc() { return forced_cast<RunFuncType>(&NoWaitTimeoutTask::RunInner); }
-    void *GetFuncUserData() { return this; }
-
 private:
-    void RunInner()
+    void Run()
     {
         if (m_task_id == 1)
         {
@@ -534,11 +513,8 @@ public:
     StressTestTask(uint8_t task_id, int32_t iterations) : m_task_id(task_id), m_iterations(iterations)
     {}
 
-    RunFuncType GetFunc() { return forced_cast<RunFuncType>(&StressTestTask::RunInner); }
-    void *GetFuncUserData() { return this; }
-
 private:
-    void RunInner()
+    void Run()
     {
         for (int32_t i = 0; i < m_iterations; ++i)
         {
