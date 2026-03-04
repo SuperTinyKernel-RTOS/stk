@@ -116,11 +116,6 @@
 			<locationURI>virtual:/virtual</locationURI>
 		</link>
 		<link>
-			<name>deps/stk/src/stk.cpp</name>
-			<type>1</type>
-			<locationURI>PARENT-6-PROJECT_LOC/stk/src/stk.cpp</locationURI>
-		</link>
-		<link>
 			<name>src/driver/portable/led.cpp</name>
 			<type>1</type>
 			<locationURI>PARENT-4-PROJECT_LOC/driver/portable/led.cpp</locationURI>

@@ -116,11 +116,6 @@
 			<locationURI>virtual:/virtual</locationURI>
 		</link>
 		<link>
-			<name>deps/stk/src/stk.cpp</name>
-			<type>1</type>
-			<locationURI>PARENT-5-PROJECT_LOC/stk/src/stk.cpp</locationURI>
-		</link>
-		<link>
 			<name>deps/risc-v/include/risc-v/encoding.h</name>
 			<type>1</type>
 			<locationURI>PARENT-5-PROJECT_LOC/deps/target/risc-v/include/risc-v/encoding.h</locationURI>
