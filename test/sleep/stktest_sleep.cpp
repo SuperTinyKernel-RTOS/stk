@@ -41,12 +41,11 @@ class TestTask : public Task<256, _AccessMode>
     uint8_t m_task_id;
 
 public:
-    TestTask(uint8_t task_id) : m_task_id(task_id) {}
-    RunFuncType GetFunc() { return forced_cast<RunFuncType>(&TestTask::RunInner); }
-    void *GetFuncUserData() { return this; }
+    TestTask(uint8_t task_id) : m_task_id(task_id)
+    {}
 
 private:
-    void RunInner()
+    void Run()
     {
         // task 0: sleep 100 ms
         // task 1: sleep 200 ms

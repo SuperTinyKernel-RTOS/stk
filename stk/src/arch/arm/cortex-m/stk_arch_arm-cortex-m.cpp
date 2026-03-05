@@ -207,9 +207,6 @@ __stk_attr_naked uint32_t SVC_EnterCritical()
 {
     STK_CORTEX_M_UNPRIV_ENTER_CRITICAL();
     STK_CORTEX_M_EXIT_FUNCTION();
-#if !((defined(__clang__) && defined(__ARMCOMPILER_VERSION)) || defined(__ICCARM__))
-    __builtin_unreachable();
-#endif
 }
 
 /*! \brief     Exit critical section.

@@ -151,18 +151,6 @@
     #define __stk_attr_deprecated
 #endif
 
-/*! \def     __stk_unreachable
-    \brief   Informs compiler that a code path is logically unreachable (in-code statement).
-    \note    Enables dead-code elimination and suppresses "control reaches end of non-void function" warnings.
-    \warning If execution reaches this point at runtime the behaviour is undefined with no diagnostic.
-             Use only where the path is provably unreachable (e.g. after an exhaustive switch).
-*/
-#ifdef __GNUC__
-    #define __stk_unreachable() __builtin_unreachable()
-#else
-    #error "__stk_unreachable() is not implemented for this compiler. Add a definition to stk_defs.h."
-#endif
-
 /*! \def   __stk_full_memfence
     \brief Emits a full (sequentially-consistent) memory barrier (in-code statement).
     \note  Prevents both the compiler and the CPU from reordering memory accesses across this point.
