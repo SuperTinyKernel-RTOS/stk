@@ -104,7 +104,7 @@ extern TestContext g_TestContext;
     \brief Declare assertion redirector in the source file.
 */
 #define STK_TEST_DECL_ASSERT\
-    extern void STK_ASSERT_IMPL(const char *message, const char *file, int32_t line)\
+    extern void STK_ASSERT_HANDLER(const char *message, const char *file, int32_t line)\
     {\
         printf("_STK_ASSERT failed!\n file: %s\n line: %d\n message: %s\n", file, (int)line, message);\
         abort();\

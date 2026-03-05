@@ -82,7 +82,7 @@ public:
 
     /*! \brief Override in subclass to supply a name for SEGGER SystemView tracing. Returns NULL by default.
     */
-    virtual const char *GetTraceName() const { return NULL; }
+    virtual const char *GetTraceName() const { return nullptr; }
 
 private:
     typename StackMemoryDef<_StackSize>::Type m_stack; //!< Stack memory region, 16-byte aligned.
@@ -128,7 +128,7 @@ public:
 
     /*! \brief Override in subclass to supply a name for SEGGER SystemView tracing. Returns NULL by default.
     */
-    virtual const char *GetTraceName() const { return NULL; }
+    virtual const char *GetTraceName() const { return nullptr; }
 
 private:
     typename StackMemoryDef<_StackSize>::Type m_stack; //!< Stack memory region, 16-byte aligned.

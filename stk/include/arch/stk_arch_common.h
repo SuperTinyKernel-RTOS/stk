@@ -39,7 +39,7 @@ public:
         m_handler         = handler;
         m_service         = service;
         m_stack_idle      = exit_trap;
-        m_stack_active    = NULL;
+        m_stack_active    = nullptr;
         m_tick_resolution = resolution_us;
     }
 

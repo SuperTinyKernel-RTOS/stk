@@ -36,6 +36,11 @@
 			<locationURI>virtual:/virtual</locationURI>
 		</link>
 		<link>
+			<name>src/stktest_switch.cpp</name>
+			<type>1</type>
+			<locationURI>PARENT-5-PROJECT_LOC/test/switch/stktest_switch.cpp</locationURI>
+		</link>
+		<link>
 			<name>deps/risc-v/include</name>
 			<type>2</type>
 			<locationURI>virtual:/virtual</locationURI>

@@ -58,7 +58,7 @@ extern int32_t g_CriticalSectionState;
 extern bool g_InsideISR;
 
 /*! \class TestAssertPassed
-    \brief Throwable class for catching assertions from _STK_ASSERT_IMPL().
+    \brief Throwable class for catching assertions from STK_ASSERT_HANDLER().
 */
 struct TestAssertPassed : public std::exception
 {

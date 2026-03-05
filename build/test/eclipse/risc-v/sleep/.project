@@ -36,6 +36,11 @@
 			<locationURI>virtual:/virtual</locationURI>
 		</link>
 		<link>
+			<name>src/stktest_sleep.cpp</name>
+			<type>1</type>
+			<locationURI>PARENT-5-PROJECT_LOC/test/sleep/stktest_sleep.cpp</locationURI>
+		</link>
+		<link>
 			<name>deps/risc-v/include</name>
 			<type>2</type>
 			<locationURI>virtual:/virtual</locationURI>

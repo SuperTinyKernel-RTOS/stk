@@ -61,7 +61,7 @@ template <class _Ty, bool _ClosedLoop> class DListEntry
 public:
     /*! \brief Construct an unlinked entry. All pointers initialised to NULL.
     */
-    explicit DListEntry() : m_head(NULL), m_next(NULL), m_prev(NULL)
+    explicit DListEntry() : m_head(nullptr), m_next(nullptr), m_prev(nullptr)
     {}
 
     /*! \typedef DLEntryType
@@ -98,7 +98,7 @@ public:
     /*! \brief  Check whether this entry is currently a member of any list.
         \return \c true if linked (m_head != NULL); \c false otherwise.
     */
-    bool IsLinked() const        { return (GetHead() != NULL); }
+    bool IsLinked() const        { return (GetHead() != nullptr); }
 
     /*! \brief Implicit conversion to a mutable pointer to the host object (_Ty).
         \note  Safe because _Ty must derive from DListEntry<_Ty, _ClosedLoop>.
@@ -136,10 +136,10 @@ private:
         m_next = next;
         m_prev = prev;
 
-        if (m_prev != NULL)
+        if (m_prev != nullptr)
             m_prev->m_next = this;
 
-        if (m_next != NULL)
+        if (m_next != nullptr)
             m_next->m_prev = this;
     }
 
@@ -152,15 +152,15 @@ private:
     */
     void Unlink()
     {
-        if (m_prev != NULL)
+        if (m_prev != nullptr)
             m_prev->m_next = m_next;
 
-        if (m_next != NULL)
+        if (m_next != nullptr)
             m_next->m_prev = m_prev;
 
-        m_head = NULL;
-        m_next = NULL;
-        m_prev = NULL;
+        m_head = nullptr;
+        m_next = nullptr;
+        m_prev = nullptr;
     }
 
     DLHeadType  *m_head; //!< Owning list head, or \c NULL when the entry is not linked.
@@ -200,7 +200,7 @@ public:
 
     /*! \brief Construct an empty list head (count = 0, first = last = NULL).
     */
-    explicit DListHead(): m_count(0), m_first(NULL), m_last(NULL)
+    explicit DListHead(): m_count(0), m_first(nullptr), m_last(nullptr)
     {}
 
     /*! \brief  Get the number of entries currently in the list.
@@ -232,24 +232,24 @@ public:
     /*! \brief     Append \a entry to the back of the list (pointer overload).
         \param[in] entry: Entry to insert. Must not already be linked to any list.
     */
-    void LinkBack(DLEntryType *entry)  { Link(entry, NULL, m_last); }
+    void LinkBack(DLEntryType *entry)  { Link(entry, nullptr, m_last); }
 
     /*! \brief     Append \a entry to the back of the list (reference overload).
         \param[in] entry: Entry to insert. Must not already be linked to any list.
     */
-    void LinkBack(DLEntryType &entry)  { Link(&entry, NULL, m_last); }
+    void LinkBack(DLEntryType &entry)  { Link(&entry, nullptr, m_last); }
 
     /*! \brief     Prepend \a entry to the front of the list (pointer overload).
         \param[in] entry: Entry to insert. Must not already be linked to any list.
         \note      In an open list, \a entry becomes the new first element.
                    In a closed loop, the circular pointers are updated by UpdateEnds().
     */
-    void LinkFront(DLEntryType *entry) { Link(entry, m_last, NULL); }
+    void LinkFront(DLEntryType *entry) { Link(entry, m_last, nullptr); }
 
     /*! \brief     Prepend \a entry to the front of the list (reference overload).
         \param[in] entry: Entry to insert. Must not already be linked to any list.
     */
-    void LinkFront(DLEntryType &entry) { Link(&entry, m_last, NULL); }
+    void LinkFront(DLEntryType &entry) { Link(&entry, m_last, nullptr); }
 
     /*! \brief  Remove and return the last entry.
         \return Pointer to the removed entry.
@@ -282,7 +282,7 @@ public:
     */
     void Unlink(DLEntryType *entry)
     {
-        STK_ASSERT(entry != NULL);
+        STK_ASSERT(entry != nullptr);
         STK_ASSERT(entry->IsLinked());
         STK_ASSERT(entry->GetHead() == this);
 
@@ -323,21 +323,21 @@ public:
         \note      Updates m_first and m_last as needed. For closed-loop lists, calls UpdateEnds()
                    to maintain the circular back-link from last to first.
     */
-    void Link(DLEntryType *entry, DLEntryType *next = NULL, DLEntryType *prev = NULL)
+    void Link(DLEntryType *entry, DLEntryType *next = nullptr, DLEntryType *prev = nullptr)
     {
-        STK_ASSERT(entry != NULL);
+        STK_ASSERT(entry != nullptr);
         STK_ASSERT(!entry->IsLinked());
 
-        if (prev == NULL)
+        if (prev == nullptr)
             next = m_first;
 
         ++m_count;
         entry->Link(this, next, prev);
 
-        if ((m_first == NULL) || (m_first == entry->GetNext()))
+        if ((m_first == nullptr) || (m_first == entry->GetNext()))
             m_first = entry;
 
-        if ((m_last == NULL) || (m_last == entry->GetPrev()))
+        if ((m_last == nullptr) || (m_last == entry->GetPrev()))
             m_last = entry;
 
         if (_ClosedLoop)
@@ -359,8 +359,8 @@ private:
     {
         if (IsEmpty())
         {
-            m_first = NULL;
-            m_last = NULL;
+            m_first = nullptr;
+            m_last  = nullptr;
         }
         else
         if (_ClosedLoop)

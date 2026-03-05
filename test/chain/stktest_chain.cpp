@@ -16,12 +16,7 @@
 using namespace stk;
 using namespace stk::test;
 
-//STK_TEST_DECL_ASSERT;
-extern void STK_ASSERT_IMPL(const char *message, const char *file, int32_t line)
-{
-    printf("_STK_ASSERT failed!\n file: %s\n line: %d\n message: %s\n", file, (int)line, message);
-    abort();
-}
+STK_TEST_DECL_ASSERT;
 
 #define _STK_CHAIN_TEST_TASKS_MAX  3
 #define _STK_CHAIN_TEST_DELAY_TIME 100

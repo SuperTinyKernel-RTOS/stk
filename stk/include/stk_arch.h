@@ -46,6 +46,26 @@
 
 namespace stk {
 
+/*! \def   STK_KERNEL_PANIC
+    \brief Called when the kernel detects an unrecoverable internal fault.
+    \note  Unlike STK_ASSERT (which checks preconditions) this macro is reached only
+           when a runtime invariant has been irreversibly violated — the kernel
+           cannot continue operating correctly from this point.
+    \note  Default behaviour:
+             - In debug builds:   triggers a hardware breakpoint so a debugger can
+                                  inspect state, then falls through to the safe-state handler.
+             - In all builds:     calls STK_PANIC_HANDLER(id) which must not return.
+    \note  Override STK_PANIC_HANDLER by defining it before including this header
+           or in stk_config.h. The handler receives a numeric id (EKernelPanicId)
+           and must never return. A minimal safe default is provided below.
+    \param[in] id: EKernelPanicId value identifying the fault.
+*/
+#define STK_KERNEL_PANIC(id)                         \
+    do {                                             \
+        __stk_debug_break();   /* debug aid */       \
+        STK_PANIC_HANDLER(id); /* must not return */ \
+    } while (0)
+
 /*! \namespace stk::hw
     \brief     Hardware Abstraction Layer (HAL) for architecture-specific operations.
 
@@ -363,5 +383,18 @@ __stk_forceinline void WriteVolatile64(volatile T *addr, T value)
 
 } // namespace hw
 } // namespace stk
+
+#ifndef STK_PANIC_HANDLER
+    /*! \brief Default panic handler: disable interrupts, record the id,
+               and spin in a tight loop — a defined, detectable safe state.
+        \note  On a system with a watchdog enabled this will trigger a watchdog
+               reset after the watchdog period, which is the desired behaviour.
+        \note  Replace with a platform-specific handler (e.g. one that writes a
+               fault log to non-volatile memory and calls NVIC_SystemReset()) by
+               defining STK_PANIC_HANDLER in stk_config.h.
+    */
+    extern void STK_PANIC_HANDLER_DEFAULT(stk::EKernelPanicId id);
+    #define STK_PANIC_HANDLER(id) STK_PANIC_HANDLER_DEFAULT(id)
+#endif
 
 #endif /* STK_ARCH_H_ */

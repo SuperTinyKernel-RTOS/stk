@@ -44,6 +44,17 @@ enum EKernelMode
     KERNEL_SYNC    = (1 << 3), //!< Synchronization support (see \a Event).
 };
 
+/*! \enum  EKernelPanicId
+    \brief Identifies the source of a kernel panic.
+*/
+enum EKernelPanicId
+{
+    KERNEL_PANIC_SPINLOCK_DEADLOCK = 1, //!< Spin-lock timeout expired: lock owner never released.
+    KERNEL_PANIC_STACK_CORRUPT     = 2, //!< Stack integrity check failed.
+    KERNEL_PANIC_ASSERT            = 3, //!< Internal assertion failed (maps from STK_ASSERT).
+    KERNEL_PANIC_HRT_HARD_FAULT    = 4, //!< Kernel running in KERNEL_HRT mode reported deadline failure of the task.
+};
+
 /*! \enum  EStackType
     \brief Stack type.
     \see   IPlatform::InitStack
