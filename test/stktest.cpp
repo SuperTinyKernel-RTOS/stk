@@ -20,10 +20,10 @@ int32_t test::g_CriticalSectionState = false;
 bool test::g_InsideISR = false;
 uintptr_t g_Tls = 0;
 
-/*! \fn    STK_ASSERT_IMPL
+/*! \fn    STK_ASSERT_HANDLER
     \brief Custom assertion handler which intercepts assertions from STK package.
 */
-extern void STK_ASSERT_IMPL(const char *message, const char *file, int32_t line)
+void STK_ASSERT_HANDLER(const char *message, const char *file, int32_t line)
 {
 	if (g_TestContext.IsExpectingAssert())
 	{

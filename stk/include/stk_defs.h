@@ -215,14 +215,14 @@
 /*! \def   STK_ASSERT
     \brief Runtime assertion. Halts execution if the expression \a e evaluates to false.
     \note  By default maps to the standard \c assert() macro from \c <assert.h>.
-           Define \c _STK_ASSERT_REDIRECT to redirect to a custom handler \c STK_ASSERT_IMPL
-           with the signature: \code void STK_ASSERT_IMPL(const char *expr, const char *file, int32_t line); \endcode
+           Define \c _STK_ASSERT_REDIRECT to redirect to a custom handler \c STK_ASSERT_HANDLER
+           with the signature: \code void STK_ASSERT_HANDLER(const char *expr, const char *file, int32_t line); \endcode
            This is useful for embedded targets where the standard assert handler is unavailable
            or where a custom fault logger or LED indicator is preferred.
 */
 #ifdef _STK_ASSERT_REDIRECT
-    extern void STK_ASSERT_IMPL(const char *, const char *, int32_t);
-    #define STK_ASSERT(e) ((e) ? (void)0 : STK_ASSERT_IMPL(#e, __FILE__, __LINE__))
+    extern void STK_ASSERT_HANDLER(const char *, const char *, int32_t);
+    #define STK_ASSERT(e) ((e) ? (void)0 : STK_ASSERT_HANDLER(#e, __FILE__, __LINE__))
 #else
     #if defined(DEBUG) || defined(_DEBUG)
         #include <assert.h>

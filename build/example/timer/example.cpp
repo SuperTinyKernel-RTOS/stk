@@ -16,7 +16,7 @@
 
 #ifdef _STK_ASSERT_REDIRECT
 #include <stdint.h>
-extern void STK_ASSERT_IMPL(const char *err, const char *source, int32_t line);
+extern void STK_ASSERT_HANDLER(const char *err, const char *source, int32_t line);
 #endif
 
 // R2350 requires larger stack due to stack-memory heavy SDK API
@@ -27,7 +27,7 @@ enum { TASK_STACK_SIZE = 256 };
 #endif
 
 #ifdef _STK_ASSERT_REDIRECT
-void STK_ASSERT_IMPL(const char *err, const char *source, int32_t line)
+void STK_ASSERT_HANDLER(const char *err, const char *source, int32_t line)
 {
     __stk_debug_break();
     while (true) {}
