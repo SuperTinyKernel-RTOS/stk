@@ -52,15 +52,16 @@ using namespace stk;
         {
             if (--timeout == 0)
             {
-                /* if we hit this, the lock was never released by the previous owner */
-                __stk_debug_break();
+                // Invariant violated: the lock owner exited without releasing,
+                // Kernel state is suspect, enter defined safe state.
+                STK_KERNEL_PANIC(KERNEL_PANIC_SPINLOCK_DEADLOCK);
             }
             __stk_relax_cpu();
         }
     }
     static __stk_forceinline void STK_CORTEX_M_SPIN_LOCK_UNLOCK(volatile bool &LOCK)
     {
-        /* ensure all data writes (like scheduling metadata) are flushed before the lock is released */
+        // ensure all data writes (like scheduling metadata) are flushed before the lock is released
         __asm volatile("dmb ishst" ::: "memory");
         __atomic_clear(&LOCK, __ATOMIC_RELEASE);
     }
@@ -78,8 +79,9 @@ using namespace stk;
         {
             if (--timeout == 0)
             {
-                /* if we hit this, the lock was never released by the previous owner */
-                __stk_debug_break();
+                // Invariant violated: the lock owner exited without releasing,
+                // Kernel state is suspect, enter defined safe state.
+                STK_KERNEL_PANIC(KERNEL_PANIC_SPINLOCK_DEADLOCK);
             }
             __stk_relax_cpu();
         }
@@ -110,8 +112,9 @@ using namespace stk;
         {
             if (--timeout == 0)
             {
-                /* if we hit this, the lock was never released by the previous owner */
-                __stk_debug_break();
+                // Invariant violated: the lock owner exited without releasing,
+                // Kernel state is suspect, enter defined safe state.
+                STK_KERNEL_PANIC(KERNEL_PANIC_SPINLOCK_DEADLOCK);
             }
             __stk_relax_cpu();
         }
@@ -411,6 +414,23 @@ g_Context[_STK_ARCH_CPU_COUNT];
 void PlatformArmCortexM::ProcessTick()
 {
     GetContext().OnTick();
+}
+
+__stk_attr_noinline  // keep out of inlining to preserve stack frame
+__stk_attr_noreturn  // never returns - a trap
+void STK_PANIC_HANDLER_DEFAULT(EKernelPanicId id)
+{
+    (void)id;
+
+    // disable all maskable interrupts: this prevents scheduler from running again and corrupting state further
+    STK_CORTEX_M_DISABLE_INTERRUPTS();
+
+    // spin forever: with a watchdog active this produces a clean reset, without a watchdog,
+    // a debugger can attach and inspect 'id'
+    for (;;)
+    {
+        __stk_relax_cpu();
+    }
 }
 
 extern "C" void _STK_SYSTICK_HANDLER()
@@ -955,11 +975,7 @@ void PlatformArmCortexM::ProcessHardFault()
 {
     if ((GetContext().m_overrider == nullptr) || !GetContext().m_overrider->OnHardFault())
     {
-    #ifdef NVIC_SystemReset
-        NVIC_SystemReset();
-    #else
-        exit(1);
-    #endif
+        STK_KERNEL_PANIC(KERNEL_PANIC_HRT_HARD_FAULT);
     }
 }
 

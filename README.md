@@ -292,6 +292,7 @@ STK has been tested on the following development boards:
 
 Board: STM32F407G-DISC1, MCU: STM32F407VG (Cortex-M4 168MHz).
 Update: Feb 2026
+Compiler: GCC 14.2.1 (arm-none-eabi-gcc)
 
 This table compares **SuperTinyKernel RTOS v.1.04.2** and **FreeRTOS V10.3.1** across two compiler optimization levels: `-Os` and `-Ofast`. The workload consists of a CRC32-based synthetic task running across multiple tasks/threads to measure scheduling overhead and timing determinism. Benchmark projects are located in `build/benchmark/eclipse` and the benchmark suite is located in `build/benchmark/perf`.
 
@@ -431,17 +432,11 @@ class MyTask : public stk::Task<256, _AccessMode>
     uint8_t m_taskId;
 
 public:
-    MyTask(uint8_t taskId) : m_taskId(taskId) {}
-    stk::RunFuncType GetFunc() { return &Run; }
-    void *GetFuncUserData() { return this; }
+    MyTask(uint8_t taskId) : m_taskId(taskId) 
+    {}
 
 private:
-    static void Run(void *user_data)
-    {
-        ((MyTask *)user_data)->RunInner();
-    }
-
-    void RunInner()
+    void Run()
     {
         uint8_t task_id = m_taskId;
 
@@ -478,18 +473,13 @@ private:
     }
 };
 
-static void InitLeds()
-{
-    LED_INIT(LED_RED, false);
-    LED_INIT(LED_GREEN, false);
-    LED_INIT(LED_BLUE, false);
-}
-
 void RunExample()
 {
     using namespace stk;
 
-    InitLeds();
+    LED_INIT(LED_RED, false);
+    LED_INIT(LED_GREEN, false);
+    LED_INIT(LED_BLUE, false);
 
     static Kernel<KERNEL_STATIC, 3, SwitchStrategyRoundRobin, PlatformDefault> kernel;
     static MyTask<ACCESS_PRIVILEGED> task1(0), task2(1), task3(2);

@@ -223,6 +223,19 @@ static struct Context : public PlatformContext
 }
 g_Context;
 
+__stk_attr_noinline  // keep out of inlining to preserve stack frame
+__stk_attr_noreturn  // never returns - a trap
+void STK_PANIC_HANDLER_DEFAULT(EKernelPanicId id)
+{
+    (void)id;
+
+    // spin forever: without a watchdog, a debugger can attach and inspect 'id'
+    for (;;)
+    {
+        __stk_relax_cpu();
+    }
+}
+
 static DWORD WINAPI TimerThread(LPVOID param)
 {
     (void)param;
@@ -510,8 +523,7 @@ void PlatformX86Win32::ProcessHardFault()
 {
     if ((g_Context.m_overrider == NULL) || !g_Context.m_overrider->OnHardFault())
     {
-        printf("failure: HardFault\n");
-        exit(1);
+        STK_KERNEL_PANIC(KERNEL_PANIC_HRT_HARD_FAULT);
     }
 }
 

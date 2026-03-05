@@ -12,7 +12,6 @@
 
 #include <stddef.h>
 #include <stdint.h>
-#include <setjmp.h>
 
 /*! \file  stk_defs.h
     \brief Contains compiler low-level definitions.
@@ -225,8 +224,12 @@
     extern void STK_ASSERT_IMPL(const char *, const char *, int32_t);
     #define STK_ASSERT(e) ((e) ? (void)0 : STK_ASSERT_IMPL(#e, __FILE__, __LINE__))
 #else
-    #include <assert.h>
-    #define STK_ASSERT(e) assert(e)
+    #if defined(DEBUG) || defined(_DEBUG)
+        #include <assert.h>
+        #define STK_ASSERT(e) assert(e)
+    #else
+        #define STK_ASSERT(e)
+    #endif
 #endif
 
 /*! \def   STK_STATIC_ASSERT_N

@@ -91,15 +91,16 @@ static __stk_forceinline void STK_RISCV_SPIN_LOCK_LOCK(volatile bool &LOCK)
     {
         if (--timeout == 0)
         {
-            /* if we hit this, the lock was never released by the previous owner */
-            __stk_debug_break();
+            // Invariant violated: the lock owner exited without releasing,
+            // Kernel state is suspect, enter defined safe state.
+            STK_KERNEL_PANIC(KERNEL_PANIC_SPINLOCK_DEADLOCK);
         }
         __stk_relax_cpu();
     }
 }
 static __stk_forceinline void STK_RISCV_SPIN_LOCK_UNLOCK(volatile bool &LOCK)
 {
-    /* ensure all data writes (like scheduling metadata) are flushed before the lock is released */
+    // ensure all data writes (like scheduling metadata) are flushed before the lock is released
     __asm volatile("fence rw, w" ::: "memory");
     __atomic_clear(&LOCK, __ATOMIC_RELEASE);
 }
@@ -450,6 +451,23 @@ void PlatformRiscV::ProcessTick()
     // unsupported scenario
     STK_ASSERT(false);
 #endif
+}
+
+__stk_attr_noinline  // keep out of inlining to preserve stack frame
+__stk_attr_noreturn  // never returns - a trap
+void STK_PANIC_HANDLER_DEFAULT(EKernelPanicId id)
+{
+    (void)id;
+
+    // disable all maskable interrupts: this prevents scheduler from running again and corrupting state further
+    STK_RISCV_DISABLE_INTERRUPTS();
+
+    // spin forever: with a watchdog active this produces a clean reset, without a watchdog,
+    // a debugger can attach and inspect 'id'
+    for (;;)
+    {
+        __stk_relax_cpu();
+    }
 }
 
 static __stk_forceinline void SaveContext()
@@ -1027,7 +1045,7 @@ void PlatformRiscV::ProcessHardFault()
 {
     if ((GetContext().m_overrider == NULL) || !GetContext().m_overrider->OnHardFault())
     {
-        exit(1);
+        STK_KERNEL_PANIC(KERNEL_PANIC_HRT_HARD_FAULT);
     }
 }
 
