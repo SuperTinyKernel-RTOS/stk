@@ -14,8 +14,8 @@
     \brief Intrusive doubly-linked list implementation used internally by the kernel.
 
     Provides two class templates:
-     - DListEntry<_Ty, _ClosedLoop>: the node embedded inside a host object (_Ty).
-     - DListHead<_Ty, _ClosedLoop>:  the list container that owns and traverses the nodes.
+     - DListEntry<T, _ClosedLoop>: the node embedded inside a host object (T).
+     - DListHead<T, _ClosedLoop>:  the list container that owns and traverses the nodes.
 
     The list is \e intrusive: the link pointers live inside the host object itself,
     so no separate heap allocation is required for list membership.
@@ -32,13 +32,13 @@ namespace util {
 
 // Forward declaration required so DListEntry can reference DListHead as a friend
 // and store a back-pointer to the owning list head.
-template <class _Ty, bool _ClosedLoop> class DListHead;
+template <class T, bool _ClosedLoop> class DListHead;
 
 /*! \class DListEntry
-    \brief Intrusive doubly-linked list node. Embed this as a base class in any object (_Ty)
+    \brief Intrusive doubly-linked list node. Embed this as a base class in any object (T)
            that needs to participate in a DListHead list.
 
-    \tparam _Ty:         The host class that derives from DListEntry. Used by the implicit
+    \tparam T:         The host class that derives from DListEntry. Used by the implicit
                          conversion operators to safely downcast the node pointer back to the
                          host object pointer without a dynamic_cast.
     \tparam _ClosedLoop: When \c true the list is kept circular (last->next == first and
@@ -54,9 +54,9 @@ template <class _Ty, bool _ClosedLoop> class DListHead;
     \note  Not thread-safe. The caller is responsible for protecting list operations
            with a hw::CriticalSection or equivalent.
 */
-template <class _Ty, bool _ClosedLoop> class DListEntry
+template <class T, bool _ClosedLoop> class DListEntry
 {
-    friend class DListHead<_Ty, _ClosedLoop>;
+    friend class DListHead<T, _ClosedLoop>;
 
 public:
     /*! \brief Construct an unlinked entry. All pointers initialised to NULL.
@@ -67,17 +67,17 @@ public:
     /*! \typedef DLEntryType
         \brief   Convenience alias for this entry type. Used to avoid repeating the full template spelling.
     */
-    typedef DListEntry<_Ty, _ClosedLoop> DLEntryType;
+    typedef DListEntry<T, _ClosedLoop> DLEntryType;
 
     /*! \typedef DLHeadType
         \brief   Convenience alias for the corresponding list head type.
     */
-    typedef DListHead<_Ty, _ClosedLoop>  DLHeadType;
+    typedef DListHead<T, _ClosedLoop>  DLHeadType;
 
     /*! \brief  Get the list head this entry currently belongs to.
         \return Pointer to the owning DListHead, or \c NULL if the entry is not linked.
     */
-    DLHeadType *GetHead() const  { return m_head; }
+    DLHeadType *GetHead() const { return m_head; }
 
     /*! \brief  Get the next entry in the list.
         \return Pointer to the next DListEntry, or \c NULL if this is the last entry
@@ -98,23 +98,23 @@ public:
     /*! \brief  Check whether this entry is currently a member of any list.
         \return \c true if linked (m_head != NULL); \c false otherwise.
     */
-    bool IsLinked() const        { return (GetHead() != nullptr); }
+    bool IsLinked() const { return (GetHead() != nullptr); }
 
-    /*! \brief Implicit conversion to a mutable pointer to the host object (_Ty).
-        \note  Safe because _Ty must derive from DListEntry<_Ty, _ClosedLoop>.
+    /*! \brief Implicit conversion to a mutable pointer to the host object (T).
+        \note  Safe because T must derive from DListEntry<T, _ClosedLoop>.
                Eliminates the need for explicit static_cast at call sites.
     */
-    operator _Ty *()             { return static_cast<_Ty *>(this); }
+    operator T *() { return static_cast<T *>(this); }
 
-    /*! \brief Implicit conversion to a const pointer to the host object (_Ty).
+    /*! \brief Implicit conversion to a const pointer to the host object (T).
     */
-    operator const _Ty *() const { return static_cast<const _Ty *>(this); }
+    operator const T *() const { return static_cast<const T *>(this); }
 
 protected:
     /*! \brief     Protected non-virtual destructor.
         \note      Non-virtual by design: adding a vtable pointer would increase the size of every
                    kernel object and pull in the C++ runtime. The consequence is that deleting a
-                   DListEntry pointer directly (rather than through the host _Ty pointer) will not
+                   DListEntry pointer directly (rather than through the host T pointer) will not
                    invoke the host destructor — do not do this.
         \note      An entry should be removed from its list (via DListHead::Unlink) before the
                    host object is destroyed, to keep the list's neighbour pointers consistent.
@@ -170,10 +170,10 @@ private:
 
 /*! \class DListHead
     \brief Intrusive doubly-linked list container. Manages a collection of DListEntry nodes
-           embedded in host objects of type _Ty.
+           embedded in host objects of type T.
 
-    \tparam _Ty:         The host class whose instances are stored in this list. Each _Ty must
-                         derive from DListEntry<_Ty, _ClosedLoop>.
+    \tparam T:         The host class whose instances are stored in this list. Each T must
+                         derive from DListEntry<T, _ClosedLoop>.
     \tparam _ClosedLoop: When \c true the list is maintained as a circular ring: after every
                          insertion or removal, last->next is set to first and first->prev is
                          set to last. This allows scheduler algorithms to wrap around the end
@@ -188,15 +188,15 @@ private:
     \note  Not thread-safe. The caller is responsible for protecting concurrent access with
            a hw::CriticalSection or equivalent.
 */
-template <class _Ty, bool _ClosedLoop> class DListHead
+template <class T, bool _ClosedLoop> class DListHead
 {
-    friend class DListEntry<_Ty, _ClosedLoop>;
+    friend class DListEntry<T, _ClosedLoop>;
 
 public:
     /*! \typedef DLEntryType
         \brief   Convenience alias for the node type stored in this list.
     */
-    typedef DListEntry<_Ty, _ClosedLoop> DLEntryType;
+    typedef DListEntry<T, _ClosedLoop> DLEntryType;
 
     /*! \brief Construct an empty list head (count = 0, first = last = NULL).
     */
@@ -206,38 +206,38 @@ public:
     /*! \brief  Get the number of entries currently in the list.
         \return Element count.
     */
-    size_t GetSize() const             { return m_count; }
+    size_t GetSize() const { return m_count; }
 
     /*! \brief  Check whether the list contains no entries.
         \return \c true if empty; \c false otherwise.
     */
-    bool IsEmpty() const               { return (m_count == 0); }
+    bool IsEmpty() const { return (m_count == 0); }
 
     /*! \brief  Get the first (front) entry without removing it.
         \return Pointer to the first DListEntry, or \c NULL if the list is empty.
     */
-    DLEntryType *GetFirst() const      { return m_first; }
+    DLEntryType *GetFirst() const { return m_first; }
 
     /*! \brief  Get the last (back) entry without removing it.
         \return Pointer to the last DListEntry, or \c NULL if the list is empty.
     */
-    DLEntryType *GetLast() const       { return m_last; }
+    DLEntryType *GetLast() const { return m_last; }
 
     /*! \brief  Remove and unlink all entries. After this call the list is empty.
         \note   Runs in O(n). Each entry is individually unlinked so its pointers are
                 reset to NULL and it is left in a clean state suitable for re-insertion.
     */
-    void Clear()                       { while (!IsEmpty()) Unlink(m_first); }
+    void Clear() { while (!IsEmpty()) Unlink(m_first); }
 
     /*! \brief     Append \a entry to the back of the list (pointer overload).
         \param[in] entry: Entry to insert. Must not already be linked to any list.
     */
-    void LinkBack(DLEntryType *entry)  { Link(entry, nullptr, m_last); }
+    void LinkBack(DLEntryType *entry) { Link(entry, nullptr, m_last); }
 
     /*! \brief     Append \a entry to the back of the list (reference overload).
         \param[in] entry: Entry to insert. Must not already be linked to any list.
     */
-    void LinkBack(DLEntryType &entry)  { Link(&entry, nullptr, m_last); }
+    void LinkBack(DLEntryType &entry) { Link(&entry, nullptr, m_last); }
 
     /*! \brief     Prepend \a entry to the front of the list (pointer overload).
         \param[in] entry: Entry to insert. Must not already be linked to any list.

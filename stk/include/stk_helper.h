@@ -54,15 +54,15 @@ namespace stk {
     MyTask<ACCESS_PRIVILEGED> my_task;
     \endcode
 */
-template <uint32_t _StackSize, EAccessMode _AccessMode>
+template <size_t _StackSize, EAccessMode _AccessMode>
 class Task : public ITask
 {
 public:
-    enum { STACK_SIZE = _StackSize }; //!< Stack size in elements of size_t, mirrors the _StackSize template parameter.
+    enum { STACK_SIZE = _StackSize }; //!< Stack size in elements of TReg, mirrors the _StackSize template parameter.
 
-    size_t *GetStack() const { return const_cast<size_t *>(m_stack); }
-    uint32_t GetStackSize() const { return _StackSize; }
-    uint32_t GetStackSizeBytes() const { return _StackSize * sizeof(size_t); }
+    TReg *GetStack() const { return const_cast<TReg *>(m_stack); }
+    size_t GetStackSize() const { return _StackSize; }
+    size_t GetStackSizeBytes() const { return _StackSize * sizeof(TReg); }
     EAccessMode GetAccessMode() const { return _AccessMode; }
 
     /*! \brief Default no-op handler. Override in subclass to log or handle missed deadlines.
@@ -78,7 +78,7 @@ public:
 
     /*! \brief Get object's own address as its Id. Unique per task instance, requires no manual assignment.
     */
-    virtual size_t GetId() const { return reinterpret_cast<size_t>(this); }
+    virtual TId GetId() const { return hw::PtrToTReg(this); }
 
     /*! \brief Override in subclass to supply a name for SEGGER SystemView tracing. Returns NULL by default.
     */
@@ -94,7 +94,7 @@ private:
 
     \tparam _Weight:     Static scheduling weight (positive, non-zero 24-bit integer).
                          Higher values cause this task to receive proportionally more CPU time.
-    \tparam _StackSize:  Stack size in elements of size_t.
+    \tparam _StackSize:  Stack size in elements of TReg.
     \tparam _AccessMode: Hardware access mode (ACCESS_USER or ACCESS_PRIVILEGED).
 
     \note  Hard Real-Time mode (KERNEL_HRT) is not supported for weighted tasks.
@@ -102,15 +102,15 @@ private:
 
     See Task for full usage example and implementation guidance.
 */
-template <int32_t _Weight, uint32_t _StackSize, EAccessMode _AccessMode>
+template <int32_t _Weight, size_t _StackSize, EAccessMode _AccessMode>
 class TaskW : public ITask
 {
 public:
-    enum { STACK_SIZE = _StackSize }; //!< Stack size in elements of size_t, mirrors the _StackSize template parameter.
+    enum { STACK_SIZE = _StackSize }; //!< Stack size in elements of TReg, mirrors the _StackSize template parameter.
 
-    size_t *GetStack() const { return const_cast<size_t *>(m_stack); }
-    uint32_t GetStackSize() const { return _StackSize; }
-    uint32_t GetStackSizeBytes() const { return _StackSize * sizeof(size_t); }
+    TReg *GetStack() const { return const_cast<TReg *>(m_stack); }
+    size_t GetStackSize() const { return _StackSize; }
+    size_t GetStackSizeBytes() const { return _StackSize * sizeof(TReg); }
     EAccessMode GetAccessMode() const { return _AccessMode; }
 
     /*! \brief Hard Real-Time mode is unsupported for weighted tasks. Triggers an assertion if called.
@@ -124,7 +124,7 @@ public:
 
     /*! \brief Get object's own address as its Id. Unique per task instance, requires no manual assignment.
     */
-    virtual size_t GetId() const { return reinterpret_cast<size_t>(this); }
+    virtual TId GetId() const { return hw::PtrToTReg(this); }
 
     /*! \brief Override in subclass to supply a name for SEGGER SystemView tracing. Returns NULL by default.
     */
@@ -139,9 +139,9 @@ private:
     \note  Wrapper (Adapter) design pattern. Use when the stack memory is declared separately
            from the task object (e.g. in a linker section or shared buffer) and needs to be
            passed to the kernel via the IStackMemory interface.
-    \tparam _StackSize Stack size in elements of size_t. Must be >= STACK_SIZE_MIN.
+    \tparam _StackSize Stack size in elements of TReg. Must be >= STACK_SIZE_MIN.
 */
-template <uint32_t _StackSize>
+template <size_t _StackSize>
 class StackMemoryWrapper : public IStackMemory
 {
 public:
@@ -162,15 +162,15 @@ public:
 
     /*! \brief Get pointer to the first element of the wrapped stack array.
     */
-    size_t *GetStack() const { return (*m_stack); }
+    TReg *GetStack() const { return (*m_stack); }
 
     /*! \brief Get number of elements in the wrapped stack array.
     */
-    uint32_t GetStackSize() const { return _StackSize; }
+    size_t GetStackSize() const { return _StackSize; }
 
     /*! \brief Get size of the wrapped stack array in bytes.
     */
-    uint32_t GetStackSizeBytes() const { return _StackSize * sizeof(size_t); }
+    size_t GetStackSizeBytes() const { return _StackSize * sizeof(TReg); }
 
 private:
     MemoryType *m_stack; //!< Pointer to the externally-owned stack memory array.

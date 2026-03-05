@@ -73,7 +73,7 @@ enum EConsts
 {
     PERIODICITY_MAX      = 99000,             //!< Maximum periodicity (microseconds), 99 milliseconds (note: this value is the highest working on a real hardware and QEMU).
     PERIODICITY_DEFAULT  = 1000,              //!< Default periodicity (microseconds), 1 millisecond.
-    STACK_SIZE_MIN       = STK_STACK_SIZE_MIN //!< Minimum stack size in elements of size_t. Used as a lower bound for all stack allocations (user task, sleep trap, exit trap). See: StackMemoryDef, StackMemoryWrapper.
+    STACK_SIZE_MIN       = STK_STACK_SIZE_MIN //!< Minimum stack size in elements of TReg. Used as a lower bound for all stack allocations (user task, sleep trap, exit trap). See: StackMemoryDef, StackMemoryWrapper.
 };
 
 /*! \enum  ESystemTaskId
@@ -95,10 +95,15 @@ enum ETraceEventId
     TRACE_EVENT_SLEEP   = 1000 + 2
 };
 
+/*! \typedef TReg
+    \brief   CPU register/word type.
+*/
+typedef uintptr_t TReg;
+
 /*! \typedef ThreadId
     \brief   Task/thread id.
 */
-typedef size_t TId;
+typedef TReg TId;
 
 /*! \var     TID_ISR
     \brief   Reserved task/thread id representing an ISR context.
@@ -138,14 +143,14 @@ typedef int64_t Ticks;
     StackMemoryDef<128>::Type my_memory_array;
     \endcode
 */
-template <uint32_t _StackSize> struct StackMemoryDef
+template <size_t _StackSize> struct StackMemoryDef
 {
     enum { SIZE = _StackSize };
 
     /*! \typedef Type
         \brief   Stack memory type.
     */
-    typedef __stk_aligned(16) size_t Type[_StackSize];
+    typedef __stk_aligned(16) TReg Type[_StackSize];
 };
 
 /*! \class Stack
@@ -153,10 +158,10 @@ template <uint32_t _StackSize> struct StackMemoryDef
 */
 struct Stack
 {
-    size_t      SP;   //!< Stack Pointer (SP) register (note: must be the first entry in this struct)
+    TReg        SP;   //!< Stack Pointer (SP) register (note: must be the first entry in this struct)
     EAccessMode mode; //!< access mode
 #if STK_NEED_TASK_ID
-    TId        tid;  //!< task id (see \a STK_SEGGER_SYSVIEW)
+    TId         tid;  //!< task id (see \a STK_SEGGER_SYSVIEW)
 #endif
 };
 
@@ -168,15 +173,15 @@ class IStackMemory
 public:
     /*! \brief Get pointer to the stack memory.
     */
-    virtual size_t *GetStack() const = 0;
+    virtual TReg *GetStack() const = 0;
 
     /*! \brief Get number of elements of the stack memory array.
     */
-    virtual uint32_t GetStackSize() const = 0;
+    virtual size_t GetStackSize() const = 0;
 
     /*! \brief Get size of the memory in bytes.
     */
-    virtual uint32_t GetStackSizeBytes() const = 0;
+    virtual size_t GetStackSizeBytes() const = 0;
 };
 
 /*! \class IWaitObject
@@ -299,7 +304,7 @@ public:
     /*! \brief     Called by kernel on every system tick to handle timeout logic of waiting tasks.
         \return    \c true if this synchronization object still has waiters with a finite timeout and
                    requires further tick calls. \c false if the wait list is empty or all remaining
-                   waiters have infinite timeouts, signalling to the kernel that it may stop calling
+                   waiters have infinite timeouts, signaling to the kernel that it may stop calling
                    Tick() for this object until a new waiter is added.
     */
     virtual bool Tick()
@@ -431,7 +436,7 @@ public:
         \return    Application-defined task identifier. Return 0 if unused.
         \note      Used for debugging and tracing only. The kernel does not interpret this value.
     */
-    virtual size_t GetId() const = 0;
+    virtual TId GetId() const = 0;
 
     /*! \brief     Get task trace name set by application.
         \return    Null-terminated name string, or \c NULL if unused.
@@ -551,13 +556,13 @@ public:
         /*! \brief      Called by Thread process (via IKernelService::SwitchToNext) to switch to a next task.
             \param[in]  caller_SP: Value of Stack Pointer (SP) register (for locating the calling process inside the kernel).
         */
-        virtual void OnTaskSwitch(size_t caller_SP) = 0;
+        virtual void OnTaskSwitch(TReg caller_SP) = 0;
 
         /*! \brief      Called by Thread process (via IKernelService::Sleep) for exclusion of the calling process from scheduling (sleeping).
             \param[in]  caller_SP: Value of Stack Pointer (SP) register (for locating the calling process inside the kernel).
             \param[in]  ticks: Time to sleep (ticks).
         */
-        virtual void OnTaskSleep(size_t caller_SP, Timeout ticks) = 0;
+        virtual void OnTaskSleep(TReg caller_SP, Timeout ticks) = 0;
 
         /*! \brief      Called from the Thread process when task finished (its Run function exited by return).
             \param[out] stack: Stack of the exited task.
@@ -570,13 +575,13 @@ public:
             \param[in]  mutex: IMutex instance (passed by Wait).
             \param[in]  timeout: Time to sleep (ticks).
         */
-        virtual IWaitObject *OnTaskWait(size_t caller_SP, ISyncObject *sync_obj, IMutex *mutex, Timeout timeout) = 0;
+        virtual IWaitObject *OnTaskWait(TReg caller_SP, ISyncObject *sync_obj, IMutex *mutex, Timeout timeout) = 0;
 
         /*! \brief      Called from the Thread process when for getting task/thread id of the process.
             \param[in]  caller_SP: Value of Stack Pointer (SP) register (for locating the calling process inside the kernel).
             \return     Task/thread id of the process.
         */
-        virtual TId OnGetTid(size_t caller_SP) const = 0;
+        virtual TId OnGetTid(TReg caller_SP) const = 0;
     };
 
     /*! \class IEventOverrider
@@ -668,7 +673,7 @@ public:
         \note      Valid for a Thread process only.
         \return    Current value of the Stack Pointer (SP) of the calling process.
     */
-    virtual size_t GetCallerSP() const = 0;
+    virtual TReg GetCallerSP() const = 0;
 
     /*! \brief     Get thread Id.
         \return    Thread Id.

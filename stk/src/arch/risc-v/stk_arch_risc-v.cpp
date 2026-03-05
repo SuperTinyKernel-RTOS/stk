@@ -66,17 +66,6 @@ static __stk_forceinline void __ISB()
 //! Put core into a low-power state (similar to ARM's __WFI).
 static __stk_forceinline void __WFI() { __asm volatile("wfi"); }
 
-//! Check if caller is in Handler Mode, i.e. inside ISR.
-static __stk_forceinline bool IsHandlerMode()
-{
-    uintptr_t cause;
-    __asm__ volatile("csrr %0, mcause" : "=r"(cause));
-
-    // the most significant bit (MSB) of mcause indicates if the trap was caused by an interrupt (1) or an exception (0)
-    const uintptr_t MSB_MASK = (uintptr_t)1 << (__riscv_xlen - 1);
-    return ((cause & MSB_MASK) != 0);
-}
-
 #define STK_RISCV_CRITICAL_SECTION_START(SES) do { SES = ::HW_EnterCriticalSection(); __DSB(); __ISB(); } while (0)
 #define STK_RISCV_CRITICAL_SECTION_END(SES) do { __DSB(); __ISB(); ::HW_ExitCriticalSection(SES); } while (0)
 
@@ -228,9 +217,9 @@ static __stk_forceinline void HW_EnableIrq()
 /*! \brief  Enter critical section.
     \return Session value which has to be supplied to HW_ExitCriticalSection().
 */
-static __stk_forceinline size_t HW_EnterCriticalSection()
+static __stk_forceinline TReg HW_EnterCriticalSection()
 {
-    size_t ses;
+    TReg ses;
 
     __asm volatile("csrrci %0, mstatus, %1"
     : "=r"(ses)
@@ -243,7 +232,7 @@ static __stk_forceinline size_t HW_EnterCriticalSection()
 /*! \brief     Exit critical section.
     \param[in] ses: Session value obtained by HW_EnterCriticalSection().
 */
-static __stk_forceinline void HW_ExitCriticalSection(size_t ses)
+static __stk_forceinline void HW_ExitCriticalSection(TReg ses)
 {
     __asm volatile("csrrs zero, mstatus, %0"
     : /* output: none */
@@ -308,9 +297,9 @@ static __stk_forceinline void HW_SetMtimecmp(uint64_t advance)
 
 /*! \brief Get SP of the calling process.
 */
-static __stk_forceinline size_t HW_GetCallerSP()
+static __stk_forceinline TReg HW_GetCallerSP()
 {
-    size_t sp;
+    TReg sp;
 
     // load SP into sp variable
     __asm volatile(
@@ -355,7 +344,7 @@ static struct Context : public PlatformContext
         // init ISR's stack
         {
             StackMemoryWrapper<STK_RISCV_ISR_STACK_SIZE> stack_isr_mem(&m_stack_isr_mem);
-            m_stack_isr.SP   = (size_t)InitStackMemory(&stack_isr_mem);
+            m_stack_isr.SP   = hw::PtrToTReg(InitStackMemory(&stack_isr_mem));
             m_stack_isr.mode = ACCESS_PRIVILEGED;
         }
 
@@ -386,7 +375,7 @@ static struct Context : public PlatformContext
     __stk_forceinline void EnterCriticalSection()
     {
         // disable local interrupts and save state
-        size_t current_ses;
+        TReg current_ses;
         STK_RISCV_CRITICAL_SECTION_START(current_ses);
 
         if (m_csu_nesting == 0)
@@ -409,7 +398,7 @@ static struct Context : public PlatformContext
         if (m_csu_nesting == 0)
         {
             // capture the state before releasing lock
-            size_t ses_to_restore = m_csu;
+            TReg ses_to_restore = m_csu;
 
             // release global lock
             STK_RISCV_SPIN_LOCK_UNLOCK(g_CsuLock);
@@ -430,7 +419,7 @@ static struct Context : public PlatformContext
     eovrd_t  *m_overrider;     //!< platform events overrider
     sehndl_t *m_specific;      //!< platform-specific event handler
     int32_t   m_tick_period;   //!< system tick periodicity (microseconds, ticks)
-    size_t    m_csu;           //!< user critical session
+    TReg    m_csu;           //!< user critical session
     uint32_t  m_csu_nesting;   //!< depth of user critical session nesting
     bool      m_starting;      //!< 'true' when in is being started
     bool      m_started;       //!< 'true' when in started state
@@ -441,7 +430,7 @@ g_Context[_STK_ARCH_CPU_COUNT];
 void PlatformRiscV::ProcessTick()
 {
 #ifdef _STK_RISCV_USE_PENDSV
-    size_t cs;
+    TReg cs;
     STK_RISCV_CRITICAL_SECTION_START(cs);
 
     GetContext().OnTick();
@@ -720,6 +709,18 @@ static __stk_forceinline void LoadIsrSP()
     : /* clobbers: none */);
 }
 
+static __stk_forceinline bool IsHandlerMode()
+{
+    TReg current_sp = HW_GetCallerSP();
+
+    // get the bounds of the ISR stack from our Context
+    // note: STK uses StackMemoryWrapper, so we check against that memory block
+    const TReg isr_stack_base = (TReg)&GetContext().m_stack_isr_mem;
+    const TReg isr_stack_top  = isr_stack_base + STK_RISCV_ISR_STACK_SIZE;
+
+    return ((current_sp >= isr_stack_base) && (current_sp < isr_stack_top));
+}
+
 __stk_forceinline void OnTaskStart()
 {
     LoadContext();
@@ -744,7 +745,7 @@ extern "C" STK_RISCV_ISR_SECTION __stk_attr_used void TrySwitchContext() // __st
 STK_RISCV_ISR void _STK_SYSTICK_HANDLER()
 {
     // save SP before switching to the main
-    size_t sp = HW_GetCallerSP();
+    TReg sp = HW_GetCallerSP();
 
     // load SP of the main stack to handle ISR
     LoadIsrSP();
@@ -816,7 +817,7 @@ static __stk_forceinline void StartScheduling()
 
 STK_RISCV_ISR void _STK_SVC_HANDLER()
 {
-    size_t cause;
+    TReg cause;
     __asm volatile("csrr %0, mcause"
     : "=r"(cause)
     : /* input : none */
@@ -842,7 +843,7 @@ STK_RISCV_ISR void _STK_SVC_HANDLER()
                 GetContext().m_specific->OnException(cause);
 
             // switch to the next instruction of the caller space (PC) after the return
-            write_csr(mepc, read_csr(mepc) + sizeof(size_t));
+            write_csr(mepc, read_csr(mepc) + sizeof(TReg));
         }
         else
         {
@@ -880,7 +881,7 @@ static void OnTaskRun(ITask *task)
 
 static void OnTaskExit()
 {
-    size_t cs;
+    TReg cs;
     STK_RISCV_CRITICAL_SECTION_START(cs);
 
     GetContext().m_handler->OnTaskExit(GetContext().m_stack_active);
@@ -951,35 +952,35 @@ bool PlatformRiscV::InitStack(EStackType stack_type, Stack *stack, IStackMemory 
     STK_ASSERT(stack_memory->GetStackSize() > (STK_RISCV_REGISTER_COUNT + STK_SERVICE_SLOTS));
 
     // initialize stack memory
-    size_t *stack_top = PlatformContext::InitStackMemory(stack_memory);
+    TReg *stack_top = PlatformContext::InitStackMemory(stack_memory);
 
     // initialize Stack Pointer (SP)
-    stack->SP = (size_t)(stack_top - (STK_RISCV_REGISTER_COUNT + STK_SERVICE_SLOTS));
+    stack->SP = hw::PtrToTReg(stack_top - (STK_RISCV_REGISTER_COUNT + STK_SERVICE_SLOTS));
 
-    size_t MEPC, RA, X10;
-    size_t MSTATUS = MSTATUS_MPP | MSTATUS_MPIE | (STK_RISCV_FP != 0 ? (MSTATUS_FS | MSTATUS_XS) : 0);
+    TReg MEPC, RA, X10;
+    TReg MSTATUS = MSTATUS_MPP | MSTATUS_MPIE | (STK_RISCV_FP != 0 ? (MSTATUS_FS | MSTATUS_XS) : 0);
 #if (STK_RISCV_FP != 0)
-    size_t FSR = 0;
+    TReg FSR = 0;
 #endif
 
     // initialize registers for the user task's first start
     switch (stack_type)
     {
     case STACK_USER_TASK: {
-        MEPC = (size_t)&OnTaskRun;
-        RA   = (size_t)&OnTaskExit;
-        X10  = (size_t)user_task;
+        MEPC = hw::PtrToTReg(&OnTaskRun);
+        RA   = hw::PtrToTReg(&OnTaskExit);
+        X10  = hw::PtrToTReg(user_task);
         break; }
 
     case STACK_SLEEP_TRAP: {
-        MEPC = (size_t)(GetContext().m_overrider != NULL ? &OnSchedulerSleepOverride : &OnSchedulerSleep);
-        RA   = (size_t)STK_STACK_MEMORY_FILLER; // should not attempt to exit
+        MEPC = hw::PtrToTReg(GetContext().m_overrider != NULL ? &OnSchedulerSleepOverride : &OnSchedulerSleep);
+        RA   = STK_STACK_MEMORY_FILLER; // should not attempt to exit
         X10  = 0;
         break; }
 
     case STACK_EXIT_TRAP: {
-        MEPC = (size_t)&OnSchedulerExit;
-        RA   = (size_t)STK_STACK_MEMORY_FILLER; // should not attempt to exit
+        MEPC = hw::PtrToTReg(&OnSchedulerExit);
+        RA   = STK_STACK_MEMORY_FILLER; // should not attempt to exit
         X10  = 0;
         break; }
 
@@ -1055,7 +1056,7 @@ void PlatformRiscV::SetEventOverrider(IEventOverrider *overrider)
     GetContext().m_overrider = overrider;
 }
 
-size_t PlatformRiscV::GetCallerSP() const
+TReg PlatformRiscV::GetCallerSP() const
 {
     return ::HW_GetCallerSP();
 }

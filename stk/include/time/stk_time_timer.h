@@ -275,13 +275,13 @@ private:
         EAccessMode GetAccessMode() const { return m_mode; }
         void OnDeadlineMissed(uint32_t duration) { (void)duration; }
         int32_t GetWeight() const         { return m_weight; }
-        size_t GetId() const              { return 0; }
+        TId GetId() const                 { return 0; }
         const char *GetTraceName() const  { return nullptr; }
 
         // IStackMemory
-        size_t *GetStack() const           { return m_stack; }
-        uint32_t GetStackSize() const      { return m_stack_size; }
-        uint32_t GetStackSizeBytes() const { return m_stack_size * sizeof(size_t); }
+        TReg *GetStack() const           { return m_stack; }
+        size_t GetStackSize() const      { return m_stack_size; }
+        size_t GetStackSizeBytes() const { return m_stack_size * sizeof(size_t); }
 
         void Initialize(TimerHost *host, size_t *stack, size_t stack_size, EAccessMode mode, TimerFuncType func)
         {
@@ -300,7 +300,7 @@ private:
 
         TimerFuncType m_func;
         TimerHost    *m_host;
-        size_t       *m_stack;
+        TReg         *m_stack;
         size_t        m_stack_size;
         EAccessMode   m_mode;
         int32_t       m_weight;

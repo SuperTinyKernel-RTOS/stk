@@ -32,7 +32,7 @@ public:
     void ProcessTick();
     void ProcessHardFault();
     void SetEventOverrider(IEventOverrider *overrider);
-    size_t GetCallerSP() const;
+    TReg GetCallerSP() const;
     TId GetTid() const;
 };
 

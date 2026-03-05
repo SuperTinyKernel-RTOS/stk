@@ -446,12 +446,12 @@ class Kernel : public IKernel, private IPlatform::IEventHandler
         /*! \brief     Check if Stack Pointer (SP) belongs to this task.
             \param[in] SP: Stack Pointer.
         */
-        bool IsMemoryOfSP(size_t SP) const
+        bool IsMemoryOfSP(TReg SP) const
         {
-            size_t *start = m_user->GetStack();
-            size_t *end   = start + m_user->GetStackSize();
+            TReg *start = m_user->GetStack();
+            TReg *end   = start + m_user->GetStackSize();
 
-            return (SP >= (size_t)start) && (SP <= (size_t)end);
+            return (SP >= hw::PtrToTReg(start)) && (SP <= hw::PtrToTReg(end));
         }
 
         /*! \brief     Initialize task with HRT info.
@@ -1073,7 +1073,7 @@ protected:
         \param[in] SP: Stack pointer.
         \return    Kernel task.
     */
-    __stk_attr_noinline KernelTask *FindTaskBySP(size_t SP) const
+    __stk_attr_noinline KernelTask *FindTaskBySP(TReg SP) const
     {
         STK_ASSERT(m_task_now != nullptr);
 
@@ -1175,7 +1175,7 @@ protected:
         return UpdateFsmState(idle, active);
     }
 
-    void OnTaskSwitch(size_t caller_SP)
+    void OnTaskSwitch(TReg caller_SP)
     {
         // yield with 2 ticks: 1 will be incremented on the next OnTick call by UpdateTasks
         // and remaining 1 will cause a context switch by UpdateFsmState when strategy detects
@@ -1183,7 +1183,7 @@ protected:
         OnTaskSleep(caller_SP, 2);
     }
 
-    void OnTaskSleep(size_t caller_SP, Timeout ticks)
+    void OnTaskSleep(TReg caller_SP, Timeout ticks)
     {
         KernelTask *task = FindTaskBySP(caller_SP);
         STK_ASSERT(task != nullptr);
@@ -1223,7 +1223,7 @@ protected:
         }
     }
 
-    IWaitObject *OnTaskWait(size_t caller_SP, ISyncObject *sync_obj, IMutex *mutex, Timeout timeout)
+    IWaitObject *OnTaskWait(TReg caller_SP, ISyncObject *sync_obj, IMutex *mutex, Timeout timeout)
     {
         if (_Mode & KERNEL_SYNC)
         {
@@ -1266,7 +1266,7 @@ protected:
         }
     }
 
-    TId OnGetTid(size_t caller_SP) const
+    TId OnGetTid(TReg caller_SP) const
     {
         KernelTask *task = FindTaskBySP(caller_SP);
         STK_ASSERT(task != nullptr);
@@ -1710,7 +1710,7 @@ protected:
         typedef SleepTrapStackMemory::MemoryType Memory;
 
         Stack  stack;  //!< Stack descriptor (SP register value + access mode). Initialised by InitTraps() on every Start().
-        Memory memory; //!< Backing stack memory array. Size: STK_SLEEP_TRAP_STACK_SIZE elements of size_t.
+        Memory memory; //!< Backing stack memory array. Size: STK_SLEEP_TRAP_STACK_SIZE elements of TReg.
     };
 
     /*! \class ExitTrapStack
@@ -1726,7 +1726,7 @@ protected:
         typedef ExitTrapStackMemory::MemoryType Memory;
 
         Stack  stack;  //!< Stack descriptor (SP register value + access mode). Initialised by InitTraps() on every Start().
-        Memory memory; //!< Backing stack memory array. Size: STACK_SIZE_MIN elements of size_t.
+        Memory memory; //!< Backing stack memory array. Size: STACK_SIZE_MIN elements of TReg.
     };
 
     /*! \typedef SyncObjectList

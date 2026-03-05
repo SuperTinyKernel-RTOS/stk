@@ -255,7 +255,7 @@
            Can be overridden by defining STK_STACK_MEMORY_FILLER before including this header or in stk_config.h.
 */
 #ifndef STK_STACK_MEMORY_FILLER
-    #define STK_STACK_MEMORY_FILLER ((size_t)(sizeof(size_t) <= 4 ? 0xdeadbeef : 0xdeadbeefdeadbeef))
+    #define STK_STACK_MEMORY_FILLER ((TReg)(sizeof(TReg) <= 4 ? 0xdeadbeef : 0xdeadbeefdeadbeef))
 #endif
 
 /*! \def   _STK_ARCH_CPU_COUNT
@@ -269,7 +269,7 @@
 #endif
 
 /*! \def   STK_STACK_SIZE_MIN
-    \brief Minimum stack size in elements of \c size_t, shared by all stack allocation lower-bound checks.
+    \brief Minimum stack size in elements of \c TReg, shared by all stack allocation lower-bound checks.
     \see   TrapStackMemory
     \note  This is the smallest stack that can correctly save and restore all CPU registers during
            a context switch or service trap. The required size depends on the number of registers
@@ -295,7 +295,7 @@
 #endif
 
 /*! \def   STK_SLEEP_TRAP_STACK_SIZE
-    \brief Stack size for the sleep trap in elements of \c size_t (default: STK_STACK_SIZE_MIN).
+    \brief Stack size for the sleep trap in elements of \c TReg (default: STK_STACK_SIZE_MIN).
     \see   Kernel::SleepTrapStackMemory
     \note  If IEventOverrider::OnSleep() is overridden with a non-trivial implementation (e.g.
            calling platform-specific low-power APIs that use the stack), increase this value

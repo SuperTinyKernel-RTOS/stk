@@ -381,6 +381,41 @@ __stk_forceinline void WriteVolatile64(volatile T *addr, T value)
     }
 }
 
+/*! \brief     Cast a pointer to a CPU register-width integer.
+    \tparam    T: The type of the object pointed to.
+    \param[in] ptr: The pointer to be converted.
+    \return    The numeric value of the pointer as a TReg.
+    \note      This operation is used to store pointers within task context structures
+               or stack frames where raw register values are required.
+    \note      MISRA deviation: Rule 5-2-7 (reinterpret_cast). This is a mechanical
+               necessity for low-level kernel operations where the hardware requires
+               integral values for address registers.
+    \see       IntToPtr
+*/
+template <typename T>
+__stk_forceinline TReg PtrToTReg(T *ptr) noexcept
+{
+    STK_STATIC_ASSERT(sizeof(TReg) == sizeof(T *));
+    return reinterpret_cast<TReg>(ptr);
+}
+
+/*! \brief     Cast a CPU register-width integer back to a pointer.
+    \tparam    T: The type of the object the resulting pointer will address.
+    \param[in] value: The register-width integer (TReg) to be converted.
+    \return    A pointer of type T* addressing the memory location specified by the value.
+    \note      This is the inverse of PtrToTReg and is primarily used when restoring
+               a task's context from a saved stack frame.
+    \note      MISRA deviation: Rule 5-2-7 (reinterpret_cast). Required for restoring
+               pointer types from numeric CPU context structures.
+    \see       PtrToTReg
+*/
+template <typename T>
+__stk_forceinline T *TRegToPtr(TReg value) noexcept
+{
+    STK_STATIC_ASSERT(sizeof(TReg) == sizeof(T *));
+    return reinterpret_cast<T *>(value);
+}
+
 } // namespace hw
 } // namespace stk
 

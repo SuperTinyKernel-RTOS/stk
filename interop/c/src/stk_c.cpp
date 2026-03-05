@@ -28,17 +28,17 @@ public:
     EAccessMode GetAccessMode() const { return m_mode; }
     void OnDeadlineMissed(uint32_t duration) { (void)duration; }
     int32_t GetWeight() const { return m_weight; }
-    size_t GetId() const  { return m_tid; }
+    stk_tid_t GetId() const  { return m_tid; }
     const char *GetTraceName() const  { return m_tname; }
 
     // IStackMemory
-    size_t *GetStack() const { return m_stack; }
-    uint32_t GetStackSize() const { return m_stack_size; }
-    uint32_t GetStackSizeBytes() const { return m_stack_size * sizeof(size_t); }
+    stk_reg_t *GetStack() const { return m_stack; }
+    size_t GetStackSize() const { return m_stack_size; }
+    size_t GetStackSizeBytes() const { return m_stack_size * sizeof(stk_reg_t); }
 
     void Initialize(stk_task_entry_t func,
                     void       *user_data,
-                    size_t     *stack,
+                    stk_reg_t  *stack,
                     size_t      stack_size,
                     EAccessMode mode)
     {
@@ -51,7 +51,7 @@ public:
     }
 
     void SetWeight(int32_t weight) { m_weight = weight; }
-    void SetId(uint32_t tid) { m_tid = tid; }
+    void SetId(stk_tid_t tid) { m_tid = tid; }
     void SetName(const char *tname) { m_tname = tname; }
 
 private:
@@ -59,11 +59,11 @@ private:
 
     stk_task_entry_t m_func;
     void            *m_user_data;
-    size_t          *m_stack;
+    stk_reg_t       *m_stack;
     size_t           m_stack_size;
     EAccessMode      m_mode;
     int32_t          m_weight;
-    uint32_t         m_tid;
+    stk_tid_t        m_tid;
     const char      *m_tname;
 };
 
@@ -91,7 +91,7 @@ static TaskSlot s_Tasks[STK_C_TASKS_MAX];
 
 static stk_task_t *AllocateTask(stk_task_entry_t entry,
                                 void *arg,
-                                size_t *stack,
+                                stk_reg_t *stack,
                                 uint32_t stack_size,
                                 EAccessMode mode)
 {
@@ -142,10 +142,10 @@ extern "C" {
 #define STK_KERNEL_CASE(X) \
     case X: \
     { \
-        static_assert(sizeof(STK_C_KERNEL_TYPE_CPU_##X) % sizeof(size_t) == 0, \
-                      "Kernel memory size must be multiple of size_t"); \
+        static_assert(sizeof(STK_C_KERNEL_TYPE_CPU_##X) % sizeof(stk_reg_t) == 0, \
+                      "Kernel memory size must be multiple of stk_reg_t"); \
         alignas(alignof(STK_C_KERNEL_TYPE_CPU_##X)) /* instead of __stk_c_stack_attr */ \
-        static size_t kernel_##X##_mem[sizeof(STK_C_KERNEL_TYPE_CPU_##X) / sizeof(size_t)]; \
+        static stk_reg_t kernel_##X##_mem[sizeof(STK_C_KERNEL_TYPE_CPU_##X) / sizeof(stk_reg_t)]; \
         IKernel *kernel = new (kernel_##X##_mem) STK_C_KERNEL_TYPE_CPU_##X(); \
         return reinterpret_cast<stk_kernel_t *>(kernel); \
     }
@@ -260,7 +260,7 @@ void stk_kernel_add_task_hrt(stk_kernel_t *k,
 // ---------------------------------------------------------------------------
 stk_task_t *stk_task_create_privileged(stk_task_entry_t entry,
                                        void *arg,
-                                       size_t *stack,
+                                       stk_reg_t *stack,
                                        uint32_t stack_size)
 {
     STK_ASSERT(entry != nullptr);
@@ -272,7 +272,7 @@ stk_task_t *stk_task_create_privileged(stk_task_entry_t entry,
 
 stk_task_t *stk_task_create_user(stk_task_entry_t entry,
                                  void *arg,
-                                 size_t *stack,
+                                 stk_reg_t *stack,
                                  uint32_t stack_size)
 {
     STK_ASSERT(entry != nullptr);
@@ -321,14 +321,14 @@ void stk_task_destroy(stk_task_t *task)
 // ---------------------------------------------------------------------------
 // Kernel services (available inside tasks)
 // ---------------------------------------------------------------------------
-size_t  stk_tid(void)             { return stk::GetTid(); }
-int64_t stk_ticks(void)           { return stk::GetTicks(); }
-int32_t stk_tick_resolution(void) { return stk::GetTickResolution(); }
-int64_t stk_time_now_ms(void)     { return stk::GetTimeNowMsec(); }
-int64_t stk_ticks_from_ms(int64_t msec) { return stk_ticks_from_ms_r(msec, stk_tick_resolution()); }
-void    stk_delay_ms(uint32_t ms) { stk::Delay(ms); }
-void    stk_sleep_ms(uint32_t ms) { stk::Sleep(ms); }
-void    stk_yield(void)           { stk::Yield(); }
+stk_tid_t stk_tid(void)             { return stk::GetTid(); }
+int64_t   stk_ticks(void)           { return stk::GetTicks(); }
+int32_t   stk_tick_resolution(void) { return stk::GetTickResolution(); }
+int64_t   stk_time_now_ms(void)     { return stk::GetTimeNowMsec(); }
+int64_t   stk_ticks_from_ms(int64_t msec) { return stk_ticks_from_ms_r(msec, stk_tick_resolution()); }
+void      stk_delay_ms(uint32_t ms) { stk::Delay(ms); }
+void      stk_sleep_ms(uint32_t ms) { stk::Sleep(ms); }
+void      stk_yield(void)           { stk::Yield(); }
 
 // ---------------------------------------------------------------------------
 // Thread-Local Storage (TLS) API
