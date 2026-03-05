@@ -187,7 +187,7 @@ enum ESvc
 #endif
 
 // Declarations:
-extern "C" void SVC_Handler_Main(size_t *svc_args) __stk_attr_used; // __stk_attr_used required for Link-Time Optimization (-flto)
+extern "C" void SVC_Handler_Main(TReg *svc_args) __stk_attr_used; // __stk_attr_used required for Link-Time Optimization (-flto)
 
 //! Check if caller is in Handler Mode (IPSR != 0), i.e. inside ISR.
 static __stk_forceinline bool IsHandlerMode() { return (__get_IPSR() != 0); }
@@ -206,7 +206,7 @@ static __stk_forceinline bool IsPrivilegedThreadMode()
     \note   Unprivileged mode only. No input, but returns a value (will be read from R0).
     \return Previous value of BASEPRI.
 */
-__stk_attr_naked uint32_t SVC_EnterCritical()
+__stk_attr_naked TReg SVC_EnterCritical()
 {
     STK_CORTEX_M_UNPRIV_ENTER_CRITICAL();
     STK_CORTEX_M_EXIT_FUNCTION();
@@ -217,7 +217,7 @@ __stk_attr_naked uint32_t SVC_EnterCritical()
     \note      Unprivileged mode only. Input 'state' is passed in R0; no return value.
     \see       SVC_EnterCritical
 */
-__stk_attr_naked void SVC_ExitCritical(uint32_t /*prev*/)
+__stk_attr_naked void SVC_ExitCritical(TReg /*prev*/)
 {
     STK_CORTEX_M_UNPRIV_EXIT_CRITICAL();
     STK_CORTEX_M_EXIT_FUNCTION();
@@ -226,7 +226,7 @@ __stk_attr_naked void SVC_ExitCritical(uint32_t /*prev*/)
 /*! \brief  Get SP of the calling process.
     \return SP register value.
 */
-static __stk_forceinline size_t GetCallerSP()
+static __stk_forceinline TReg GetCallerSP()
 {
     // __get_PSP() returns 0 in unprivileged mode, thus get SP (R13) which is available for both modes
 #if 0
@@ -652,7 +652,7 @@ void Context::OnStart()
     m_started = true;
 }
 
-void SVC_Handler_Main(size_t *svc_args)
+void SVC_Handler_Main(TReg *svc_args)
 {
     // Stack frame layout: r0, r1, r2, r3, r12, r14, the return address and xPSR, First argument (r0) is svc_args[0]
     // - R0 = stack[0]
@@ -861,16 +861,16 @@ bool PlatformArmCortexM::InitStack(EStackType stack_type, Stack *stack, IStackMe
     STK_ASSERT(stack_memory->GetStackSize() > STK_CORTEX_M_REGISTER_COUNT);
 
     // initialize stack memory
-    size_t *stack_top = Context::InitStackMemory(stack_memory);
+    TReg *stack_top = Context::InitStackMemory(stack_memory);
 
     // initialize Stack Pointer (SP)
-    stack->SP = (size_t)(stack_top - STK_CORTEX_M_REGISTER_COUNT);
+    stack->SP = hw::PtrToTReg(stack_top - STK_CORTEX_M_REGISTER_COUNT);
 
     // xPSR, PC, LR, R12, R3, R2, R1, R0
     // -1    -2  -3  -4   -5  -6  -7  -8
 
-    size_t xPSR = (1 << 24); // set T bit of EPSR sub-regiser to enable execution of instructions (https://developer.arm.com/documentation/ddi0413/c/programmer-s-model/registers/special-purpose-program-status-registers--xpsr-)
-    size_t PC, LR, R0;
+    TReg xPSR = (1 << 24); // set T bit of EPSR sub-regiser to enable execution of instructions (https://developer.arm.com/documentation/ddi0413/c/programmer-s-model/registers/special-purpose-program-status-registers--xpsr-)
+    TReg PC, LR, R0;
 
     stack_top[-1] = xPSR;
 
@@ -878,20 +878,20 @@ bool PlatformArmCortexM::InitStack(EStackType stack_type, Stack *stack, IStackMe
     switch (stack_type)
     {
     case STACK_USER_TASK: {
-        PC = (size_t)&OnTaskRun & ~0x1UL; // "Bit [0] is always 0, so instructions are always aligned to halfword boundaries" (https://developer.arm.com/documentation/ddi0413/c/programmer-s-model/registers/general-purpose-registers)
-        LR = (size_t)&OnTaskExit;
-        R0 = (size_t)user_task;
+        PC = hw::PtrToTReg(&OnTaskRun) & ~0x1UL; // "Bit [0] is always 0, so instructions are always aligned to halfword boundaries" (https://developer.arm.com/documentation/ddi0413/c/programmer-s-model/registers/general-purpose-registers)
+        LR = hw::PtrToTReg(&OnTaskExit);
+        R0 = hw::PtrToTReg(user_task);
         break; }
 
     case STACK_SLEEP_TRAP: {
-        PC = (size_t)(GetContext().m_overrider != nullptr ? &OnSchedulerSleepOverride : &OnSchedulerSleep) & ~0x1UL;
-        LR = (size_t)STK_STACK_MEMORY_FILLER; // should not attempt to exit
+        PC = hw::PtrToTReg(GetContext().m_overrider != nullptr ? &OnSchedulerSleepOverride : &OnSchedulerSleep) & ~0x1UL;
+        LR = STK_STACK_MEMORY_FILLER; // should not attempt to exit
         R0 = 0;
         break; }
 
     case STACK_EXIT_TRAP: {
-        PC = (size_t)&OnSchedulerExit & ~0x1UL;
-        LR = (size_t)STK_STACK_MEMORY_FILLER; // should not attempt to exit
+        PC = hw::PtrToTReg(&OnSchedulerExit) & ~0x1UL;
+        LR = STK_STACK_MEMORY_FILLER; // should not attempt to exit
         R0 = 0;
         break; }
 
@@ -985,7 +985,7 @@ void PlatformArmCortexM::SetEventOverrider(IEventOverrider *overrider)
     GetContext().m_overrider = overrider;
 }
 
-size_t PlatformArmCortexM::GetCallerSP() const
+TReg PlatformArmCortexM::GetCallerSP() const
 {
     return ::GetCallerSP();
 }

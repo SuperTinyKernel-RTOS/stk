@@ -136,7 +136,7 @@ static struct Context : public PlatformContext
         void InitThread()
         {
             // simulate stack size limitation
-            uint32_t stack_size = m_task->GetStackSize() * sizeof(size_t);
+            uint32_t stack_size = m_task->GetStackSize() * sizeof(TReg);
 
             m_thread = CreateThread(nullptr, stack_size, &OnTaskRun, this, CREATE_SUSPENDED, &m_thread_id);
         }
@@ -164,7 +164,7 @@ static struct Context : public PlatformContext
     void Sleep(Timeout ticks);
     IWaitObject *Wait(ISyncObject *sync_obj, IMutex *mutex, Timeout timeout);
     void Stop();
-    size_t GetCallerSP() const;
+    TReg GetCallerSP() const;
     TId GetTid() const;
     
     __stk_forceinline uintptr_t GetTls() 
@@ -267,7 +267,7 @@ void Context::ConfigureTime()
 void Context::StartActiveTask()
 {
     STK_ASSERT(m_stack_active != nullptr);
-    TaskContext *active_task = reinterpret_cast<TaskContext *>(m_stack_active->SP);
+    TaskContext *active_task = hw::TRegToPtr<TaskContext>(m_stack_active->SP);
     STK_ASSERT(active_task != nullptr);
 
     ResumeThread(active_task->m_thread);
@@ -364,7 +364,7 @@ void Context::SwitchContext()
     // suspend Idle thread
     if ((m_stack_idle != m_sleep_trap) && (m_stack_idle != m_exit_trap))
     {
-        TaskContext *idle_task = reinterpret_cast<TaskContext *>(m_stack_idle->SP);
+        TaskContext *idle_task = hw::TRegToPtr<TaskContext>(m_stack_idle->SP);
         STK_ASSERT(idle_task != nullptr);
 
         SuspendThread(idle_task->m_thread);
@@ -385,16 +385,16 @@ void Context::SwitchContext()
     }
     else
     {
-        TaskContext *active_task = reinterpret_cast<TaskContext *>(m_stack_active->SP);
+        TaskContext *active_task = hw::TRegToPtr<TaskContext>(m_stack_active->SP);
         STK_ASSERT(active_task != nullptr);
 
         ResumeThread(active_task->m_thread);
     }
 }
 
-size_t Context::GetCallerSP() const
+TReg Context::GetCallerSP() const
 {
-    size_t caller_sp = 0;
+    TReg caller_sp = 0;
     DWORD calling_tid = GetCurrentThreadId();
 
     Win32ScopedCriticalSection __cs(const_cast<STK_X86_WIN32_CRITICAL_SECTION &>(m_cs));
@@ -403,7 +403,7 @@ size_t Context::GetCallerSP() const
     {
         if ((*itr)->m_thread_id == calling_tid)
         {
-            caller_sp = reinterpret_cast<size_t>(STK_X86_WIN32_GET_SP((*itr)->m_task->GetStack()));
+            caller_sp = hw::PtrToTReg(STK_X86_WIN32_GET_SP((*itr)->m_task->GetStack()));
             break;
         }
     }
@@ -444,13 +444,11 @@ bool Context::InitStack(EStackType stack_type, Stack *stack, IStackMemory *stack
 {
     InitStackMemory(stack_memory);
 
-    size_t *stack_top = STK_X86_WIN32_GET_SP(stack_memory->GetStack());
+    TaskContext *ctx = reinterpret_cast<TaskContext *>(STK_X86_WIN32_GET_SP(stack_memory->GetStack()));
 
     switch (stack_type)
     {
     case STACK_USER_TASK: {
-        TaskContext *ctx = (TaskContext *)stack_top;
-
         ctx->Initialize(user_task, stack);
 
         m_tasks.push_back(ctx);
@@ -466,7 +464,7 @@ bool Context::InitStack(EStackType stack_type, Stack *stack, IStackMemory *stack
         break; }
     }
 
-    stack->SP = reinterpret_cast<size_t>(stack_top);
+    stack->SP = hw::PtrToTReg(ctx);
 
     return true;
 }
@@ -533,7 +531,7 @@ void PlatformX86Win32::SetEventOverrider(IEventOverrider *overrider)
     g_Context.m_overrider = overrider;
 }
 
-size_t PlatformX86Win32::GetCallerSP() const
+TReg PlatformX86Win32::GetCallerSP() const
 {
     return g_Context.GetCallerSP();
 }

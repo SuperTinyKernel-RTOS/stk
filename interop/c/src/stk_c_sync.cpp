@@ -265,9 +265,9 @@ void stk_sem_signal(stk_sem_t *sem)
 }
 
 // ---------------------------------------------------------------------------
-// Pipe (template instantiation for size_t, STK_PIPE_SIZE)
+// Pipe (template instantiation for stk_reg_t, STK_PIPE_SIZE)
 // ---------------------------------------------------------------------------
-typedef Pipe<size_t, STK_PIPE_SIZE> PipeX;
+typedef Pipe<stk_reg_t, STK_PIPE_SIZE> PipeX;
 
 struct stk_pipe_t
 {
@@ -290,14 +290,14 @@ void stk_pipe_destroy(stk_pipe_t *pipe)
         pipe->~stk_pipe_t();
 }
 
-bool stk_pipe_write(stk_pipe_t *pipe, size_t data, int32_t timeout)
+bool stk_pipe_write(stk_pipe_t *pipe, stk_reg_t data, int32_t timeout)
 {
     STK_ASSERT(pipe != nullptr);
 
     return pipe->handle.Write(data, timeout);
 }
 
-bool stk_pipe_read(stk_pipe_t *pipe, size_t *data, int32_t timeout)
+bool stk_pipe_read(stk_pipe_t *pipe, stk_reg_t *data, int32_t timeout)
 {
     STK_ASSERT(pipe != nullptr);
     STK_ASSERT(data != nullptr);
@@ -305,14 +305,14 @@ bool stk_pipe_read(stk_pipe_t *pipe, size_t *data, int32_t timeout)
     return pipe->handle.Read(*data, timeout);
 }
 
-size_t stk_pipe_write_bulk(stk_pipe_t *pipe, const size_t *src, size_t count, int32_t timeout)
+size_t stk_pipe_write_bulk(stk_pipe_t *pipe, const stk_reg_t *src, size_t count, int32_t timeout)
 {
     STK_ASSERT(pipe != nullptr);
 
     return pipe->handle.WriteBulk(src, count, timeout);
 }
 
-size_t stk_pipe_read_bulk(stk_pipe_t *pipe, size_t *dst, size_t count, int32_t timeout)
+size_t stk_pipe_read_bulk(stk_pipe_t *pipe, stk_reg_t *dst, size_t count, int32_t timeout)
 {
     STK_ASSERT(pipe != nullptr);
 

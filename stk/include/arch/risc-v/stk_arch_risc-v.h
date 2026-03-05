@@ -29,7 +29,7 @@ public:
         /*! \brief Called by ISR handler on IRQ_XXX (see encoding.h).
             \note if scheduler is not started and ecall is invoked then
         */
-        virtual bool OnException(size_t cause) = 0;
+        virtual bool OnException(TReg cause) = 0;
     };
 
     void Initialize(IEventHandler *event_handler, IKernelService *service, uint32_t resolution_us, Stack *exit_trap);
@@ -43,7 +43,7 @@ public:
     void ProcessTick();
     void ProcessHardFault();
     void SetEventOverrider(IEventOverrider *overrider);
-    size_t GetCallerSP() const;
+    TReg GetCallerSP() const;
     TId GetTid() const;
 
     void SetSpecificEventHandler(ISpecificEventHandler *handler);
