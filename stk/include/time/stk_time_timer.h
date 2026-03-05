@@ -256,6 +256,11 @@ public:
     Ticks GetTimeNow() const { return hw::ReadVolatile64(&m_now); }
 
 private:
+    /*! \typedef TimerFuncType
+        \brief   Timer task function prototype.
+    */
+    typedef void (*TimerFuncType) (TimerHost *host);
+
     /*! \class TimerWorkerTask
         \brief The actual task that executes timer callback.
     */
@@ -267,8 +272,6 @@ private:
         {}
 
         // ITask
-        RunFuncType GetFunc()             { return m_func; }
-        void *GetFuncUserData()           { return m_host; }
         EAccessMode GetAccessMode() const { return m_mode; }
         void OnDeadlineMissed(uint32_t duration) { (void)duration; }
         int32_t GetWeight() const         { return m_weight; }
@@ -280,7 +283,7 @@ private:
         uint32_t GetStackSize() const      { return m_stack_size; }
         uint32_t GetStackSizeBytes() const { return m_stack_size * sizeof(size_t); }
 
-        void Initialize(TimerHost *host, size_t *stack, size_t stack_size, EAccessMode mode, RunFuncType func)
+        void Initialize(TimerHost *host, size_t *stack, size_t stack_size, EAccessMode mode, TimerFuncType func)
         {
             m_host       = host;
             m_func       = func;
@@ -293,12 +296,14 @@ private:
         void SetWeight(int32_t weight) { m_weight = weight; }
 
     private:
-        RunFuncType m_func;
-        TimerHost  *m_host;
-        size_t     *m_stack;
-        size_t      m_stack_size;
-        EAccessMode m_mode;
-        int32_t     m_weight;
+        void Run() { m_func(m_host); }
+
+        TimerFuncType m_func;
+        TimerHost    *m_host;
+        size_t       *m_stack;
+        size_t        m_stack_size;
+        EAccessMode   m_mode;
+        int32_t       m_weight;
     };
 
     struct TimerCommand
@@ -365,14 +370,14 @@ inline void TimerHost::Initialize(IKernel *kernel, EAccessMode mode)
 {
     for (int32_t i = 0; i < STK_TIMER_THREADS_COUNT; ++i)
     {
-        m_task_process[i].Initialize(this, m_task_handler_memory[i], TASK_HANDLER_STACK_SIZE, mode, [](void *p) {
-            static_cast<TimerHost *>(p)->ProcessTimers();
+        m_task_process[i].Initialize(this, m_task_handler_memory[i], TASK_HANDLER_STACK_SIZE, mode, [](TimerHost *host) {
+            host->ProcessTimers();
         });
         kernel->AddTask(&m_task_process[i]);
     }
 
-    m_task_tick.Initialize(this, m_task_tick_memory, TASK_TICK_MEMORY_SIZE, ACCESS_USER, [](void *p) {
-        static_cast<TimerHost *>(p)->UpdateTime();
+    m_task_tick.Initialize(this, m_task_tick_memory, TASK_TICK_MEMORY_SIZE, ACCESS_USER, [](TimerHost *host) {
+        host->UpdateTime();
     });
     kernel->AddTask(&m_task_tick);
 }

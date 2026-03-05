@@ -65,12 +65,9 @@ class BasicLockUnlockTask : public Task<_STK_MUTEX_STACK_SIZE, _AccessMode>
 public:
     BasicLockUnlockTask(uint8_t task_id, int32_t iterations) : m_task_id(task_id), m_iterations(iterations)
     {}
-    
-    RunFuncType GetFunc() { return forced_cast<RunFuncType>(&BasicLockUnlockTask::RunInner); }
-    void *GetFuncUserData() { return this; }
 
 private:
-    void RunInner()
+    void Run()
     {
         int32_t workload = 0;
 
@@ -121,12 +118,9 @@ class RecursiveLockTask : public Task<_STK_MUTEX_STACK_SIZE, _AccessMode>
 public:
     RecursiveLockTask(uint8_t task_id, int32_t) : m_task_id(task_id)
     {}
-    
-    RunFuncType GetFunc() { return forced_cast<RunFuncType>(&RecursiveLockTask::RunInner); }
-    void *GetFuncUserData() { return this; }
 
 private:
-    void RunInner()
+    void Run()
     {
         g_TestMutex.Lock();
         {
@@ -172,12 +166,9 @@ class TryLockTask : public Task<_STK_MUTEX_STACK_SIZE, _AccessMode>
 public:
     TryLockTask(uint8_t task_id, int32_t) : m_task_id(task_id)
     {}
-    
-    RunFuncType GetFunc() { return forced_cast<RunFuncType>(&TryLockTask::RunInner); }
-    void *GetFuncUserData() { return this; }
 
 private:
-    void RunInner()
+    void Run()
     {
         if (m_task_id == 0)
         {
@@ -223,12 +214,9 @@ class TimedLockTask : public Task<_STK_MUTEX_STACK_SIZE, _AccessMode>
 public:
     TimedLockTask(uint8_t task_id, int32_t) : m_task_id(task_id)
     {}
-    
-    RunFuncType GetFunc() { return forced_cast<RunFuncType>(&TimedLockTask::RunInner); }
-    void *GetFuncUserData() { return this; }
 
 private:
-    void RunInner()
+    void Run()
     {
         if (m_task_id == 0)
         {
@@ -294,12 +282,9 @@ class FIFOOrderTask : public Task<_STK_MUTEX_STACK_SIZE, _AccessMode>
 public:
     FIFOOrderTask(uint8_t task_id, int32_t) : m_task_id(task_id)
     {}
-    
-    RunFuncType GetFunc() { return forced_cast<RunFuncType>(&FIFOOrderTask::RunInner); }
-    void *GetFuncUserData() { return this; }
 
 private:
-    void RunInner()
+    void Run()
     {
         if (m_task_id == 0)
         {
@@ -362,12 +347,9 @@ class StressTestTask : public Task<_STK_MUTEX_STACK_SIZE, _AccessMode>
 public:
     StressTestTask(uint8_t task_id, int32_t iterations) : m_task_id(task_id), m_iterations(iterations)
     {}
-    
-    RunFuncType GetFunc() { return forced_cast<RunFuncType>(&StressTestTask::RunInner); }
-    void *GetFuncUserData() { return this; }
 
 private:
-    void RunInner()
+    void Run()
     {
         for (int32_t i = 0; i < m_iterations; ++i)
         {
@@ -433,9 +415,6 @@ class RecursiveDepthTask : public Task<1024, _AccessMode>
 public:
     RecursiveDepthTask(uint8_t task_id, int32_t) : m_task_id(task_id)
     {}
-    
-    RunFuncType GetFunc() { return forced_cast<RunFuncType>(&RecursiveDepthTask::RunInner); }
-    void *GetFuncUserData() { return this; }
 
 private:
     void RecursiveLock(int32_t depth)
@@ -449,7 +428,7 @@ private:
         g_TestMutex.Unlock();
     }
     
-    void RunInner()
+    void Run()
     {
         // Recursive lock to depth 50
         RecursiveLock(DEPTH);
@@ -483,11 +462,8 @@ public:
     InterTaskCoordinationTask(uint8_t task_id, int32_t) : m_task_id(task_id)
     {}
     
-    RunFuncType GetFunc() { return forced_cast<RunFuncType>(&InterTaskCoordinationTask::RunInner); }
-    void *GetFuncUserData() { return this; }
-
 private:
-    void RunInner()
+    void Run()
     {
         for (int32_t round = 0; round < 10; ++round)
         {

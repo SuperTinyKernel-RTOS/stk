@@ -24,7 +24,7 @@ extern "C" void SysTick_Handler()
 template <int32_t _Count> struct Processor
 {
     // processing unrolled _Count number of times
-    static inline void Process()
+    static void Process()
     {
         g_Bench[_Count - 1].Process();
         Processor<_Count - 1>::Process();
@@ -33,7 +33,7 @@ template <int32_t _Count> struct Processor
 
 template <> struct Processor<0>
 {
-    static inline void Process() {}
+    static void Process() {}
 };
 
 int main(int argc, char **argv)
@@ -44,8 +44,11 @@ int main(int argc, char **argv)
     // periodicity: 1 ms
     SysTick_Config((uint32_t)((int64_t)SystemCoreClock * 1000 / 1000000));
 
-    g_Enable = true;
+    // warm up
+    for (volatile int32_t i = 1000000; i > 0; i--) {}
 
+    // do processing
+    g_Enable = true;
     while (g_Ticks < _STK_BENCH_WINDOW)
     {
         Processor<_STK_BENCH_TASK_MAX>::Process();

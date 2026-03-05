@@ -138,15 +138,12 @@ static struct Context : public PlatformContext
             // simulate stack size limitation
             uint32_t stack_size = m_task->GetStackSize() * sizeof(size_t);
 
-            m_thread = CreateThread(NULL, stack_size, &TaskThread, this, CREATE_SUSPENDED, &m_thread_id);
+            m_thread = CreateThread(NULL, stack_size, &OnTaskRun, this, CREATE_SUSPENDED, &m_thread_id);
         }
 
-        static DWORD WINAPI TaskThread(LPVOID param)
+        static DWORD WINAPI OnTaskRun(LPVOID param)
         {
-            TaskContext *tctx = (TaskContext *)param;
-
-            tctx->m_task->GetFunc()(tctx->m_task->GetFuncUserData());
-
+            ((TaskContext *)param)->m_task->Run();
             return 0;
         }
 

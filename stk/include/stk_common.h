@@ -23,11 +23,6 @@ namespace stk {
 class IKernelService;
 class IKernelTask;
 
-/*! \typedef RunFuncType
-    \brief   User task main entry function prototype.
-*/
-typedef void (*RunFuncType) (void *user_data);
-
 /*! \enum  EAccessMode
     \brief Hardware access mode by the user task.
     \warning Type is explicitly 32-bit to be compatible with platform implementations.
@@ -389,13 +384,21 @@ public:
 class ITask : public IStackMemory
 {
 public:
-    /*! \brief     Get user task's main entry function.
+    /*! \brief     Entry point of the user task.
+        \note      Called by the Kernel when the task is scheduled for execution.
+                   Implement this method with the task's main logic.
+        \warning   If \c Kernel is configured as \c KERNEL_STATIC, the body must contain an infinite loop.
+        \code
+        void Run()
+        {
+            while (true)
+            {
+                // task logic here
+            }
+        }
+        \endcode
     */
-    virtual RunFuncType GetFunc() = 0;
-
-    /*! \brief     Get user data which is supplied to the user task's main entry function.
-    */
-    virtual void *GetFuncUserData() = 0;
+    virtual void Run() = 0;
 
     /*! \brief     Get hardware access mode of the user task.
     */

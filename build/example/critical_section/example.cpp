@@ -74,9 +74,10 @@ template <stk::EAccessMode _AccessMode>
 class Thread : public stk::Task<256, _AccessMode>
 {
 public:
-    stk::RunFuncType GetFunc() { return m_func; }
-    void *GetFuncUserData() { return NULL; }
     stk::RunFuncType m_func;
+
+private:
+    void Run() { m_func(nullptr); }
 };
 
 void RunExample()
@@ -104,7 +105,7 @@ void RunExample()
         for (int32_t i = 0; i < THREADS_MAX; ++i)
         {
             // we shall see Green/Red LEDs switching on one by one in a loop
-            task[i].m_func = (toogle ? IncrementWithCS : IncrementWithoutCS);
+            task[i].m_func = (toogle ? &IncrementWithCS : &IncrementWithoutCS);
 
             // add task to the kernel
             kernel.AddTask(&task[i]);

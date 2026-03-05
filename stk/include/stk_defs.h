@@ -151,18 +151,6 @@
     #define __stk_attr_deprecated
 #endif
 
-/*! \def     __stk_unreachable
-    \brief   Informs compiler that a code path is logically unreachable (in-code statement).
-    \note    Enables dead-code elimination and suppresses "control reaches end of non-void function" warnings.
-    \warning If execution reaches this point at runtime the behaviour is undefined with no diagnostic.
-             Use only where the path is provably unreachable (e.g. after an exhaustive switch).
-*/
-#ifdef __GNUC__
-    #define __stk_unreachable() __builtin_unreachable()
-#else
-    #error "__stk_unreachable() is not implemented for this compiler. Add a definition to stk_defs.h."
-#endif
-
 /*! \def   __stk_full_memfence
     \brief Emits a full (sequentially-consistent) memory barrier (in-code statement).
     \note  Prevents both the compiler and the CPU from reordering memory accesses across this point.
@@ -373,27 +361,6 @@ namespace stk {
                used by the kernel implementation. Not part of the public user API.
  */
 namespace util {}
-
-/*! \brief     Reinterpret the bit pattern of \a from as type \c _To without invoking undefined
-               behaviour from \c reinterpret_cast on unrelated pointer types.
-    \tparam    _To: Target type. Must be trivially copyable.
-    \tparam    _From: Source type. Must be trivially copyable.
-    \param[in] from: Source value to reinterpret.
-    \return    The same bit pattern as \a from, interpreted as \c _To.
-    \warning   \c sizeof(_To) must equal \c sizeof(_From); no compile-time check is performed here.
-               Mismatched sizes will read uninitialised union bytes, producing undefined behaviour.
-    \warning   Not valid for pointer-to-pointer conversions between unrelated types in strict C++.
-               Intended for bare-metal embedded use only where the target type layout is known.
-    \note      Declared \c static to give each translation unit its own copy and avoid ODR issues
-               with the anonymous union across compilation units.
-*/
-template <class _To, class _From>
-static __stk_forceinline _To forced_cast(const _From &from)
-{
-    union { _From from; _To to; } cast;
-    cast.from = from;
-    return cast.to;
-}
 
 } // namespace stk
 

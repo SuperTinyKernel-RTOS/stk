@@ -31,13 +31,6 @@ public:
     MyTask(uint8_t task_id, const char *name) : m_task_id(task_id), m_name(name)
     {}
 
-    stk::RunFuncType GetFunc() {
-        return [](void *p) {
-            static_cast<MyTask *>(p)->Run();
-        };
-    }
-    void *GetFuncUserData() { return this; }
-
     size_t GetId() const  { return m_task_id; }
     const char *GetName() const  { return m_name; }
 

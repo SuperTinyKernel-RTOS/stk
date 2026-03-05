@@ -25,8 +25,6 @@ class TaskWrapper : public ITask
 {
 public:
     // ITask
-    RunFuncType GetFunc() { return m_func; }
-    void *GetFuncUserData() { return m_user_data; }
     EAccessMode GetAccessMode() const { return m_mode; }
     void OnDeadlineMissed(uint32_t duration) { (void)duration; }
     int32_t GetWeight() const { return m_weight; }
@@ -38,7 +36,7 @@ public:
     uint32_t GetStackSize() const { return m_stack_size; }
     uint32_t GetStackSizeBytes() const { return m_stack_size * sizeof(size_t); }
 
-    void Initialize(RunFuncType func,
+    void Initialize(stk_task_entry_t func,
                     void       *user_data,
                     size_t     *stack,
                     size_t      stack_size,
@@ -57,14 +55,16 @@ public:
     void SetName(const char *tname) { m_tname = tname; }
 
 private:
-    RunFuncType m_func;
-    void       *m_user_data;
-    size_t     *m_stack;
-    size_t      m_stack_size;
-    EAccessMode m_mode;
-    int32_t     m_weight;
-    uint32_t    m_tid;
-    const char *m_tname;
+    void Run() { m_func(m_user_data); }
+
+    stk_task_entry_t m_func;
+    void            *m_user_data;
+    size_t          *m_stack;
+    size_t           m_stack_size;
+    EAccessMode      m_mode;
+    int32_t          m_weight;
+    uint32_t         m_tid;
+    const char      *m_tname;
 };
 
 struct stk_task_t

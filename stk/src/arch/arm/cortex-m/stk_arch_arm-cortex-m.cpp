@@ -207,9 +207,6 @@ __stk_attr_naked uint32_t SVC_EnterCritical()
 {
     STK_CORTEX_M_UNPRIV_ENTER_CRITICAL();
     STK_CORTEX_M_EXIT_FUNCTION();
-#if !((defined(__clang__) && defined(__ARMCOMPILER_VERSION)) || defined(__ICCARM__))
-    __builtin_unreachable();
-#endif
 }
 
 /*! \brief     Exit critical section.
@@ -514,7 +511,7 @@ extern "C" __stk_attr_naked void _STK_PENDSV_HANDLER()
     STK_ASM_BLOCK_PRIVILEGE_MODE
 #endif
 
-    // load stack of the active task from GetContext().m_stack_active (note: keep in sync with OnTaskRun)
+    // load stack of the active task from GetContext().m_stack_active (note: keep in sync with OnTaskStart)
     "LDR        r1, %[st_active] \n"
     "LDR        r0, [r1]         \n" /* load the first member of Stack (Stack::SP) into r0 */
 
@@ -551,7 +548,7 @@ extern "C" __stk_attr_naked void _STK_PENDSV_HANDLER()
     : "r0", "r1" /* only r0, r1 are used as a scratchpad */ );
 }
 
-__stk_attr_naked void OnTaskRun()
+__stk_attr_naked void OnTaskStart()
 {
     // note: STK_CORTEX_M_DISABLE_INTERRUPTS() must be called prior calling this function
 
@@ -563,7 +560,7 @@ __stk_attr_naked void OnTaskRun()
     STK_ASM_BLOCK_PRIVILEGE_MODE
 #endif
 
-    // load stack of the active task from GetContext().m_stack_active (note: keep in sync with OnTaskRun)
+    // load stack of the active task from GetContext().m_stack_active (note: keep in sync with OnTaskStart)
     "LDR        r1, %[st_active] \n"
     "LDR        r0, [r1]         \n" /* load the first member of Stack (Stack::SP) into r0 */
 
@@ -660,7 +657,7 @@ void SVC_Handler_Main(size_t *svc_args)
 
         STK_CORTEX_M_DISABLE_INTERRUPTS();
         GetContext().OnStart();
-        OnTaskRun();
+        OnTaskStart();
         break; }
 
     case SVC_FORCE_SWITCH: {
@@ -771,6 +768,11 @@ extern "C" __stk_attr_naked void _STK_SVC_HANDLER()
     ".pool                      \n"); // ensure literal pool is reachable
 }
 
+static void OnTaskRun(ITask *task)
+{
+    task->Run();
+}
+
 static void OnTaskExit()
 {
     uint32_t cs;
@@ -856,19 +858,19 @@ bool PlatformArmCortexM::InitStack(EStackType stack_type, Stack *stack, IStackMe
     switch (stack_type)
     {
     case STACK_USER_TASK: {
-        PC = (size_t)user_task->GetFunc() & ~0x1UL; // "Bit [0] is always 0, so instructions are always aligned to halfword boundaries" (https://developer.arm.com/documentation/ddi0413/c/programmer-s-model/registers/general-purpose-registers)
-        LR = (size_t)OnTaskExit;
-        R0 = (size_t)user_task->GetFuncUserData();
+        PC = (size_t)&OnTaskRun & ~0x1UL; // "Bit [0] is always 0, so instructions are always aligned to halfword boundaries" (https://developer.arm.com/documentation/ddi0413/c/programmer-s-model/registers/general-purpose-registers)
+        LR = (size_t)&OnTaskExit;
+        R0 = (size_t)user_task;
         break; }
 
     case STACK_SLEEP_TRAP: {
-        PC = (size_t)(GetContext().m_overrider != nullptr ? OnSchedulerSleepOverride : OnSchedulerSleep) & ~0x1UL;
+        PC = (size_t)(GetContext().m_overrider != nullptr ? &OnSchedulerSleepOverride : &OnSchedulerSleep) & ~0x1UL;
         LR = (size_t)STK_STACK_MEMORY_FILLER; // should not attempt to exit
         R0 = 0;
         break; }
 
     case STACK_EXIT_TRAP: {
-        PC = (size_t)OnSchedulerExit & ~0x1UL;
+        PC = (size_t)&OnSchedulerExit & ~0x1UL;
         LR = (size_t)STK_STACK_MEMORY_FILLER; // should not attempt to exit
         R0 = 0;
         break; }
@@ -921,7 +923,7 @@ void PlatformArmCortexM::Stop()
 
     // load context of the Exit trap
     STK_CORTEX_M_DISABLE_INTERRUPTS();
-    OnTaskRun();
+    OnTaskStart();
 }
 
 int32_t PlatformArmCortexM::GetTickResolution() const
