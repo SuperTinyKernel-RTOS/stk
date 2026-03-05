@@ -30,7 +30,7 @@
 
 typedef UINT MMRESULT;
 typedef MMRESULT (WINAPI * timeBeginPeriodF)(UINT uPeriod);
-static timeBeginPeriodF timeBeginPeriod = NULL;
+static timeBeginPeriodF timeBeginPeriod = nullptr;
 
 #define STK_X86_WIN32_CRITICAL_SECTION CRITICAL_SECTION
 #define STK_X86_WIN32_CRITICAL_SECTION_INIT(SES) ::InitializeCriticalSection(SES)
@@ -68,11 +68,11 @@ static struct Context : public PlatformContext
     {
         PlatformContext::Initialize(handler, service, exit_trap, resolution_us);
 
-        m_overrider    = NULL;
-        m_sleep_trap   = NULL;
-        m_exit_trap    = NULL;
-        m_winmm_dll    = NULL;
-        m_timer_thread = NULL;
+        m_overrider    = nullptr;
+        m_sleep_trap   = nullptr;
+        m_exit_trap    = nullptr;
+        m_winmm_dll    = nullptr;
+        m_timer_thread = nullptr;
         m_started      = false;
         m_stop_signal  = false;
         m_csu_nesting  = 0;
@@ -99,35 +99,35 @@ static struct Context : public PlatformContext
     void LoadWindowsAPI()
     {
         HMODULE winmm = GetModuleHandleA("Winmm");
-        if (winmm == NULL)
+        if (winmm == nullptr)
             m_winmm_dll = winmm = LoadLibraryA("Winmm.dll");
-        assert(winmm != NULL);
+        assert(winmm != nullptr);
 
         timeBeginPeriod = (timeBeginPeriodF)GetProcAddress(winmm, "timeBeginPeriod");
-        assert(timeBeginPeriod != NULL);
+        assert(timeBeginPeriod != nullptr);
 
         timeBeginPeriod(1);
     }
 
     void UnloadWindowsAPI()
     {
-        if (m_winmm_dll != NULL)
+        if (m_winmm_dll != nullptr)
         {
             FreeLibrary(m_winmm_dll);
-            m_winmm_dll = NULL;
+            m_winmm_dll = nullptr;
         }
     }
 
     struct TaskContext
     {
-        TaskContext() : m_task(NULL), m_stack(NULL), m_thread(NULL), m_thread_id(0)
+        TaskContext() : m_task(nullptr), m_stack(nullptr), m_thread(nullptr), m_thread_id(0)
         { }
 
         void Initialize(ITask *task, Stack *stack)
         {
             m_task      = task;
             m_stack     = stack;
-            m_thread    = NULL;
+            m_thread    = nullptr;
             m_thread_id = 0;
 
             InitThread();
@@ -138,7 +138,7 @@ static struct Context : public PlatformContext
             // simulate stack size limitation
             uint32_t stack_size = m_task->GetStackSize() * sizeof(size_t);
 
-            m_thread = CreateThread(NULL, stack_size, &OnTaskRun, this, CREATE_SUSPENDED, &m_thread_id);
+            m_thread = CreateThread(nullptr, stack_size, &OnTaskRun, this, CREATE_SUSPENDED, &m_thread_id);
         }
 
         static DWORD WINAPI OnTaskRun(LPVOID param)
@@ -266,9 +266,9 @@ void Context::ConfigureTime()
 
 void Context::StartActiveTask()
 {
-    STK_ASSERT(m_stack_active != NULL);
+    STK_ASSERT(m_stack_active != nullptr);
     TaskContext *active_task = reinterpret_cast<TaskContext *>(m_stack_active->SP);
-    STK_ASSERT(active_task != NULL);
+    STK_ASSERT(active_task != nullptr);
 
     ResumeThread(active_task->m_thread);
 }
@@ -282,7 +282,7 @@ void Context::CreateTimerThreadAndJoin()
     StartActiveTask();
 
     // create tick thread with highest priority
-    m_timer_thread = CreateThread(NULL, 0, &TimerThread, NULL, 0, NULL);
+    m_timer_thread = CreateThread(nullptr, 0, &TimerThread, nullptr, 0, nullptr);
     SetThreadPriority(m_timer_thread, THREAD_PRIORITY_TIME_CRITICAL);
 
     while (!m_task_threads.empty())
@@ -299,7 +299,7 @@ void Context::CreateTimerThreadAndJoin()
         {
             if (result == (WAIT_OBJECT_0 + i))
             {
-                TaskContext *exiting_task = NULL;
+                TaskContext *exiting_task = nullptr;
                 for (std::list<TaskContext *>::iterator titr = m_tasks.begin(); titr != m_tasks.end(); ++titr)
                 {
                     if ((*titr)->m_thread == (*itr))
@@ -308,9 +308,9 @@ void Context::CreateTimerThreadAndJoin()
                         break;
                     }
                 }
-                STK_ASSERT(exiting_task != NULL);
+                STK_ASSERT(exiting_task != nullptr);
 
-                if (exiting_task != NULL)
+                if (exiting_task != nullptr)
                     m_handler->OnTaskExit(exiting_task->m_stack);
 
                 m_task_threads.erase(itr);
@@ -323,7 +323,7 @@ void Context::CreateTimerThreadAndJoin()
 
     // join (never returns to the caller from here unless thread is terminated, see KERNEL_DYNAMIC),
     // a stop signal is sent by IPlatform::Stop() by the last exiting task
-    if (m_timer_thread != NULL)
+    if (m_timer_thread != nullptr)
         WaitForSingleObject(m_timer_thread, INFINITE);
 }
 
@@ -332,19 +332,19 @@ void Context::Cleanup()
     // close thread handles of all tasks
     for (std::list<TaskContext *>::iterator itr = m_tasks.begin(); itr != m_tasks.end(); ++itr)
     {
-        if ((*itr)->m_thread != NULL)
+        if ((*itr)->m_thread != nullptr)
         {
             CloseHandle((*itr)->m_thread);
-            (*itr)->m_thread = NULL;
+            (*itr)->m_thread = nullptr;
         }
     }
     m_tasks.clear();
 
     // close timer thread
-    if (m_timer_thread != NULL)
+    if (m_timer_thread != nullptr)
     {
         CloseHandle(m_timer_thread);
-        m_timer_thread = NULL;
+        m_timer_thread = nullptr;
     }
 
     // reset stop signal
@@ -365,7 +365,7 @@ void Context::SwitchContext()
     if ((m_stack_idle != m_sleep_trap) && (m_stack_idle != m_exit_trap))
     {
         TaskContext *idle_task = reinterpret_cast<TaskContext *>(m_stack_idle->SP);
-        STK_ASSERT(idle_task != NULL);
+        STK_ASSERT(idle_task != nullptr);
 
         SuspendThread(idle_task->m_thread);
     }
@@ -373,7 +373,7 @@ void Context::SwitchContext()
     // resume Active thread
     if (m_stack_active == m_sleep_trap)
     {
-        if ((m_overrider == NULL) || !m_overrider->OnSleep())
+        if ((m_overrider == nullptr) || !m_overrider->OnSleep())
         {
             // pass
         }
@@ -386,7 +386,7 @@ void Context::SwitchContext()
     else
     {
         TaskContext *active_task = reinterpret_cast<TaskContext *>(m_stack_active->SP);
-        STK_ASSERT(active_task != NULL);
+        STK_ASSERT(active_task != nullptr);
 
         ResumeThread(active_task->m_thread);
     }
@@ -521,7 +521,7 @@ void PlatformX86Win32::ProcessTick()
 
 void PlatformX86Win32::ProcessHardFault()
 {
-    if ((g_Context.m_overrider == NULL) || !g_Context.m_overrider->OnHardFault())
+    if ((g_Context.m_overrider == nullptr) || !g_Context.m_overrider->OnHardFault())
     {
         STK_KERNEL_PANIC(KERNEL_PANIC_HRT_HARD_FAULT);
     }
