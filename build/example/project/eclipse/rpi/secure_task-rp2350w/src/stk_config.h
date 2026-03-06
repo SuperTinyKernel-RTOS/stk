@@ -17,13 +17,13 @@
 
 #ifdef _STK_ARCH_ARM_CORTEX_M
     // Redefine if SysTick handler name is different from SysTick_Handler
-    #define _STK_SYSTICK_HANDLER isr_systick
+    #define STK_SYSTICK_HANDLER isr_systick
 
     // Redefine if PendSv handler name is different from PendSV_Handler
-    #define _STK_PENDSV_HANDLER isr_pendsv
+    #define STK_PENDSV_HANDLER isr_pendsv
 
     // Redefine if SVC handler name is different from SVC_Handler
-    #define _STK_SVC_HANDLER isr_svcall
+    #define STK_SVC_HANDLER isr_svcall
 #endif
 
 #endif /* STK_CONFIG_H_ */

@@ -110,13 +110,13 @@ static __stk_forceinline void STK_RISCV_SPIN_LOCK_UNLOCK(volatile bool &LOCK)
 #define STK_RISCV_ISR_STACK_SIZE 256
 
 //! Timer handler.
-#ifndef _STK_SYSTICK_HANDLER
-    #define _STK_SYSTICK_HANDLER riscv_mtvec_mti // see vector_table.h/vector_table.c
+#ifndef STK_SYSTICK_HANDLER
+    #define STK_SYSTICK_HANDLER riscv_mtvec_mti // see vector_table.h/vector_table.c
 #endif
 
 //! Exception handler.
-#ifndef _STK_SVC_HANDLER
-    #define _STK_SVC_HANDLER riscv_mtvec_exception // see vector_table.h/vector_table.c
+#ifndef STK_SVC_HANDLER
+    #define STK_SVC_HANDLER riscv_mtvec_exception // see vector_table.h/vector_table.c
 #endif
 
 #if (__riscv_flen == 0)
@@ -425,7 +425,7 @@ static struct Context : public PlatformContext
     bool      m_started;       //!< 'true' when in started state
     bool      m_exiting;       //!< 'true' when is exiting the scheduling process
 }
-g_Context[_STK_ARCH_CPU_COUNT];
+g_Context[STK_ARCH_CPU_COUNT];
 
 void PlatformRiscV::ProcessTick()
 {
@@ -742,7 +742,7 @@ extern "C" STK_RISCV_ISR_SECTION __stk_attr_used void TrySwitchContext() // __st
 }
 
 #ifdef _STK_RISCV_USE_PENDSV
-STK_RISCV_ISR void _STK_SYSTICK_HANDLER()
+STK_RISCV_ISR void STK_SYSTICK_HANDLER()
 {
     // save SP before switching to the main
     Word sp = HW_GetCallerSP();
@@ -765,7 +765,7 @@ STK_RISCV_ISR void _STK_SYSTICK_HANDLER()
     : /* clobbers: none */);
 }
 #else
-extern "C" STK_RISCV_ISR_SECTION __stk_attr_naked void _STK_SYSTICK_HANDLER()
+extern "C" STK_RISCV_ISR_SECTION __stk_attr_naked void STK_SYSTICK_HANDLER()
 {
     // save current context (unconditionally)
     SaveContext();
@@ -815,7 +815,7 @@ static __stk_forceinline void StartScheduling()
     set_csr(mie, MIP_MTIP);
 }
 
-STK_RISCV_ISR void _STK_SVC_HANDLER()
+STK_RISCV_ISR void STK_SVC_HANDLER()
 {
     Word cause;
     __asm volatile("csrr %0, mcause"

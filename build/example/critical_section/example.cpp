@@ -74,7 +74,7 @@ template <stk::EAccessMode _AccessMode>
 class Thread : public stk::Task<256, _AccessMode>
 {
 public:
-    stk::RunFuncType m_func;
+    void (* m_func) (void *user_data);
 
 private:
     void Run() { m_func(nullptr); }

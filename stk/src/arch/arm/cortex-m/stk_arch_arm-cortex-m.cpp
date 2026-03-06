@@ -172,18 +172,18 @@ enum ESvc
 #endif
 
 //! SysTick_Handler
-#ifndef _STK_SYSTICK_HANDLER
-    #define _STK_SYSTICK_HANDLER SysTick_Handler
+#ifndef STK_SYSTICK_HANDLER
+    #define STK_SYSTICK_HANDLER SysTick_Handler
 #endif
 
 //! PendSV_Handler
-#ifndef _STK_PENDSV_HANDLER
-    #define _STK_PENDSV_HANDLER PendSV_Handler
+#ifndef STK_PENDSV_HANDLER
+    #define STK_PENDSV_HANDLER PendSV_Handler
 #endif
 
 //! SVC_Handler
-#ifndef _STK_SVC_HANDLER
-    #define _STK_SVC_HANDLER SVC_Handler
+#ifndef STK_SVC_HANDLER
+    #define STK_SVC_HANDLER SVC_Handler
 #endif
 
 // Declarations:
@@ -409,7 +409,7 @@ static struct Context : public PlatformContext
     volatile bool m_started;     //!< 'true' when in started state
     bool          m_exiting;     //!< 'true' when is exiting the scheduling process
 }
-g_Context[_STK_ARCH_CPU_COUNT];
+g_Context[STK_ARCH_CPU_COUNT];
 
 void PlatformArmCortexM::ProcessTick()
 {
@@ -433,7 +433,7 @@ void STK_PANIC_HANDLER_DEFAULT(EKernelPanicId id)
     }
 }
 
-extern "C" void _STK_SYSTICK_HANDLER()
+extern "C" void STK_SYSTICK_HANDLER()
 {
 #if STK_SEGGER_SYSVIEW
     SEGGER_SYSVIEW_RecordEnterISR();
@@ -487,7 +487,7 @@ extern "C" void _STK_SYSTICK_HANDLER()
     "MSR        CONTROL, r0     \n"\
     "2:                         \n"
 
-extern "C" __stk_attr_naked void _STK_PENDSV_HANDLER()
+extern "C" __stk_attr_naked void STK_PENDSV_HANDLER()
 {
     __asm volatile(
     ".syntax unified             \n"
@@ -710,7 +710,7 @@ void SVC_Handler_Main(Word *svc_args)
 
 // source:
 // ARM: How to Write an SVC Function, https://developer.arm.com/documentation/ka004005/latest
-extern "C" __stk_attr_naked void _STK_SVC_HANDLER()
+extern "C" __stk_attr_naked void STK_SVC_HANDLER()
 {
     __asm volatile(
     ".syntax unified            \n"

@@ -559,7 +559,7 @@ class Kernel : public IKernel, private IPlatform::IEventHandler
         volatile Timeout  m_time_sleep; //!< Sleep countdown: negative while sleeping (absolute value = ticks remaining), zero when awake.
         SrtInfo           m_srt[STK_ALLOCATE_COUNT(_Mode, KERNEL_HRT, 0, 1)];       //!< SRT metadata. Zero-size (no memory) in KERNEL_HRT mode.
         HrtInfo           m_hrt[STK_ALLOCATE_COUNT(_Mode, KERNEL_HRT, 1, 0)];       //!< HRT metadata. Zero-size (no memory) in non-HRT mode.
-        int32_t           m_rt_weight[_TyStrategy::WEIGHT_API ? 1 : 0];             //!< Run-time weight for weighted-round-robin scheduling. Zero-size for unweighted strategies.
+        int32_t           m_rt_weight[STK_ALLOCATE_COUNT(_TyStrategy::WEIGHT_API, 1, 1, 0)]; //!< Run-time weight for weighted-round-robin scheduling. Zero-size for unweighted strategies.
         WaitObject        m_wait_obj[STK_ALLOCATE_COUNT(_Mode, KERNEL_SYNC, 1, 0)]; //!< Embedded wait object for synchronization. Zero-size (no memory) if KERNEL_SYNC is not set.
     };
 

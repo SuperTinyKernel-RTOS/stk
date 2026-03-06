@@ -154,7 +154,7 @@ template <size_t _StackSize> struct StackMemoryDef
     /*! \typedef Type
         \brief   Stack memory type.
     */
-    typedef __stk_aligned(16) Word Type[_StackSize];
+    typedef __stk_aligned(STK_STACK_MEMORY_ALIGN) Word Type[_StackSize];
 };
 
 /*! \class Stack
@@ -656,7 +656,7 @@ public:
                    In case system tick handler is used by the application and should not be implemented
                    by the driver then disable driver's handler in stk_config.h like this:
                    \code
-                   #define _STK_SYSTICK_HANDLER _STK_SYSTICK_HANDLER_DISABLE
+                   #define STK_SYSTICK_HANDLER _STK_SYSTICK_HANDLER_DISABLE
                    \endcode
                    and then call ProcessTick() from your custom tick handler.
     */

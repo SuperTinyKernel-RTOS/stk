@@ -50,7 +50,7 @@ public:
     */
     static inline Word *InitStackMemory(IStackMemory *memory)
     {
-        int32_t stack_size = memory->GetStackSize();
+        size_t stack_size = memory->GetStackSize();
         Word *itr = memory->GetStack();
         Word *stack_top = itr + stack_size;
 
@@ -60,8 +60,8 @@ public:
         while (itr < stack_top)
             *itr++ = STK_STACK_MEMORY_FILLER;
 
-        // expecting 16-byte aligned memory for a stack
-        STK_ASSERT(((uintptr_t)stack_top & (16 - 1)) == 0);
+        // expecting STK_STACK_MEMORY_ALIGN-byte aligned memory for a stack
+        STK_ASSERT(((uintptr_t)stack_top & (STK_STACK_MEMORY_ALIGN - 1)) == 0);
 
         return stack_top;
     }
@@ -80,10 +80,10 @@ public:
     \brief Set platform's context.
 */
 #ifndef _STK_UNDER_TEST
-#if (_STK_ARCH_CPU_COUNT == 1)
+#if (STK_ARCH_CPU_COUNT == 1)
     #define GetContext() g_Context[0]
 #else
-    #define GetContext() g_Context[_STK_ARCH_GET_CPU_ID()]
+    #define GetContext() g_Context[STK_ARCH_GET_CPU_ID()]
 #endif
 #endif
 

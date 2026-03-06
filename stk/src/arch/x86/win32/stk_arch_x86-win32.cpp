@@ -64,13 +64,29 @@ using namespace stk;
 //! Internal context.
 static struct Context : public PlatformContext
 {
+    Context()
+    : m_overrider(nullptr),
+        m_sleep_trap(nullptr),
+        m_exit_trap(nullptr),
+        m_winmm_dll(nullptr),
+        m_timer_thread(nullptr),
+        m_tls(TLS_OUT_OF_INDEXES),
+        m_tasks(),
+        m_task_threads(),
+        m_cs(),
+        m_csu_nesting(0),
+        m_timer_tid(0),
+        m_started(false),
+        m_stop_signal(false)
+    {}
+
     void Initialize(IPlatform::IEventHandler *handler, IKernelService *service, Stack *exit_trap, int32_t resolution_us)
     {
         PlatformContext::Initialize(handler, service, exit_trap, resolution_us);
 
         m_overrider    = nullptr;
-        m_sleep_trap   = nullptr;
-        m_exit_trap    = nullptr;
+        m_sleep_trap   = nullptr; // set by Context::InitStack
+        m_exit_trap    = nullptr; // set by Context::InitStack
         m_winmm_dll    = nullptr;
         m_timer_thread = nullptr;
         m_started      = false;
@@ -136,7 +152,7 @@ static struct Context : public PlatformContext
         void InitThread()
         {
             // simulate stack size limitation
-            uint32_t stack_size = m_task->GetStackSize() * sizeof(Word);
+            size_t stack_size = m_task->GetStackSize() * sizeof(Word);
 
             m_thread = CreateThread(nullptr, stack_size, &OnTaskRun, this, CREATE_SUSPENDED, &m_thread_id);
         }
@@ -283,6 +299,7 @@ void Context::CreateTimerThreadAndJoin()
 
     // create tick thread with highest priority
     m_timer_thread = CreateThread(nullptr, 0, &TimerThread, nullptr, 0, nullptr);
+    STK_ASSERT(m_timer_thread != nullptr);
     SetThreadPriority(m_timer_thread, THREAD_PRIORITY_TIME_CRITICAL);
 
     while (!m_task_threads.empty())

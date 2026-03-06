@@ -144,7 +144,6 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="..\..\..\..\..\stk\src\arch\x86\win32\stk_arch_x86-win32.cpp" />
-    <ClCompile Include="..\..\..\..\..\stk\src\stk.cpp" />
     <ClCompile Include="..\..\..\critical_section\example.cpp" />
     <ClCompile Include="..\..\..\driver\portable\led.cpp" />
     <ClCompile Include="main.cpp" />
@@ -158,7 +157,23 @@
     <ClInclude Include="..\..\..\..\..\stk\include\stk_defs.h" />
     <ClInclude Include="..\..\..\..\..\stk\include\stk_helper.h" />
     <ClInclude Include="..\..\..\..\..\stk\include\stk_linked_list.h" />
+    <ClInclude Include="..\..\..\..\..\stk\include\strategy\stk_strategy_edf.h" />
+    <ClInclude Include="..\..\..\..\..\stk\include\strategy\stk_strategy_fpriority.h" />
+    <ClInclude Include="..\..\..\..\..\stk\include\strategy\stk_strategy_monotonic.h" />
     <ClInclude Include="..\..\..\..\..\stk\include\strategy\stk_strategy_rrobin.h" />
+    <ClInclude Include="..\..\..\..\..\stk\include\strategy\stk_strategy_swrrobin.h" />
+    <ClInclude Include="..\..\..\..\..\stk\include\sync\stk_sync.h" />
+    <ClInclude Include="..\..\..\..\..\stk\include\sync\stk_sync_cs.h" />
+    <ClInclude Include="..\..\..\..\..\stk\include\sync\stk_sync_cv.h" />
+    <ClInclude Include="..\..\..\..\..\stk\include\sync\stk_sync_event.h" />
+    <ClInclude Include="..\..\..\..\..\stk\include\sync\stk_sync_mutex.h" />
+    <ClInclude Include="..\..\..\..\..\stk\include\sync\stk_sync_pipe.h" />
+    <ClInclude Include="..\..\..\..\..\stk\include\sync\stk_sync_rwmutex.h" />
+    <ClInclude Include="..\..\..\..\..\stk\include\sync\stk_sync_semaphore.h" />
+    <ClInclude Include="..\..\..\..\..\stk\include\sync\stk_sync_spinlock.h" />
+    <ClInclude Include="..\..\..\..\..\stk\include\time\stk_time.h" />
+    <ClInclude Include="..\..\..\..\..\stk\include\time\stk_time_timer.h" />
+    <ClInclude Include="..\..\..\..\..\stk\include\time\stk_time_util.h" />
     <ClInclude Include="..\..\..\critical_section\example.h" />
     <ClInclude Include="stk_config.h" />
   </ItemGroup>

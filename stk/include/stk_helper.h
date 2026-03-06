@@ -84,6 +84,17 @@ public:
     */
     virtual const char *GetTraceName() const { return nullptr; }
 
+protected:
+    /*! \brief Initializes task instance and zero-initializes its internal stack memory.
+        
+        The constructor is protected to ensure that the Task class can only be 
+        instantiated through a derived subclass. It handles the allocation (if applicable) 
+        and zero-initialization of the \ref m_stack member based on the \a _StackSize 
+        template parameter.
+    */
+    Task() : m_stack()
+    {}
+
 private:
     typename StackMemoryDef<_StackSize>::Type m_stack; //!< Stack memory region, 16-byte aligned.
 };
@@ -129,6 +140,17 @@ public:
     /*! \brief Override in subclass to supply a name for SEGGER SystemView tracing. Returns NULL by default.
     */
     virtual const char *GetTraceName() const { return nullptr; }
+
+protected:
+    /*! \brief Initializes task instance and zero-initializes its internal stack memory.
+        
+        The constructor is protected to ensure that the Task class can only be 
+        instantiated through a derived subclass. It handles the allocation (if applicable) 
+        and zero-initialization of the \ref m_stack member based on the \a _StackSize 
+        template parameter.
+    */
+    TaskW() : m_stack()
+    {}
 
 private:
     typename StackMemoryDef<_StackSize>::Type m_stack; //!< Stack memory region, 16-byte aligned.
