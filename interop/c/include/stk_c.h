@@ -40,7 +40,7 @@ extern "C" {
                Has direct impact on RAM and FLASH usage.
 */
 #ifndef STK_C_KERNEL_MAX_TASKS
-    #define STK_C_KERNEL_MAX_TASKS 4
+    #define STK_C_KERNEL_MAX_TASKS (4)
 #endif
 
 /*! \def       STK_C_CPU_COUNT
@@ -48,16 +48,16 @@ extern "C" {
     \note      Each core usually gets its own independent kernel instance.
 */
 #ifndef STK_C_CPU_COUNT
-    #define STK_C_CPU_COUNT 1
+    #define STK_C_CPU_COUNT (1)
 #endif
 
 /*! \def       STK_SYNC_DEBUG_NAMES
     \brief     Enable names for synchronization primitives for debugging/tracing purpose.
 */
 #if !defined(STK_SYNC_DEBUG_NAMES) && STK_SEGGER_SYSVIEW
-    #define STK_SYNC_DEBUG_NAMES 1
+    #define STK_SYNC_DEBUG_NAMES (1)
 #elif !defined(STK_SYNC_DEBUG_NAMES)
-    #define STK_SYNC_DEBUG_NAMES 0
+    #define STK_SYNC_DEBUG_NAMES (0)
 #endif
 
 /*! \def       STK_C_ASSERT
@@ -80,11 +80,11 @@ extern "C" {
 
 /*! \brief     CPU register type.
 */
-typedef uintptr_t stk_reg_t;
+typedef uintptr_t stk_word_t;
 
 /*! \brief     Task id.
 */
-typedef stk_reg_t stk_tid_t;
+typedef stk_word_t stk_tid_t;
 
 /*! \brief     Opaque handle to a kernel instance.
 */
@@ -247,25 +247,25 @@ bool stk_kernel_is_schedulable(const stk_kernel_t *k);
 /*! \brief     Create privileged-mode (kernel-mode) task.
     \param[in] entry: Task entry function.
     \param[in] arg: Argument passed to entry function.
-    \param[in] stack: Pointer to stack buffer (array of stk_reg_t).
+    \param[in] stack: Pointer to stack buffer (array of stk_word_t).
     \param[in] stack_size: Number of elements (words) in the stack buffer.
     \return    Task handle (static storage in static kernels, heap in dynamic).
 */
 stk_task_t *stk_task_create_privileged(stk_task_entry_t entry,
                                        void *arg,
-                                       stk_reg_t *stack,
+                                       stk_word_t *stack,
                                        uint32_t stack_size);
 
 /*! \brief     Create user-mode task.
     \param[in] entry: Task entry function.
     \param[in] arg: Argument passed to entry function.
-    \param[in] stack: Pointer to stack buffer (array of stk_reg_t).
+    \param[in] stack: Pointer to stack buffer (array of stk_word_t).
     \param[in] stack_size: Number of elements (words) in the stack buffer.
     \return    Task handle.
 */
 stk_task_t *stk_task_create_user(stk_task_entry_t entry,
                                  void *arg,
-                                 stk_reg_t *stack,
+                                 stk_word_t *stack,
                                  uint32_t stack_size);
 
 /*! \brief     Set task weight (used only by Smooth Weighted Round Robin).
@@ -433,14 +433,14 @@ void stk_critical_section_exit(void);
 
 // ───── Mutex ─────────────────────────────────────────────────────────────────
 
-/*! \brief     A memory size (multiples of stk_reg_t) required for Mutex instance.
+/*! \brief     A memory size (multiples of stk_word_t) required for Mutex instance.
 */
 #define STK_MUTEX_IMPL_SIZE (10 + (STK_SYNC_DEBUG_NAMES ? 1 : 0))
 
 /*! \brief     Opaque memory container for a Mutex instance.
 */
 typedef struct stk_mutex_mem_t {
-    stk_reg_t data[STK_MUTEX_IMPL_SIZE] __stk_c_stack_attr;
+    stk_word_t data[STK_MUTEX_IMPL_SIZE] __stk_c_stack_attr;
 } stk_mutex_mem_t;
 
 /*! \brief     Opaque handle to a Mutex instance.
@@ -484,7 +484,7 @@ bool stk_mutex_timed_lock(stk_mutex_t *mtx, int32_t timeout);
 
 // ───── SpinLock ──────────────────────────────────────────────────────────────
 
-/*! \brief     A memory size (multiples of stk_reg_t) required for SpinLock instance.
+/*! \brief     A memory size (multiples of stk_word_t) required for SpinLock instance.
 */
 #define STK_SPINLOCK_IMPL_SIZE (1)
 
@@ -492,7 +492,7 @@ bool stk_mutex_timed_lock(stk_mutex_t *mtx, int32_t timeout);
     \brief     Opaque memory container for SpinLock object.
 */
 typedef struct {
-    stk_reg_t data[STK_SPINLOCK_IMPL_SIZE];
+    stk_word_t data[STK_SPINLOCK_IMPL_SIZE];
 } stk_spinlock_mem_t;
 
 /*! \brief     Opaque handle to a SpinLock instance.
@@ -526,14 +526,14 @@ void stk_spinlock_unlock(stk_spinlock_t *lock);
 
 // ───── Condition Variable ────────────────────────────────────────────────────
 
-/*! \brief     A memory size (multiples of stk_reg_t) required for ConditionVariable instance.
+/*! \brief     A memory size (multiples of stk_word_t) required for ConditionVariable instance.
 */
 #define STK_CV_IMPL_SIZE (7 + (STK_SYNC_DEBUG_NAMES ? 1 : 0))
 
 /*! \brief     Opaque memory container for a ConditionVariable instance.
 */
 typedef struct stk_cv_mem_t {
-    stk_reg_t data[STK_CV_IMPL_SIZE] __stk_c_stack_attr;
+    stk_word_t data[STK_CV_IMPL_SIZE] __stk_c_stack_attr;
 } stk_cv_mem_t;
 
 /*! \brief     Opaque handle to a Condition Variable instance.
@@ -574,14 +574,14 @@ void stk_cv_notify_all(stk_cv_t *cv);
 
 // ───── Event ─────────────────────────────────────────────────────────────────
 
-/*! \brief     A memory size (multiples of stk_reg_t) required for Event instance.
+/*! \brief     A memory size (multiples of stk_word_t) required for Event instance.
 */
 #define STK_EVENT_IMPL_SIZE (8 + (STK_SYNC_DEBUG_NAMES ? 1 : 0))
 
 /*! \brief     Opaque memory container for an Event instance.
 */
 typedef struct stk_event_mem_t {
-    stk_reg_t data[STK_EVENT_IMPL_SIZE] __stk_c_stack_attr;
+    stk_word_t data[STK_EVENT_IMPL_SIZE] __stk_c_stack_attr;
 } stk_event_mem_t;
 
 /*! \brief     Opaque handle to an Event instance.
@@ -631,14 +631,14 @@ void stk_event_pulse(stk_event_t *ev);
 
 // ───── Semaphore ─────────────────────────────────────────────────────────────
 
-/*! \brief     A memory size (multiples of stk_reg_t) required for Semaphore instance.
+/*! \brief     A memory size (multiples of stk_word_t) required for Semaphore instance.
 */
 #define STK_SEM_IMPL_SIZE (8 + (STK_SYNC_DEBUG_NAMES ? 1 : 0))
 
 /*! \brief     Opaque memory container for a Semaphore instance.
 */
 typedef struct stk_sem_mem_t {
-    stk_reg_t data[STK_SEM_IMPL_SIZE] __stk_c_stack_attr;
+    stk_word_t data[STK_SEM_IMPL_SIZE] __stk_c_stack_attr;
 } stk_sem_mem_t;
 
 /*! \brief     Opaque handle to a Semaphore instance.
@@ -672,20 +672,20 @@ void stk_sem_signal(stk_sem_t *sem);
 
 // ───── Pipe (FIFO) ───────────────────────────────────────────────────────────
 
-/*! \brief     Size of the Pipe: Pipe<stk_reg_t, STK_PIPE_SIZE>.
+/*! \brief     Size of the Pipe: Pipe<stk_word_t, STK_PIPE_SIZE>.
     \note      Adjust if larger or smaller pipe is needed.
 */
 #define STK_PIPE_SIZE 16
 
-/*! \brief     A memory size (multiples of stk_reg_t) required for Pipe instance.
-    \note      Sized for Pipe<stk_reg_t, 16>. Adjust if template parameters change.
+/*! \brief     A memory size (multiples of stk_word_t) required for Pipe instance.
+    \note      Sized for Pipe<stk_word_t, 16>. Adjust if template parameters change.
 */
 #define STK_PIPE_IMPL_SIZE ((27 + (STK_SYNC_DEBUG_NAMES ? 3 : 0)) + STK_PIPE_SIZE)
 
 /*! \brief     Opaque memory container for a Pipe instance.
 */
 typedef struct stk_pipe_mem_t {
-    stk_reg_t data[STK_PIPE_IMPL_SIZE] __stk_c_stack_attr;
+    stk_word_t data[STK_PIPE_IMPL_SIZE] __stk_c_stack_attr;
 } stk_pipe_mem_t;
 
 /*! \brief     Opaque handle to a Pipe instance.
@@ -710,7 +710,7 @@ void stk_pipe_destroy(stk_pipe_t *pipe);
     \param[in] timeout: Max time to wait in milliseconds.
     \return    True if successful, False on timeout.
 */
-bool stk_pipe_write(stk_pipe_t *pipe, stk_reg_t data, int32_t timeout);
+bool stk_pipe_write(stk_pipe_t *pipe, stk_word_t data, int32_t timeout);
 
 /*! \brief      Read data from the pipe.
     \param[in]  pipe: Pipe handle.
@@ -718,7 +718,7 @@ bool stk_pipe_write(stk_pipe_t *pipe, stk_reg_t data, int32_t timeout);
     \param[in]  timeout: Max time to wait in milliseconds.
     \return     True if successful, False on timeout.
 */
-bool stk_pipe_read(stk_pipe_t *pipe, stk_reg_t *data, int32_t timeout);
+bool stk_pipe_read(stk_pipe_t *pipe, stk_word_t *data, int32_t timeout);
 
 /*! \brief     Write multiple elements to the pipe.
     \param[in] pipe: Pipe handle.
@@ -727,7 +727,7 @@ bool stk_pipe_read(stk_pipe_t *pipe, stk_reg_t *data, int32_t timeout);
     \param[in] timeout: Max time to wait in milliseconds.
     \return    Number of elements actually written.
 */
-size_t stk_pipe_write_bulk(stk_pipe_t *pipe, const stk_reg_t *src, size_t count, int32_t timeout);
+size_t stk_pipe_write_bulk(stk_pipe_t *pipe, const stk_word_t *src, size_t count, int32_t timeout);
 
 /*! \brief      Read multiple elements from the pipe.
     \param[in]  pipe: Pipe handle.
@@ -736,7 +736,7 @@ size_t stk_pipe_write_bulk(stk_pipe_t *pipe, const stk_reg_t *src, size_t count,
     \param[in]  timeout: Max time to wait in milliseconds.
     \return     Number of elements actually read.
 */
-size_t stk_pipe_read_bulk(stk_pipe_t *pipe, stk_reg_t *dst, size_t count, int32_t timeout);
+size_t stk_pipe_read_bulk(stk_pipe_t *pipe, stk_word_t *dst, size_t count, int32_t timeout);
 
 /*! \brief     Get current number of elements in the pipe.
     \param[in] pipe: Pipe handle.
@@ -746,14 +746,14 @@ size_t stk_pipe_get_size(stk_pipe_t *pipe);
 
 // ───── RWMutex (Reader-Writer Lock) ──────────────────────────────────────────
 
-/*! \brief     A memory size (multiples of stk_reg_t) required for RWMutex instance.
+/*! \brief     A memory size (multiples of stk_word_t) required for RWMutex instance.
 */
 #define STK_RWMUTEX_IMPL_SIZE (17 + (STK_SYNC_DEBUG_NAMES ? 3 : 0))
 
 /*! \brief     Opaque memory container for an RWMutex instance.
 */
 typedef struct stk_rwmutex_mem_t {
-    stk_reg_t data[STK_RWMUTEX_IMPL_SIZE] __stk_c_stack_attr;
+    stk_word_t data[STK_RWMUTEX_IMPL_SIZE] __stk_c_stack_attr;
 } stk_rwmutex_mem_t;
 
 /*! \brief     Opaque handle to an RWMutex instance.

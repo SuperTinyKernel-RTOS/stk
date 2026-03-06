@@ -61,7 +61,7 @@ public:
             *itr++ = STK_STACK_MEMORY_FILLER;
 
         // expecting STK_STACK_MEMORY_ALIGN-byte aligned memory for a stack
-        STK_ASSERT(((uintptr_t)stack_top & (STK_STACK_MEMORY_ALIGN - 1)) == 0);
+        STK_ASSERT((hw::PtrToWord(stack_top) & (STK_STACK_MEMORY_ALIGN - 1)) == 0);
 
         return stack_top;
     }

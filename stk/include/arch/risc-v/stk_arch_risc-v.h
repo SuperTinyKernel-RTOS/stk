@@ -58,9 +58,9 @@ typedef PlatformRiscV PlatformDefault;
     \return TLS value.
     \note   tp register is an alias for x4
 */
-__stk_forceinline uintptr_t GetTls()
+__stk_forceinline Word GetTls()
 {
-    uintptr_t tp;
+    Word tp;
     __asm volatile("mv %0, tp" : "=r"(tp) : /* input: none */ : /* clobbers: none */);
     return tp;
 }
@@ -69,7 +69,7 @@ __stk_forceinline uintptr_t GetTls()
     \param[in] tp: TLS value.
     \note      tp register is an alias for x4
 */
-__stk_forceinline void SetTls(uintptr_t tp)
+__stk_forceinline void SetTls(Word tp)
 {
     __asm volatile("mv tp, %0" : /* output: none */ : "r"(tp) : /* clobbers: none */);
 }

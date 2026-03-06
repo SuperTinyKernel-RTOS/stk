@@ -44,9 +44,9 @@ typedef PlatformArmCortexM PlatformDefault;
     \return TLS value.
     \note   Using r9 register.
 */
-__stk_forceinline uintptr_t GetTls()
+__stk_forceinline Word GetTls()
 {
-    uintptr_t tp;
+    Word tp;
     __asm volatile("MOV %0, r9" : "=r"(tp) : /* input: none */ : /* clobbers: none */);
     return tp;
 }
@@ -55,7 +55,7 @@ __stk_forceinline uintptr_t GetTls()
     \param[in] tp: TLS value.
     \note      Using r9 register.
 */
-__stk_forceinline void SetTls(uintptr_t tp)
+__stk_forceinline void SetTls(Word tp)
 {
     __asm volatile("MOV r9, %0" : /* output: none */ : "r"(tp) : /* clobbers: none */);
 }

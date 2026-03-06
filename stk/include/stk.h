@@ -170,7 +170,7 @@ class Kernel : public IKernel, private IPlatform::IEventHandler
         /*! \brief  Get task identifier.
             \return TId derived from the bound ITask pointer address (unique per task instance).
         */
-        TId GetTid() const { return reinterpret_cast<TId>(m_user); }
+        TId GetTid() const { return hw::PtrToWord(m_user); }
 
         /*! \brief  Wake this task on the next scheduling tick.
             \note   Sets m_time_sleep to -1 (one tick remaining) so the task exits sleep state
@@ -1672,8 +1672,8 @@ protected:
             .TaskID    = task->GetUserStack()->tid,
             .sName     = task->GetUserTask()->GetTraceName(),
             .Prio      = 0,
-            .StackBase = reinterpret_cast<U32>(task->GetUserTask()->GetStack()),
-            .StackSize = task->GetUserTask()->GetStackSizeBytes(),
+            .StackBase = hw::PtrToWord(task->GetUserTask()->GetStack()),
+            .StackSize = task->GetUserTask()->GetStackSizeBytes()
         };
         SEGGER_SYSVIEW_SendTaskInfo(&info);
     }
