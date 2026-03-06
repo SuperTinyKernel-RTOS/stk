@@ -150,14 +150,16 @@
     #define __stk_attr_deprecated
 #endif
 
-/*! \def   __stk_full_memfence
+/*! \def    __stk_full_memfence
     \brief Emits a full (sequentially-consistent) memory barrier (in-code statement).
     \note  Prevents both the compiler and the CPU from reordering memory accesses across this point.
            Used to enforce visibility ordering between cores or between a task and an ISR without
            entering a critical section.
 */
-#ifdef __GNUC__
+#if defined(__GNUC__) || defined(__clang__)
     #define __stk_full_memfence() __sync_synchronize()
+#elif defined(_MSC_VER)
+    #define __stk_full_memfence() __stk_dmb()
 #else
     #error "__stk_full_memfence() is not implemented for this compiler. Add a definition to stk_defs.h."
 #endif
@@ -172,15 +174,26 @@
            waiting loops without modifying kernel source.
 */
 #ifndef __stk_relax_cpu
-#ifdef __GNUC__
+#if defined(__GNUC__) || defined(__clang__)
     #if defined(__i386__) || defined(__x86_64__)
         #define __stk_relax_cpu() __builtin_ia32_pause()
     #elif defined(__riscv)
         #ifdef __riscv_zihintpause
             #define __stk_relax_cpu() __builtin_riscv_pause()
         #else
-            #define __stk_relax_cpu() __stk_full_memfence() // Zihintpause not available, memory fence used as fallback
+            #define __stk_relax_cpu() __stk_full_memfence() 
         #endif
+    #else
+        #define __stk_relax_cpu() __stk_full_memfence()
+    #endif
+#elif defined(_MSC_VER)
+    #include <intrin.h>
+    #if defined(_M_IX86) || defined(_M_X64)
+        // Maps to the PAUSE instruction
+        #define __stk_relax_cpu() _mm_pause()
+    #elif defined(_M_ARM) || defined(_M_ARM64)
+        // Maps to the YIELD instruction on ARM
+        #define __stk_relax_cpu() __yield()
     #else
         #define __stk_relax_cpu() __stk_full_memfence()
     #endif
@@ -255,21 +268,28 @@
            Can be overridden by defining STK_STACK_MEMORY_FILLER before including this header or in stk_config.h.
 */
 #ifndef STK_STACK_MEMORY_FILLER
-    #define STK_STACK_MEMORY_FILLER ((TReg)(sizeof(TReg) <= 4 ? 0xdeadbeef : 0xdeadbeefdeadbeef))
+    #define STK_STACK_MEMORY_FILLER ((Word)(sizeof(Word) <= 4 ? 0xdeadbeef : 0xdeadbeefdeadbeef))
 #endif
 
-/*! \def   _STK_ARCH_CPU_COUNT
+/*! \def   STK_STACK_MEMORY_ALIGN
+    \brief Stack memory alignment (default: 8).
+*/
+#ifndef STK_STACK_MEMORY_ALIGN
+    #define STK_STACK_MEMORY_ALIGN 8
+#endif
+
+/*! \def   STK_ARCH_CPU_COUNT
     \brief Number of physical CPU cores available to the scheduler (default: 1).
     \note  Controls the number of per-CPU kernel service instances and per-CPU data structures
            allocated by the kernel. Set to the actual core count for SMP (symmetric multi-processing)
            targets. Can be defined in the architecture header or stk_config.h.
 */
-#ifndef _STK_ARCH_CPU_COUNT
-    #define _STK_ARCH_CPU_COUNT 1
+#ifndef STK_ARCH_CPU_COUNT
+    #define STK_ARCH_CPU_COUNT 1
 #endif
 
 /*! \def   STK_STACK_SIZE_MIN
-    \brief Minimum stack size in elements of \c TReg, shared by all stack allocation lower-bound checks.
+    \brief Minimum stack size in elements of \c Word, shared by all stack allocation lower-bound checks.
     \see   TrapStackMemory
     \note  This is the smallest stack that can correctly save and restore all CPU registers during
            a context switch or service trap. The required size depends on the number of registers
@@ -295,7 +315,7 @@
 #endif
 
 /*! \def   STK_SLEEP_TRAP_STACK_SIZE
-    \brief Stack size for the sleep trap in elements of \c TReg (default: STK_STACK_SIZE_MIN).
+    \brief Stack size for the sleep trap in elements of \c Word (default: STK_STACK_SIZE_MIN).
     \see   Kernel::SleepTrapStackMemory
     \note  If IEventOverrider::OnSleep() is overridden with a non-trivial implementation (e.g.
            calling platform-specific low-power APIs that use the stack), increase this value

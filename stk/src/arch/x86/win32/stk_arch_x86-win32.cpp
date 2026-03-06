@@ -64,13 +64,29 @@ using namespace stk;
 //! Internal context.
 static struct Context : public PlatformContext
 {
+    Context()
+    : m_overrider(nullptr),
+        m_sleep_trap(nullptr),
+        m_exit_trap(nullptr),
+        m_winmm_dll(nullptr),
+        m_timer_thread(nullptr),
+        m_tls(TLS_OUT_OF_INDEXES),
+        m_tasks(),
+        m_task_threads(),
+        m_cs(),
+        m_csu_nesting(0),
+        m_timer_tid(0),
+        m_started(false),
+        m_stop_signal(false)
+    {}
+
     void Initialize(IPlatform::IEventHandler *handler, IKernelService *service, Stack *exit_trap, int32_t resolution_us)
     {
         PlatformContext::Initialize(handler, service, exit_trap, resolution_us);
 
         m_overrider    = nullptr;
-        m_sleep_trap   = nullptr;
-        m_exit_trap    = nullptr;
+        m_sleep_trap   = nullptr; // set by Context::InitStack
+        m_exit_trap    = nullptr; // set by Context::InitStack
         m_winmm_dll    = nullptr;
         m_timer_thread = nullptr;
         m_started      = false;
@@ -136,7 +152,7 @@ static struct Context : public PlatformContext
         void InitThread()
         {
             // simulate stack size limitation
-            uint32_t stack_size = m_task->GetStackSize() * sizeof(TReg);
+            size_t stack_size = m_task->GetStackSize() * sizeof(Word);
 
             m_thread = CreateThread(nullptr, stack_size, &OnTaskRun, this, CREATE_SUSPENDED, &m_thread_id);
         }
@@ -164,7 +180,7 @@ static struct Context : public PlatformContext
     void Sleep(Timeout ticks);
     IWaitObject *Wait(ISyncObject *sync_obj, IMutex *mutex, Timeout timeout);
     void Stop();
-    TReg GetCallerSP() const;
+    Word GetCallerSP() const;
     TId GetTid() const;
     
     __stk_forceinline uintptr_t GetTls() 
@@ -267,7 +283,7 @@ void Context::ConfigureTime()
 void Context::StartActiveTask()
 {
     STK_ASSERT(m_stack_active != nullptr);
-    TaskContext *active_task = hw::TRegToPtr<TaskContext>(m_stack_active->SP);
+    TaskContext *active_task = hw::WordToPtr<TaskContext>(m_stack_active->SP);
     STK_ASSERT(active_task != nullptr);
 
     ResumeThread(active_task->m_thread);
@@ -283,6 +299,7 @@ void Context::CreateTimerThreadAndJoin()
 
     // create tick thread with highest priority
     m_timer_thread = CreateThread(nullptr, 0, &TimerThread, nullptr, 0, nullptr);
+    STK_ASSERT(m_timer_thread != nullptr);
     SetThreadPriority(m_timer_thread, THREAD_PRIORITY_TIME_CRITICAL);
 
     while (!m_task_threads.empty())
@@ -364,7 +381,7 @@ void Context::SwitchContext()
     // suspend Idle thread
     if ((m_stack_idle != m_sleep_trap) && (m_stack_idle != m_exit_trap))
     {
-        TaskContext *idle_task = hw::TRegToPtr<TaskContext>(m_stack_idle->SP);
+        TaskContext *idle_task = hw::WordToPtr<TaskContext>(m_stack_idle->SP);
         STK_ASSERT(idle_task != nullptr);
 
         SuspendThread(idle_task->m_thread);
@@ -385,16 +402,16 @@ void Context::SwitchContext()
     }
     else
     {
-        TaskContext *active_task = hw::TRegToPtr<TaskContext>(m_stack_active->SP);
+        TaskContext *active_task = hw::WordToPtr<TaskContext>(m_stack_active->SP);
         STK_ASSERT(active_task != nullptr);
 
         ResumeThread(active_task->m_thread);
     }
 }
 
-TReg Context::GetCallerSP() const
+Word Context::GetCallerSP() const
 {
-    TReg caller_sp = 0;
+    Word caller_sp = 0;
     DWORD calling_tid = GetCurrentThreadId();
 
     Win32ScopedCriticalSection __cs(const_cast<STK_X86_WIN32_CRITICAL_SECTION &>(m_cs));
@@ -403,7 +420,7 @@ TReg Context::GetCallerSP() const
     {
         if ((*itr)->m_thread_id == calling_tid)
         {
-            caller_sp = hw::PtrToTReg(STK_X86_WIN32_GET_SP((*itr)->m_task->GetStack()));
+            caller_sp = hw::PtrToWord(STK_X86_WIN32_GET_SP((*itr)->m_task->GetStack()));
             break;
         }
     }
@@ -464,7 +481,7 @@ bool Context::InitStack(EStackType stack_type, Stack *stack, IStackMemory *stack
         break; }
     }
 
-    stack->SP = hw::PtrToTReg(ctx);
+    stack->SP = hw::PtrToWord(ctx);
 
     return true;
 }
@@ -531,7 +548,7 @@ void PlatformX86Win32::SetEventOverrider(IEventOverrider *overrider)
     g_Context.m_overrider = overrider;
 }
 
-TReg PlatformX86Win32::GetCallerSP() const
+Word PlatformX86Win32::GetCallerSP() const
 {
     return g_Context.GetCallerSP();
 }

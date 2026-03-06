@@ -139,7 +139,7 @@ inline void ConditionVariable::NotifyAll()
 inline bool ConditionVariable::Tick()
 {
     // required for multi-core CPU and multiple instances of STK (one per core)
-#if (_STK_ARCH_CPU_COUNT > 1)
+#if (STK_ARCH_CPU_COUNT > 1)
     ScopedCriticalSection __cs;
 #endif
 

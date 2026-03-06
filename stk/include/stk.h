@@ -22,7 +22,7 @@
            task-switching strategies.
 
     Include this single header in user application code. It transitively pulls in:
-     - stk_helper.h    — Task, TaskW, StackMemoryWrapper, and time/synchronization utilities.
+     - stk_helper.h             — Task, TaskW, StackMemoryWrapper, and time/synchronization utilities.
      - stk_strategy_rrobin.h    — SwitchStrategyRoundRobin.
      - stk_strategy_swrrobin.h  — SwitchStrategySmoothWeightedRoundRobin.
      - stk_strategy_monotonic.h — SwitchStrategyMonotonic (SRT rate-monotonic).
@@ -446,12 +446,12 @@ class Kernel : public IKernel, private IPlatform::IEventHandler
         /*! \brief     Check if Stack Pointer (SP) belongs to this task.
             \param[in] SP: Stack Pointer.
         */
-        bool IsMemoryOfSP(TReg SP) const
+        bool IsMemoryOfSP(Word SP) const
         {
-            TReg *start = m_user->GetStack();
-            TReg *end   = start + m_user->GetStackSize();
+            Word *start = m_user->GetStack();
+            Word *end   = start + m_user->GetStackSize();
 
-            return (SP >= hw::PtrToTReg(start)) && (SP <= hw::PtrToTReg(end));
+            return (SP >= hw::PtrToWord(start)) && (SP <= hw::PtrToWord(end));
         }
 
         /*! \brief     Initialize task with HRT info.
@@ -559,7 +559,7 @@ class Kernel : public IKernel, private IPlatform::IEventHandler
         volatile Timeout  m_time_sleep; //!< Sleep countdown: negative while sleeping (absolute value = ticks remaining), zero when awake.
         SrtInfo           m_srt[STK_ALLOCATE_COUNT(_Mode, KERNEL_HRT, 0, 1)];       //!< SRT metadata. Zero-size (no memory) in KERNEL_HRT mode.
         HrtInfo           m_hrt[STK_ALLOCATE_COUNT(_Mode, KERNEL_HRT, 1, 0)];       //!< HRT metadata. Zero-size (no memory) in non-HRT mode.
-        int32_t           m_rt_weight[_TyStrategy::WEIGHT_API ? 1 : 0];             //!< Run-time weight for weighted-round-robin scheduling. Zero-size for unweighted strategies.
+        int32_t           m_rt_weight[STK_ALLOCATE_COUNT(_TyStrategy::WEIGHT_API, 1, 1, 0)]; //!< Run-time weight for weighted-round-robin scheduling. Zero-size for unweighted strategies.
         WaitObject        m_wait_obj[STK_ALLOCATE_COUNT(_Mode, KERNEL_SYNC, 1, 0)]; //!< Embedded wait object for synchronization. Zero-size (no memory) if KERNEL_SYNC is not set.
     };
 
@@ -1073,7 +1073,7 @@ protected:
         \param[in] SP: Stack pointer.
         \return    Kernel task.
     */
-    __stk_attr_noinline KernelTask *FindTaskBySP(TReg SP) const
+    __stk_attr_noinline KernelTask *FindTaskBySP(Word SP) const
     {
         STK_ASSERT(m_task_now != nullptr);
 
@@ -1082,14 +1082,14 @@ protected:
 
         for (uint32_t i = 0; i < TASKS_MAX; ++i)
         {
-            KernelTask *task = const_cast<KernelTask *>(&m_task_storage[i]);
+            const KernelTask *task = &m_task_storage[i];
 
             // skip finished tasks (applicable only for KERNEL_DYNAMIC mode)
             if ((_Mode & KERNEL_DYNAMIC) && !task->IsBusy())
                 continue;
 
             if (task->IsMemoryOfSP(SP))
-                return task;
+                return const_cast<KernelTask *>(task);
         }
 
         return nullptr;
@@ -1175,7 +1175,7 @@ protected:
         return UpdateFsmState(idle, active);
     }
 
-    void OnTaskSwitch(TReg caller_SP)
+    void OnTaskSwitch(Word caller_SP)
     {
         // yield with 2 ticks: 1 will be incremented on the next OnTick call by UpdateTasks
         // and remaining 1 will cause a context switch by UpdateFsmState when strategy detects
@@ -1183,7 +1183,7 @@ protected:
         OnTaskSleep(caller_SP, 2);
     }
 
-    void OnTaskSleep(TReg caller_SP, Timeout ticks)
+    void OnTaskSleep(Word caller_SP, Timeout ticks)
     {
         KernelTask *task = FindTaskBySP(caller_SP);
         STK_ASSERT(task != nullptr);
@@ -1223,7 +1223,7 @@ protected:
         }
     }
 
-    IWaitObject *OnTaskWait(TReg caller_SP, ISyncObject *sync_obj, IMutex *mutex, Timeout timeout)
+    IWaitObject *OnTaskWait(Word caller_SP, ISyncObject *sync_obj, IMutex *mutex, Timeout timeout)
     {
         if (_Mode & KERNEL_SYNC)
         {
@@ -1266,7 +1266,7 @@ protected:
         }
     }
 
-    TId OnGetTid(TReg caller_SP) const
+    TId OnGetTid(Word caller_SP) const
     {
         KernelTask *task = FindTaskBySP(caller_SP);
         STK_ASSERT(task != nullptr);
@@ -1710,7 +1710,7 @@ protected:
         typedef SleepTrapStackMemory::MemoryType Memory;
 
         Stack  stack;  //!< Stack descriptor (SP register value + access mode). Initialised by InitTraps() on every Start().
-        Memory memory; //!< Backing stack memory array. Size: STK_SLEEP_TRAP_STACK_SIZE elements of TReg.
+        Memory memory; //!< Backing stack memory array. Size: STK_SLEEP_TRAP_STACK_SIZE elements of Word.
     };
 
     /*! \class ExitTrapStack
@@ -1726,7 +1726,7 @@ protected:
         typedef ExitTrapStackMemory::MemoryType Memory;
 
         Stack  stack;  //!< Stack descriptor (SP register value + access mode). Initialised by InitTraps() on every Start().
-        Memory memory; //!< Backing stack memory array. Size: STACK_SIZE_MIN elements of TReg.
+        Memory memory; //!< Backing stack memory array. Size: STACK_SIZE_MIN elements of Word.
     };
 
     /*! \typedef SyncObjectList

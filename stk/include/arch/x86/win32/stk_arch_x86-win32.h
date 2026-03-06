@@ -32,7 +32,7 @@ public:
     void ProcessTick();
     void ProcessHardFault();
     void SetEventOverrider(IEventOverrider *overrider);
-    TReg GetCallerSP() const;
+    Word GetCallerSP() const;
     TId GetTid() const;
 };
 
@@ -48,9 +48,17 @@ typedef PlatformX86Win32 PlatformDefault;
 */
 #if defined(_MSC_VER)
     #include <intrin.h>
-    #define __stk_dmb() MemoryBarrier()
-#elif defined(__GNUC__)
-    #define __stk_dmb() __asm volatile("mfence" ::: "memory")
+    #if defined(_M_IX86) || defined(_M_X64)
+        // x86/x64: full hardware serializing fence
+        #define __stk_dmb() _mm_mfence()
+    #elif defined(_M_ARM) || defined(_M_ARM64)
+        // ARM/ARM64: Data Memory Barrier (Inner Shareable)
+        #define __stk_dmb() __dmb(_ARM_BARRIER_ISH)
+    #endif
+#elif defined(__GNUC__) || defined(__clang__)
+    #define __stk_dmb() __sync_synchronize()
+#else
+    #error "__stk_dmb() is not implemented for this compiler."
 #endif
 
 #endif /* STK_ARCH_X86_WIN32_H_ */

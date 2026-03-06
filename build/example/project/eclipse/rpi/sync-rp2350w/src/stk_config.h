@@ -17,12 +17,12 @@
 #define _STK_ARCH_ARM_CORTEX_M
 
 // Define _STK_C_CPU_COUNT as 2 to use STK on both CPU cores or on CPU1, if 1 then STK can be hosted on CPU0 only
-#define _STK_ARCH_CPU_COUNT    (2)
-#define _STK_ARCH_GET_CPU_ID() (*(uint32_t *)(SIO_BASE + SIO_CPUID_OFFSET)) // see get_core_num() in pico/platform.h
+#define STK_ARCH_CPU_COUNT    (2)
+#define STK_ARCH_GET_CPU_ID() (*(uint32_t *)(SIO_BASE + SIO_CPUID_OFFSET)) // see get_core_num() in pico/platform.h
 
 // RP2350 ISR handlers, see crt0.S of pico-sdk
-#define _STK_SYSTICK_HANDLER   isr_systick
-#define _STK_PENDSV_HANDLER    isr_pendsv
-#define _STK_SVC_HANDLER       isr_svcall
+#define STK_SYSTICK_HANDLER   isr_systick
+#define STK_PENDSV_HANDLER    isr_pendsv
+#define STK_SVC_HANDLER       isr_svcall
 
 #endif /* STK_CONFIG_H_ */

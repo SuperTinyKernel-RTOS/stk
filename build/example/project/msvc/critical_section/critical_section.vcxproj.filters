@@ -34,13 +34,16 @@
     <Filter Include="Source Files\example">
       <UniqueIdentifier>{803d46da-e1c9-48b9-9a9b-37cca572dc12}</UniqueIdentifier>
     </Filter>
+    <Filter Include="stk\sync">
+      <UniqueIdentifier>{cb444249-814e-46a7-858c-0adc190d1d3a}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="stk\time">
+      <UniqueIdentifier>{a571f36d-f56d-423a-863c-34450e2e21fb}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="main.cpp">
       <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="..\..\..\..\..\stk\src\stk.cpp">
-      <Filter>stk</Filter>
     </ClCompile>
     <ClCompile Include="..\..\..\..\..\stk\src\arch\x86\win32\stk_arch_x86-win32.cpp">
       <Filter>stk\arch\x86\win32</Filter>
@@ -85,6 +88,54 @@
     </ClInclude>
     <ClInclude Include="..\..\..\critical_section\example.h">
       <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\..\..\stk\include\strategy\stk_strategy_monotonic.h">
+      <Filter>stk\strategy</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\..\..\stk\include\strategy\stk_strategy_swrrobin.h">
+      <Filter>stk\strategy</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\..\..\stk\include\strategy\stk_strategy_edf.h">
+      <Filter>stk\strategy</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\..\..\stk\include\strategy\stk_strategy_fpriority.h">
+      <Filter>stk\strategy</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\..\..\stk\include\sync\stk_sync.h">
+      <Filter>stk\sync</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\..\..\stk\include\sync\stk_sync_cs.h">
+      <Filter>stk\sync</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\..\..\stk\include\sync\stk_sync_cv.h">
+      <Filter>stk\sync</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\..\..\stk\include\sync\stk_sync_event.h">
+      <Filter>stk\sync</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\..\..\stk\include\sync\stk_sync_mutex.h">
+      <Filter>stk\sync</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\..\..\stk\include\sync\stk_sync_pipe.h">
+      <Filter>stk\sync</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\..\..\stk\include\sync\stk_sync_rwmutex.h">
+      <Filter>stk\sync</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\..\..\stk\include\sync\stk_sync_semaphore.h">
+      <Filter>stk\sync</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\..\..\stk\include\sync\stk_sync_spinlock.h">
+      <Filter>stk\sync</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\..\..\stk\include\time\stk_time.h">
+      <Filter>stk\time</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\..\..\stk\include\time\stk_time_timer.h">
+      <Filter>stk\time</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\..\..\stk\include\time\stk_time_util.h">
+      <Filter>stk\time</Filter>
     </ClInclude>
   </ItemGroup>
 </Project>

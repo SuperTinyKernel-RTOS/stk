@@ -110,13 +110,13 @@ static __stk_forceinline void STK_RISCV_SPIN_LOCK_UNLOCK(volatile bool &LOCK)
 #define STK_RISCV_ISR_STACK_SIZE 256
 
 //! Timer handler.
-#ifndef _STK_SYSTICK_HANDLER
-    #define _STK_SYSTICK_HANDLER riscv_mtvec_mti // see vector_table.h/vector_table.c
+#ifndef STK_SYSTICK_HANDLER
+    #define STK_SYSTICK_HANDLER riscv_mtvec_mti // see vector_table.h/vector_table.c
 #endif
 
 //! Exception handler.
-#ifndef _STK_SVC_HANDLER
-    #define _STK_SVC_HANDLER riscv_mtvec_exception // see vector_table.h/vector_table.c
+#ifndef STK_SVC_HANDLER
+    #define STK_SVC_HANDLER riscv_mtvec_exception // see vector_table.h/vector_table.c
 #endif
 
 #if (__riscv_flen == 0)
@@ -217,9 +217,9 @@ static __stk_forceinline void HW_EnableIrq()
 /*! \brief  Enter critical section.
     \return Session value which has to be supplied to HW_ExitCriticalSection().
 */
-static __stk_forceinline TReg HW_EnterCriticalSection()
+static __stk_forceinline Word HW_EnterCriticalSection()
 {
-    TReg ses;
+    Word ses;
 
     __asm volatile("csrrci %0, mstatus, %1"
     : "=r"(ses)
@@ -232,7 +232,7 @@ static __stk_forceinline TReg HW_EnterCriticalSection()
 /*! \brief     Exit critical section.
     \param[in] ses: Session value obtained by HW_EnterCriticalSection().
 */
-static __stk_forceinline void HW_ExitCriticalSection(TReg ses)
+static __stk_forceinline void HW_ExitCriticalSection(Word ses)
 {
     __asm volatile("csrrs zero, mstatus, %0"
     : /* output: none */
@@ -297,9 +297,9 @@ static __stk_forceinline void HW_SetMtimecmp(uint64_t advance)
 
 /*! \brief Get SP of the calling process.
 */
-static __stk_forceinline TReg HW_GetCallerSP()
+static __stk_forceinline Word HW_GetCallerSP()
 {
-    TReg sp;
+    Word sp;
 
     // load SP into sp variable
     __asm volatile(
@@ -344,7 +344,7 @@ static struct Context : public PlatformContext
         // init ISR's stack
         {
             StackMemoryWrapper<STK_RISCV_ISR_STACK_SIZE> stack_isr_mem(&m_stack_isr_mem);
-            m_stack_isr.SP   = hw::PtrToTReg(InitStackMemory(&stack_isr_mem));
+            m_stack_isr.SP   = hw::PtrToWord(InitStackMemory(&stack_isr_mem));
             m_stack_isr.mode = ACCESS_PRIVILEGED;
         }
 
@@ -375,7 +375,7 @@ static struct Context : public PlatformContext
     __stk_forceinline void EnterCriticalSection()
     {
         // disable local interrupts and save state
-        TReg current_ses;
+        Word current_ses;
         STK_RISCV_CRITICAL_SECTION_START(current_ses);
 
         if (m_csu_nesting == 0)
@@ -398,7 +398,7 @@ static struct Context : public PlatformContext
         if (m_csu_nesting == 0)
         {
             // capture the state before releasing lock
-            TReg ses_to_restore = m_csu;
+            Word ses_to_restore = m_csu;
 
             // release global lock
             STK_RISCV_SPIN_LOCK_UNLOCK(g_CsuLock);
@@ -419,18 +419,18 @@ static struct Context : public PlatformContext
     eovrd_t  *m_overrider;     //!< platform events overrider
     sehndl_t *m_specific;      //!< platform-specific event handler
     int32_t   m_tick_period;   //!< system tick periodicity (microseconds, ticks)
-    TReg    m_csu;           //!< user critical session
+    Word    m_csu;           //!< user critical session
     uint32_t  m_csu_nesting;   //!< depth of user critical session nesting
     bool      m_starting;      //!< 'true' when in is being started
     bool      m_started;       //!< 'true' when in started state
     bool      m_exiting;       //!< 'true' when is exiting the scheduling process
 }
-g_Context[_STK_ARCH_CPU_COUNT];
+g_Context[STK_ARCH_CPU_COUNT];
 
 void PlatformRiscV::ProcessTick()
 {
 #ifdef _STK_RISCV_USE_PENDSV
-    TReg cs;
+    Word cs;
     STK_RISCV_CRITICAL_SECTION_START(cs);
 
     GetContext().OnTick();
@@ -711,12 +711,12 @@ static __stk_forceinline void LoadIsrSP()
 
 static __stk_forceinline bool IsHandlerMode()
 {
-    TReg current_sp = HW_GetCallerSP();
+    Word current_sp = HW_GetCallerSP();
 
     // get the bounds of the ISR stack from our Context
     // note: STK uses StackMemoryWrapper, so we check against that memory block
-    const TReg isr_stack_base = (TReg)&GetContext().m_stack_isr_mem;
-    const TReg isr_stack_top  = isr_stack_base + STK_RISCV_ISR_STACK_SIZE;
+    const Word isr_stack_base = (Word)&GetContext().m_stack_isr_mem;
+    const Word isr_stack_top  = isr_stack_base + STK_RISCV_ISR_STACK_SIZE;
 
     return ((current_sp >= isr_stack_base) && (current_sp < isr_stack_top));
 }
@@ -742,10 +742,10 @@ extern "C" STK_RISCV_ISR_SECTION __stk_attr_used void TrySwitchContext() // __st
 }
 
 #ifdef _STK_RISCV_USE_PENDSV
-STK_RISCV_ISR void _STK_SYSTICK_HANDLER()
+STK_RISCV_ISR void STK_SYSTICK_HANDLER()
 {
     // save SP before switching to the main
-    TReg sp = HW_GetCallerSP();
+    Word sp = HW_GetCallerSP();
 
     // load SP of the main stack to handle ISR
     LoadIsrSP();
@@ -765,7 +765,7 @@ STK_RISCV_ISR void _STK_SYSTICK_HANDLER()
     : /* clobbers: none */);
 }
 #else
-extern "C" STK_RISCV_ISR_SECTION __stk_attr_naked void _STK_SYSTICK_HANDLER()
+extern "C" STK_RISCV_ISR_SECTION __stk_attr_naked void STK_SYSTICK_HANDLER()
 {
     // save current context (unconditionally)
     SaveContext();
@@ -815,9 +815,9 @@ static __stk_forceinline void StartScheduling()
     set_csr(mie, MIP_MTIP);
 }
 
-STK_RISCV_ISR void _STK_SVC_HANDLER()
+STK_RISCV_ISR void STK_SVC_HANDLER()
 {
-    TReg cause;
+    Word cause;
     __asm volatile("csrr %0, mcause"
     : "=r"(cause)
     : /* input : none */
@@ -843,7 +843,7 @@ STK_RISCV_ISR void _STK_SVC_HANDLER()
                 GetContext().m_specific->OnException(cause);
 
             // switch to the next instruction of the caller space (PC) after the return
-            write_csr(mepc, read_csr(mepc) + sizeof(TReg));
+            write_csr(mepc, read_csr(mepc) + sizeof(Word));
         }
         else
         {
@@ -881,7 +881,7 @@ static void OnTaskRun(ITask *task)
 
 static void OnTaskExit()
 {
-    TReg cs;
+    Word cs;
     STK_RISCV_CRITICAL_SECTION_START(cs);
 
     GetContext().m_handler->OnTaskExit(GetContext().m_stack_active);
@@ -952,34 +952,34 @@ bool PlatformRiscV::InitStack(EStackType stack_type, Stack *stack, IStackMemory 
     STK_ASSERT(stack_memory->GetStackSize() > (STK_RISCV_REGISTER_COUNT + STK_SERVICE_SLOTS));
 
     // initialize stack memory
-    TReg *stack_top = PlatformContext::InitStackMemory(stack_memory);
+    Word *stack_top = PlatformContext::InitStackMemory(stack_memory);
 
     // initialize Stack Pointer (SP)
-    stack->SP = hw::PtrToTReg(stack_top - (STK_RISCV_REGISTER_COUNT + STK_SERVICE_SLOTS));
+    stack->SP = hw::PtrToWord(stack_top - (STK_RISCV_REGISTER_COUNT + STK_SERVICE_SLOTS));
 
-    TReg MEPC, RA, X10;
-    TReg MSTATUS = MSTATUS_MPP | MSTATUS_MPIE | (STK_RISCV_FP != 0 ? (MSTATUS_FS | MSTATUS_XS) : 0);
+    Word MEPC, RA, X10;
+    Word MSTATUS = MSTATUS_MPP | MSTATUS_MPIE | (STK_RISCV_FP != 0 ? (MSTATUS_FS | MSTATUS_XS) : 0);
 #if (STK_RISCV_FP != 0)
-    TReg FSR = 0;
+    Word FSR = 0;
 #endif
 
     // initialize registers for the user task's first start
     switch (stack_type)
     {
     case STACK_USER_TASK: {
-        MEPC = hw::PtrToTReg(&OnTaskRun);
-        RA   = hw::PtrToTReg(&OnTaskExit);
-        X10  = hw::PtrToTReg(user_task);
+        MEPC = hw::PtrToWord(&OnTaskRun);
+        RA   = hw::PtrToWord(&OnTaskExit);
+        X10  = hw::PtrToWord(user_task);
         break; }
 
     case STACK_SLEEP_TRAP: {
-        MEPC = hw::PtrToTReg(GetContext().m_overrider != NULL ? &OnSchedulerSleepOverride : &OnSchedulerSleep);
+        MEPC = hw::PtrToWord(GetContext().m_overrider != NULL ? &OnSchedulerSleepOverride : &OnSchedulerSleep);
         RA   = STK_STACK_MEMORY_FILLER; // should not attempt to exit
         X10  = 0;
         break; }
 
     case STACK_EXIT_TRAP: {
-        MEPC = hw::PtrToTReg(&OnSchedulerExit);
+        MEPC = hw::PtrToWord(&OnSchedulerExit);
         RA   = STK_STACK_MEMORY_FILLER; // should not attempt to exit
         X10  = 0;
         break; }
@@ -1056,7 +1056,7 @@ void PlatformRiscV::SetEventOverrider(IEventOverrider *overrider)
     GetContext().m_overrider = overrider;
 }
 
-TReg PlatformRiscV::GetCallerSP() const
+Word PlatformRiscV::GetCallerSP() const
 {
     return ::HW_GetCallerSP();
 }
