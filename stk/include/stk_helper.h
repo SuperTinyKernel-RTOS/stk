@@ -58,11 +58,11 @@ template <size_t _StackSize, EAccessMode _AccessMode>
 class Task : public ITask
 {
 public:
-    enum { STACK_SIZE = _StackSize }; //!< Stack size in elements of TReg, mirrors the _StackSize template parameter.
+    enum { STACK_SIZE = _StackSize }; //!< Stack size in elements of Word, mirrors the _StackSize template parameter.
 
-    TReg *GetStack() const { return const_cast<TReg *>(m_stack); }
+    Word *GetStack() const { return const_cast<Word *>(m_stack); }
     size_t GetStackSize() const { return _StackSize; }
-    size_t GetStackSizeBytes() const { return _StackSize * sizeof(TReg); }
+    size_t GetStackSizeBytes() const { return _StackSize * sizeof(Word); }
     EAccessMode GetAccessMode() const { return _AccessMode; }
 
     /*! \brief Default no-op handler. Override in subclass to log or handle missed deadlines.
@@ -78,7 +78,7 @@ public:
 
     /*! \brief Get object's own address as its Id. Unique per task instance, requires no manual assignment.
     */
-    virtual TId GetId() const { return hw::PtrToTReg(this); }
+    virtual TId GetId() const { return hw::PtrToWord(this); }
 
     /*! \brief Override in subclass to supply a name for SEGGER SystemView tracing. Returns NULL by default.
     */
@@ -94,7 +94,7 @@ private:
 
     \tparam _Weight:     Static scheduling weight (positive, non-zero 24-bit integer).
                          Higher values cause this task to receive proportionally more CPU time.
-    \tparam _StackSize:  Stack size in elements of TReg.
+    \tparam _StackSize:  Stack size in elements of Word.
     \tparam _AccessMode: Hardware access mode (ACCESS_USER or ACCESS_PRIVILEGED).
 
     \note  Hard Real-Time mode (KERNEL_HRT) is not supported for weighted tasks.
@@ -106,11 +106,11 @@ template <int32_t _Weight, size_t _StackSize, EAccessMode _AccessMode>
 class TaskW : public ITask
 {
 public:
-    enum { STACK_SIZE = _StackSize }; //!< Stack size in elements of TReg, mirrors the _StackSize template parameter.
+    enum { STACK_SIZE = _StackSize }; //!< Stack size in elements of Word, mirrors the _StackSize template parameter.
 
-    TReg *GetStack() const { return const_cast<TReg *>(m_stack); }
+    Word *GetStack() const { return const_cast<Word *>(m_stack); }
     size_t GetStackSize() const { return _StackSize; }
-    size_t GetStackSizeBytes() const { return _StackSize * sizeof(TReg); }
+    size_t GetStackSizeBytes() const { return _StackSize * sizeof(Word); }
     EAccessMode GetAccessMode() const { return _AccessMode; }
 
     /*! \brief Hard Real-Time mode is unsupported for weighted tasks. Triggers an assertion if called.
@@ -124,7 +124,7 @@ public:
 
     /*! \brief Get object's own address as its Id. Unique per task instance, requires no manual assignment.
     */
-    virtual TId GetId() const { return hw::PtrToTReg(this); }
+    virtual TId GetId() const { return hw::PtrToWord(this); }
 
     /*! \brief Override in subclass to supply a name for SEGGER SystemView tracing. Returns NULL by default.
     */
@@ -139,7 +139,7 @@ private:
     \note  Wrapper (Adapter) design pattern. Use when the stack memory is declared separately
            from the task object (e.g. in a linker section or shared buffer) and needs to be
            passed to the kernel via the IStackMemory interface.
-    \tparam _StackSize Stack size in elements of TReg. Must be >= STACK_SIZE_MIN.
+    \tparam _StackSize Stack size in elements of Word. Must be >= STACK_SIZE_MIN.
 */
 template <size_t _StackSize>
 class StackMemoryWrapper : public IStackMemory
@@ -162,7 +162,7 @@ public:
 
     /*! \brief Get pointer to the first element of the wrapped stack array.
     */
-    TReg *GetStack() const { return (*m_stack); }
+    Word *GetStack() const { return (*m_stack); }
 
     /*! \brief Get number of elements in the wrapped stack array.
     */
@@ -170,7 +170,7 @@ public:
 
     /*! \brief Get size of the wrapped stack array in bytes.
     */
-    size_t GetStackSizeBytes() const { return _StackSize * sizeof(TReg); }
+    size_t GetStackSizeBytes() const { return _StackSize * sizeof(Word); }
 
 private:
     MemoryType *m_stack; //!< Pointer to the externally-owned stack memory array.

@@ -301,6 +301,8 @@ protected:
                is obtained. Requires that WriteVolatile64 writes hi before lo (which it does).
     \note      Requires a \b single writer that uses WriteVolatile64. Safe with multiple concurrent
                readers. Not C++ memory-model compliant, intended for bare-metal embedded use only.
+    \note      MISRA deviation: [STK-DEV-002] Rule 5-2-7, 5-0-15. Required for lock-free 64-bit I/O
+               on 32-bit architectures using a Hi-Lo retry protocol.
     \warning   Not safe for read-modify-write operations. Use only for polling a value written
                atomically by a single producer.
     \see       WriteVolatile64
@@ -351,6 +353,8 @@ __stk_forceinline T ReadVolatile64(volatile const T *addr)
     \note      A full memory fence is emitted between the two half-writes to prevent the CPU
                from reordering the stores.
     \note      ISR-safe: does not use a critical section.
+    \note      MISRA deviation: [STK-DEV-002] Rule 5-2-7, 5-0-15. Required for lock-free 64-bit I/O
+               on 32-bit architectures using a Hi-Lo retry protocol.
     \warning   Supports only a \b single writer at a time. Concurrent writers on the same address
                will corrupt the value. Not safe for read-modify-write operations (e.g. increment);
                the caller must ensure exclusive write access by other means.
@@ -384,35 +388,35 @@ __stk_forceinline void WriteVolatile64(volatile T *addr, T value)
 /*! \brief     Cast a pointer to a CPU register-width integer.
     \tparam    T: The type of the object pointed to.
     \param[in] ptr: The pointer to be converted.
-    \return    The numeric value of the pointer as a TReg.
+    \return    The numeric value of the pointer as a Word.
     \note      This operation is used to store pointers within task context structures
                or stack frames where raw register values are required.
-    \note      MISRA deviation: Rule 5-2-7 (reinterpret_cast). This is a mechanical
-               necessity for low-level kernel operations where the hardware requires
-               integral values for address registers.
-    \see       IntToPtr
+    \note      MISRA deviation: [STK-DEV-001] Rule 5-2-7 (reinterpret_cast). This is a
+               mechanical necessity for low-level kernel operations where the hardware
+               requires integral values for address registers.
+    \see       WordToPtr
 */
 template <typename T>
-__stk_forceinline TReg PtrToTReg(T *ptr) noexcept
+__stk_forceinline Word PtrToWord(T *ptr) noexcept
 {
-    STK_STATIC_ASSERT(sizeof(TReg) == sizeof(T *));
-    return reinterpret_cast<TReg>(ptr);
+    STK_STATIC_ASSERT(sizeof(Word) == sizeof(T *));
+    return reinterpret_cast<Word>(ptr);
 }
 
 /*! \brief     Cast a CPU register-width integer back to a pointer.
     \tparam    T: The type of the object the resulting pointer will address.
-    \param[in] value: The register-width integer (TReg) to be converted.
+    \param[in] value: The register-width integer (Word) to be converted.
     \return    A pointer of type T* addressing the memory location specified by the value.
-    \note      This is the inverse of PtrToTReg and is primarily used when restoring
+    \note      This is the inverse of PtrToWord and is primarily used when restoring
                a task's context from a saved stack frame.
-    \note      MISRA deviation: Rule 5-2-7 (reinterpret_cast). Required for restoring
-               pointer types from numeric CPU context structures.
-    \see       PtrToTReg
+    \note      MISRA deviation: [STK-DEV-001] Rule 5-2-7 (reinterpret_cast).
+               Required for restoring pointer types from numeric CPU context structures.
+    \see       PtrToWord
 */
 template <typename T>
-__stk_forceinline T *TRegToPtr(TReg value) noexcept
+__stk_forceinline T *WordToPtr(Word value) noexcept
 {
-    STK_STATIC_ASSERT(sizeof(TReg) == sizeof(T *));
+    STK_STATIC_ASSERT(sizeof(Word) == sizeof(T *));
     return reinterpret_cast<T *>(value);
 }
 

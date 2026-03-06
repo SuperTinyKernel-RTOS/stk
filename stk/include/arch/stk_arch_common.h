@@ -48,11 +48,11 @@ public:
         \param[in] memory: Stack memory to initialize.
         \return    Pointer to initialized stack memory.
     */
-    static inline TReg *InitStackMemory(IStackMemory *memory)
+    static inline Word *InitStackMemory(IStackMemory *memory)
     {
         int32_t stack_size = memory->GetStackSize();
-        TReg *itr = memory->GetStack();
-        TReg *stack_top = itr + stack_size;
+        Word *itr = memory->GetStack();
+        Word *stack_top = itr + stack_size;
 
         STK_ASSERT(stack_size >= STACK_SIZE_MIN);
 

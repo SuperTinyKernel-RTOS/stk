@@ -73,7 +73,7 @@ enum EConsts
 {
     PERIODICITY_MAX      = 99000,             //!< Maximum periodicity (microseconds), 99 milliseconds (note: this value is the highest working on a real hardware and QEMU).
     PERIODICITY_DEFAULT  = 1000,              //!< Default periodicity (microseconds), 1 millisecond.
-    STACK_SIZE_MIN       = STK_STACK_SIZE_MIN //!< Minimum stack size in elements of TReg. Used as a lower bound for all stack allocations (user task, sleep trap, exit trap). See: StackMemoryDef, StackMemoryWrapper.
+    STACK_SIZE_MIN       = STK_STACK_SIZE_MIN //!< Minimum stack size in elements of Word. Used as a lower bound for all stack allocations (user task, sleep trap, exit trap). See: StackMemoryDef, StackMemoryWrapper.
 };
 
 /*! \enum  ESystemTaskId
@@ -95,15 +95,19 @@ enum ETraceEventId
     TRACE_EVENT_SLEEP   = 1000 + 2
 };
 
-/*! \typedef TReg
-    \brief   CPU register/word type.
+/*! \typedef Word
+    \brief   Native processor word type.
+    \details Represents natural data width of the CPU (matching uintptr_t).
+             Used for stack allocation, register storage, pointer value storage,
+             and memory alignment to ensure atomic access, optimal performance,
+             and hardware compatibility.
 */
-typedef uintptr_t TReg;
+typedef uintptr_t Word;
 
 /*! \typedef ThreadId
     \brief   Task/thread id.
 */
-typedef TReg TId;
+typedef Word TId;
 
 /*! \var     TID_ISR
     \brief   Reserved task/thread id representing an ISR context.
@@ -150,7 +154,7 @@ template <size_t _StackSize> struct StackMemoryDef
     /*! \typedef Type
         \brief   Stack memory type.
     */
-    typedef __stk_aligned(16) TReg Type[_StackSize];
+    typedef __stk_aligned(16) Word Type[_StackSize];
 };
 
 /*! \class Stack
@@ -158,7 +162,7 @@ template <size_t _StackSize> struct StackMemoryDef
 */
 struct Stack
 {
-    TReg        SP;   //!< Stack Pointer (SP) register (note: must be the first entry in this struct)
+    Word        SP;   //!< Stack Pointer (SP) register (note: must be the first entry in this struct)
     EAccessMode mode; //!< access mode
 #if STK_NEED_TASK_ID
     TId         tid;  //!< task id (see \a STK_SEGGER_SYSVIEW)
@@ -173,7 +177,7 @@ class IStackMemory
 public:
     /*! \brief Get pointer to the stack memory.
     */
-    virtual TReg *GetStack() const = 0;
+    virtual Word *GetStack() const = 0;
 
     /*! \brief Get number of elements of the stack memory array.
     */
@@ -556,13 +560,13 @@ public:
         /*! \brief      Called by Thread process (via IKernelService::SwitchToNext) to switch to a next task.
             \param[in]  caller_SP: Value of Stack Pointer (SP) register (for locating the calling process inside the kernel).
         */
-        virtual void OnTaskSwitch(TReg caller_SP) = 0;
+        virtual void OnTaskSwitch(Word caller_SP) = 0;
 
         /*! \brief      Called by Thread process (via IKernelService::Sleep) for exclusion of the calling process from scheduling (sleeping).
             \param[in]  caller_SP: Value of Stack Pointer (SP) register (for locating the calling process inside the kernel).
             \param[in]  ticks: Time to sleep (ticks).
         */
-        virtual void OnTaskSleep(TReg caller_SP, Timeout ticks) = 0;
+        virtual void OnTaskSleep(Word caller_SP, Timeout ticks) = 0;
 
         /*! \brief      Called from the Thread process when task finished (its Run function exited by return).
             \param[out] stack: Stack of the exited task.
@@ -575,13 +579,13 @@ public:
             \param[in]  mutex: IMutex instance (passed by Wait).
             \param[in]  timeout: Time to sleep (ticks).
         */
-        virtual IWaitObject *OnTaskWait(TReg caller_SP, ISyncObject *sync_obj, IMutex *mutex, Timeout timeout) = 0;
+        virtual IWaitObject *OnTaskWait(Word caller_SP, ISyncObject *sync_obj, IMutex *mutex, Timeout timeout) = 0;
 
         /*! \brief      Called from the Thread process when for getting task/thread id of the process.
             \param[in]  caller_SP: Value of Stack Pointer (SP) register (for locating the calling process inside the kernel).
             \return     Task/thread id of the process.
         */
-        virtual TId OnGetTid(TReg caller_SP) const = 0;
+        virtual TId OnGetTid(Word caller_SP) const = 0;
     };
 
     /*! \class IEventOverrider
@@ -673,7 +677,7 @@ public:
         \note      Valid for a Thread process only.
         \return    Current value of the Stack Pointer (SP) of the calling process.
     */
-    virtual TReg GetCallerSP() const = 0;
+    virtual Word GetCallerSP() const = 0;
 
     /*! \brief     Get thread Id.
         \return    Thread Id.

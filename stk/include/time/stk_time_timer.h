@@ -279,7 +279,7 @@ private:
         const char *GetTraceName() const  { return nullptr; }
 
         // IStackMemory
-        TReg *GetStack() const           { return m_stack; }
+        Word *GetStack() const           { return m_stack; }
         size_t GetStackSize() const      { return m_stack_size; }
         size_t GetStackSizeBytes() const { return m_stack_size * sizeof(size_t); }
 
@@ -300,7 +300,7 @@ private:
 
         TimerFuncType m_func;
         TimerHost    *m_host;
-        TReg         *m_stack;
+        Word         *m_stack;
         size_t        m_stack_size;
         EAccessMode   m_mode;
         int32_t       m_weight;
