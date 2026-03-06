@@ -183,14 +183,14 @@ static struct Context : public PlatformContext
     Word GetCallerSP() const;
     TId GetTid() const;
     
-    __stk_forceinline uintptr_t GetTls() 
+    __stk_forceinline Word GetTls() 
     { 
-        return reinterpret_cast<uintptr_t>(TlsGetValue(m_tls)); 
+        return hw::PtrToWord(TlsGetValue(m_tls)); 
     }
 
-    __stk_forceinline void SetTls(uintptr_t tp) 
+    __stk_forceinline void SetTls(Word tp) 
     { 
-        TlsSetValue(m_tls, reinterpret_cast<void *>(tp));
+        TlsSetValue(m_tls, hw::WordToPtr<void>(tp));
     }
     
     __stk_forceinline void EnterCriticalSection()
@@ -558,12 +558,12 @@ TId PlatformX86Win32::GetTid() const
     return g_Context.GetTid();
 }
 
-uintptr_t stk::hw::GetTls()
+Word stk::hw::GetTls()
 {
     return g_Context.GetTls();
 }
 
-void stk::hw::SetTls(uintptr_t tp)
+void stk::hw::SetTls(Word tp)
 {
     return g_Context.SetTls(tp);
 }

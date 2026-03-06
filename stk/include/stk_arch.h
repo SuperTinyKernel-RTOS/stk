@@ -79,6 +79,41 @@ namespace stk {
 */
 namespace hw {
 
+/*! \brief     Cast a pointer to a CPU register-width integer.
+    \tparam    T: The type of the object pointed to.
+    \param[in] ptr: The pointer to be converted.
+    \return    The numeric value of the pointer as a Word.
+    \note      This operation is used to store pointers within task context structures
+               or stack frames where raw register values are required.
+    \note      MISRA deviation: [STK-DEV-001] Rule 5-2-7 (reinterpret_cast). This is a
+               mechanical necessity for low-level kernel operations where the hardware
+               requires integral values for address registers.
+    \see       WordToPtr
+*/
+template <typename T>
+__stk_forceinline Word PtrToWord(T *ptr) noexcept
+{
+    STK_STATIC_ASSERT(sizeof(Word) == sizeof(T *));
+    return reinterpret_cast<Word>(ptr);
+}
+
+/*! \brief     Cast a CPU register-width integer back to a pointer.
+    \tparam    T: The type of the object the resulting pointer will address.
+    \param[in] value: The register-width integer (Word) to be converted.
+    \return    A pointer of type T* addressing the memory location specified by the value.
+    \note      This is the inverse of PtrToWord and is primarily used when restoring
+               a task's context from a saved stack frame.
+    \note      MISRA deviation: [STK-DEV-001] Rule 5-2-7 (reinterpret_cast).
+               Required for restoring pointer types from numeric CPU context structures.
+    \see       PtrToWord
+*/
+template <typename T>
+__stk_forceinline T *WordToPtr(Word value) noexcept
+{
+    STK_STATIC_ASSERT(sizeof(Word) == sizeof(T *));
+    return reinterpret_cast<T *>(value);
+}
+
 /*! \brief     Check whether the CPU is currently executing inside a hardware interrupt service routine (ISR).
     \return    \c true if called from an ISR context; \c false if called from a normal task/thread context.
     \note      Used as a guard in all ISR-unsafe kernel functions (Sleep, Delay, Yield, GetTid, etc.)
@@ -94,14 +129,14 @@ bool IsInsideISR();
 #if !_STK_INLINE_TLS_DEFINED
 
 /*! \brief     Read raw thread-pointer (TP) register used as per-task TLS storage.
-    \return    Current TP register value as a \c uintptr_t.
+    \return    Current TP register value as a \c Word.
     \note      Architecture-specific. On ARM Cortex-M the kernel stores the TLS pointer
                in a dedicated register or memory location; on RISC-V it is the \c tp register.
     \note      Use GetTlsPtr<T>() for a type-safe wrapper that returns a typed pointer.
     \warning   ISR-unsafe in the sense that the TP register holds the \e current task's context;
                reading it from an ISR will return the interrupted task's TLS, not an ISR-specific one.
 */
-uintptr_t GetTls();
+Word GetTls();
 
 /*! \brief     Write raw thread-pointer (TP) register used as per-task TLS storage.
     \param[in] tp: New TP value to store.
@@ -109,7 +144,7 @@ uintptr_t GetTls();
                to the incoming task's TLS pointer. Not intended for direct use in application code;
                use SetTlsPtr<T>() instead.
 */
-void SetTls(uintptr_t tp);
+void SetTls(Word tp);
 
 #endif // _STK_INLINE_TLS_DEFINED
 
@@ -122,19 +157,19 @@ void SetTls(uintptr_t tp);
 template <class _TyTls>
 __stk_forceinline _TyTls *GetTlsPtr()
 {
-    return reinterpret_cast<_TyTls *>(GetTls());
+    return hw::WordToPtr<_TyTls>(GetTls());
 }
 
 /*! \brief     Type-safe wrapper around SetTls() that stores a typed pointer as the raw TP value.
     \tparam    _TyTls: The type pointed to by the TLS register (typically the per-task kernel context struct).
     \param[in] tp: Pointer to the new task's TLS object.
-    \note      Equivalent to \c SetTls(reinterpret_cast<uintptr_t>(tp)). Called by the scheduler
+    \note      Equivalent to \c SetTls(reinterpret_cast<Word>(tp)). Called by the scheduler
                during context switches to install the incoming task's TLS pointer.
 */
 template <class _TyTls>
 __stk_forceinline void SetTlsPtr(const _TyTls *tp)
 {
-    SetTls(reinterpret_cast<uintptr_t>(tp));
+    SetTls(hw::PtrToWord(tp));
 }
 
 /*! \class CriticalSection
@@ -383,41 +418,6 @@ __stk_forceinline void WriteVolatile64(volatile T *addr, T value)
 
         (*plo) = (uint32_t)value;
     }
-}
-
-/*! \brief     Cast a pointer to a CPU register-width integer.
-    \tparam    T: The type of the object pointed to.
-    \param[in] ptr: The pointer to be converted.
-    \return    The numeric value of the pointer as a Word.
-    \note      This operation is used to store pointers within task context structures
-               or stack frames where raw register values are required.
-    \note      MISRA deviation: [STK-DEV-001] Rule 5-2-7 (reinterpret_cast). This is a
-               mechanical necessity for low-level kernel operations where the hardware
-               requires integral values for address registers.
-    \see       WordToPtr
-*/
-template <typename T>
-__stk_forceinline Word PtrToWord(T *ptr) noexcept
-{
-    STK_STATIC_ASSERT(sizeof(Word) == sizeof(T *));
-    return reinterpret_cast<Word>(ptr);
-}
-
-/*! \brief     Cast a CPU register-width integer back to a pointer.
-    \tparam    T: The type of the object the resulting pointer will address.
-    \param[in] value: The register-width integer (Word) to be converted.
-    \return    A pointer of type T* addressing the memory location specified by the value.
-    \note      This is the inverse of PtrToWord and is primarily used when restoring
-               a task's context from a saved stack frame.
-    \note      MISRA deviation: [STK-DEV-001] Rule 5-2-7 (reinterpret_cast).
-               Required for restoring pointer types from numeric CPU context structures.
-    \see       PtrToWord
-*/
-template <typename T>
-__stk_forceinline T *WordToPtr(Word value) noexcept
-{
-    STK_STATIC_ASSERT(sizeof(Word) == sizeof(T *));
-    return reinterpret_cast<T *>(value);
 }
 
 } // namespace hw

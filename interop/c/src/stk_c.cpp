@@ -32,13 +32,13 @@ public:
     const char *GetTraceName() const  { return m_tname; }
 
     // IStackMemory
-    stk_reg_t *GetStack() const { return m_stack; }
+    stk_word_t *GetStack() const { return m_stack; }
     size_t GetStackSize() const { return m_stack_size; }
-    size_t GetStackSizeBytes() const { return m_stack_size * sizeof(stk_reg_t); }
+    size_t GetStackSizeBytes() const { return m_stack_size * sizeof(stk_word_t); }
 
     void Initialize(stk_task_entry_t func,
                     void       *user_data,
-                    stk_reg_t  *stack,
+                    stk_word_t  *stack,
                     size_t      stack_size,
                     EAccessMode mode)
     {
@@ -59,7 +59,7 @@ private:
 
     stk_task_entry_t m_func;
     void            *m_user_data;
-    stk_reg_t       *m_stack;
+    stk_word_t       *m_stack;
     size_t           m_stack_size;
     EAccessMode      m_mode;
     int32_t          m_weight;
@@ -91,7 +91,7 @@ static TaskSlot s_Tasks[STK_C_TASKS_MAX];
 
 static stk_task_t *AllocateTask(stk_task_entry_t entry,
                                 void *arg,
-                                stk_reg_t *stack,
+                                stk_word_t *stack,
                                 uint32_t stack_size,
                                 EAccessMode mode)
 {
@@ -142,10 +142,10 @@ extern "C" {
 #define STK_KERNEL_CASE(X) \
     case X: \
     { \
-        static_assert(sizeof(STK_C_KERNEL_TYPE_CPU_##X) % sizeof(stk_reg_t) == 0, \
-                      "Kernel memory size must be multiple of stk_reg_t"); \
+        static_assert(sizeof(STK_C_KERNEL_TYPE_CPU_##X) % sizeof(stk_word_t) == 0, \
+                      "Kernel memory size must be multiple of stk_word_t"); \
         alignas(alignof(STK_C_KERNEL_TYPE_CPU_##X)) /* instead of __stk_c_stack_attr */ \
-        static stk_reg_t kernel_##X##_mem[sizeof(STK_C_KERNEL_TYPE_CPU_##X) / sizeof(stk_reg_t)]; \
+        static stk_word_t kernel_##X##_mem[sizeof(STK_C_KERNEL_TYPE_CPU_##X) / sizeof(stk_word_t)]; \
         IKernel *kernel = new (kernel_##X##_mem) STK_C_KERNEL_TYPE_CPU_##X(); \
         return reinterpret_cast<stk_kernel_t *>(kernel); \
     }
@@ -260,7 +260,7 @@ void stk_kernel_add_task_hrt(stk_kernel_t *k,
 // ---------------------------------------------------------------------------
 stk_task_t *stk_task_create_privileged(stk_task_entry_t entry,
                                        void *arg,
-                                       stk_reg_t *stack,
+                                       stk_word_t *stack,
                                        uint32_t stack_size)
 {
     STK_ASSERT(entry != nullptr);
@@ -272,7 +272,7 @@ stk_task_t *stk_task_create_privileged(stk_task_entry_t entry,
 
 stk_task_t *stk_task_create_user(stk_task_entry_t entry,
                                  void *arg,
-                                 stk_reg_t *stack,
+                                 stk_word_t *stack,
                                  uint32_t stack_size)
 {
     STK_ASSERT(entry != nullptr);
