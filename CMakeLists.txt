@@ -7,9 +7,9 @@
 #  License: MIT License, see LICENSE for a full text.
 # 
 
-project(global)
-
 cmake_minimum_required(VERSION 3.14)
+
+project(global)
 
 # Vendor specific targeting
 option(VENDOR_STM32   "Target STM32 devices" OFF)

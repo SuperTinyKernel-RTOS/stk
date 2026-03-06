@@ -105,7 +105,7 @@ if (ENABLE_DEBUG_ABILITY)
 else()
     set(TOOLCHAIN_COMMON_FLAGS "-O${OPT_LEVEL_RELEASE} -g -DNDEBUG")
 endif()
-set(TOOLCHAIN_COMMON_FLAGS "${TOOLCHAIN_COMMON_FLAGS} -pipe -fmessage-length=0 -fsigned-char -ffunction-sections -fdata-sections -fno-common -fstrict-aliasing -fmerge-constants -Wall -Wextra -Wno-missing-field-initializers")
+set(TOOLCHAIN_COMMON_FLAGS "${TOOLCHAIN_COMMON_FLAGS} --pipe -msmall-data-limit=8 -mno-save-restore -fmessage-length=0 -fsigned-char -ffunction-sections -fdata-sections -fno-common -fstrict-aliasing -fmerge-constants -Wall -Wextra -Wno-missing-field-initializers")
 
 # Common C and C++ (C++ excludes RTTI always)
 set(TOOLCHAIN_COMMON_FLAGS "-fno-builtin-printf") #  -fno-builtin-printf required for Semihosting to avoid using system stub which is causing segfault

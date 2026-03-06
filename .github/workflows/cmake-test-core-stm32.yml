@@ -25,18 +25,18 @@ jobs:
       uses: docker/build-push-action@v3
       with:
         context: .
-        file: build/test/qemu/Dockerfile
-        tags: stk-qemu:latest
+        file: build/test/qemu/Dockerfile.arm
+        tags: stk-qemu-arm:latest
         load: false
         cache-from: type=gha
         cache-to: type=gha,mode=max
-        outputs: type=docker,dest=/tmp/stk-qemu.tar
+        outputs: type=docker,dest=/tmp/stk-qemu-arm.tar
 
     - name: Upload Docker image artifact
       uses: actions/upload-artifact@v4
       with:
-        name: stk-qemu-image
-        path: /tmp/stk-qemu.tar
+        name: stk-qemu-arm-image
+        path: /tmp/stk-qemu-arm.tar
         retention-days: 1
 
   build:
@@ -114,11 +114,11 @@ jobs:
     - name: Download Docker image artifact
       uses: actions/download-artifact@v4
       with:
-        name: stk-qemu-image
+        name: stk-qemu-arm-image
         path: /tmp
 
     - name: Load Docker image
-      run: docker load --input /tmp/stk-qemu.tar
+      run: docker load --input /tmp/stk-qemu-arm.tar
 
     - name: Prepare
       run: chmod +x build/test/qemu/stk-qemu.sh && chmod +x build/test/qemu/test.sh
@@ -126,6 +126,8 @@ jobs:
     - name: Test (${{matrix.test.name}})
       run: >
         sh build/test/qemu/test.sh
+        stk-qemu-arm:latest
+        qemu-system-gnuarmeclipse
         ${{matrix.board.cpu}}
         ${{matrix.board.board}}
         ${{github.workspace}}/build/test/${{matrix.test.dir}}
