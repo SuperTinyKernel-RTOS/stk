@@ -15,7 +15,7 @@
 #include <pico.h>
 
 // Risc-V
-#define STK_ARCH_CPU_COUNT
+#define _STK_ARCH_RISC_V
 
 // Define _STK_CPU_COUNT as 2 to use STK on both CPU cores or on CPU1, if 1 then STK can be hosted on CPU0 only
 #define STK_ARCH_CPU_COUNT    (2)

@@ -14,8 +14,8 @@ FLAGS=""
 case "${ARCH}" in
     "qemu-system-riscv32")
         # Use -device loader to handle the 0x20010000 entry point
-        FLAGS="-bios none -semihosting -d unimp,guest_errors \
-               -device loader,file=/fw/${KERNEL},cpu-num=0"
+        FLAGS="-semihosting -d unimp,guest_errors \
+               -bios none -device loader,file=/fw/${KERNEL},cpu-num=0"
         KERNEL_ARG="" 
         ;;
     "qemu-system-gnuarmeclipse")

@@ -272,10 +272,14 @@
 #endif
 
 /*! \def   STK_STACK_MEMORY_ALIGN
-    \brief Stack memory alignment (default: 8).
+    \brief Stack memory alignment.
 */
 #ifndef STK_STACK_MEMORY_ALIGN
-    #define STK_STACK_MEMORY_ALIGN 8
+    #ifdef __riscv
+        #define STK_STACK_MEMORY_ALIGN 16
+    #else
+        #define STK_STACK_MEMORY_ALIGN 8
+    #endif
 #endif
 
 /*! \def   STK_ARCH_CPU_COUNT
@@ -293,24 +297,39 @@
     \see   TrapStackMemory
     \note  This is the smallest stack that can correctly save and restore all CPU registers during
            a context switch or service trap. The required size depends on the number of registers
-           the architecture mandates saving.
+           the architecture mandates saving and specific platform alignment requirements.
     \note  Default values by architecture:
-           - Non-RISC-V and standard RISC-V (RV32I / RV64): 32 elements.
-           - RISC-V RV32E (embedded, __riscv_32e != 0) without FPU: 256 elements
-             (smaller sizes cause memory corruption on RP2350).
-           - RISC-V RV32E with FPU (__riscv_flen != 0): 512 elements (FP registers double the frame size).
+           - ARM Cortex-M and RISC-V RV32E (reduced 16-register file): 32 elements.
+           - Standard RISC-V (RV32I / RV64I) without FPU: 256 elements
+             (larger register file; smaller sizes may cause memory corruption on RP2350).
+           - Standard RISC-V with FPU: 512 elements + (__riscv_flen * 2)
+             (dedicated FP registers significantly expand the required frame size).
     \note  Can be overridden to any larger value in stk_config.h if your application's
            interrupt nesting or stack frame size requires it.
 */
 #ifndef STK_STACK_SIZE_MIN
-    #if (__riscv_32e == 0) // non-RISC-V or standard RISC-V (RV32I/RV64): small register file
-        #define STK_STACK_SIZE_MIN 32
-    #else                  // RISC-V RV32E: embedded reduced register file
-        #if (__riscv_flen == 0) // no FPU
-            #define STK_STACK_SIZE_MIN 256 // smaller sizes cause memory corruption on RP2350
-        #else                   // with FPU: floating-point registers require larger frame
-            #define STK_STACK_SIZE_MIN 512
+    #ifdef __riscv
+        #if defined(__riscv_32e) && (__riscv_32e == 1)
+            // RISC-V RV32E (Embedded): Small 16-register file
+            #if !defined(__riscv_flen) || (__riscv_flen == 0)
+                #define STK_STACK_SIZE_MIN 32
+            #else
+                // FPU present: Requires additional space for 32 FP registers
+                #define STK_STACK_SIZE_MIN (32 + (__riscv_flen * 2))
+            #endif
+        #else
+            // Standard RISC-V (RV32I/RV64I): Large 32-register file
+            // Higher minimum to prevent memory corruption on platforms like RP2350
+            #if !defined(__riscv_flen) || (__riscv_flen == 0)
+                #define STK_STACK_SIZE_MIN 256
+            #else
+                // Standard RISC-V with FPU: Maximum frame allocation
+                #define STK_STACK_SIZE_MIN (512 + (__riscv_flen * 2))
+            #endif
         #endif
+    #else
+        // ARM Cortex-M and other architectures
+        #define STK_STACK_SIZE_MIN 32
     #endif
 #endif
 

@@ -20,9 +20,9 @@ void riscv_stvec_table(void)  __attribute__ ((naked, section(".text.stvec_table"
 void riscv_utvec_table(void)  __attribute__ ((naked, section(".text.utvec_table") ,aligned(256)));
 
 // Default "NOP" implementations
-void riscv_nop_machine(void)    __attribute__ ((interrupt ("machine"), used) );
-void riscv_nop_supervisor(void) __attribute__ ((interrupt ("supervisor"), used) );
-void riscv_nop_user(void)       __attribute__ ((interrupt ("user"), used) );
+void riscv_nop_machine(void)    __attribute__ ((interrupt ("machine"), used));
+void riscv_nop_supervisor(void) __attribute__ ((interrupt ("supervisor"), used));
+void riscv_nop_user(void)       __attribute__ ((interrupt ("user"), used));
 
 // Weak alias to the "NOP" implementations. If another function
 void riscv_mtvec_exception(void) __attribute__ ((interrupt ("machine"), weak, used, alias("riscv_nop_machine") ));
@@ -164,4 +164,3 @@ void riscv_nop_user(void) {
 }
 
 #pragma GCC pop_options
-

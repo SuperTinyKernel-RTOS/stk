@@ -1,4 +1,4 @@
-name: Test - All stk::sync (QEMU, RISC-V)
+name: Test - All stk::time (QEMU, RISC-V)
 
 on:
   push:
@@ -46,40 +46,10 @@ jobs:
       fail-fast: false
       matrix:
         test:
-          - name: sync::Event
-            cmake_flag: TEST_EVENT=ON
-            elf: test-event.elf
-            dir: event
-
-          - name: sync::Mutex
-            cmake_flag: TEST_MUTEX=ON
-            elf: test-mutex.elf
-            dir: mutex
-
-          - name: sync::Pipe
-            cmake_flag: TEST_PIPE=ON
-            elf: test-pipe.elf
-            dir: pipe
-
-          - name: sync::RWMutex
-            cmake_flag: TEST_RWMUTEX=ON
-            elf: test-rwmutex.elf
-            dir: rwmutex
-
-          - name: sync::Semaphore
-            cmake_flag: TEST_SEMAPHORE=ON
-            elf: test-semaphore.elf
-            dir: semaphore
-
-          - name: sync::SpinLock
-            cmake_flag: TEST_SPINLOCK=ON
-            elf: test-spinlock.elf
-            dir: spinlock
-
-          - name: sync::ConditionVariable
-            cmake_flag: TEST_CONDVAR=ON
-            elf: test-condvar.elf
-            dir: condvar
+          - name: time::TimerHost
+            cmake_flag: TEST_TIMERHOST=ON
+            elf: test-timerhost.elf
+            dir: timerhost
 
         board:
           - name: "Generic"

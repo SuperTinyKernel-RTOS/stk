@@ -25,12 +25,13 @@
 #define STK_RISCV_CLINT_MTIME_ADDR    ((volatile uint64_t *)(SIO_BASE + SIO_MTIME_OFFSET)) // MTIME + MTIMEH (see SIO_Type in RP2350.h)
 #define STK_RISCV_CLINT_MTIMECMP_ADDR ((volatile uint64_t *)(SIO_BASE + SIO_MTIMECMP_OFFSET)) // MTIMECMP + MTIMECMPH (see SIO_Type in RP2350.h)
 
-// SIO_BASE of RP2350  is per calling CPU core, thus there is no classic access via CLINT + hart
+// SIO_BASE of RP2350 is per calling CPU core, thus there is no classic access via CLINT + hart
 #define STK_RISCV_CLINT_MTIMECMP_PER_HART (0)
 
 // RP2350 ISR handlers, see crt0_riscv.S of pico-sdk
 #define STK_SYSTICK_HANDLER isr_riscv_machine_timer
 #define STK_SVC_HANDLER     isr_riscv_machine_exception
+#define STK_MSI_HANDLER     isr_riscv_machine_soft_irq
 
 // Keep STK's ISR handlers in RAM to be compatible with pico-sdk
 #define STK_RISCV_ISR_SECTION __not_in_flash("stk")
