@@ -31,7 +31,7 @@ void Log(const char *label, Led::Id led, bool state)
     static const time_t g_SecNow = time(NULL);
     time_t now = time(NULL);
 
-    printf("%ds [%s]: %s - %s\n", (int32_t)(now - g_SecNow), label, Led_GetPin(led), (state ? "ON" : "OFF"));
+    printf("%ds [%s]: %s - %s\n", (int)(now - g_SecNow), label, Led_GetPin(led), (state ? "ON" : "OFF"));
 }
 
 void Led::Init(Id led, bool init_state)

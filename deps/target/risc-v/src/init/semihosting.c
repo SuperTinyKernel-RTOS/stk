@@ -107,6 +107,9 @@ static inline int32_t smh_readc(void)
 
 int _open(const char *path, int oflag, ...)
 {
+    (void)path;
+    (void)oflag;
+
     // TO-DO
     SEMIHOSTING_UNIMPLEMENTED();
     return -1;
@@ -114,6 +117,8 @@ int _open(const char *path, int oflag, ...)
 
 int _close(int fildes)
 {
+    (void)fildes;
+
     // TO-DO
     SEMIHOSTING_UNIMPLEMENTED();
     return -1;
@@ -121,6 +126,10 @@ int _close(int fildes)
 
 ssize_t _read(int fildes, void* buf, size_t nbyte)
 {
+    (void)fildes;
+    (void)buf;
+    (void)nbyte;
+
     // TO-DO
     SEMIHOSTING_UNIMPLEMENTED();
     return -1;
@@ -128,6 +137,10 @@ ssize_t _read(int fildes, void* buf, size_t nbyte)
 
 ssize_t _write(int fildes, const void* buf, size_t nbyte)
 {
+    (void)fildes;
+    (void)buf;
+    (void)nbyte;
+
     // TO-DO
     errno = ENOSYS;
     return -1;
@@ -135,6 +148,10 @@ ssize_t _write(int fildes, const void* buf, size_t nbyte)
 
 off_t _lseek(int fildes, off_t offset, int whence)
 {
+    (void)fildes;
+    (void)offset;
+    (void)whence;
+
     // TO-DO
     SEMIHOSTING_UNIMPLEMENTED();
     return -1;
@@ -142,6 +159,9 @@ off_t _lseek(int fildes, off_t offset, int whence)
 
 int _fstat(int fildes, struct stat *buf)
 {
+    (void)fildes;
+    (void)buf;
+
     // TO-DO
     errno = ENOSYS;
     return -1;
@@ -149,6 +169,8 @@ int _fstat(int fildes, struct stat *buf)
 
 int _isatty(int fildes)
 {
+    (void)fildes;
+
     // TO-DO
     SEMIHOSTING_UNIMPLEMENTED();
     return -1;
@@ -163,6 +185,9 @@ pid_t _getpid(void)
 
 int _kill(pid_t pid, int sig)
 {
+    (void)pid;
+    (void)sig;
+
     // TO-DO
     SEMIHOSTING_UNIMPLEMENTED();
     return -1;
@@ -170,6 +195,9 @@ int _kill(pid_t pid, int sig)
 
 int _gettimeofday(struct timeval *tv, void *tz)
 {
+    (void)tv;
+    (void)tz;
+
     // TO-DO
     SEMIHOSTING_UNIMPLEMENTED();
     return -1;

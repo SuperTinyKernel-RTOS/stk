@@ -593,8 +593,8 @@ void STK_PANIC_HANDLER_DEFAULT(EKernelPanicId id)
 
 #define STK_ASM_LOAD_CONTEXT_BASE\
     LREG " x1, 2*" REGBYTES "(sp)    \n"\
-    /*LREG " x2, 3*" REGBYTES "(sp)  \n" /* skip loading sp, Stack pointer */\
-    /*LREG " x3, 4*" REGBYTES "(sp)  \n" /* skip loading gp, Global pointer (note: slot is used by fscsr) */\
+    /*LREG " x2, 3*" REGBYTES "(sp)  \n" skip loading sp, Stack pointer */\
+    /*LREG " x3, 4*" REGBYTES "(sp)  \n" skip loading gp, Global pointer (note: slot is used by fscsr) */\
     LREG " x4, 5*" REGBYTES "(sp)    \n"\
     LREG " x5, 6*" REGBYTES "(sp)    \n"\
     LREG " x6, 7*" REGBYTES "(sp)    \n"\
