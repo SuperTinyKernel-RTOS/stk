@@ -1,4 +1,4 @@
-name: Test - All stk::time (QEMU, Arm Cortex-M0,M4)
+name: Test - All stk::time (QEMU, RISC-V)
 
 on:
   push:
@@ -8,6 +8,7 @@ on:
 
 env:
   BUILD_TYPE: Release
+  GCC_VERSION: 15.2.0-1.1
 
 jobs:
   docker-build:
@@ -16,27 +17,27 @@ jobs:
 
     steps:
     - name: Checkout
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
 
     - name: Setup Docker Buildx
-      uses: docker/setup-buildx-action@v2
+      uses: docker/setup-buildx-action@v3
 
     - name: Docker build
-      uses: docker/build-push-action@v3
+      uses: docker/build-push-action@v5
       with:
         context: .
-        file: build/test/qemu/Dockerfile.arm
-        tags: stk-qemu-arm:latest
+        file: build/test/qemu/Dockerfile.riscv32
+        tags: stk-qemu-riscv:latest
         load: false
         cache-from: type=gha
         cache-to: type=gha,mode=max
-        outputs: type=docker,dest=/tmp/stk-qemu-arm.tar
+        outputs: type=docker,dest=/tmp/stk-qemu-riscv.tar
 
     - name: Upload Docker image artifact
       uses: actions/upload-artifact@v4
       with:
-        name: stk-qemu-arm-image
-        path: /tmp/stk-qemu-arm.tar
+        name: stk-qemu-riscv-image
+        path: /tmp/stk-qemu-riscv.tar
         retention-days: 1
 
   build:
@@ -51,35 +52,40 @@ jobs:
             dir: timerhost
 
         board:
-          - name: "STM32F0DISCOVERY"
-            cmake_flags: -DVENDOR_STM32=ON -DTARGET_CORTEX_M0=ON -DTARGET_CPU_FAMILY=STM32F051x8
-            cpu: cortex-m0
-            board: STM32F0-Discovery
-
-          - name: "STM32F407DISC1"
-            cmake_flags: -DVENDOR_STM32=ON -DTARGET_CORTEX_M4=ON -DTARGET_CPU_FAMILY=STM32F407xx
-            cpu: cortex-m4
-            board: STM32F4-Discovery
+          - name: "Generic"
+            cmake_flags: -DTARGET_RV32I=ON
+            cpu: rv32
+            board: virt
 
     runs-on: ubuntu-22.04
 
     name: "${{matrix.test.name}} / ${{matrix.board.name}}"
 
     steps:
-    - name: Install GCC arm-none-eabi
-      uses: carlosperate/arm-none-eabi-gcc-action@v1
+    - name: Checkout
+      uses: actions/checkout@v4
+      
+    - name: Cache xPacks
+      id: cache-xpack
+      uses: actions/cache@v4
+      with:
+        path: ~/.local/xPacks
+        key: ${{ runner.os }}-xpack-riscv-${{ env.GCC_VERSION }}
+
+    - name: Install xPack RISC-V GCC
+      run: |
+        npm install --location=global xpm@latest
+        xpm install --global @xpack-dev-tools/riscv-none-elf-gcc@${{ env.GCC_VERSION }}
+        echo "$HOME/.local/xPacks/@xpack-dev-tools/riscv-none-elf-gcc/${{ env.GCC_VERSION }}/.content/bin" >> $GITHUB_PATH
 
     - name: GCC version
-      run: arm-none-eabi-gcc --version
-
-    - name: Checkout
-      uses: actions/checkout@v3
+      run: riscv-none-elf-gcc --version
 
     - name: Configure CMake
       run: >
         cmake -G "Unix Makefiles"
         -B ${{github.workspace}}/build
-        -DCMAKE_TOOLCHAIN_FILE=build/cmake/toolchain/arm-none-eabi-gcc.cmake
+        -DCMAKE_TOOLCHAIN_FILE=build/cmake/toolchain/riscv-none-elf-gcc.cmake
         ${{matrix.board.cmake_flags}}
         -DENABLE_LTO=ON
         -DENABLE_SMALL=ON
@@ -94,11 +100,11 @@ jobs:
     - name: Download Docker image artifact
       uses: actions/download-artifact@v4
       with:
-        name: stk-qemu-arm-image
+        name: stk-qemu-riscv-image
         path: /tmp
 
     - name: Load Docker image
-      run: docker load --input /tmp/stk-qemu-arm.tar
+      run: docker load --input /tmp/stk-qemu-riscv.tar
 
     - name: Prepare
       run: chmod +x build/test/qemu/stk-qemu.sh && chmod +x build/test/qemu/test.sh
@@ -106,8 +112,8 @@ jobs:
     - name: Test (${{matrix.test.name}})
       run: >
         sh build/test/qemu/test.sh
-        stk-qemu-arm:latest
-        qemu-system-gnuarmeclipse
+        stk-qemu-riscv:latest
+        qemu-system-riscv32
         ${{matrix.board.cpu}}
         ${{matrix.board.board}}
         ${{github.workspace}}/build/test/${{matrix.test.dir}}

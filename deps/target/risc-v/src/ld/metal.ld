@@ -10,7 +10,7 @@ OUTPUT_ARCH("riscv")
 
 ENTRY(_enter)
 
-RAM_SIZE = DEFINED(__METAL_RAM_SIZE__) ? __METAL_RAM_SIZE__ : 0x4000;
+RAM_SIZE = DEFINED(__METAL_RAM_SIZE__) ? __METAL_RAM_SIZE__ : 0x40000;
 ROM_SIZE = DEFINED(__METAL_ROM_SIZE__) ? __METAL_ROM_SIZE__ : 0x200000;
 
 MEMORY
@@ -44,7 +44,7 @@ SECTIONS
      * initializes the stack pointers for each hart at the right offset from
      * the _sp symbol.
      */
-    __stack_size = DEFINED(__stack_size) ? __stack_size : 0x400;
+    __stack_size = DEFINED(__stack_size) ? __stack_size : 0x8000;
     PROVIDE(__stack_size = __stack_size);
 
     /* The size of the heap can be overriden at build-time by adding the

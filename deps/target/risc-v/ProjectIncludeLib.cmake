@@ -7,5 +7,5 @@ set(LINKER_FLAGS "-T metal.ld")
 set(CMAKE_C_LINK_FLAGS "${CMAKE_C_LINK_FLAGS} ${LINKER_FLAGS}")
 set(CMAKE_CXX_LINK_FLAGS "${CMAKE_CXX_LINK_FLAGS} ${LINKER_FLAGS}")
 
-list(APPEND TARGET_DEPS risc-v)
-list(APPEND TARGET_LIBS -Wl,--whole-archive risc-v -Wl,--no-whole-archive)
+list(APPEND TARGET_DEPS riscv)
+list(APPEND TARGET_LIBS -Wl,--whole-archive riscv -Wl,--no-whole-archive)

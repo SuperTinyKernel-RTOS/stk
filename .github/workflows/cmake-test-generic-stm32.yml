@@ -39,7 +39,7 @@ jobs:
 
     # note: Replaced with [Setup Docker Buildx] and [Docker build] below to benefit from GitHub caching (Docker image not built on every pass)
     #- name: Docker build
-      #run: docker build --pull --rm -f "build/test/qemu/Dockerfile" -t stk-qemu:latest "build/test/qemu"
+      #run: docker build --pull --rm -f "build/test/qemu/Dockerfile" -t stk-qemu-arm:latest "build/test/qemu"
 
     - name: Setup Docker Buildx
       uses: docker/setup-buildx-action@v2
@@ -48,8 +48,8 @@ jobs:
       uses: docker/build-push-action@v3
       with:
         context: .
-        file: build/test/qemu/Dockerfile
-        tags: stk-qemu:latest
+        file: build/test/qemu/Dockerfile.arm
+        tags: stk-qemu-arm:latest
         load: true
         cache-from: type=gha
         cache-to: type=gha,mode=max
@@ -58,4 +58,11 @@ jobs:
       run: chmod +x build/test/qemu/stk-qemu.sh && chmod +x build/test/qemu/test.sh
 
     - name: Test (Generic)
-      run: sh build/test/qemu/test.sh ${{matrix.cpu}} ${{matrix.board}} ${{github.workspace}}/build/test/generic test-generic.elf
+      run: > 
+        sh build/test/qemu/test.sh 
+        stk-qemu-arm:latest
+        qemu-system-gnuarmeclipse 
+        ${{matrix.cpu}} 
+        ${{matrix.board}} 
+        ${{github.workspace}}/build/test/generic 
+        test-generic.elf

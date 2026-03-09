@@ -43,8 +43,8 @@ extern function_t __fini_array_end[];
 extern void _enter(void)  __attribute__ ((naked, section(".text.metal.init.enter")));
 
 // Entry and exit points as C functions.
-extern void _start(void) __attribute__ ((noreturn));
-void _Exit(int exit_code) __attribute__ ((noreturn,noinline));
+extern void _start(void) __attribute__ ((noreturn, used));
+void _Exit(int exit_code) __attribute__ ((noreturn, noinline));
 extern void _init_args(int *argc, char ***argv) __attribute__ ((weak));
 extern int main(int argc, char *argv[]);
 extern void __libc_init_array(void);

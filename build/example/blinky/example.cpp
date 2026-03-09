@@ -50,7 +50,11 @@ private:
                 continue;
             }
 
-            SwitchOnLED(task_id);
+            {
+                stk::hw::CriticalSection __guard;
+
+                SwitchOnLED(task_id);
+            }
 
             // sleep 1s and delegate work to another task switching another LED
             stk::Sleep(1000);
