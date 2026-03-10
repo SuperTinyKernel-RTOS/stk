@@ -693,17 +693,12 @@ public:
 
     /*! \brief Construct the kernel with all storage zero-initialised and the request flag set to ~0
                (indicating uninitialized state; cleared to REQUEST_NONE by Initialize()).
-        \note  Performs a compile-time assertion that KERNEL_HRT is not combined with a weighted
-               scheduling strategy (WEIGHT_API). In debug builds also verifies that _TyPlatform
-               derives from IPlatform and _TyStrategy from ITaskSwitchStrategy.
+        \note  In debug builds also verifies that _TyPlatform derives from IPlatform and _TyStrategy
+               from ITaskSwitchStrategy.
     */
     explicit Kernel() : m_platform(), m_strategy(), m_task_now(nullptr), m_task_storage(), m_sleep_trap(),
         m_exit_trap(), m_fsm_state(FSM_STATE_NONE), m_request(~0)
     {
-        // HRT mode does not support scheduling strategy with task weights
-        STK_STATIC_ASSERT((!_TyStrategy::WEIGHT_API && ((_Mode & KERNEL_HRT) != 0)) ||
-            ((_Mode & KERNEL_HRT) == 0));
-
     #ifdef _DEBUG
         // _TyPlatform must inherit IPlatform
         IPlatform *platform = &m_platform;
