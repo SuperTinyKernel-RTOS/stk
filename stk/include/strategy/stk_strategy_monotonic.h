@@ -79,6 +79,11 @@ public:
         DEADLINE_MISSED_API = 0  //!< This strategy does not use OnTaskDeadlineMissed() events.
     };
 
+    /*! \brief Construct an empty strategy with no tasks.
+    */
+    explicit SwitchStrategyMonotonic() : m_tasks()
+    {}
+
     /*! \brief     Add a task to the priority-sorted runnable list.
         \param[in] task: Task to add. Must not be \c NULL and must not already be in any list.
         \note      Performs an O(n) insertion sort into \c m_tasks so that higher-priority tasks
@@ -250,6 +255,8 @@ public:
     }
 
 private:
+    STK_NONCOPYABLE_CLASS(SwitchStrategyMonotonic);
+
     IKernelTask::ListHeadType m_tasks; //!< All tasks (runnable and sleeping) in priority order. GetNext() skips sleeping tasks via IsSleeping(). AddTask() maintains sort order.
 };
 

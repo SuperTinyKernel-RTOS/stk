@@ -393,6 +393,21 @@
     #define STK_ENDIAN_IDX_LO (0) // little-endian (default): low word at index 0
 #endif
 
+/*! \def       STK_NONCOPYABLE_CLASS
+    \brief     Disables copy construction and assignment for a class.
+    \details   This macro declares a private copy constructor and copy assignment
+               operator to prevent the compiler from generating default ones. It
+               ensures that instances of a class cannot be duplicated.
+    \param[in] TYPE: The name of the class to be made non-copyable.
+    \warning   This macro must be placed within the \c private or \c protected
+               section of the class declaration to be effective.
+    \note      In C++11 and later, it is generally preferred to use \c = delete, however,
+               this macro provides compatibility for legacy environments.
+*/
+#define STK_NONCOPYABLE_CLASS(TYPE)\
+    TYPE(const TYPE &);\
+    const TYPE &operator=(const TYPE &);
+
 /*! \namespace stk
     \brief     Namespace of STK package.
  */

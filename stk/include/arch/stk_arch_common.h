@@ -71,6 +71,9 @@ public:
     Stack                    *m_stack_idle;      //!< idle task stack
     Stack                    *m_stack_active;    //!< active task stack
     int32_t                   m_tick_resolution; //!< system tick resolution (microseconds)
+
+protected:
+    STK_NONCOPYABLE_CLASS(PlatformContext);
 };
 
 /*! \def   GetContext

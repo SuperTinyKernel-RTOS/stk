@@ -83,6 +83,9 @@ bool stk_mutex_timed_lock(stk_mutex_t *mtx, int32_t timeout)
 // ---------------------------------------------------------------------------
 struct stk_spinlock_t
 {
+    stk_spinlock_t(uint16_t spin_count) : handle(spin_count)
+    {}
+
     sync::SpinLock handle;
 };
 
@@ -93,7 +96,7 @@ stk_spinlock_t *stk_spinlock_create(stk_spinlock_mem_t *memory, uint32_t memory_
     if (memory_size < sizeof(stk_spinlock_t))
         return nullptr;
 
-    return (stk_spinlock_t *)new (memory->data) stk_spinlock_t{ sync::SpinLock(spin_count) };
+    return (stk_spinlock_t *)new (memory->data) stk_spinlock_t(spin_count);
 }
 
 void stk_spinlock_destroy(stk_spinlock_t *lock)
@@ -172,6 +175,9 @@ void stk_cv_notify_all(stk_cv_t *cv)
 // ---------------------------------------------------------------------------
 struct stk_event_t
 {
+    stk_event_t(bool manual_reset) : handle(manual_reset)
+    {}
+
     Event handle;
 };
 
@@ -182,7 +188,7 @@ stk_event_t *stk_event_create(stk_event_mem_t *memory, uint32_t memory_size, boo
     if (memory_size < sizeof(stk_event_t))
         return nullptr;
 
-    return (stk_event_t *)new (memory->data) stk_event_t{ Event(manual_reset) };
+    return (stk_event_t *)new (memory->data) stk_event_t(manual_reset);
 }
 
 void stk_event_destroy(stk_event_t *ev)
@@ -231,6 +237,9 @@ void stk_event_pulse(stk_event_t *ev)
 // ---------------------------------------------------------------------------
 struct stk_sem_t
 {
+    stk_sem_t(uint32_t initial_count) : handle(initial_count)
+    {}
+
     Semaphore handle;
 };
 
@@ -241,7 +250,7 @@ stk_sem_t *stk_sem_create(stk_sem_mem_t *memory, uint32_t memory_size, uint32_t 
     if (memory_size < sizeof(stk_sem_t))
         return nullptr;
 
-    return (stk_sem_t *)new (memory->data) stk_sem_t{ Semaphore(initial_count) };
+    return (stk_sem_t *)new (memory->data) stk_sem_t(initial_count);
 }
 
 void stk_sem_destroy(stk_sem_t *sem)

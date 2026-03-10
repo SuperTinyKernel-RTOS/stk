@@ -237,6 +237,8 @@ public:
     }
 
 private:
+    STK_NONCOPYABLE_CLASS(SwitchStrategySmoothWeightedRoundRobin);
+
     /*! \brief     Append task to \c m_tasks and update the total weight.
         \param[in] task: Task to make runnable.
         \note      Increments \c m_total_weight by the task's static weight so that the

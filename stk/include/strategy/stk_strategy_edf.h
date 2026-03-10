@@ -70,6 +70,11 @@ public:
         DEADLINE_MISSED_API = 0  //!< This strategy does not use OnTaskDeadlineMissed() events.
     };
 
+    /*! \brief Construct an empty strategy with no tasks.
+    */
+    explicit SwitchStrategyEDF() : m_tasks(), m_sleep()
+    {}
+
     /*! \brief     Add task to the runnable set.
         \param[in] task: Task to add. Must not be \c NULL and must not already be in any list.
         \note      The task is appended to the back of \c m_tasks. Unlike RR and FP strategies,
@@ -208,6 +213,8 @@ public:
     }
 
 protected:
+    STK_NONCOPYABLE_CLASS(SwitchStrategyEDF);
+
     IKernelTask::ListHeadType m_tasks; //!< Runnable tasks eligible for scheduling. Scanned in full by GetNext() each tick to find the minimum relative deadline.
     IKernelTask::ListHeadType m_sleep; //!< Sleeping (blocked) tasks not eligible for scheduling. Deadline tracking continues in the kernel while tasks are in this list.
 };

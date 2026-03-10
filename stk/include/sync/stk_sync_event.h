@@ -125,6 +125,8 @@ public:
     void Pulse();
 
 private:
+    STK_NONCOPYABLE_CLASS(Event);
+
     void RemoveWaitObject(IWaitObject *wobj);
     bool Tick();
 

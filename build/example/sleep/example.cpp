@@ -25,14 +25,7 @@ class MyTask : public stk::Task<TASK_STACK_SIZE, _AccessMode>
 
 public:
     MyTask(uint8_t task_id) : m_task_id(task_id)
-    { }
-
-    stk::RunFuncType GetFunc() {
-        return [](void *user_data) {
-            ((MyTask *)user_data)->Run();
-        };
-    }
-    void *GetFuncUserData() { return this; }
+    {}
 
 private:
     void Run()

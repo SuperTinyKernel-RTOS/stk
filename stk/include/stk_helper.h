@@ -92,8 +92,8 @@ protected:
         and zero-initialization of the \ref m_stack member based on the \a _StackSize 
         template parameter.
     */
-    Task() : m_stack()
-    {}
+    Task() : m_stack() {}
+    STK_NONCOPYABLE_CLASS(Task);
 
 private:
     typename StackMemoryDef<_StackSize>::Type m_stack; //!< Stack memory region, 16-byte aligned.
@@ -149,8 +149,8 @@ protected:
         and zero-initialization of the \ref m_stack member based on the \a _StackSize 
         template parameter.
     */
-    TaskW() : m_stack()
-    {}
+    TaskW() : m_stack() {}
+    STK_NONCOPYABLE_CLASS(TaskW);
 
 private:
     typename StackMemoryDef<_StackSize>::Type m_stack; //!< Stack memory region, 16-byte aligned.

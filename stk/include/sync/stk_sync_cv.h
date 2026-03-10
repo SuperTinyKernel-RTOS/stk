@@ -67,6 +67,9 @@ namespace sync {
 class ConditionVariable : private ISyncObject, public ITraceable
 {
 public:
+    explicit ConditionVariable()
+    {}
+
     /*! \brief     Destructor.
         \note      If tasks are still waiting at destruction time it is considered a logical error (dangling waiters).
                    An assertion is triggered in debug builds.
@@ -94,6 +97,8 @@ public:
     void NotifyAll();
 
 private:
+    STK_NONCOPYABLE_CLASS(ConditionVariable);
+
     bool Tick();
 };
 
