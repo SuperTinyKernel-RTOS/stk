@@ -183,6 +183,8 @@ public:
     }
 
 protected:
+    STK_NONCOPYABLE_CLASS(SwitchStrategyRoundRobin);
+
     /*! \brief     Append a task to \c m_tasks and restore the cursor if necessary.
         \param[in] task: Task to make runnable.
         \note      Cursor invariant: if \c m_prev is \c nullptr (all tasks were previously sleeping),

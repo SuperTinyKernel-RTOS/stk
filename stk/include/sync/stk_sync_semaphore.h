@@ -66,7 +66,7 @@ public:
                    error (dangling waiters).
                    An assertion is triggered in debug builds.
     */
-    virtual ~Semaphore() { STK_ASSERT(m_wait_list.IsEmpty()); }
+    ~Semaphore() { STK_ASSERT(m_wait_list.IsEmpty()); }
 
     /*! \brief     Wait for a signal (decrement counter).
         \param[in] timeout: Maximum time to wait (ticks).
@@ -88,6 +88,8 @@ public:
     uint32_t GetCount() const { return m_count; }
 
 private:
+    STK_NONCOPYABLE_CLASS(Semaphore);
+
     bool Tick();
 
     uint32_t m_count; //!< Internal resource counter

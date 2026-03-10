@@ -64,6 +64,12 @@ public:
         : m_owner_tid(0), m_spin_count(spin_count), m_recursion_count(0)
     {}
 
+    /*! \brief     Destructor.
+        \note      If tasks are still waiting at destruction time it is considered a logical error (dangling waiters).
+                   An assertion is triggered in debug builds.
+    */
+    ~SpinLock() { STK_ASSERT(m_owner_tid == 0); }
+
     /*! \brief    Acquire the lock, spinning up to m_spin_count times.
         \note     If spin count is exhausted, it performs a Yield to allow other tasks to run.
         \warning  ISR-unsafe.
@@ -82,6 +88,8 @@ public:
     void Unlock();
 
 private:
+    STK_NONCOPYABLE_CLASS(SpinLock);
+
     bool LockRecursively(TId locking_tid);
     void MakeLocked(TId locking_tid);
 

@@ -68,6 +68,8 @@ public:
     ~ScopedCriticalSection() { Unlock(); }
 
 private:
+    STK_NONCOPYABLE_CLASS(ScopedCriticalSection);
+
     void Lock() { hw::CriticalSection::Enter(); }
     void Unlock() { hw::CriticalSection::Exit(); }
 };

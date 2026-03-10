@@ -90,6 +90,8 @@ public:
     void Unlock();
 
 private:
+    STK_NONCOPYABLE_CLASS(Mutex);
+
     bool Tick();
 
     TId      m_owner_tid; //!< thread id of the current owner

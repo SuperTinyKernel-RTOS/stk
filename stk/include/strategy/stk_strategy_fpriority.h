@@ -320,6 +320,8 @@ protected:
     }
 
 private:
+    STK_NONCOPYABLE_CLASS(SwitchStrategyFixedPriority);
+
     IKernelTask::ListHeadType m_tasks[MAX_PRIORITIES]; //!< Per-priority runnable task lists. m_tasks[i] holds all runnable tasks at priority level i.
     IKernelTask::ListHeadType m_sleep;                 //!< Sleeping (blocked) tasks. Priority is retained in GetWeight() and restored on OnTaskWake().
     uint32_t                  m_ready_bitmap;          //!< Bitmask of non-empty priority levels: bit i is set when m_tasks[i] has at least one runnable task. Updated by AddActive() (bit set) and RemoveActive() (bit cleared on last removal).

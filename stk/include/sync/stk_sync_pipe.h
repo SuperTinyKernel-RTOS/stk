@@ -301,6 +301,8 @@ public:
     bool IsEmpty() const { return (GetSize() == 0); }
 
 private:
+    STK_NONCOPYABLE_CLASS(Pipe);
+
     T                 m_buffer[N]; //!< static storage for FIFO elements
     size_t            m_head;      //!< index of the next slot to be written (producer)
     size_t            m_tail;      //!< index of the next slot to be read (consumer)

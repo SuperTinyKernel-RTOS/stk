@@ -51,7 +51,7 @@ private:
             }
 
             {
-                stk::hw::CriticalSection __guard;
+                stk::hw::CriticalSection::ScopedLock __guard;
 
                 SwitchOnLED(task_id);
             }

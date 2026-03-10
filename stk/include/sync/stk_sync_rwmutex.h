@@ -179,6 +179,8 @@ public:
     void Unlock();
 
 private:
+    STK_NONCOPYABLE_CLASS(RWMutex);
+
     ConditionVariable m_cv_readers;      //!< signaled when readers can proceed
     ConditionVariable m_cv_writers;      //!< signaled when a writer can proceed
     uint16_t          m_readers;         //!< current active readers

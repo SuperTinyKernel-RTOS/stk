@@ -198,8 +198,9 @@ __stk_forceinline void SetTlsPtr(const _TyTls *tp)
            deadlines in HRT mode.
     \see   SpinLock
 */
-struct CriticalSection
+class CriticalSection
 {
+public:
     /*! \class ScopedLock
         \brief RAII guard that enters the critical section on construction and exits it on destruction.
         \note  Guarantees Exit() is always called even if an early return or exception unwinds the scope.
@@ -243,6 +244,10 @@ struct CriticalSection
                  debug builds).
     */
     static void Exit();
+
+private:
+    explicit CriticalSection() {}
+    STK_NONCOPYABLE_CLASS(CriticalSection);
 };
 
 /*! \class     SpinLock
@@ -276,7 +281,7 @@ public:
 
     /*! \brief Construct a SpinLock (unlocked by default).
     */
-    SpinLock() : m_lock(UNLOCKED)
+    explicit SpinLock() : m_lock(UNLOCKED)
     {}
 
     /*! \brief   Acquire SpinLock, blocking until it is available.
@@ -316,6 +321,8 @@ public:
     bool IsLocked() const { return (m_lock == LOCKED); }
 
 protected:
+    STK_NONCOPYABLE_CLASS(SpinLock);
+
 #ifdef _STK_ARCH_X86_WIN32
     volatile long m_lock; //!< Lock state (see EState). \c long required by Win32 Interlocked API (InterlockedCompareExchange).
 #else
