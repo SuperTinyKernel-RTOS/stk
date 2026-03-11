@@ -237,7 +237,7 @@ static struct Context : public PlatformContext
     bool                           m_started;       //!< started state's flag
     volatile bool                  m_stop_signal;   //!< stop signal for a timer thread
 }
-g_Context;
+s_StkPlatformContext[1];
 
 __stk_attr_noinline  // keep out of inlining to preserve stack frame
 __stk_attr_noreturn  // never returns - a trap
@@ -256,15 +256,15 @@ static DWORD WINAPI TimerThread(LPVOID param)
 {
     (void)param;
 
-    DWORD wait_ms = g_Context.m_tick_resolution / 1000;
-    g_Context.m_timer_tid = GetCurrentThreadId();
+    DWORD wait_ms = GetContext().m_tick_resolution / 1000;
+    GetContext().m_timer_tid = GetCurrentThreadId();
 
-    while (WaitForSingleObject(g_Context.m_timer_thread, wait_ms) == WAIT_TIMEOUT)
+    while (WaitForSingleObject(GetContext().m_timer_thread, wait_ms) == WAIT_TIMEOUT)
     {
-        if (g_Context.m_stop_signal)
+        if (GetContext().m_stop_signal)
             break;
 
-        g_Context.ProcessTick();
+        GetContext().ProcessTick();
     }
 
     return 0;
@@ -373,7 +373,7 @@ void Context::ProcessTick()
     Win32ScopedCriticalSection __cs(m_cs);
 
     if (m_handler->OnTick(&m_stack_idle, &m_stack_active))
-        g_Context.SwitchContext();
+        GetContext().SwitchContext();
 }
 
 void Context::SwitchContext()
@@ -396,7 +396,7 @@ void Context::SwitchContext()
         }
     }
     else
-    if (m_stack_active == g_Context.m_exit_trap)
+    if (m_stack_active == GetContext().m_exit_trap)
     {
         // pass
     }
@@ -473,11 +473,11 @@ bool Context::InitStack(EStackType stack_type, Stack *stack, IStackMemory *stack
         break; }
 
     case STACK_SLEEP_TRAP: {
-        g_Context.m_sleep_trap = stack;
+        GetContext().m_sleep_trap = stack;
         break; }
 
     case STACK_EXIT_TRAP: {
-        g_Context.m_exit_trap = stack;
+        GetContext().m_exit_trap = stack;
         break; }
     }
 
@@ -489,54 +489,54 @@ bool Context::InitStack(EStackType stack_type, Stack *stack, IStackMemory *stack
 void PlatformX86Win32::Initialize(IEventHandler *event_handler, IKernelService *service, uint32_t resolution_us,
     Stack *exit_trap)
 {
-    g_Context.Initialize(event_handler, service, exit_trap, resolution_us);
+    GetContext().Initialize(event_handler, service, exit_trap, resolution_us);
 }
 
 void PlatformX86Win32::Start()
 {
-    g_Context.ConfigureTime();
-    g_Context.CreateTimerThreadAndJoin();
-    g_Context.Cleanup();
+    GetContext().ConfigureTime();
+    GetContext().CreateTimerThreadAndJoin();
+    GetContext().Cleanup();
 }
 
 void PlatformX86Win32::Stop()
 {
-    g_Context.Stop();
+    GetContext().Stop();
 }
 
 bool PlatformX86Win32::InitStack(EStackType stack_type, Stack *stack, IStackMemory *stack_memory, ITask *user_task)
 {
-    return g_Context.InitStack(stack_type, stack, stack_memory, user_task);
+    return GetContext().InitStack(stack_type, stack, stack_memory, user_task);
 }
 
 int32_t PlatformX86Win32::GetTickResolution() const
 {
-    return g_Context.m_tick_resolution;
+    return GetContext().m_tick_resolution;
 }
 
 void PlatformX86Win32::SwitchToNext()
 {
-    g_Context.SwitchToNext();
+    GetContext().SwitchToNext();
 }
 
 void PlatformX86Win32::Sleep(Timeout ticks)
 {
-    g_Context.Sleep(ticks);
+    GetContext().Sleep(ticks);
 }
 
 IWaitObject *PlatformX86Win32::Wait(ISyncObject *sync_obj, IMutex *mutex, Timeout timeout)
 {
-    return g_Context.Wait(sync_obj, mutex, timeout);
+    return GetContext().Wait(sync_obj, mutex, timeout);
 }
 
 void PlatformX86Win32::ProcessTick()
 {
-    g_Context.ProcessTick();
+    GetContext().ProcessTick();
 }
 
 void PlatformX86Win32::ProcessHardFault()
 {
-    if ((g_Context.m_overrider == nullptr) || !g_Context.m_overrider->OnHardFault())
+    if ((GetContext().m_overrider == nullptr) || !GetContext().m_overrider->OnHardFault())
     {
         STK_KERNEL_PANIC(KERNEL_PANIC_HRT_HARD_FAULT);
     }
@@ -544,43 +544,43 @@ void PlatformX86Win32::ProcessHardFault()
 
 void PlatformX86Win32::SetEventOverrider(IEventOverrider *overrider)
 {
-    STK_ASSERT(!g_Context.m_started);
-    g_Context.m_overrider = overrider;
+    STK_ASSERT(!GetContext().m_started);
+    GetContext().m_overrider = overrider;
 }
 
 Word PlatformX86Win32::GetCallerSP() const
 {
-    return g_Context.GetCallerSP();
+    return GetContext().GetCallerSP();
 }
 
 TId PlatformX86Win32::GetTid() const
 {
-    return g_Context.GetTid();
+    return GetContext().GetTid();
 }
 
 Word stk::hw::GetTls()
 {
-    return g_Context.GetTls();
+    return GetContext().GetTls();
 }
 
 void stk::hw::SetTls(Word tp)
 {
-    return g_Context.SetTls(tp);
+    return GetContext().SetTls(tp);
 }
 
 IKernelService *IKernelService::GetInstance()
 {
-    return g_Context.m_service;
+    return GetContext().m_service;
 }
 
 void stk::hw::CriticalSection::Enter()
 {
-    g_Context.EnterCriticalSection();
+    GetContext().EnterCriticalSection();
 }
 
 void stk::hw::CriticalSection::Exit()
 {
-    g_Context.ExitCriticalSection();
+    GetContext().ExitCriticalSection();
 }
 
 void stk::hw::SpinLock::Lock()
