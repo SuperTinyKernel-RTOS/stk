@@ -13,9 +13,6 @@
 
 #ifdef _STK_ARCH_RISC_V
 
-#include <stdlib.h>
-#include <setjmp.h>
-
 #include "stk_helper.h"
 #include "stk_arch.h"
 #include "arch/stk_arch_common.h"
@@ -126,9 +123,9 @@ static __stk_forceinline void STK_RISCV_SPIN_LOCK_UNLOCK(volatile bool &LOCK)
 #endif
 
 #if (__riscv_flen == 0)
-    #define STK_RISCV_FP 0
+    #define STK_RISCV_FPU 0
 #else
-    #define STK_RISCV_FP __riscv_flen
+    #define STK_RISCV_FPU __riscv_flen
 #endif
 
 #define STR(x) #x
@@ -146,56 +143,56 @@ static __stk_forceinline void STK_RISCV_SPIN_LOCK_UNLOCK(volatile bool &LOCK)
     #error Unsupported RISC-V platform!
 #endif
 
-#if (STK_RISCV_FP == 32)
+#if (STK_RISCV_FPU == 32)
     #define FREGBYTES XSTR(4)
     #define FLREG     XSTR(flw)
     #define FSREG     XSTR(fsw)
-#elif (STK_RISCV_FP == 64)
+#elif (STK_RISCV_FPU == 64)
     #define FREGBYTES XSTR(8)
     #define FLREG     XSTR(fld)
     #define FSREG     XSTR(fsd)
-#elif (STK_RISCV_FP != 0)
+#elif (STK_RISCV_FPU != 0)
 #error Unsupported FP register count!
 #endif
 
 #if (__riscv_32e == 1)
-    #define STK_RISCV_REGISTER_COUNT (15 + (STK_RISCV_FP != 0 ? 31 : 0))
+    #define STK_RISCV_REGISTER_COUNT (15 + (STK_RISCV_FPU != 0 ? 31 : 0))
 #else
-    #define STK_RISCV_REGISTER_COUNT (31 + (STK_RISCV_FP != 0 ? 31 : 0))
+    #define STK_RISCV_REGISTER_COUNT (31 + (STK_RISCV_FPU != 0 ? 31 : 0))
 #endif
 
 #define STK_SERVICE_SLOTS 2 // (0) mepc, (1) mstatus
 
 #if (__riscv_32e == 1)
     #define FOFFSET XSTR(68) // FP stack offset = (17 * 4)
-    #if (STK_RISCV_FP == 0)
+    #if (STK_RISCV_FPU == 0)
         #define REGSIZE XSTR(((15 + STK_SERVICE_SLOTS) * 4)) // STK_RISCV_REGISTER_COUNT + 2 for mepc, mstatus
     #else
-        #if (STK_RISCV_FP == 32)
+        #if (STK_RISCV_FPU == 32)
         #define REGSIZE XSTR((((15 + STK_SERVICE_SLOTS) * 4) + (31 * 4))) // STK_RISCV_REGISTER_COUNT + 2 for mepc, mstatus + 32 fp registers
-        #elif (STK_RISCV_FP == 64)
+        #elif (STK_RISCV_FPU == 64)
         #define REGSIZE XSTR((((15 + STK_SERVICE_SLOTS) * 4) + (31 * 8))) // STK_RISCV_REGISTER_COUNT + 2 for mepc, mstatus + 32 fp registers
         #endif
     #endif
 #elif (__riscv_xlen == 32)
     #define FOFFSET XSTR(132) // FP stack offset = (33 * 4)
-    #if (STK_RISCV_FP == 0)
+    #if (STK_RISCV_FPU == 0)
         #define REGSIZE XSTR(((31 + STK_SERVICE_SLOTS) * 4)) // STK_RISCV_REGISTER_COUNT + 2 for mepc, mstatus
     #else
-        #if (STK_RISCV_FP == 32)
+        #if (STK_RISCV_FPU == 32)
         #define REGSIZE XSTR((((31 + STK_SERVICE_SLOTS) * 4) + (31 * 4))) // STK_RISCV_REGISTER_COUNT + 2 for mepc, mstatus + 32 fp registers
-        #elif (STK_RISCV_FP == 64)
+        #elif (STK_RISCV_FPU == 64)
         #define REGSIZE XSTR((((31 + STK_SERVICE_SLOTS) * 4) + (31 * 8))) // STK_RISCV_REGISTER_COUNT + 2 for mepc, mstatus + 32 fp registers
         #endif
     #endif
 #elif (__riscv_xlen == 64)
     #define FOFFSET XSTR(264) // FP stack offset = (33 * 8)
-    #if (STK_RISCV_FP == 0)
+    #if (STK_RISCV_FPU == 0)
         #define REGSIZE XSTR(((31 + STK_SERVICE_SLOTS) * 8)) // STK_RISCV_REGISTER_COUNT + 2 for mepc, mstatus
     #else
-        #if (STK_RISCV_FP == 32)
+        #if (STK_RISCV_FPU == 32)
         #define REGSIZE XSTR((((31 + STK_SERVICE_SLOTS) * 8) + (31 * 4))) // STK_RISCV_REGISTER_COUNT + 2 for mepc, mstatus + 32 fp registers
-        #elif (STK_RISCV_FP == 64)
+        #elif (STK_RISCV_FPU == 64)
         #define REGSIZE XSTR((((31 + STK_SERVICE_SLOTS) * 8) + (31 * 8))) // STK_RISCV_REGISTER_COUNT + 2 for mepc, mstatus + 32 fp registers
         #endif
     #endif
@@ -338,7 +335,7 @@ volatile uint32_t _STK_SYSTEM_CLOCK_VAR = _STK_SYSTEM_CLOCK_FREQUENCY;
 #endif
 
 //! Global lock to synchronize critical sections of multiple cores.
-static volatile bool g_CsuLock = false;
+static volatile bool s_StkRiscvCsuLock = false;
 
 // ── ISR asm pointer cache ─────────────────────────────────────────────────────
 // These are the ONLY symbols referenced by STK_SYSTICK_HANDLER asm for
@@ -347,18 +344,153 @@ static volatile bool g_CsuLock = false;
 // Context's layout and sizeof — they never need updating regardless of how
 // Context grows. Both arrays are indexed by hart id (0 for single-core builds).
 //
-// g_StkRiscvStackActive[hart] : pointer to Context::m_stack_active for that hart.
+// s_StkRiscvStackActive[hart] : pointer to Context::m_stack_active for that hart.
 //   Stack::SP inside this object is updated by the scheduler on every tick.
 //   The pointer itself is set once in StartScheduling() and never changes.
 //
-// g_StkRiscvStackIsr[hart]    : pointer to Context::m_stack_isr for that hart.
+// s_StkRiscvStackIsr[hart]    : pointer to Context::m_stack_isr for that hart.
 //   Both the pointer and its Stack::SP are set once in Context::Initialize()
 //   and never change thereafter.
 //
 // Declared volatile so the compiler always re-reads SP through the pointer;
 // the SP field is written by C++ (scheduler) and read by asm (ISR entry/exit).
-Stack * volatile g_StkRiscvStackActive[STK_ARCH_CPU_COUNT];
-Stack * volatile g_StkRiscvStackIsr   [STK_ARCH_CPU_COUNT];
+Stack * volatile s_StkRiscvStackActive[STK_ARCH_CPU_COUNT];
+Stack * volatile s_StkRiscvStackIsr   [STK_ARCH_CPU_COUNT];
+
+// ── SaveJmp/RestoreJmp ────────────────────────────────────────────────────────
+// RISC-V callee-saved registers per the ABI:
+//   s0/fp (x8), s1 (x9), s2-s11 (x18-x27), sp (x2), ra (x1)
+//
+// Both functions are naked so the compiler emits no prologue/epilogue:
+//   - SaveJmp captures the *caller's* SP and RA before any frame adjustment.
+//   - RestoreJmp reloads everything and jumps directly to the saved RA, making
+//     SaveJmp's caller see a non-zero return value (val) as if SaveJmp returned
+//     a second time.
+//
+// If FPU is present (STK_RISCV_FPU != 0), FCSR is also saved/restored to
+// preserve the caller's rounding mode and exception flags across the jump.
+// The callee-saved FP data registers (fs0-fs11) are NOT saved here —
+// the ABI already guarantees they survive any normal call boundary.
+//
+// a0 = &f  (first argument)
+// a1 = val (second argument, RestoreJmp only)
+
+/*! \struct JmpFrame
+    \brief  Callee-saved CPU register snapshot used by SaveJmp() and RestoreJmp().
+    \note   Layout matches the RISC-V ABI callee-saved register set: ra, sp, s0-s11.
+            If an FPU is present, FCSR is appended to preserve the caller's
+            floating-point rounding mode and accrued exception flags across the jump.
+            FP data registers (fs0-fs11) are intentionally excluded —
+            the ABI guarantees they survive any normal call boundary.
+    \see    SaveJmp, RestoreJmp
+*/
+struct JmpFrame
+{
+    Word RA;   //!< Return address of the SaveJmp call site (x1, ra).
+    Word SP;   //!< Stack pointer of the SaveJmp call site (x2, sp).
+    Word S0;   //!< Callee-saved register s0/fp (x8).
+    Word S1;   //!< Callee-saved register s1 (x9).
+    Word S2;   //!< Callee-saved register s2 (x18).
+    Word S3;   //!< Callee-saved register s3 (x19).
+    Word S4;   //!< Callee-saved register s4 (x20).
+    Word S5;   //!< Callee-saved register s5 (x21).
+    Word S6;   //!< Callee-saved register s6 (x22).
+    Word S7;   //!< Callee-saved register s7 (x23).
+    Word S8;   //!< Callee-saved register s8 (x24).
+    Word S9;   //!< Callee-saved register s9 (x25).
+    Word S10;  //!< Callee-saved register s10 (x26).
+    Word S11;  //!< Callee-saved register s11 (x27).
+#if (STK_RISCV_FPU != 0)
+    Word FCSR; //!< Floating-point control and status register (rounding mode + exception flags).
+#endif
+};
+
+/*! \brief     Save callee-saved CPU registers into a JmpFrame.
+    \param[in] f: Frame to save the register snapshot into.
+    \return    0 when called directly; RestoreJmp() makes this function appear
+               to return \a val a second time at the original call site.
+    \note      Naked function — the compiler emits no prologue or epilogue,
+               ensuring the snapshot reflects the *caller's* true register state.
+    \note      MISRA deviation: [STK-DEV-003] Rule 7-5-1, 7-5-2, 6-6-4
+               (__attribute__((naked))). Required to capture the caller's true
+               SP and return address before any compiler-generated frame
+               adjustment. A non-naked wrapper would snapshot the wrapper's
+               own frame, producing a broken call chain on RestoreJmp().
+    \note      Pair with RestoreJmp().
+    \see       RestoreJmp
+*/
+__attribute__((naked))
+int32_t SaveJmp(JmpFrame &/*f*/)
+{
+    __asm volatile(
+        // a0 = &f — no prologue has touched sp or s0 yet
+        SREG " ra, 0*" REGBYTES "(a0)  \n" // save return address
+        SREG " sp, 1*" REGBYTES "(a0)  \n" // save caller's stack pointer
+        SREG " s0, 2*" REGBYTES "(a0)  \n"
+        SREG " s1, 3*" REGBYTES "(a0)  \n"
+        SREG " s2, 4*" REGBYTES "(a0)  \n"
+        SREG " s3, 5*" REGBYTES "(a0)  \n"
+        SREG " s4, 6*" REGBYTES "(a0)  \n"
+        SREG " s5, 7*" REGBYTES "(a0)  \n"
+        SREG " s6, 8*" REGBYTES "(a0)  \n"
+        SREG " s7, 9*" REGBYTES "(a0)  \n"
+        SREG " s8, 10*" REGBYTES "(a0) \n"
+        SREG " s9, 11*" REGBYTES "(a0) \n"
+        SREG " s10, 12*" REGBYTES "(a0) \n"
+        SREG " s11, 13*" REGBYTES "(a0) \n"
+    #if (STK_RISCV_FPU != 0)
+        "frcsr t0                       \n" // read fcsr (rounding mode + flags)
+        SREG " t0, 14*" REGBYTES "(a0)  \n" // save to JmpFrame::FCSR
+    #endif
+        "li    a0, 0                    \n" // return 0
+        "ret                            \n" // explicit return (naked)
+    );
+}
+
+/*! \brief     Restore callee-saved CPU registers from a JmpFrame and jump back
+               to the SaveJmp() call site.
+    \param[in] f:   Frame previously populated by SaveJmp().
+    \param[in] val: Value that SaveJmp() will appear to return at the restored
+                    call site. Should be non-zero to distinguish a restore from
+                    an original save.
+    \note      Naked noreturn function — execution transfers directly to the
+               saved LR/RA; this function never returns to its own caller.
+    \note      MISRA deviation: [STK-DEV-003] Rule 7-5-1, 7-5-2, 6-6-4
+               (__attribute__((naked))). Required to restore SP and branch to
+               the saved return address without any compiler-generated epilogue
+               that would corrupt the restored stack state.
+    \note      Pair with SaveJmp().
+    \warning   Undefined behavior if \a f was not previously initialized by
+               a matching SaveJmp() call on the same stack.
+    \see       SaveJmp
+*/
+__attribute__((naked, noreturn))
+void RestoreJmp(JmpFrame &/*f*/, int32_t /*val*/)
+{
+    __asm volatile(
+        // a0 = &f, a1 = val
+        LREG " ra, 0*" REGBYTES "(a0)  \n"
+        LREG " sp, 1*" REGBYTES "(a0)  \n"
+        LREG " s0, 2*" REGBYTES "(a0)  \n"
+        LREG " s1, 3*" REGBYTES "(a0)  \n"
+        LREG " s2, 4*" REGBYTES "(a0)  \n"
+        LREG " s3, 5*" REGBYTES "(a0)  \n"
+        LREG " s4, 6*" REGBYTES "(a0)  \n"
+        LREG " s5, 7*" REGBYTES "(a0)  \n"
+        LREG " s6, 8*" REGBYTES "(a0)  \n"
+        LREG " s7, 9*" REGBYTES "(a0)  \n"
+        LREG " s8, 10*" REGBYTES "(a0) \n"
+        LREG " s9, 11*" REGBYTES "(a0) \n"
+        LREG " s10, 12*" REGBYTES "(a0) \n"
+        LREG " s11, 13*" REGBYTES "(a0) \n"
+    #if (STK_RISCV_FPU != 0)
+        LREG " t0, 14*" REGBYTES "(a0)  \n" // load saved fcsr into t0
+        "fscsr t0                       \n" // restore rounding mode + flags
+    #endif
+        "mv    a0, a1                   \n" // return val to SaveJmp's caller
+        "ret                            \n" // jump to saved RA
+    );
+}
 
 //! Internal context.
 static struct Context : public PlatformContext
@@ -412,7 +544,7 @@ static struct Context : public PlatformContext
         if (m_csu_nesting == 0)
         {
             // ONLY attempt the global spinlock if we aren't already nested
-            STK_RISCV_SPIN_LOCK_LOCK(g_CsuLock);
+            STK_RISCV_SPIN_LOCK_LOCK(s_StkRiscvCsuLock);
 
             // store the hardware interrupt state to restore later
             m_csu = current_ses;
@@ -432,7 +564,7 @@ static struct Context : public PlatformContext
             Word ses_to_restore = m_csu;
 
             // release global lock
-            STK_RISCV_SPIN_LOCK_UNLOCK(g_CsuLock);
+            STK_RISCV_SPIN_LOCK_UNLOCK(s_StkRiscvCsuLock);
 
             // restore hardware interrupts
             STK_RISCV_CRITICAL_SECTION_END(ses_to_restore);
@@ -445,18 +577,18 @@ static struct Context : public PlatformContext
 
     Stack     m_stack_main;    //!< main stack info
     Stack     m_stack_isr;     //!< isr stack info
-    jmp_buf   m_exit_buf;      //!< saved context of the exit point
+    JmpFrame  m_exit_buf;      //!< saved context of the exit point
     isrmem_t  m_stack_isr_mem; //!< ISR stack memory
     eovrd_t  *m_overrider;     //!< platform events overrider
     sehndl_t *m_specific;      //!< platform-specific event handler
     int32_t   m_tick_period;   //!< system tick periodicity (microseconds, ticks)
-    Word    m_csu;           //!< user critical session
+    Word      m_csu;           //!< user critical session
     uint32_t  m_csu_nesting;   //!< depth of user critical session nesting
     bool      m_starting;      //!< 'true' when in is being started
     bool      m_started;       //!< 'true' when in started state
-    bool      m_exiting;       //!< 'true' when is exiting the scheduling process
+    volatile bool m_exiting;   //!< 'true' when is exiting the scheduling process
 }
-g_Context[STK_ARCH_CPU_COUNT];
+s_StkPlatformContext[STK_ARCH_CPU_COUNT];
 
 void PlatformRiscV::ProcessTick()
 {
@@ -529,7 +661,7 @@ void STK_PANIC_HANDLER_DEFAULT(EKernelPanicId id)
 #define STK_ASM_SAVE_CONTEXT_RV32I_EXT
 #endif
 
-#if (STK_RISCV_FP != 0)
+#if (STK_RISCV_FPU != 0)
 #define STK_ASM_SAVE_CONTEXT_FP\
     FSREG " f0, " FOFFSET "+0*" FREGBYTES "(sp)  \n"\
     FSREG " f1, " FOFFSET "+1*" FREGBYTES "(sp)  \n"\
@@ -573,7 +705,7 @@ void STK_PANIC_HANDLER_DEFAULT(EKernelPanicId id)
     SREG " t0, 0*" REGBYTES "(sp)    \n"\
     SREG " t1, 1*" REGBYTES "(sp)    \n"
 
-#if (STK_RISCV_FP != 0)
+#if (STK_RISCV_FPU != 0)
 #define STK_ASM_SAVE_CONTEXT_FRCSR\
     "frcsr t0                        \n"\
     SREG " t0, 4*" REGBYTES "(sp)    \n"  /* use stack memory slot of gp  (see comment for x3 above) */
@@ -630,7 +762,7 @@ void STK_PANIC_HANDLER_DEFAULT(EKernelPanicId id)
 #define STK_ASM_LOAD_CONTEXT_RV32I_EXT
 #endif
 
-#if (STK_RISCV_FP != 0)
+#if (STK_RISCV_FPU != 0)
 #define STK_ASM_LOAD_CONTEXT_FP\
     FLREG " f0, " FOFFSET "+0*" FREGBYTES "(sp)  \n"\
     FLREG " f1, " FOFFSET "+1*" FREGBYTES "(sp)  \n"\
@@ -674,7 +806,7 @@ void STK_PANIC_HANDLER_DEFAULT(EKernelPanicId id)
     "csrw mepc, t0                   \n"\
     "csrw mstatus, t1                \n"
 
-#if (STK_RISCV_FP != 0)
+#if (STK_RISCV_FPU != 0)
 #define STK_ASM_LOAD_CONTEXT_FRCSR\
     LREG " t0, 4*" REGBYTES "(sp)    \n" /* use stack memory slot of gp (see comment for x3 below) */\
     "fscsr t0                        \n"
@@ -723,7 +855,7 @@ static __stk_forceinline void LoadContextAndExit()
 
 static __stk_forceinline void EnableFullFpuAccess()
 {
-#if (STK_RISCV_FP != 0)
+#if (STK_RISCV_FPU != 0)
     __asm volatile(
     "li t0, %0        \n"
     "csrs mstatus, t0 \n"
@@ -735,7 +867,7 @@ static __stk_forceinline void EnableFullFpuAccess()
 
 static __stk_forceinline void ClearFpuState()
 {
-#if (STK_RISCV_FP != 0)
+#if (STK_RISCV_FPU != 0)
     __asm volatile(
     "fssr x0"
     : /* output: none */
@@ -807,11 +939,11 @@ extern "C" STK_RISCV_ISR_SECTION __stk_attr_used void TrySwitchContext() // __st
 
     // refresh the ISR asm pointer cache so the naked ISR reads the correct
     // (possibly new) active stack SP immediately when jal returns.
-    // g_StkRiscvStackActive[hart] always points to Context::m_stack_active, the pointer
+    // s_StkRiscvStackActive[hart] always points to Context::m_stack_active, the pointer
     // itself is stable, but we reassign here so multi-core hart-indexed builds
     // stay correct if the hart mapping ever changes in future,
     // for single-core builds this is a simple store to a known address at index 0
-    g_StkRiscvStackActive[HW_GetHartId()] = GetContext().m_stack_active;
+    s_StkRiscvStackActive[HW_GetHartId()] = GetContext().m_stack_active;
 }
 
 #ifdef _STK_RISCV_USE_PENDSV
@@ -853,7 +985,7 @@ DESIGN RULES — must be obeyed to work correctly at all optimisation levels:
     text, i.e. before the register save - trashing uninitialized registers.
 
  2. All addresses are linker symbols loaded via "la" inside the asm.
-    g_StkRiscvStackActive and g_StkRiscvStackIsr are plain file-scope globals. "la reg, sym"
+    s_StkRiscvStackActive and s_StkRiscvStackIsr are plain file-scope globals. "la reg, sym"
     emits a PC-relative load that is resolved at link time, it produces no
     compiler-generated code outside the asm string.
 
@@ -862,7 +994,7 @@ DESIGN RULES — must be obeyed to work correctly at all optimisation levels:
     single left-shift by log2(REGBYTES): 2 for RV32 (4 bytes), 3 for RV64
     (8 bytes). REGBYTES_LOG2 is defined below accordingly.
 
- 4. g_StkRiscvStackActive[hart]->SP is updated by TrySwitchContext.
+ 4. s_StkRiscvStackActive[hart]->SP is updated by TrySwitchContext.
     The naked asm reads it fresh after the jal returns, so it always sees
     the task the scheduler has chosen — even if it changed.
 
@@ -876,7 +1008,7 @@ DESIGN RULES — must be obeyed to work correctly at all optimisation levels:
    [6*REGBYTES] x5  / t0
    ...
    [32*REGBYTES] x31 / t6  (RV32I; absent on RV32E)
-   [FOFFSET + n*FREGBYTES] fn  (FP registers, if STK_RISCV_FP != 0)
+   [FOFFSET + n*FREGBYTES] fn  (FP registers, if STK_RISCV_FPU != 0)
 */
 
 #if (__riscv_xlen == 32)
@@ -891,53 +1023,53 @@ extern "C" STK_RISCV_ISR_SECTION __stk_attr_naked void STK_SYSTICK_HANDLER()
     // 1. save context
     STK_ASM_SAVE_CONTEXT
 
-    // 2. store task SP into g_StkRiscvStackActive[hart]->SP
+    // 2. store task SP into s_StkRiscvStackActive[hart]->SP
     // all integer registers are now saved. t0/t1 are free to use as scratch.
     // "la" loads the address of the global array - a linker-time constant,
     // no compiler-generated runtime code, safe to use here
 #if (STK_ARCH_CPU_COUNT > 1)
     "csrr t0, mhartid                    \n"
-    "la   t1, g_StkRiscvStackActive      \n"
+    "la   t1, s_StkRiscvStackActive      \n"
     "slli t0, t0, " REGBYTES_LOG2 "      \n"  // t0 = hart * sizeof(Stack*)
-    "add  t1, t1, t0                     \n"  // t1 = &g_StkRiscvStackActive[hart]
-    LREG " t1, 0(t1)                     \n"  // t1 = g_StkRiscvStackActive[hart] (Stack*)
+    "add  t1, t1, t0                     \n"  // t1 = &s_StkRiscvStackActive[hart]
+    LREG " t1, 0(t1)                     \n"  // t1 = s_StkRiscvStackActive[hart] (Stack*)
 #else
-    "la   t1, g_StkRiscvStackActive      \n"
-    LREG " t1, 0(t1)                     \n"  // t1 = g_StkRiscvStackActive[0] (Stack*)
+    "la   t1, s_StkRiscvStackActive      \n"
+    LREG " t1, 0(t1)                     \n"  // t1 = s_StkRiscvStackActive[0] (Stack*)
 #endif
     SREG " sp, 0(t1)                     \n"  // Stack::SP = task's sp (SP is first member)
 
     // 3. switch to private ISR stack
 #if (STK_ARCH_CPU_COUNT > 1)
     "csrr t0, mhartid                    \n"
-    "la   t1, g_StkRiscvStackIsr         \n"
+    "la   t1, s_StkRiscvStackIsr         \n"
     "slli t0, t0, " REGBYTES_LOG2 "      \n"
     "add  t1, t1, t0                     \n"
-    LREG " t1, 0(t1)                     \n"  // t1 = g_StkRiscvStackIsr[hart] (Stack*)
+    LREG " t1, 0(t1)                     \n"  // t1 = s_StkRiscvStackIsr[hart] (Stack*)
 #else
-    "la   t1, g_StkRiscvStackIsr         \n"
-    LREG " t1, 0(t1)                     \n"  // t1 = g_StkRiscvStackIsr[0] (Stack*)
+    "la   t1, s_StkRiscvStackIsr         \n"
+    LREG " t1, 0(t1)                     \n"  // t1 = s_StkRiscvStackIsr[0] (Stack*)
 #endif
     LREG " sp, 0(t1)                     \n"  // sp = Stack::SP of ISR stack
 
     // 4. call TrySwitchContext
     // runs on the ISR stack: reschedules timer, runs scheduler
     // (which may update m_stack_active to a new task), then updates
-    // g_StkRiscvStackActive[hart] so step 5 below reads the correct new SP,
+    // s_StkRiscvStackActive[hart] so step 5 below reads the correct new SP,
     // all caller-saved registers (a0-a7, t0-t6, ra) are trashed — expected
     "jal  ra, TrySwitchContext           \n"
 
-    // 5. reload SP from g_StkRiscvStackActive[hart]->SP
-    // TrySwitchContext updated g_StkRiscvStackActive[hart] before returning,
+    // 5. reload SP from s_StkRiscvStackActive[hart]->SP
+    // TrySwitchContext updated s_StkRiscvStackActive[hart] before returning,
     // we re-read it fresh to pick up any task switch the scheduler made
 #if (STK_ARCH_CPU_COUNT > 1)
     "csrr t0, mhartid                    \n"
-    "la   t1, g_StkRiscvStackActive      \n"
+    "la   t1, s_StkRiscvStackActive      \n"
     "slli t0, t0, " REGBYTES_LOG2 "      \n"
     "add  t1, t1, t0                     \n"
     LREG " t1, 0(t1)                     \n"
 #else
-    "la   t1, g_StkRiscvStackActive      \n"
+    "la   t1, s_StkRiscvStackActive      \n"
     LREG " t1, 0(t1)                     \n"
 #endif
     LREG " sp, 0(t1)                     \n"  // sp = active task's saved SP
@@ -978,8 +1110,8 @@ static __stk_forceinline void StartScheduling()
 
     // initialize ISR asm pointer cache
     const uint8_t hart = HW_GetHartId();
-    g_StkRiscvStackIsr[hart]    = &GetContext().m_stack_isr;   // set once here, the ISR stack never moves
-    g_StkRiscvStackActive[hart] = GetContext().m_stack_active; // set here for the first task, updated every tick by TrySwitchContext after the scheduler runs
+    s_StkRiscvStackIsr[hart]    = &GetContext().m_stack_isr;   // set once here, the ISR stack never moves
+    s_StkRiscvStackActive[hart] = GetContext().m_stack_active; // set here for the first task, updated every tick by TrySwitchContext after the scheduler runs
 
     // enable timer interrupt
     set_csr(mie, MIP_MTIP);
@@ -1085,7 +1217,7 @@ static void OnSchedulerExit()
     LoadMainSP();
 
     // jump to the exit from the IKernel::Start()
-    longjmp(GetContext().m_exit_buf, 0);
+    RestoreJmp(GetContext().m_exit_buf, 0);
 }
 
 void PlatformRiscV::Initialize(IEventHandler *event_handler, IKernelService *service, uint32_t resolution_us, Stack *exit_trap)
@@ -1098,7 +1230,7 @@ void PlatformRiscV::Start()
     GetContext().m_exiting = false;
 
     // save jump location of the Exit trap
-    setjmp(GetContext().m_exit_buf);
+    SaveJmp(GetContext().m_exit_buf);
     if (GetContext().m_exiting)
         return;
 
@@ -1121,8 +1253,8 @@ bool PlatformRiscV::InitStack(EStackType stack_type, Stack *stack, IStackMemory 
     stack->SP = hw::PtrToWord(stack_top - (STK_RISCV_REGISTER_COUNT + STK_SERVICE_SLOTS));
 
     Word MEPC, RA, X10;
-    Word MSTATUS = MSTATUS_MPP | MSTATUS_MPIE | (STK_RISCV_FP != 0 ? (MSTATUS_FS | MSTATUS_XS) : 0);
-#if (STK_RISCV_FP != 0)
+    Word MSTATUS = MSTATUS_MPP | MSTATUS_MPIE | (STK_RISCV_FPU != 0 ? (MSTATUS_FS | MSTATUS_XS) : 0);
+#if (STK_RISCV_FPU != 0)
     Word FSR = 0;
 #endif
 
@@ -1155,7 +1287,7 @@ bool PlatformRiscV::InitStack(EStackType stack_type, Stack *stack, IStackMemory 
     stack_top[STK_RISCV_SRV_INDEX(2)]  = MSTATUS; // mstatus (entry function)
 
     stack_top[STK_RISCV_REG_INDEX(1)]  = RA;      // x1, ra
-#if (STK_RISCV_FP != 0)
+#if (STK_RISCV_FPU != 0)
     stack_top[STK_RISCV_REG_INDEX(3)]  = FSR;     // x3, fssr (note: x4 is gp register but we use this slot to hold value for fsr register)
 #endif
     stack_top[STK_RISCV_REG_INDEX(10)] = X10;     // x10, function argument

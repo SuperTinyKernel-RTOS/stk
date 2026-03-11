@@ -84,9 +84,9 @@ protected:
 */
 #ifndef _STK_UNDER_TEST
 #if (STK_ARCH_CPU_COUNT == 1)
-    #define GetContext() g_Context[0]
+    #define GetContext() s_StkPlatformContext[0]
 #else
-    #define GetContext() g_Context[STK_ARCH_GET_CPU_ID()]
+    #define GetContext() s_StkPlatformContext[STK_ARCH_GET_CPU_ID()]
 #endif
 #endif
 

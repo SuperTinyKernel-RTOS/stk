@@ -13,9 +13,6 @@
 
 #ifdef _STK_ARCH_ARM_CORTEX_M
 
-#include <stdlib.h>
-#include <setjmp.h>
-
 //#define STK_CORTEX_M_TRUSTZONE
 
 #ifdef STK_CORTEX_M_TRUSTZONE
@@ -154,18 +151,14 @@ enum ESvc
 #error Expecting __CORTEX_M with value corresponding to Cortex-M model (0, 3, 4, ...)!
 #endif
 
-//! If defined, assume CPU may support FPU.
-#if (__FPU_PRESENT == 1) && (__FPU_USED == 1)
-    #define STK_CORTEX_M_EXPECT_FPU
-#endif
+//! If (1) then code assumes FPU presence on CPU which is used by the compiler.
+#define STK_CORTEX_M_FPU ((__FPU_PRESENT == 1) && (__FPU_USED == 1))
 
-//! If defined, manage Link Register (LR) per task.
-#if (__CORTEX_M >= 3)
-    #define STK_CORTEX_M_MANAGE_LR
-#endif
+//! If (1), manage Link Register (LR) per task.
+#define STK_CORTEX_M_MANAGE_LR (__CORTEX_M >= 3)
 
 //! Number of registers kept in stack.
-#ifdef STK_CORTEX_M_MANAGE_LR
+#if STK_CORTEX_M_MANAGE_LR
     #define STK_CORTEX_M_REGISTER_COUNT 17
 #else
     #define STK_CORTEX_M_REGISTER_COUNT 16
@@ -185,6 +178,174 @@ enum ESvc
 #ifndef STK_SVC_HANDLER
     #define STK_SVC_HANDLER SVC_Handler
 #endif
+
+//! SVC frame.
+struct SvcFrame
+{
+    Word R0;
+    Word R1;
+    Word R2;
+    Word R3;
+    Word R12;
+    Word R14_LR;
+    Word R15_PC;
+    Word PSR;
+};
+
+// ── SaveJmp/RestoreJmp ────────────────────────────────────────────────────────
+// ARM Cortex-M callee-saved registers per the AAPCS ABI:
+//   r4-r11, sp (r13), lr (r14)
+//
+// Both functions are naked so the compiler emits no prologue/epilogue:
+//   - SaveJmp captures the *caller's* SP and LR before any frame adjustment.
+//   - RestoreJmp reloads everything and jumps directly to the saved LR, making
+//     SaveJmp's caller see a non-zero return value (val) as if SaveJmp returned
+//     a second time.
+//
+// Cortex-M0/M0+/M1 (Thumb-1 only):
+//   STR/LDR with r8-r11/sp/lr cannot be encoded in 16-bit Thumb-1.
+//   High registers are moved into r1/r2 first, then stored via r0 base.
+//   SP and LR are also moved into low registers before store/load.
+//
+// If FPU is present (STK_CORTEX_M_FPU != 0), FPSCR is also saved/restored
+// to preserve the caller's rounding mode and exception flags across the jump.
+// The callee-saved VFP data registers (d8-d15 / s16-s31) are NOT saved here —
+// the ABI already guarantees they survive any normal call boundary.
+//
+// r0 = &f  (first argument)
+// r1 = val (second argument, RestoreJmp only)
+
+/*! \struct JmpFrame
+    \brief  Callee-saved CPU register snapshot used by SaveJmp() and RestoreJmp().
+    \note   Layout matches the AAPCS callee-saved register set: r4-r11, sp, lr.
+            If an FPU is present, FPSCR is appended to preserve the caller's
+            floating-point rounding mode and exception flags across the jump.
+            VFP data registers (d8-d15 / s16-s31) are intentionally excluded —
+            the ABI guarantees they survive any normal call boundary.
+    \see    SaveJmp, RestoreJmp
+*/
+struct JmpFrame
+{
+    Word R4, R5, R6, R7, R8, R9, R10, R11; //!< Callee-saved general-purpose registers.
+    Word SP;    //!< Stack pointer of the SaveJmp call site (r13).
+    Word LR;    //!< Return address of the SaveJmp call site (r14).
+#if STK_CORTEX_M_FPU
+    Word FPSCR; //!< Floating-point status and control register (rounding mode + exception flags).
+#endif
+};
+
+/*! \brief     Save callee-saved CPU registers into a JmpFrame.
+    \param[in] f: Frame to save the register snapshot into.
+    \return    0 when called directly; RestoreJmp() makes this function appear
+               to return \a val a second time at the original call site.
+    \note      Naked function — the compiler emits no prologue or epilogue,
+               ensuring the snapshot reflects the *caller's* true register state.
+    \note      MISRA deviation: [STK-DEV-003] Rule 7-5-1, 7-5-2, 6-6-4
+               (__attribute__((naked))). Required to capture the caller's true
+               SP and return address before any compiler-generated frame
+               adjustment. A non-naked wrapper would snapshot the wrapper's
+               own frame, producing a broken call chain on RestoreJmp().
+    \note      Pair with RestoreJmp().
+    \see       RestoreJmp
+*/
+__stk_attr_naked
+int32_t SaveJmp(JmpFrame &/*f*/)
+{
+    __asm volatile(
+        ".syntax unified                \n"
+
+    #if (__CORTEX_M >= 3)
+        // ── Cortex-M3/M4/M7: STMIA stores r4-r11 at r0+0 .. r0+28 ──────
+        "STMIA r0,  {r4-r11}            \n" // store r4-r11 at offsets 0-28, no writeback
+        "STR   sp,  [r0, #32]           \n" // SP at offset 32
+        "STR   lr,  [r0, #36]           \n" // LR at offset 36
+    #else
+        // ── Cortex-M0/M0+/M1: Thumb-1 only ─────────────────────────────
+        "STR  r4,  [r0, #0]             \n"
+        "STR  r5,  [r0, #4]             \n"
+        "STR  r6,  [r0, #8]             \n"
+        "STR  r7,  [r0, #12]            \n"
+        "MOV  r1,  r8                   \n"
+        "STR  r1,  [r0, #16]            \n"
+        "MOV  r1,  r9                   \n"
+        "STR  r1,  [r0, #20]            \n"
+        "MOV  r1,  r10                  \n"
+        "STR  r1,  [r0, #24]            \n"
+        "MOV  r1,  r11                  \n"
+        "STR  r1,  [r0, #28]            \n"
+        "MOV  r1,  sp                   \n"
+        "STR  r1,  [r0, #32]            \n"
+        "MOV  r1,  lr                   \n"
+        "STR  r1,  [r0, #36]            \n"
+    #endif
+
+    #if STK_CORTEX_M_FPU
+        "VMRS r1,  FPSCR                \n"
+        "STR  r1,  [r0, #40]            \n"
+    #endif
+        "MOVS r0,  #0                   \n"
+        "BX   lr                        \n"
+    );
+}
+
+/*! \brief     Restore callee-saved CPU registers from a JmpFrame and jump back
+               to the SaveJmp() call site.
+    \param[in] f:   Frame previously populated by SaveJmp().
+    \param[in] val: Value that SaveJmp() will appear to return at the restored
+                    call site. Should be non-zero to distinguish a restore from
+                    an original save.
+    \note      Naked noreturn function — execution transfers directly to the
+               saved LR; this function never returns to its own caller.
+    \note      MISRA deviation: [STK-DEV-003] Rule 7-5-1, 7-5-2, 6-6-4
+               (__attribute__((naked))). Required to restore SP and branch to
+               the saved return address without any compiler-generated epilogue
+               that would corrupt the restored stack state.
+    \note      Pair with SaveJmp().
+    \warning   Undefined behavior if \a f was not previously initialized by
+               a matching SaveJmp() call on the same stack.
+    \see       SaveJmp
+*/
+__stk_attr_naked
+__stk_attr_noreturn
+void RestoreJmp(JmpFrame &/*f*/, int32_t /*val*/)
+{
+    __asm volatile(
+        ".syntax unified                \n"
+
+    #if (__CORTEX_M >= 3)
+        // ── Cortex-M3/M4/M7: LDMIA loads r4-r11 from offsets 0-28 ───────
+        "LDR   sp,  [r0, #32]           \n" // restore SP
+    #if STK_CORTEX_M_FPU
+        "LDR   r2,  [r0, #40]           \n" // load saved FPSCR
+        "VMSR  FPSCR, r2                \n" // restore rounding mode + flags
+    #endif
+        "LDR   r2,  [r0, #36]           \n" // load saved LR into r2
+        "LDMIA r0,  {r4-r11}            \n" // restore r4-r11, no writeback
+        "MOV   r0,  r1                  \n" // return val
+        "BX    r2                       \n"
+    #else
+        // ── Cortex-M0/M0+/M1: Thumb-1 only ─────────────────────────────
+        "LDR  r2,  [r0, #36]            \n"
+        "MOV  lr,  r2                   \n"
+        "LDR  r2,  [r0, #32]            \n"
+        "MOV  sp,  r2                   \n"
+        "LDR  r2,  [r0, #28]            \n"
+        "MOV  r11, r2                   \n"
+        "LDR  r2,  [r0, #24]            \n"
+        "MOV  r10, r2                   \n"
+        "LDR  r2,  [r0, #20]            \n"
+        "MOV  r9,  r2                   \n"
+        "LDR  r2,  [r0, #16]            \n"
+        "MOV  r8,  r2                   \n"
+        "LDR  r4,  [r0, #0]             \n"
+        "LDR  r5,  [r0, #4]             \n"
+        "LDR  r6,  [r0, #8]             \n"
+        "LDR  r7,  [r0, #12]            \n"
+        "MOV  r0,  r1                   \n"  // return val
+        "BX   lr                        \n"
+    #endif
+    );
+}
 
 // Declarations:
 extern "C" void SVC_Handler_Main(Word *svc_args) __stk_attr_used; // __stk_attr_used required for Link-Time Optimization (-flto)
@@ -249,7 +410,7 @@ static __stk_forceinline void ScheduleContextSwitch()
 */
 static __stk_forceinline void ClearFpuState()
 {
-#ifdef STK_CORTEX_M_EXPECT_FPU
+#if STK_CORTEX_M_FPU
     __set_CONTROL(__get_CONTROL() & ~CONTROL_FPCA_Msk);
 #endif
 }
@@ -258,14 +419,14 @@ static __stk_forceinline void ClearFpuState()
 */
 static __stk_forceinline void EnableFullFpuAccess()
 {
-#ifdef STK_CORTEX_M_EXPECT_FPU
+#if STK_CORTEX_M_FPU
     // enable FPU CP10/CP11 Secure and Non-secure register access
     SCB->CPACR |= (0b11 << 20) | (0b11 << 22);
 #endif
 }
 
 //! Global lock to synchronize critical sections of multiple cores.
-static volatile bool g_CsuLock = false;
+static volatile bool s_StkCortexmCsuLock = false;
 
 //! Internal context.
 static struct Context : public PlatformContext
@@ -321,7 +482,7 @@ static struct Context : public PlatformContext
         if (m_csu_nesting == 0)
         {
             // ONLY attempt the global spinlock if we aren't already nested
-            STK_CORTEX_M_SPIN_LOCK_LOCK(g_CsuLock);
+            STK_CORTEX_M_SPIN_LOCK_LOCK(s_StkCortexmCsuLock);
 
             // store the hardware interrupt state to restore later
             m_csu = current_ses;
@@ -341,7 +502,7 @@ static struct Context : public PlatformContext
             uint32_t ses_to_restore = m_csu;
 
             // release global lock
-            STK_CORTEX_M_SPIN_LOCK_UNLOCK(g_CsuLock);
+            STK_CORTEX_M_SPIN_LOCK_UNLOCK(s_StkCortexmCsuLock);
 
             // restore hardware interrupts
             STK_CORTEX_M_CRITICAL_SECTION_END(ses_to_restore);
@@ -357,7 +518,7 @@ static struct Context : public PlatformContext
         if (m_csu_nesting == 0)
         {
             // ONLY attempt the global spinlock if we aren't already nested
-            STK_CORTEX_M_SPIN_LOCK_LOCK(g_CsuLock);
+            STK_CORTEX_M_SPIN_LOCK_LOCK(s_StkCortexmCsuLock);
 
             // store the hardware interrupt state to restore later
             m_csu = current_ses;
@@ -378,7 +539,7 @@ static struct Context : public PlatformContext
             uint32_t ses_to_restore = m_csu;
 
             // release global lock
-            STK_CORTEX_M_SPIN_LOCK_UNLOCK(g_CsuLock);
+            STK_CORTEX_M_SPIN_LOCK_UNLOCK(s_StkCortexmCsuLock);
 
             // restore hardware interrupts via SVC
             SVC_ExitCritical(ses_to_restore);
@@ -390,7 +551,7 @@ static struct Context : public PlatformContext
         m_exiting = false;
 
         // save jump location of the Exit trap
-        setjmp(m_exit_buf);
+        SaveJmp(m_exit_buf);
         if (m_exiting)
             return;
 
@@ -402,14 +563,14 @@ static struct Context : public PlatformContext
 
     typedef IPlatform::IEventOverrider eovrd_t;
 
-    jmp_buf       m_exit_buf;    //!< saved context of the exit point
+    JmpFrame      m_exit_buf;    //!< saved context of the exit point
     eovrd_t      *m_overrider;   //!< platform events overrider
     uint32_t      m_csu;         //!< user critical session
     uint32_t      m_csu_nesting; //!< depth of user critical session nesting
     volatile bool m_started;     //!< 'true' when in started state
     bool          m_exiting;     //!< 'true' when is exiting the scheduling process
 }
-g_Context[STK_ARCH_CPU_COUNT];
+s_StkPlatformContext[STK_ARCH_CPU_COUNT];
 
 void PlatformArmCortexM::ProcessTick()
 {
@@ -497,7 +658,7 @@ extern "C" __stk_attr_naked void STK_PENDSV_HANDLER()
     // save stack to inactive (idle) task
     "MRS        r0, psp          \n"
 
-#ifdef STK_CORTEX_M_EXPECT_FPU
+#if STK_CORTEX_M_FPU
     // save FP registers
     "TST        LR, #16          \n" /* test LR for 0xffffffe_, e.g. Thread mode with FP data */
     "IT         EQ               \n"
@@ -505,7 +666,7 @@ extern "C" __stk_attr_naked void STK_PENDSV_HANDLER()
 #endif
 
     // save general registers
-#ifdef STK_CORTEX_M_MANAGE_LR
+#if STK_CORTEX_M_MANAGE_LR
     // save r4-r11 and LR
     // note: for Cortex-M3 and higher save LR to keep correct Thread state of the task when it is restored
     "STMDB      r0!, {r4-r11, LR}\n"
@@ -536,7 +697,7 @@ extern "C" __stk_attr_naked void STK_PENDSV_HANDLER()
     "LDR        r0, [r1]         \n" /* load the first member of Stack (Stack::SP) into r0 */
 
     // restore general registers
-#ifdef STK_CORTEX_M_MANAGE_LR
+#if STK_CORTEX_M_MANAGE_LR
     // restore r4-r11 and LR
     "LDMIA      r0!, {r4-r11, LR}\n"
 #else
@@ -549,7 +710,7 @@ extern "C" __stk_attr_naked void STK_PENDSV_HANDLER()
     "LDMIA      r0!, {r4-r7}     \n"
 #endif
 
-#ifdef STK_CORTEX_M_EXPECT_FPU
+#if STK_CORTEX_M_FPU
     // restore FP registers
     "TST        LR, #16         \n" /* test LR for 0xffffffe_, e.g. Thread mode with FP data */
     "IT         EQ              \n" /* if result is positive */
@@ -585,7 +746,7 @@ __stk_attr_naked void OnTaskStart()
     "LDR        r0, [r1]         \n" /* load the first member of Stack (Stack::SP) into r0 */
 
     // restore general registers
-#ifdef STK_CORTEX_M_MANAGE_LR
+#if STK_CORTEX_M_MANAGE_LR
     // restore r4-r11 and LR
     "LDMIA      r0!, {r4-r11, LR}\n"
 #else
@@ -598,7 +759,7 @@ __stk_attr_naked void OnTaskStart()
     "LDMIA      r0!, {r4-r7}     \n"
 #endif
 
-#ifdef STK_CORTEX_M_EXPECT_FPU
+#if STK_CORTEX_M_FPU
     // restore FP registers
     "TST        LR, #16         \n" /* test LR for 0xffffffe_, e.g. Thread mode with FP data */
     "IT         EQ              \n" /* if result is positive */
@@ -608,7 +769,7 @@ __stk_attr_naked void OnTaskStart()
     // restore psp
     "MSR        psp, r0         \n"
 
-#ifndef STK_CORTEX_M_MANAGE_LR
+#if !STK_CORTEX_M_MANAGE_LR
     // M0: set LR to Thread mode, use PSP state and stack
     "LDR        r0, =%[exc_ret] \n"
     "MOV        LR, r0          \n"
@@ -834,8 +995,8 @@ static void OnSchedulerExit()
     __set_CONTROL(0); // switch to MSP
     __set_PSP(0);     // clear PSP (for a clean register state)
 
-    // jump to the exit from the IKernel::Start()
-    longjmp(GetContext().m_exit_buf, 0);
+    // jump back to SaveJmp's return site with m_exiting already set to true
+    RestoreJmp(GetContext().m_exit_buf, 0);
 }
 
 #if STK_SEGGER_SYSVIEW
@@ -904,7 +1065,7 @@ bool PlatformArmCortexM::InitStack(EStackType stack_type, Stack *stack, IStackMe
     stack_top[-8] = R0;
 
     // Exception exit value (LR) if FP is present
-#ifdef STK_CORTEX_M_MANAGE_LR
+#if STK_CORTEX_M_MANAGE_LR
     stack_top[-9] = STK_CORTEX_M_EXC_RETURN_THREAD_PSP;
 #endif
 
