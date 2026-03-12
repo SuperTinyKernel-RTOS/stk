@@ -126,6 +126,11 @@
 			<locationURI>virtual:/virtual</locationURI>
 		</link>
 		<link>
+			<name>deps/stk/include/time</name>
+			<type>2</type>
+			<locationURI>virtual:/virtual</locationURI>
+		</link>
+		<link>
 			<name>deps/stk/src/arch</name>
 			<type>2</type>
 			<locationURI>virtual:/virtual</locationURI>
@@ -299,6 +304,21 @@
 			<name>deps/stk/include/sync/stk_sync_spinlock.h</name>
 			<type>1</type>
 			<locationURI>PARENT-4-PROJECT_LOC/stk/include/sync/stk_sync_spinlock.h</locationURI>
+		</link>
+		<link>
+			<name>deps/stk/include/time/stk_time.h</name>
+			<type>1</type>
+			<locationURI>PARENT-4-PROJECT_LOC/stk/include/time/stk_time.h</locationURI>
+		</link>
+		<link>
+			<name>deps/stk/include/time/stk_time_timer.h</name>
+			<type>1</type>
+			<locationURI>PARENT-4-PROJECT_LOC/stk/include/time/stk_time_timer.h</locationURI>
+		</link>
+		<link>
+			<name>deps/stk/include/time/stk_time_util.h</name>
+			<type>1</type>
+			<locationURI>PARENT-4-PROJECT_LOC/stk/include/time/stk_time_util.h</locationURI>
 		</link>
 		<link>
 			<name>deps/stk/src/arch/arm</name>

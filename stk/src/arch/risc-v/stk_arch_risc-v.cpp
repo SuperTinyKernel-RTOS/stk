@@ -30,16 +30,6 @@ using namespace stk;
 #error RISC-V has no PendSV interrupt functionality similar to Arm Cortex-M!
 #endif
 
-// Set tick timer (MTIMECMP) per physical CPU core (1) or not (0)
-#ifndef STK_RISCV_CLINT_MTIMECMP_PER_HART
-    #define STK_RISCV_CLINT_MTIMECMP_PER_HART (1)
-#endif
-
-// Get CPU Id of the caller
-#ifndef STK_ARCH_GET_CPU_ID
-    #define STK_ARCH_GET_CPU_ID() read_csr(mhartid)
-#endif
-
 // CLINT
 // Details: https://github.com/riscv/riscv-aclint/blob/main/riscv-aclint.adoc
 #ifndef STK_RISCV_CLINT_BASE_ADDR
@@ -52,76 +42,17 @@ using namespace stk;
     #define STK_RISCV_CLINT_MTIME_ADDR (STK_RISCV_CLINT_BASE_ADDR + 0xBFF8) // 8-byte value, global
 #endif
 
-//! Orders all predecessor Read/Write with all successor Read/Write (similar to ARM's __DSB(DSB ISH)).
-static __stk_forceinline void __DSB() { __asm volatile("fence rw, rw" : : : "memory"); }
-
-//! Flushes the instruction cache and pipeline (similar to ARM's __ISB).
-static __stk_forceinline void __ISB()
-{
-#ifdef __riscv_zifencei
-    __asm volatile("fence.i" : : : "memory");
-#else
-    __sync_synchronize();
-#endif
-}
-
-//! Put core into a low-power state (similar to ARM's __WFI).
-static __stk_forceinline void __WFI() { __asm volatile("wfi"); }
-
-#define STK_RISCV_CRITICAL_SECTION_START(SES) do { SES = ::HW_EnterCriticalSection(); __DSB(); __ISB(); } while (0)
-#define STK_RISCV_CRITICAL_SECTION_END(SES) do { __DSB(); __ISB(); ::HW_ExitCriticalSection(SES); } while (0)
-
-static __stk_forceinline bool STK_RISCV_SPIN_LOCK_TRYLOCK(volatile bool &LOCK)
-{
-    return __atomic_test_and_set(&LOCK, __ATOMIC_ACQUIRE);
-}
-static __stk_forceinline void STK_RISCV_SPIN_LOCK_LOCK(volatile bool &LOCK)
-{
-    uint32_t timeout = 0xFFFFFF;
-    while (STK_RISCV_SPIN_LOCK_TRYLOCK(LOCK))
-    {
-        if (--timeout == 0)
-        {
-            // Invariant violated: the lock owner exited without releasing,
-            // Kernel state is suspect, enter defined safe state.
-            STK_KERNEL_PANIC(KERNEL_PANIC_SPINLOCK_DEADLOCK);
-        }
-        __stk_relax_cpu();
-    }
-}
-static __stk_forceinline void STK_RISCV_SPIN_LOCK_UNLOCK(volatile bool &LOCK)
-{
-    // ensure all data writes (like scheduling metadata) are flushed before the lock is released
-    __asm volatile("fence rw, w" ::: "memory");
-    __atomic_clear(&LOCK, __ATOMIC_RELEASE);
-}
-
-#define STK_RISCV_DISABLE_INTERRUPTS() ::HW_DisableIrq()
-#define STK_RISCV_ENABLE_INTERRUPTS() ::HW_EnableIrq()
-
-#define STK_RISCV_PRIVILEGED_MODE_ON() ((void)0)
-#define STK_RISCV_PRIVILEGED_MODE_OFF() ((void)0)
-
-#define STK_ASM_EXIT_FROM_HANDLER "mret"
-#define STK_RISCV_EXIT_FROM_HANDLER() __asm volatile(STK_ASM_EXIT_FROM_HANDLER)
-
-#define STK_RISCV_START_SCHEDULING() __asm volatile("ecall") // cause exception with RISCV_EXCP_ENVIRONMENT_CALL_FROM_M_MODE
-
-#define STK_RISCV_ISR extern "C" STK_RISCV_ISR_SECTION __attribute__ ((interrupt ("machine")))
-
-//! Use private stack allocated by Context of size STK_RISCV_ISR_STACK_SIZE for handling ISRs.
-#define STK_RISCV_ISR_STACK_SIZE 256
-
-//! Timer handler.
-#ifndef STK_SYSTICK_HANDLER
-    #define STK_SYSTICK_HANDLER riscv_mtvec_mti // see vector_table.h/vector_table.c
+//! Set tick timer (MTIMECMP) per physical CPU core (1) or not (0).
+#ifndef STK_RISCV_CLINT_MTIMECMP_PER_HART
+    #define STK_RISCV_CLINT_MTIMECMP_PER_HART (1)
 #endif
 
-//! Exception handler.
-#ifndef STK_SVC_HANDLER
-    #define STK_SVC_HANDLER riscv_mtvec_exception // see vector_table.h/vector_table.c
+//! Get CPU Id of the caller.
+#ifndef STK_ARCH_GET_CPU_ID
+    #define STK_ARCH_GET_CPU_ID() read_csr(mhartid)
 #endif
 
+//! FPU presence define (FPU present=1).
 #if (__riscv_flen == 0)
     #define STK_RISCV_FPU 0
 #else
@@ -131,6 +62,7 @@ static __stk_forceinline void STK_RISCV_SPIN_LOCK_UNLOCK(volatile bool &LOCK)
 #define STR(x) #x
 #define XSTR(s) STR(s)
 
+//! CPU register access portable defines.
 #if (__riscv_xlen == 32)
     #define REGBYTES XSTR(4)
     #define LREG     XSTR(lw)
@@ -155,52 +87,27 @@ static __stk_forceinline void STK_RISCV_SPIN_LOCK_UNLOCK(volatile bool &LOCK)
 #error Unsupported FP register count!
 #endif
 
-#if (__riscv_32e == 1)
-    #define STK_RISCV_REGISTER_COUNT (15 + (STK_RISCV_FPU != 0 ? 31 : 0))
+/*! \brief  Order all predecessor Read/Write with all successor Read/Write (similar to ARM's __DSB(DSB ISH)).
+*/
+static __stk_forceinline void __DSB() { __asm volatile("fence rw, rw" : : : "memory"); }
+
+/*! \brief  Flush the instruction cache and pipeline (similar to ARM's __ISB).
+*/
+static __stk_forceinline void __ISB()
+{
+#ifdef __riscv_zifencei
+    __asm volatile("fence.i" : : : "memory");
 #else
-    #define STK_RISCV_REGISTER_COUNT (31 + (STK_RISCV_FPU != 0 ? 31 : 0))
+    __sync_synchronize();
 #endif
+}
 
-#define STK_SERVICE_SLOTS 2 // (0) mepc, (1) mstatus
+/*! \brief  Put core into a low-power state (similar to ARM's __WFI).
+*/
+static __stk_forceinline void __WFI() { __asm volatile("wfi"); }
 
-#if (__riscv_32e == 1)
-    #define FOFFSET XSTR(68) // FP stack offset = (17 * 4)
-    #if (STK_RISCV_FPU == 0)
-        #define REGSIZE XSTR(((15 + STK_SERVICE_SLOTS) * 4)) // STK_RISCV_REGISTER_COUNT + 2 for mepc, mstatus
-    #else
-        #if (STK_RISCV_FPU == 32)
-        #define REGSIZE XSTR((((15 + STK_SERVICE_SLOTS) * 4) + (31 * 4))) // STK_RISCV_REGISTER_COUNT + 2 for mepc, mstatus + 32 fp registers
-        #elif (STK_RISCV_FPU == 64)
-        #define REGSIZE XSTR((((15 + STK_SERVICE_SLOTS) * 4) + (31 * 8))) // STK_RISCV_REGISTER_COUNT + 2 for mepc, mstatus + 32 fp registers
-        #endif
-    #endif
-#elif (__riscv_xlen == 32)
-    #define FOFFSET XSTR(132) // FP stack offset = (33 * 4)
-    #if (STK_RISCV_FPU == 0)
-        #define REGSIZE XSTR(((31 + STK_SERVICE_SLOTS) * 4)) // STK_RISCV_REGISTER_COUNT + 2 for mepc, mstatus
-    #else
-        #if (STK_RISCV_FPU == 32)
-        #define REGSIZE XSTR((((31 + STK_SERVICE_SLOTS) * 4) + (31 * 4))) // STK_RISCV_REGISTER_COUNT + 2 for mepc, mstatus + 32 fp registers
-        #elif (STK_RISCV_FPU == 64)
-        #define REGSIZE XSTR((((31 + STK_SERVICE_SLOTS) * 4) + (31 * 8))) // STK_RISCV_REGISTER_COUNT + 2 for mepc, mstatus + 32 fp registers
-        #endif
-    #endif
-#elif (__riscv_xlen == 64)
-    #define FOFFSET XSTR(264) // FP stack offset = (33 * 8)
-    #if (STK_RISCV_FPU == 0)
-        #define REGSIZE XSTR(((31 + STK_SERVICE_SLOTS) * 8)) // STK_RISCV_REGISTER_COUNT + 2 for mepc, mstatus
-    #else
-        #if (STK_RISCV_FPU == 32)
-        #define REGSIZE XSTR((((31 + STK_SERVICE_SLOTS) * 8) + (31 * 4))) // STK_RISCV_REGISTER_COUNT + 2 for mepc, mstatus + 32 fp registers
-        #elif (STK_RISCV_FPU == 64)
-        #define REGSIZE XSTR((((31 + STK_SERVICE_SLOTS) * 8) + (31 * 8))) // STK_RISCV_REGISTER_COUNT + 2 for mepc, mstatus + 32 fp registers
-        #endif
-    #endif
-#endif
-
-#define STK_RISCV_REG_INDEX(REG) (-((STK_RISCV_REGISTER_COUNT + 1) - REG))
-#define STK_RISCV_SRV_INDEX(REG) (STK_RISCV_REG_INDEX(REG) - STK_SERVICE_SLOTS)
-
+/*! \brief  Get current (caller's) Hart Id.
+*/
 static __stk_forceinline uint8_t HW_GetHartId()
 {
 #if STK_RISCV_CLINT_MTIMECMP_PER_HART
@@ -211,7 +118,9 @@ static __stk_forceinline uint8_t HW_GetHartId()
     return hart;
 }
 
-static __stk_forceinline void HW_DisableIrq()
+/*! \brief  Disable CPU interrupts.
+*/
+static __stk_forceinline void HW_DisableInterrupts()
 {
     __asm volatile("csrrci zero, mstatus, %0"
     : /* output: none */
@@ -219,7 +128,9 @@ static __stk_forceinline void HW_DisableIrq()
     : /* clobbers: none */);
 }
 
-static __stk_forceinline void HW_EnableIrq()
+/*! \brief  Enable CPU interrupts.
+*/
+static __stk_forceinline void HW_EnableInterrupts()
 {
     __asm volatile("csrrsi zero, mstatus, %0"
     : /* output: none */
@@ -318,6 +229,129 @@ static __stk_forceinline Word HW_GetCallerSP()
 
     return sp;
 }
+
+/*! \brief Start critical section.
+*/
+static __stk_forceinline void HW_CriticalSectionStart(Word &ses)
+{
+    ses = HW_EnterCriticalSection();
+
+    // ensure the disable is recognized before subsequent code
+    __DSB();
+    __ISB();
+}
+
+/*! \brief End critical section.
+*/
+static __stk_forceinline void HW_CriticalSectionEnd(Word ses)
+{
+    // ensure all memory work is finished before re-enabling
+    __DSB();
+
+    HW_ExitCriticalSection(ses);
+
+    // synchronization point: any pending interrupt can be serviced immediately at this boundary
+    __ISB();
+}
+
+/*! \brief Attempt to lock a spin-lock.
+*/
+static __stk_forceinline bool HW_SpinLockTryLock(volatile bool &lock)
+{
+    return __atomic_test_and_set(&lock, __ATOMIC_ACQUIRE);
+}
+
+/*! \brief Lock a spin-lock.
+*/
+static __stk_forceinline void HW_SpinLockLock(volatile bool &lock)
+{
+    uint32_t timeout = 0xFFFFFF;
+    while (HW_SpinLockTryLock(lock))
+    {
+        if (--timeout == 0)
+        {
+            // Invariant violated: the lock owner exited without releasing,
+            // Kernel state is suspect, enter defined safe state.
+            STK_KERNEL_PANIC(KERNEL_PANIC_SPINLOCK_DEADLOCK);
+        }
+        __stk_relax_cpu();
+    }
+}
+
+/*! \brief Unlock a spin-lock.
+*/
+static __stk_forceinline void HW_SpinLockUnlock(volatile bool &LOCK)
+{
+    // ensure all data writes (like scheduling metadata) are flushed before the lock is released
+    __asm volatile("fence rw, w" ::: "memory");
+    __atomic_clear(&LOCK, __ATOMIC_RELEASE);
+}
+
+#define STK_ASM_EXIT_FROM_HANDLER "mret"
+#define STK_RISCV_EXIT_FROM_HANDLER() __asm volatile(STK_ASM_EXIT_FROM_HANDLER)
+
+#define STK_RISCV_START_SCHEDULING() __asm volatile("ecall") // cause exception with RISCV_EXCP_ENVIRONMENT_CALL_FROM_M_MODE
+
+#define STK_RISCV_ISR extern "C" STK_RISCV_ISR_SECTION __attribute__ ((interrupt ("machine")))
+
+//! Use private stack allocated by Context of size STK_RISCV_ISR_STACK_SIZE for handling ISRs.
+#define STK_RISCV_ISR_STACK_SIZE 256
+
+//! Timer handler.
+#ifndef STK_SYSTICK_HANDLER
+    #define STK_SYSTICK_HANDLER riscv_mtvec_mti // see vector_table.h/vector_table.c
+#endif
+
+//! Exception handler.
+#ifndef STK_SVC_HANDLER
+    #define STK_SVC_HANDLER riscv_mtvec_exception // see vector_table.h/vector_table.c
+#endif
+
+#if (__riscv_32e == 1)
+    #define STK_RISCV_REGISTER_COUNT (15 + (STK_RISCV_FPU != 0 ? 31 : 0))
+#else
+    #define STK_RISCV_REGISTER_COUNT (31 + (STK_RISCV_FPU != 0 ? 31 : 0))
+#endif
+
+#define STK_SERVICE_SLOTS 2 // (0) mepc, (1) mstatus
+
+#if (__riscv_32e == 1)
+    #define FOFFSET XSTR(68) // FP stack offset = (17 * 4)
+    #if (STK_RISCV_FPU == 0)
+        #define REGSIZE XSTR(((15 + STK_SERVICE_SLOTS) * 4)) // STK_RISCV_REGISTER_COUNT + 2 for mepc, mstatus
+    #else
+        #if (STK_RISCV_FPU == 32)
+        #define REGSIZE XSTR((((15 + STK_SERVICE_SLOTS) * 4) + (31 * 4))) // STK_RISCV_REGISTER_COUNT + 2 for mepc, mstatus + 32 fp registers
+        #elif (STK_RISCV_FPU == 64)
+        #define REGSIZE XSTR((((15 + STK_SERVICE_SLOTS) * 4) + (31 * 8))) // STK_RISCV_REGISTER_COUNT + 2 for mepc, mstatus + 32 fp registers
+        #endif
+    #endif
+#elif (__riscv_xlen == 32)
+    #define FOFFSET XSTR(132) // FP stack offset = (33 * 4)
+    #if (STK_RISCV_FPU == 0)
+        #define REGSIZE XSTR(((31 + STK_SERVICE_SLOTS) * 4)) // STK_RISCV_REGISTER_COUNT + 2 for mepc, mstatus
+    #else
+        #if (STK_RISCV_FPU == 32)
+        #define REGSIZE XSTR((((31 + STK_SERVICE_SLOTS) * 4) + (31 * 4))) // STK_RISCV_REGISTER_COUNT + 2 for mepc, mstatus + 32 fp registers
+        #elif (STK_RISCV_FPU == 64)
+        #define REGSIZE XSTR((((31 + STK_SERVICE_SLOTS) * 4) + (31 * 8))) // STK_RISCV_REGISTER_COUNT + 2 for mepc, mstatus + 32 fp registers
+        #endif
+    #endif
+#elif (__riscv_xlen == 64)
+    #define FOFFSET XSTR(264) // FP stack offset = (33 * 8)
+    #if (STK_RISCV_FPU == 0)
+        #define REGSIZE XSTR(((31 + STK_SERVICE_SLOTS) * 8)) // STK_RISCV_REGISTER_COUNT + 2 for mepc, mstatus
+    #else
+        #if (STK_RISCV_FPU == 32)
+        #define REGSIZE XSTR((((31 + STK_SERVICE_SLOTS) * 8) + (31 * 4))) // STK_RISCV_REGISTER_COUNT + 2 for mepc, mstatus + 32 fp registers
+        #elif (STK_RISCV_FPU == 64)
+        #define REGSIZE XSTR((((31 + STK_SERVICE_SLOTS) * 8) + (31 * 8))) // STK_RISCV_REGISTER_COUNT + 2 for mepc, mstatus + 32 fp registers
+        #endif
+    #endif
+#endif
+
+#define STK_RISCV_REG_INDEX(REG) (-((STK_RISCV_REGISTER_COUNT + 1) - REG))
+#define STK_RISCV_SRV_INDEX(REG) (STK_RISCV_REG_INDEX(REG) - STK_SERVICE_SLOTS)
 
 /*! \brief Switch context by scheduling PendSV interrupt.
 */
@@ -539,12 +573,12 @@ static struct Context : public PlatformContext
     {
         // disable local interrupts and save state
         Word current_ses;
-        STK_RISCV_CRITICAL_SECTION_START(current_ses);
+        HW_CriticalSectionStart(current_ses);
 
         if (m_csu_nesting == 0)
         {
             // ONLY attempt the global spinlock if we aren't already nested
-            STK_RISCV_SPIN_LOCK_LOCK(s_StkRiscvCsuLock);
+            HW_SpinLockLock(s_StkRiscvCsuLock);
 
             // store the hardware interrupt state to restore later
             m_csu = current_ses;
@@ -564,10 +598,10 @@ static struct Context : public PlatformContext
             Word ses_to_restore = m_csu;
 
             // release global lock
-            STK_RISCV_SPIN_LOCK_UNLOCK(s_StkRiscvCsuLock);
+            HW_SpinLockUnlock(s_StkRiscvCsuLock);
 
             // restore hardware interrupts
-            STK_RISCV_CRITICAL_SECTION_END(ses_to_restore);
+            HW_CriticalSectionEnd(ses_to_restore);
         }
     }
 
@@ -594,11 +628,11 @@ void PlatformRiscV::ProcessTick()
 {
 #ifdef _STK_RISCV_USE_PENDSV
     Word cs;
-    STK_RISCV_CRITICAL_SECTION_START(cs);
+    HW_CriticalSectionStart(cs);
 
     GetContext().OnTick();
 
-    STK_RISCV_CRITICAL_SECTION_END(cs);
+    HW_CriticalSectionEnd(cs);
 #else
     // unsupported scenario
     STK_ASSERT(false);
@@ -612,7 +646,7 @@ void STK_PANIC_HANDLER_DEFAULT(EKernelPanicId id)
     (void)id;
 
     // disable all maskable interrupts: this prevents scheduler from running again and corrupting state further
-    STK_RISCV_DISABLE_INTERRUPTS();
+    HW_DisableInterrupts();
 
     // spin forever: with a watchdog active this produces a clean reset, without a watchdog,
     // a debugger can attach and inspect 'id'
@@ -931,11 +965,11 @@ extern "C" STK_RISCV_ISR_SECTION __stk_attr_used void TrySwitchContext() // __st
 
     // process tick — scheduler may update m_stack_active to point at a new task
     Word cs;
-    STK_RISCV_CRITICAL_SECTION_START(cs);
+    HW_CriticalSectionStart(cs);
 
     GetContext().OnTick();
 
-    STK_RISCV_CRITICAL_SECTION_END(cs);
+    HW_CriticalSectionEnd(cs);
 
     // refresh the ISR asm pointer cache so the naked ISR reads the correct
     // (possibly new) active stack SP immediately when jal returns.
@@ -1179,11 +1213,11 @@ static void OnTaskRun(ITask *task)
 static void OnTaskExit()
 {
     Word cs;
-    STK_RISCV_CRITICAL_SECTION_START(cs);
+    HW_CriticalSectionStart(cs);
 
     GetContext().m_handler->OnTaskExit(GetContext().m_stack_active);
 
-    STK_RISCV_CRITICAL_SECTION_END(cs);
+    HW_CriticalSectionEnd(cs);
 
     for (;;)
     {
@@ -1379,17 +1413,17 @@ void stk::hw::CriticalSection::Exit()
 
 void stk::hw::SpinLock::Lock()
 {
-    STK_RISCV_SPIN_LOCK_LOCK(m_lock);
+    HW_SpinLockLock(m_lock);
 }
 
 void stk::hw::SpinLock::Unlock()
 {
-    STK_RISCV_SPIN_LOCK_UNLOCK(m_lock);
+    HW_SpinLockUnlock(m_lock);
 }
 
 bool stk::hw::SpinLock::TryLock()
 {
-    return !STK_RISCV_SPIN_LOCK_TRYLOCK(m_lock);
+    return !HW_SpinLockTryLock(m_lock);
 }
 
 bool stk::hw::IsInsideISR()

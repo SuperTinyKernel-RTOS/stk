@@ -275,10 +275,12 @@
     \brief Stack memory alignment.
 */
 #ifndef STK_STACK_MEMORY_ALIGN
-    #ifdef __riscv
+    #if defined(__riscv)
         #define STK_STACK_MEMORY_ALIGN 16
-    #else
-        #define STK_STACK_MEMORY_ALIGN 8
+    #elif defined(__i386__) || defined(__x86_64__) || defined(_M_IX86) || defined(_M_X64)
+        #define STK_STACK_MEMORY_ALIGN 16
+    #else // ARM, others
+        #define STK_STACK_MEMORY_ALIGN 4
     #endif
 #endif
 
