@@ -73,9 +73,9 @@ static struct Context : public PlatformContext
         m_tls(TLS_OUT_OF_INDEXES),
         m_tasks(),
         m_task_threads(),
+        m_timer_tid(0),
         m_cs(),
         m_csu_nesting(0),
-        m_timer_tid(0),
         m_started(false),
         m_stop_signal(false)
     {}
@@ -204,7 +204,12 @@ static struct Context : public PlatformContext
                 SuspendThread(m_timer_thread);
         }
 
-        ++m_csu_nesting;
+        // increase nesting count within a limit
+        if (++m_csu_nesting > STK_CRITICAL_SECTION_NESTINGS_MAX)
+        {
+            // invariant violated: exceeded max allowed number of recursions
+            STK_KERNEL_PANIC(KERNEL_PANIC_CS_NESTING_OVERFLOW);
+        }
     }
     
     __stk_forceinline void ExitCriticalSection()
@@ -231,9 +236,9 @@ static struct Context : public PlatformContext
     DWORD                          m_tls;           //!< TLS
     std::list<TaskContext *>       m_tasks;         //!< list of task internal contexts
     std::vector<HANDLE>            m_task_threads;  //!< task threads
-    STK_X86_WIN32_CRITICAL_SECTION m_cs;            //!< critical session
-    DWORD                          m_csu_nesting;   //!< depth of user critical session nesting
     DWORD                          m_timer_tid;     //!< timer thread id
+    STK_X86_WIN32_CRITICAL_SECTION m_cs;            //!< critical session
+    uint8_t                        m_csu_nesting;   //!< depth of user critical session nesting
     bool                           m_started;       //!< started state's flag
     volatile bool                  m_stop_signal;   //!< stop signal for a timer thread
 }

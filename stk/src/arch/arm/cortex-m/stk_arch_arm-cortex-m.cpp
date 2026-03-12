@@ -122,92 +122,89 @@ static __stk_forceinline void HW_CriticalSectionEnd(uint32_t SES)
 }
 
 #ifdef CONTROL_nPRIV_Msk
-    static __stk_forceinline bool HW_SpinLockTryLock(volatile bool &LOCK)
+    /*! \brief Attempt to lock a spin-lock.
+    */
+    static __stk_forceinline bool HW_SpinLockTryLock(volatile bool &lock)
     {
-        return __atomic_test_and_set(&LOCK, __ATOMIC_ACQUIRE);
+        return __atomic_test_and_set(&lock, __ATOMIC_ACQUIRE);
     }
-    static __stk_forceinline void HW_SpinLockLock(volatile bool &LOCK)
-    {
-        uint32_t timeout = 0xFFFFFF;
-        while (HW_SpinLockTryLock(LOCK))
-        {
-            if (--timeout == 0)
-            {
-                // Invariant violated: the lock owner exited without releasing,
-                // Kernel state is suspect, enter defined safe state.
-                STK_KERNEL_PANIC(KERNEL_PANIC_SPINLOCK_DEADLOCK);
-            }
-            __stk_relax_cpu();
-        }
-    }
-    static __stk_forceinline void HW_SpinLockUnlock(volatile bool &LOCK)
+
+    /*! \brief Unlock a spin-lock.
+    */
+    static __stk_forceinline void HW_SpinLockUnlock(volatile bool &lock)
     {
         // ensure all data writes (like scheduling metadata) are flushed before the lock is released
         __asm volatile("dmb ishst" ::: "memory");
-        __atomic_clear(&LOCK, __ATOMIC_RELEASE);
+        __atomic_clear(&lock, __ATOMIC_RELEASE);
     }
 #elif defined(RP2040_H)
     // Raspberry RP2040 dual-core M0+ implementation, using Hardware Spinlock 0 (SIO base 0xd0000000 + offset)
     #define STK_SIO_SPINLOCK SIO->SPINLOCK31
-    static __stk_forceinline bool HW_SpinLockTryLock(volatile bool &LOCK)
+
+    /*! \brief Attempt to lock a spin-lock.
+    */
+    static __stk_forceinline bool HW_SpinLockTryLock(volatile bool &lock)
     {
-        return (STK_SIO_SPINLOCK == 0 ? true : ((LOCK) = true, false));
+        return (STK_SIO_SPINLOCK == 0 ? true : ((lock) = true, false));
     }
-    static __stk_forceinline void HW_SpinLockLock(volatile bool &LOCK)
-    {
-        uint32_t timeout = 0xFFFFFF;
-        while (HW_SpinLockTryLock(LOCK))
-        {
-            if (--timeout == 0)
-            {
-                // Invariant violated: the lock owner exited without releasing,
-                // Kernel state is suspect, enter defined safe state.
-                STK_KERNEL_PANIC(KERNEL_PANIC_SPINLOCK_DEADLOCK);
-            }
-            __stk_relax_cpu();
-        }
-    }
-    static __stk_forceinline void HW_SpinLockUnlock(volatile bool &LOCK)
+
+    /*! \brief Unlock a spin-lock.
+    */
+    static __stk_forceinline void HW_SpinLockUnlock(volatile bool &lock)
     {
         __DMB();
-        (LOCK) = false;
+        (lock) = false;
         STK_SIO_SPINLOCK = 1; /* writing any value releases the hardware lock */
     }
+
     #undef STK_SIO_SPINLOCK
 #else
     // Standard single-core Cortex-M0 implementation:
-    static __stk_forceinline bool HW_SpinLockTryLock(volatile bool &LOCK)
-    {
-        if (LOCK)
-            return true;
 
-        LOCK = true;
-        __DMB();
-
-        return false;
-    }
-    static __stk_forceinline void HW_SpinLockLock(volatile bool &LOCK)
+    /*! \brief Attempt to lock a spin-lock.
+    */
+    static __stk_forceinline bool HW_SpinLockTryLock(volatile bool &lock)
     {
-        uint32_t timeout = 0xFFFFFF;
-        while (LOCK == true)
+        uint32_t ses;
+        HW_CriticalSectionStart(ses);
+
+        if (lock)
         {
-            if (--timeout == 0)
-            {
-                // Invariant violated: the lock owner exited without releasing,
-                // Kernel state is suspect, enter defined safe state.
-                STK_KERNEL_PANIC(KERNEL_PANIC_SPINLOCK_DEADLOCK);
-            }
-            __stk_relax_cpu();
+            HW_CriticalSectionEnd(ses);
+            return true;
         }
 
-        LOCK = true;
+        lock = true;
+        __DMB();
+
+        HW_CriticalSectionEnd(ses);
+        return false;
     }
-    static __stk_forceinline void HW_SpinLockUnlock(volatile bool &LOCK)
+
+    /*! \brief Unlock a spin-lock.
+    */
+    static __stk_forceinline void HW_SpinLockUnlock(volatile bool &lock)
     {
         __DMB();
-        LOCK = false;
+        lock = false;
     }
 #endif
+
+/*! \brief Lock a spin-lock.
+*/
+static __stk_forceinline void HW_SpinLockLock(volatile bool &lock)
+{
+    uint32_t timeout = 0xFFFFFF;
+    while (HW_SpinLockTryLock(lock))
+    {
+        if (--timeout == 0)
+        {
+            // invariant violated: the lock owner exited without releasing
+            STK_KERNEL_PANIC(KERNEL_PANIC_SPINLOCK_DEADLOCK);
+        }
+        __stk_relax_cpu();
+    }
+}
 
 #define STK_CORTEX_M_EXIT_FUNCTION() __asm volatile("BX LR")
 #define STK_CORTEX_M_START_SCHEDULING() __asm volatile("SVC %0" : : "I"(SVC_START_SCHEDULING));
@@ -228,7 +225,7 @@ struct SvcFrame
     Word PSR;
 };
 
-// ── SaveJmp/RestoreJmp ────────────────────────────────────────────────────────
+// SaveJmp/RestoreJmp ----------------------------------------------------------
 // ARM Cortex-M callee-saved registers per the AAPCS ABI:
 //   r4-r11, sp (r13), lr (r14)
 //
@@ -291,12 +288,12 @@ int32_t SaveJmp(JmpFrame &/*f*/)
         ".syntax unified                \n"
 
     #if (__CORTEX_M >= 3)
-        // ── Cortex-M3/M4/M7: STMIA stores r4-r11 at r0+0 .. r0+28 ──────
+        // Cortex-M3/M4/M7: STMIA stores r4-r11 at r0+0 .. r0+28
         "STMIA r0,  {r4-r11}            \n" // store r4-r11 at offsets 0-28, no writeback
         "STR   sp,  [r0, #32]           \n" // SP at offset 32
         "STR   lr,  [r0, #36]           \n" // LR at offset 36
     #else
-        // ── Cortex-M0/M0+/M1: Thumb-1 only ─────────────────────────────
+        // Cortex-M0/M0+/M1: Thumb-1 only
         "STR  r4,  [r0, #0]             \n"
         "STR  r5,  [r0, #4]             \n"
         "STR  r6,  [r0, #8]             \n"
@@ -326,10 +323,10 @@ int32_t SaveJmp(JmpFrame &/*f*/)
 
 /*! \brief     Restore callee-saved CPU registers from a JmpFrame and jump back
                to the SaveJmp() call site.
-    \param[in] f:   Frame previously populated by SaveJmp().
+    \param[in] f: Frame previously populated by SaveJmp().
     \param[in] val: Value that SaveJmp() will appear to return at the restored
-                    call site. Should be non-zero to distinguish a restore from
-                    an original save.
+               call site. Should be non-zero to distinguish a restore from
+               an original save.
     \note      Naked noreturn function — execution transfers directly to the
                saved LR; this function never returns to its own caller.
     \note      MISRA deviation: [STK-DEV-003] Rule 7-5-1, 7-5-2, 6-6-4
@@ -382,6 +379,8 @@ void RestoreJmp(JmpFrame &/*f*/, int32_t /*val*/)
     #endif
     );
 }
+
+// -----------------------------------------------------------------------------
 
 // Declarations:
 extern "C" void SVC_Handler_Main(Word *svc_args) __stk_attr_used; // __stk_attr_used required for Link-Time Optimization (-flto)
@@ -526,7 +525,12 @@ static struct Context : public PlatformContext
             m_csu = current_ses;
         }
 
-        ++m_csu_nesting;
+        // increase nesting count within a limit
+        if (++m_csu_nesting > STK_CRITICAL_SECTION_NESTINGS_MAX)
+        {
+            // invariant violated: exceeded max allowed number of recursions
+            STK_KERNEL_PANIC(KERNEL_PANIC_CS_NESTING_OVERFLOW);
+        }
     }
 
     __stk_forceinline void ExitCriticalSection()
@@ -551,7 +555,7 @@ static struct Context : public PlatformContext
     __stk_forceinline void UnprivEnterCriticalSection()
     {
         // elevate to privileged/disabled state via SVC
-        uint32_t current_ses = SVC_EnterCritical();
+        Word current_ses = SVC_EnterCritical();
 
         if (m_csu_nesting == 0)
         {
@@ -562,7 +566,12 @@ static struct Context : public PlatformContext
             m_csu = current_ses;
         }
 
-        ++m_csu_nesting;
+        // increase nesting count within a limit
+        if (++m_csu_nesting > STK_CRITICAL_SECTION_NESTINGS_MAX)
+        {
+            // invariant violated: exceeded max allowed number of recursions
+            STK_KERNEL_PANIC(KERNEL_PANIC_CS_NESTING_OVERFLOW);
+        }
     }
 
     // Unprivileged
@@ -574,7 +583,7 @@ static struct Context : public PlatformContext
         if (m_csu_nesting == 0)
         {
             // capture the state before releasing lock
-            uint32_t ses_to_restore = m_csu;
+            Word ses_to_restore = m_csu;
 
             // release global lock
             HW_SpinLockUnlock(s_StkCortexmCsuLock);
@@ -603,8 +612,8 @@ static struct Context : public PlatformContext
 
     JmpFrame      m_exit_buf;    //!< saved context of the exit point
     eovrd_t      *m_overrider;   //!< platform events overrider
-    uint32_t      m_csu;         //!< user critical session
-    uint32_t      m_csu_nesting; //!< depth of user critical session nesting
+    Word          m_csu;         //!< user critical session
+    uint8_t       m_csu_nesting; //!< depth of user critical session nesting
     volatile bool m_started;     //!< 'true' when in started state
     bool          m_exiting;     //!< 'true' when is exiting the scheduling process
 }
@@ -889,14 +898,17 @@ void SVC_Handler_Main(Word *svc_args)
         svc_args[0] = __get_BASEPRI();
         // block all interrupts except priority 0 (to be able to invoke SVC SVC_EXIT_CRITICAL)
         __set_BASEPRI(1 << __NVIC_PRIO_BITS);
+        // ensure the disable is recognized before subsequent code
         __DSB();
         __ISB();
         break; }
 
     case SVC_EXIT_CRITICAL: {
+        // ensure all memory work is finished before re-enabling
+        __DSB();
         // restore previous BASEPRI state (passed in R0)
         __set_BASEPRI(svc_args[0]);
-        __DSB();
+        // synchronization point: any pending interrupt can be serviced immediately at this boundary
         __ISB();
         break; }
 #endif
@@ -1110,7 +1122,7 @@ bool PlatformArmCortexM::InitStack(EStackType stack_type, Stack *stack, IStackMe
     return true;
 }
 
-static void SysTick_Stop()
+static __stk_forceinline void SysTick_Stop()
 {
     SysTick->CTRL = 0;
     SCB->ICSR |= SCB_ICSR_PENDSTCLR_Msk;
@@ -1152,22 +1164,22 @@ int32_t PlatformArmCortexM::GetTickResolution() const
 
 void PlatformArmCortexM::SwitchToNext()
 {
-    GetContext().m_handler->OnTaskSwitch(::HW_GetCallerSP());
+    GetContext().m_handler->OnTaskSwitch(HW_GetCallerSP());
 }
 
 void PlatformArmCortexM::Sleep(Timeout ticks)
 {
-    GetContext().m_handler->OnTaskSleep(::HW_GetCallerSP(), ticks);
+    GetContext().m_handler->OnTaskSleep(HW_GetCallerSP(), ticks);
 }
 
 IWaitObject *PlatformArmCortexM::Wait(ISyncObject *sync_obj, IMutex *mutex, Timeout timeout)
 {
-    return GetContext().m_handler->OnTaskWait(::HW_GetCallerSP(), sync_obj, mutex, timeout);
+    return GetContext().m_handler->OnTaskWait(HW_GetCallerSP(), sync_obj, mutex, timeout);
 }
 
 TId PlatformArmCortexM::GetTid() const
 {
-    return GetContext().m_handler->OnGetTid(::HW_GetCallerSP());
+    return GetContext().m_handler->OnGetTid(HW_GetCallerSP());
 }
 
 void PlatformArmCortexM::ProcessHardFault()
@@ -1186,7 +1198,7 @@ void PlatformArmCortexM::SetEventOverrider(IEventOverrider *overrider)
 
 Word PlatformArmCortexM::GetCallerSP() const
 {
-    return ::HW_GetCallerSP();
+    return HW_GetCallerSP();
 }
 
 IKernelService *IKernelService::GetInstance()

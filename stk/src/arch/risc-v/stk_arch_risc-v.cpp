@@ -42,6 +42,9 @@ using namespace stk;
     #define STK_RISCV_CLINT_MTIME_ADDR (STK_RISCV_CLINT_BASE_ADDR + 0xBFF8) // 8-byte value, global
 #endif
 
+//! Use private stack allocated by Context of size STK_RISCV_ISR_STACK_SIZE for handling ISRs.
+#define STK_RISCV_ISR_STACK_SIZE 256
+
 //! Set tick timer (MTIMECMP) per physical CPU core (1) or not (0).
 #ifndef STK_RISCV_CLINT_MTIMECMP_PER_HART
     #define STK_RISCV_CLINT_MTIMECMP_PER_HART (1)
@@ -85,6 +88,63 @@ using namespace stk;
     #define FSREG     XSTR(fsd)
 #elif (STK_RISCV_FPU != 0)
 #error Unsupported FP register count!
+#endif
+
+
+#if (__riscv_32e == 1)
+    #define STK_RISCV_REGISTER_COUNT (15 + (STK_RISCV_FPU != 0 ? 31 : 0))
+#else
+    #define STK_RISCV_REGISTER_COUNT (31 + (STK_RISCV_FPU != 0 ? 31 : 0))
+#endif
+
+#define STK_SERVICE_SLOTS 2 // (0) mepc, (1) mstatus
+
+#if (__riscv_32e == 1)
+    #define FOFFSET XSTR(68) // FP stack offset = (17 * 4)
+    #if (STK_RISCV_FPU == 0)
+        #define REGSIZE XSTR(((15 + STK_SERVICE_SLOTS) * 4)) // STK_RISCV_REGISTER_COUNT + 2 for mepc, mstatus
+    #else
+        #if (STK_RISCV_FPU == 32)
+        #define REGSIZE XSTR((((15 + STK_SERVICE_SLOTS) * 4) + (31 * 4))) // STK_RISCV_REGISTER_COUNT + 2 for mepc, mstatus + 32 fp registers
+        #elif (STK_RISCV_FPU == 64)
+        #define REGSIZE XSTR((((15 + STK_SERVICE_SLOTS) * 4) + (31 * 8))) // STK_RISCV_REGISTER_COUNT + 2 for mepc, mstatus + 32 fp registers
+        #endif
+    #endif
+#elif (__riscv_xlen == 32)
+    #define FOFFSET XSTR(132) // FP stack offset = (33 * 4)
+    #if (STK_RISCV_FPU == 0)
+        #define REGSIZE XSTR(((31 + STK_SERVICE_SLOTS) * 4)) // STK_RISCV_REGISTER_COUNT + 2 for mepc, mstatus
+    #else
+        #if (STK_RISCV_FPU == 32)
+        #define REGSIZE XSTR((((31 + STK_SERVICE_SLOTS) * 4) + (31 * 4))) // STK_RISCV_REGISTER_COUNT + 2 for mepc, mstatus + 32 fp registers
+        #elif (STK_RISCV_FPU == 64)
+        #define REGSIZE XSTR((((31 + STK_SERVICE_SLOTS) * 4) + (31 * 8))) // STK_RISCV_REGISTER_COUNT + 2 for mepc, mstatus + 32 fp registers
+        #endif
+    #endif
+#elif (__riscv_xlen == 64)
+    #define FOFFSET XSTR(264) // FP stack offset = (33 * 8)
+    #if (STK_RISCV_FPU == 0)
+        #define REGSIZE XSTR(((31 + STK_SERVICE_SLOTS) * 8)) // STK_RISCV_REGISTER_COUNT + 2 for mepc, mstatus
+    #else
+        #if (STK_RISCV_FPU == 32)
+        #define REGSIZE XSTR((((31 + STK_SERVICE_SLOTS) * 8) + (31 * 4))) // STK_RISCV_REGISTER_COUNT + 2 for mepc, mstatus + 32 fp registers
+        #elif (STK_RISCV_FPU == 64)
+        #define REGSIZE XSTR((((31 + STK_SERVICE_SLOTS) * 8) + (31 * 8))) // STK_RISCV_REGISTER_COUNT + 2 for mepc, mstatus + 32 fp registers
+        #endif
+    #endif
+#endif
+
+#define STK_RISCV_REG_INDEX(REG) (-((STK_RISCV_REGISTER_COUNT + 1) - REG))
+#define STK_RISCV_SRV_INDEX(REG) (STK_RISCV_REG_INDEX(REG) - STK_SERVICE_SLOTS)
+
+//! Timer handler.
+#ifndef STK_SYSTICK_HANDLER
+    #define STK_SYSTICK_HANDLER riscv_mtvec_mti // see vector_table.h/vector_table.c
+#endif
+
+//! Exception handler.
+#ifndef STK_SVC_HANDLER
+    #define STK_SVC_HANDLER riscv_mtvec_exception // see vector_table.h/vector_table.c
 #endif
 
 /*! \brief  Order all predecessor Read/Write with all successor Read/Write (similar to ARM's __DSB(DSB ISH)).
@@ -294,65 +354,6 @@ static __stk_forceinline void HW_SpinLockUnlock(volatile bool &LOCK)
 
 #define STK_RISCV_ISR extern "C" STK_RISCV_ISR_SECTION __attribute__ ((interrupt ("machine")))
 
-//! Use private stack allocated by Context of size STK_RISCV_ISR_STACK_SIZE for handling ISRs.
-#define STK_RISCV_ISR_STACK_SIZE 256
-
-//! Timer handler.
-#ifndef STK_SYSTICK_HANDLER
-    #define STK_SYSTICK_HANDLER riscv_mtvec_mti // see vector_table.h/vector_table.c
-#endif
-
-//! Exception handler.
-#ifndef STK_SVC_HANDLER
-    #define STK_SVC_HANDLER riscv_mtvec_exception // see vector_table.h/vector_table.c
-#endif
-
-#if (__riscv_32e == 1)
-    #define STK_RISCV_REGISTER_COUNT (15 + (STK_RISCV_FPU != 0 ? 31 : 0))
-#else
-    #define STK_RISCV_REGISTER_COUNT (31 + (STK_RISCV_FPU != 0 ? 31 : 0))
-#endif
-
-#define STK_SERVICE_SLOTS 2 // (0) mepc, (1) mstatus
-
-#if (__riscv_32e == 1)
-    #define FOFFSET XSTR(68) // FP stack offset = (17 * 4)
-    #if (STK_RISCV_FPU == 0)
-        #define REGSIZE XSTR(((15 + STK_SERVICE_SLOTS) * 4)) // STK_RISCV_REGISTER_COUNT + 2 for mepc, mstatus
-    #else
-        #if (STK_RISCV_FPU == 32)
-        #define REGSIZE XSTR((((15 + STK_SERVICE_SLOTS) * 4) + (31 * 4))) // STK_RISCV_REGISTER_COUNT + 2 for mepc, mstatus + 32 fp registers
-        #elif (STK_RISCV_FPU == 64)
-        #define REGSIZE XSTR((((15 + STK_SERVICE_SLOTS) * 4) + (31 * 8))) // STK_RISCV_REGISTER_COUNT + 2 for mepc, mstatus + 32 fp registers
-        #endif
-    #endif
-#elif (__riscv_xlen == 32)
-    #define FOFFSET XSTR(132) // FP stack offset = (33 * 4)
-    #if (STK_RISCV_FPU == 0)
-        #define REGSIZE XSTR(((31 + STK_SERVICE_SLOTS) * 4)) // STK_RISCV_REGISTER_COUNT + 2 for mepc, mstatus
-    #else
-        #if (STK_RISCV_FPU == 32)
-        #define REGSIZE XSTR((((31 + STK_SERVICE_SLOTS) * 4) + (31 * 4))) // STK_RISCV_REGISTER_COUNT + 2 for mepc, mstatus + 32 fp registers
-        #elif (STK_RISCV_FPU == 64)
-        #define REGSIZE XSTR((((31 + STK_SERVICE_SLOTS) * 4) + (31 * 8))) // STK_RISCV_REGISTER_COUNT + 2 for mepc, mstatus + 32 fp registers
-        #endif
-    #endif
-#elif (__riscv_xlen == 64)
-    #define FOFFSET XSTR(264) // FP stack offset = (33 * 8)
-    #if (STK_RISCV_FPU == 0)
-        #define REGSIZE XSTR(((31 + STK_SERVICE_SLOTS) * 8)) // STK_RISCV_REGISTER_COUNT + 2 for mepc, mstatus
-    #else
-        #if (STK_RISCV_FPU == 32)
-        #define REGSIZE XSTR((((31 + STK_SERVICE_SLOTS) * 8) + (31 * 4))) // STK_RISCV_REGISTER_COUNT + 2 for mepc, mstatus + 32 fp registers
-        #elif (STK_RISCV_FPU == 64)
-        #define REGSIZE XSTR((((31 + STK_SERVICE_SLOTS) * 8) + (31 * 8))) // STK_RISCV_REGISTER_COUNT + 2 for mepc, mstatus + 32 fp registers
-        #endif
-    #endif
-#endif
-
-#define STK_RISCV_REG_INDEX(REG) (-((STK_RISCV_REGISTER_COUNT + 1) - REG))
-#define STK_RISCV_SRV_INDEX(REG) (STK_RISCV_REG_INDEX(REG) - STK_SERVICE_SLOTS)
-
 /*! \brief Switch context by scheduling PendSV interrupt.
 */
 static __stk_forceinline void ScheduleContextSwitch()
@@ -371,7 +372,7 @@ volatile uint32_t _STK_SYSTEM_CLOCK_VAR = _STK_SYSTEM_CLOCK_FREQUENCY;
 //! Global lock to synchronize critical sections of multiple cores.
 static volatile bool s_StkRiscvCsuLock = false;
 
-// ── ISR asm pointer cache ─────────────────────────────────────────────────────
+// ISR asm pointer cache -------------------------------------------------------
 // These are the ONLY symbols referenced by STK_SYSTICK_HANDLER asm for
 // stack switching. Using pointers to Stack objects (rather than indexing
 // into Context by hart) means the ISR asm is completely decoupled from
@@ -388,10 +389,10 @@ static volatile bool s_StkRiscvCsuLock = false;
 //
 // Declared volatile so the compiler always re-reads SP through the pointer;
 // the SP field is written by C++ (scheduler) and read by asm (ISR entry/exit).
-Stack * volatile s_StkRiscvStackActive[STK_ARCH_CPU_COUNT];
-Stack * volatile s_StkRiscvStackIsr   [STK_ARCH_CPU_COUNT];
+Stack * volatile s_StkRiscvStackActive[STK_ARCH_CPU_COUNT] = {};
+Stack * volatile s_StkRiscvStackIsr   [STK_ARCH_CPU_COUNT] = {};
 
-// ── SaveJmp/RestoreJmp ────────────────────────────────────────────────────────
+// SaveJmp/RestoreJmp ----------------------------------------------------------
 // RISC-V callee-saved registers per the ABI:
 //   s0/fp (x8), s1 (x9), s2-s11 (x18-x27), sp (x2), ra (x1)
 //
@@ -483,10 +484,10 @@ int32_t SaveJmp(JmpFrame &/*f*/)
 
 /*! \brief     Restore callee-saved CPU registers from a JmpFrame and jump back
                to the SaveJmp() call site.
-    \param[in] f:   Frame previously populated by SaveJmp().
+    \param[in] f: Frame previously populated by SaveJmp().
     \param[in] val: Value that SaveJmp() will appear to return at the restored
-                    call site. Should be non-zero to distinguish a restore from
-                    an original save.
+               call site. Should be non-zero to distinguish a restore from
+               an original save.
     \note      Naked noreturn function — execution transfers directly to the
                saved LR/RA; this function never returns to its own caller.
     \note      MISRA deviation: [STK-DEV-003] Rule 7-5-1, 7-5-2, 6-6-4
@@ -525,6 +526,8 @@ void RestoreJmp(JmpFrame &/*f*/, int32_t /*val*/)
         "ret                            \n" // jump to saved RA
     );
 }
+
+// -----------------------------------------------------------------------------
 
 //! Internal context.
 static struct Context : public PlatformContext
@@ -584,7 +587,12 @@ static struct Context : public PlatformContext
             m_csu = current_ses;
         }
 
-        ++m_csu_nesting;
+        // increase nesting count within a limit
+        if (++m_csu_nesting > STK_CRITICAL_SECTION_NESTINGS_MAX)
+        {
+            // invariant violated: exceeded max allowed number of recursions
+            STK_KERNEL_PANIC(KERNEL_PANIC_CS_NESTING_OVERFLOW);
+        }
     }
 
     __stk_forceinline void ExitCriticalSection()
@@ -617,7 +625,7 @@ static struct Context : public PlatformContext
     sehndl_t *m_specific;      //!< platform-specific event handler
     int32_t   m_tick_period;   //!< system tick periodicity (microseconds, ticks)
     Word      m_csu;           //!< user critical session
-    uint32_t  m_csu_nesting;   //!< depth of user critical session nesting
+    uint8_t   m_csu_nesting;   //!< depth of user critical session nesting
     bool      m_starting;      //!< 'true' when in is being started
     bool      m_started;       //!< 'true' when in started state
     volatile bool m_exiting;   //!< 'true' when is exiting the scheduling process
