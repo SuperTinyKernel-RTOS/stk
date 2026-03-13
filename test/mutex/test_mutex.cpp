@@ -26,8 +26,10 @@ STK_TEST_DECL_ASSERT;
 #define _STK_MUTEX_TEST_LONG_SLEEP  100
 #ifdef __ARM_ARCH_6M__
 #define _STK_MUTEX_STACK_SIZE       128 // ARM Cortex-M0
+#define STK_TASK
 #else
 #define _STK_MUTEX_STACK_SIZE       256
+#define STK_TASK                    static
 #endif
 
 namespace stk {
@@ -74,15 +76,15 @@ private:
         for (int32_t i = 0; i < m_iterations; ++i)
         {
             g_TestMutex.Lock();
-            
+
             // Critical section - increment shared counter
             int32_t temp = g_SharedCounter;
             if (++workload % 4 == 0)
                 stk::Delay(1); // Small delay to increase chance of race if mutex broken
             g_SharedCounter = temp + 1;
-            
+
             g_TestMutex.Unlock();
-            
+
             stk::Yield(); // Yield to other tasks
         }
 
@@ -135,7 +137,7 @@ private:
             g_TestMutex.Unlock();
         }
         g_TestMutex.Unlock();
-        
+
         ++g_InstancesDone;
 
         // Verify counter was incremented exactly once per task
@@ -230,17 +232,17 @@ private:
         {
             // Task 1: Try to acquire with timeout
             stk::Sleep(_STK_MUTEX_TEST_SHORT_SLEEP); // Let task 0 acquire first
-            
+
             int64_t start = GetTimeNowMsec();
             bool acquired = g_TestMutex.TimedLock(50); // 50ms timeout
             int64_t elapsed = GetTimeNowMsec() - start;
-            
+
             // Should timeout after ~50ms
             if (!acquired && elapsed >= 45 && elapsed <= 60)
             {
                 g_SharedCounter++;
             }
-            
+
             if (acquired)
                 g_TestMutex.Unlock();
         }
@@ -249,14 +251,14 @@ private:
         {
             // Task 2: Successfully acquire after task 0 releases
             stk::Sleep(250); // Wait for task 0 to release
-            
+
             if (g_TestMutex.TimedLock(100))
             {
                 g_SharedCounter++;
                 g_TestMutex.Unlock();
             }
         }
-        
+
         ++g_InstancesDone;
 
         // Final check
@@ -297,7 +299,7 @@ private:
         {
             // Tasks 1-4: Wait in order
             stk::Sleep(_STK_MUTEX_TEST_SHORT_SLEEP * m_task_id); // Stagger start times
-            
+
             g_TestMutex.Lock();
             {
                 // Record acquisition order
@@ -306,7 +308,7 @@ private:
             }
             g_TestMutex.Unlock();
         }
-        
+
         ++g_InstancesDone;
 
         // Task 4 verifies order
@@ -314,7 +316,7 @@ private:
         {
             while (g_InstancesDone < _STK_MUTEX_TEST_TASKS_MAX)
                 stk::Sleep(_STK_MUTEX_TEST_SHORT_SLEEP);
-            
+
             // Check if tasks acquired in FIFO order (1, 2, 3, 4)
             bool ordered = true;
             for (int32_t i = 0; i < (_STK_MUTEX_TEST_TASKS_MAX - 1); ++i)
@@ -327,7 +329,7 @@ private:
                     break;
                 }
             }
-            
+
             if (ordered)
                 g_TestResult = 1;
         }
@@ -380,11 +382,11 @@ private:
                     g_TestMutex.Unlock();
                 }
             }
-            
+
             if ((i % 10) == 0)
                 stk::Delay(1);
         }
-        
+
         ++g_InstancesDone;
 
         // Last task verifies total
@@ -392,11 +394,11 @@ private:
         {
             while (g_InstancesDone < _STK_MUTEX_TEST_TASKS_MAX)
                 stk::Sleep(_STK_MUTEX_TEST_SHORT_SLEEP);
-            
+
             // All increments should be accounted for (may be less if TryLock failed)
             if (g_SharedCounter > 0)
                 g_TestResult = 1;
-            
+
             printf("Stress test: counter=%d\n", (int)g_SharedCounter);
         }
     }
@@ -427,12 +429,12 @@ private:
         g_SharedCounter++;
         g_TestMutex.Unlock();
     }
-    
+
     void Run()
     {
         // Recursive lock to depth 50
         RecursiveLock(DEPTH);
-        
+
         ++g_InstancesDone;
 
         if (m_task_id == 0)
@@ -461,7 +463,7 @@ class InterTaskCoordinationTask : public Task<_STK_MUTEX_STACK_SIZE, _AccessMode
 public:
     InterTaskCoordinationTask(uint8_t task_id, int32_t) : m_task_id(task_id)
     {}
-    
+
 private:
     void Run()
     {
@@ -476,12 +478,12 @@ private:
                     stk::Delay(1);
                     g_TestMutex.Lock();
                 }
-                
+
                 g_SharedCounter++;
             }
             g_TestMutex.Unlock();
         }
-        
+
         ++g_InstancesDone;
 
         // Last task verifies
@@ -489,12 +491,12 @@ private:
         {
             while (g_InstancesDone < _STK_MUTEX_TEST_TASKS_MAX)
                 stk::Sleep(_STK_MUTEX_TEST_SHORT_SLEEP);
-            
+
             // Should be exactly 10 rounds * number of tasks
             if (g_SharedCounter == 10 * _STK_MUTEX_TEST_TASKS_MAX)
                 g_TestResult = 1;
-            
-            printf("Coordination test: counter=%d (expected %d)\n", 
+
+            printf("Coordination test: counter=%d (expected %d)\n",
                 (int)g_SharedCounter, 10 * _STK_MUTEX_TEST_TASKS_MAX);
         }
     }
@@ -508,7 +510,7 @@ static void ResetTestState()
     g_OrderIndex = 0;
     g_TestComplete = false;
     g_InstancesDone = 0;
-    
+
     for (int32_t i = 0; i < _STK_MUTEX_TEST_TASKS_MAX; ++i)
         g_AcquisitionOrder[i] = 0;
 }
@@ -551,8 +553,8 @@ static int32_t RunTest(const char *test_name, int32_t param = 0)
     ResetTestState();
 
     // Create tasks based on test type
-    TaskType task0(0, param);
-    TaskType task1(1, param);
+    STK_TASK TaskType task0(0, param);
+    STK_TASK TaskType task1(1, param);
     TaskType task2(2, param);
     TaskType task3(3, param);
     TaskType task4(4, param);
@@ -570,12 +572,12 @@ static int32_t RunTest(const char *test_name, int32_t param = 0)
     }
 
     g_Kernel.Start();
-    
+
     int32_t result = (g_TestResult ? TestContext::SUCCESS_EXIT_CODE : TestContext::DEFAULT_FAILURE_EXIT_CODE);
 
     printf("Result: %s\n", result == TestContext::SUCCESS_EXIT_CODE ? "PASS" : "FAIL");
     printf("--------------\n");
-    
+
     return result;
 }
 
@@ -586,13 +588,13 @@ int main(int argc, char **argv)
 {
     (void)argc;
     (void)argv;
-    
+
     using namespace stk::test::mutex;
 
     TestContext::ShowTestSuitePrologue();
-    
+
     int total_failures = 0, total_success = 0;
-    
+
     printf("--------------\n");
 
     g_Kernel.Initialize();
@@ -610,19 +612,19 @@ int main(int argc, char **argv)
         total_failures++;
     else
         total_success++;
-    
+
     // Test 3: TryLock non-blocking behavior
     if (RunTest<TryLockTask<ACCESS_PRIVILEGED>>("TryLock") != TestContext::SUCCESS_EXIT_CODE)
         total_failures++;
     else
         total_success++;
-    
+
     // Test 4: TimedLock timeout behavior
     if (RunTest<TimedLockTask<ACCESS_PRIVILEGED>>("TimedLock") != TestContext::SUCCESS_EXIT_CODE)
         total_failures++;
     else
         total_success++;
-    
+
     // Test 5: FIFO ordering
     if (RunTest<FIFOOrderTask<ACCESS_PRIVILEGED>>("FIFOOrder") != TestContext::SUCCESS_EXIT_CODE)
         total_failures++;
@@ -634,7 +636,7 @@ int main(int argc, char **argv)
         total_failures++;
     else
         total_success++;
-    
+
     // Test 7: Inter-task coordination
     if (RunTest<InterTaskCoordinationTask<ACCESS_PRIVILEGED>>("InterTaskCoordination") != TestContext::SUCCESS_EXIT_CODE)
         total_failures++;
@@ -650,11 +652,11 @@ int main(int argc, char **argv)
         total_success++;
 
     int32_t final_result = (total_failures == 0 ? TestContext::SUCCESS_EXIT_CODE : TestContext::DEFAULT_FAILURE_EXIT_CODE);
-    
+
     printf("##############\n");
     printf("Total tests: %d\n", total_failures + total_success);
     printf("Failures: %d\n", (int)total_failures);
-    
+
     TestContext::ShowTestSuiteEpilogue(final_result);
     return final_result;
 }

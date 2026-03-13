@@ -26,8 +26,10 @@ STK_TEST_DECL_ASSERT;
 #define _STK_SEM_TEST_LONG_SLEEP  100
 #ifdef __ARM_ARCH_6M__
 #define _STK_SEM_STACK_SIZE       128 // ARM Cortex-M0
+#define STK_TASK
 #else
 #define _STK_SEM_STACK_SIZE       256
+#define STK_TASK                  static
 #endif
 
 #ifndef _NEW
@@ -527,9 +529,9 @@ static int32_t RunTest(const char *test_name, int32_t param = 0, uint32_t initia
     ResetTestState(initial_count);
 
     // Create tasks based on test type
-    TaskType task0(0, param);
-    TaskType task1(1, param);
-    TaskType task2(2, param);
+    STK_TASK TaskType task0(0, param);
+    STK_TASK TaskType task1(1, param);
+    STK_TASK TaskType task2(2, param);
     TaskType task3(3, param);
     TaskType task4(4, param);
 

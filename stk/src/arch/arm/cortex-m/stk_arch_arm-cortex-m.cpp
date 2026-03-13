@@ -39,9 +39,9 @@ using namespace stk;
 enum ESvc
 {
     SVC_START_SCHEDULING = 0,
-    SVC_FORCE_SWITCH,
     SVC_ENTER_CRITICAL,
-    SVC_EXIT_CRITICAL
+    SVC_EXIT_CRITICAL,
+    //SVC_FORCE_SWITCH
 };
 
 //! If (1) then code assumes FPU presence on CPU which is used by the compiler.
@@ -126,7 +126,7 @@ static __stk_forceinline void HW_CriticalSectionEnd(uint32_t SES)
     */
     static __stk_forceinline bool HW_SpinLockTryLock(volatile bool &lock)
     {
-        return __atomic_test_and_set(&lock, __ATOMIC_ACQUIRE);
+        return !__atomic_test_and_set(&lock, __ATOMIC_ACQUIRE);
     }
 
     /*! \brief Unlock a spin-lock.
@@ -145,7 +145,10 @@ static __stk_forceinline void HW_CriticalSectionEnd(uint32_t SES)
     */
     static __stk_forceinline bool HW_SpinLockTryLock(volatile bool &lock)
     {
-        return (STK_SIO_SPINLOCK == 0 ? true : ((lock) = true, false));
+        bool success = (STK_SIO_SPINLOCK == 0 ? false : ((lock) = true, true));
+        __DMB();
+
+        return success;
     }
 
     /*! \brief Unlock a spin-lock.
@@ -171,14 +174,14 @@ static __stk_forceinline void HW_CriticalSectionEnd(uint32_t SES)
         if (lock)
         {
             HW_CriticalSectionEnd(ses);
-            return true;
+            return false;
         }
 
         lock = true;
         __DMB();
 
         HW_CriticalSectionEnd(ses);
-        return false;
+        return true;
     }
 
     /*! \brief Unlock a spin-lock.
@@ -195,7 +198,7 @@ static __stk_forceinline void HW_CriticalSectionEnd(uint32_t SES)
 static __stk_forceinline void HW_SpinLockLock(volatile bool &lock)
 {
     uint32_t timeout = 0xFFFFFF;
-    while (HW_SpinLockTryLock(lock))
+    while (!HW_SpinLockTryLock(lock))
     {
         if (--timeout == 0)
         {
@@ -770,8 +773,8 @@ extern "C" __stk_attr_naked void STK_PENDSV_HANDLER()
     "BX         LR              \n" /* inline STK_CORTEX_M_EXIT_FUNCTION */
 
     : /* output: none */
-    : [st_idle]   "m" (GetContext().m_stack_idle),\
-      [st_active] "m" (GetContext().m_stack_active),\
+    : [st_idle]   "m" (GetContext().m_stack_idle),
+      [st_active] "m" (GetContext().m_stack_active),
       [priv_val]  "i" (ACCESS_PRIVILEGED)\
     : "r0", "r1" /* only r0, r1 are used as a scratchpad */ );
 }
@@ -888,9 +891,9 @@ void SVC_Handler_Main(Word *svc_args)
         OnTaskStart();
         break; }
 
-    case SVC_FORCE_SWITCH: {
+    /*case SVC_FORCE_SWITCH: {
         HW_ScheduleContextSwitch();
-        break; }
+        break; }*/
 
 #ifdef CONTROL_nPRIV_Msk
     case SVC_ENTER_CRITICAL: {
@@ -1236,7 +1239,7 @@ void stk::hw::SpinLock::Unlock()
 
 bool stk::hw::SpinLock::TryLock()
 {
-    return !HW_SpinLockTryLock(m_lock);
+    return HW_SpinLockTryLock(m_lock);
 }
 
 bool stk::hw::IsInsideISR()
