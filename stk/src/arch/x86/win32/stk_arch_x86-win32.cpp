@@ -16,6 +16,8 @@
 #include "stk_arch.h"
 #include "arch/stk_arch_common.h"
 
+using namespace stk;
+
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <stdlib.h>
@@ -40,10 +42,52 @@ static timeBeginPeriodF timeBeginPeriod = nullptr;
 #define STK_X86_WIN32_GET_SP(STACK) (STACK + 2) // +2 to overcome stack filler check inside Kernel (adjusting to +2 preserves 8-byte alignment)
 #define SLK_UNLOCKED hw::SpinLock::UNLOCKED
 #define SLK_LOCKED hw::SpinLock::LOCKED
-#define STK_X86_WIN32_SPIN_LOCK_TRYLOCK(LOCK) \
-    InterlockedCompareExchange(reinterpret_cast<volatile LONG *>(&(LOCK)), SLK_LOCKED, SLK_UNLOCKED)
-#define STK_X86_WIN32_SPIN_LOCK_UNLOCK(LOCK) \
-    InterlockedExchange(reinterpret_cast<volatile LONG *>(&(LOCK)), SLK_UNLOCKED);
+
+/*! \brief Attempt to lock a spin-lock.
+*/
+static __stk_forceinline bool HW_SpinLockTryLock(volatile LONG &lock)
+{
+    return (InterlockedCompareExchange(
+        reinterpret_cast<volatile LONG *>(&lock), SLK_LOCKED, SLK_UNLOCKED) == SLK_UNLOCKED);
+}
+
+/*! \brief Lock a spin-lock.
+*/
+static __stk_forceinline void HW_SpinLockLock(volatile LONG &lock)
+{
+    uint8_t sleep_time = 0;
+    uint32_t timeout = 0xFFFFFF;
+
+test:
+    while (!HW_SpinLockTryLock(lock))
+    {
+        if (--timeout == 0)
+        {
+            // invariant violated: the lock owner exited without releasing
+            STK_KERNEL_PANIC(KERNEL_PANIC_SPINLOCK_DEADLOCK);
+        }
+
+        for (volatile int32_t spin = 100; (spin != 0); spin--)
+        {
+            __stk_relax_cpu();
+
+            // check if became unlocked then try locking atomically again
+            if (lock == SLK_UNLOCKED)
+                goto test;
+        }
+
+        // avoid priority inversion
+        ::Sleep(sleep_time);
+        sleep_time ^= 1;
+    }
+}
+
+/*! \brief Unlock a spin-lock.
+*/
+static __stk_forceinline void HW_SpinLockUnlock(volatile LONG &lock)
+{
+    InterlockedExchange(reinterpret_cast<volatile LONG *>(&lock), SLK_UNLOCKED);
+}
 
 struct Win32ScopedCriticalSection
 {
@@ -73,9 +117,9 @@ static struct Context : public PlatformContext
         m_tls(TLS_OUT_OF_INDEXES),
         m_tasks(),
         m_task_threads(),
+        m_timer_tid(0),
         m_cs(),
         m_csu_nesting(0),
-        m_timer_tid(0),
         m_started(false),
         m_stop_signal(false)
     {}
@@ -204,7 +248,12 @@ static struct Context : public PlatformContext
                 SuspendThread(m_timer_thread);
         }
 
-        ++m_csu_nesting;
+        // increase nesting count within a limit
+        if (++m_csu_nesting > STK_CRITICAL_SECTION_NESTINGS_MAX)
+        {
+            // invariant violated: exceeded max allowed number of recursions
+            STK_KERNEL_PANIC(KERNEL_PANIC_CS_NESTING_OVERFLOW);
+        }
     }
     
     __stk_forceinline void ExitCriticalSection()
@@ -231,9 +280,9 @@ static struct Context : public PlatformContext
     DWORD                          m_tls;           //!< TLS
     std::list<TaskContext *>       m_tasks;         //!< list of task internal contexts
     std::vector<HANDLE>            m_task_threads;  //!< task threads
-    STK_X86_WIN32_CRITICAL_SECTION m_cs;            //!< critical session
-    DWORD                          m_csu_nesting;   //!< depth of user critical session nesting
     DWORD                          m_timer_tid;     //!< timer thread id
+    STK_X86_WIN32_CRITICAL_SECTION m_cs;            //!< critical session
+    uint8_t                        m_csu_nesting;   //!< depth of user critical session nesting
     bool                           m_started;       //!< started state's flag
     volatile bool                  m_stop_signal;   //!< stop signal for a timer thread
 }
@@ -585,34 +634,17 @@ void stk::hw::CriticalSection::Exit()
 
 void stk::hw::SpinLock::Lock()
 {
-    uint8_t sleep_time = 0;
-
-test:
-    while (STK_X86_WIN32_SPIN_LOCK_TRYLOCK(m_lock) != SLK_UNLOCKED)
-    {
-        for (volatile int32_t spin = 100; (spin != 0); spin--)
-        {
-            __stk_relax_cpu();
-
-            // check if became unlocked then try locking atomically again
-            if (m_lock == SLK_UNLOCKED)
-                goto test;
-        }
-
-        // avoid priority inversion
-        ::Sleep(sleep_time);
-        sleep_time ^= 1;
-    }
+    HW_SpinLockLock(m_lock);
 }
 
 void stk::hw::SpinLock::Unlock()
 {
-    STK_X86_WIN32_SPIN_LOCK_UNLOCK(m_lock);
+    HW_SpinLockUnlock(m_lock);
 }
 
 bool stk::hw::SpinLock::TryLock()
 {
-    return (STK_X86_WIN32_SPIN_LOCK_TRYLOCK(m_lock) == SLK_UNLOCKED);
+    return HW_SpinLockTryLock(m_lock);
 }
 
 bool stk::hw::IsInsideISR()

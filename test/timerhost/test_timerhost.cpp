@@ -26,8 +26,10 @@ STK_TEST_DECL_ASSERT;
 #define _STK_TIMER_STACK_SIZE       256 // min stack size required
 #ifdef __ARM_ARCH_6M__
 #define _STK_TIMER_TEST_TASKS_MAX   2
+#define STK_TASK
 #else
 #define _STK_TIMER_TEST_TASKS_MAX   5
+#define STK_TASK                    static
 #endif
 
 namespace stk {
@@ -587,7 +589,7 @@ private:
         static TestTimer timer3(3);
         static TestTimer timer4(4);
     #endif
-        static volatile int32_t g_PerTaskCount[_STK_TIMER_TEST_TASKS_MAX] = {0};
+        static volatile int32_t g_PerTaskCount[5] = {0};
 
         TestTimer *my_timer = nullptr;
         switch (m_task_id)
@@ -700,8 +702,8 @@ static int32_t RunTest(const char *test_name, int32_t param = 0)
     g_TimerHost.Initialize(&g_Kernel, stk::ACCESS_PRIVILEGED);
 
     // Create tasks based on test type
-    TaskType task0(0, param);
-    TaskType task1(1, param);
+    STK_TASK TaskType task0(0, param);
+    STK_TASK TaskType task1(1, param);
 #if (_STK_TIMER_TEST_TASKS_MAX > 2)
     TaskType task2(2, param);
     TaskType task3(3, param);

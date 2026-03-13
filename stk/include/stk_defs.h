@@ -275,11 +275,27 @@
     \brief Stack memory alignment.
 */
 #ifndef STK_STACK_MEMORY_ALIGN
-    #ifdef __riscv
+    #if defined(__riscv)
         #define STK_STACK_MEMORY_ALIGN 16
-    #else
-        #define STK_STACK_MEMORY_ALIGN 8
+    #elif defined(__i386__) || defined(__x86_64__) || defined(_M_IX86) || defined(_M_X64)
+        #define STK_STACK_MEMORY_ALIGN 16
+    #else // ARM, others
+        #define STK_STACK_MEMORY_ALIGN 4
     #endif
+#endif
+
+/*! \def   STK_CRITICAL_SECTION_NESTINGS_MAX
+    \brief Maximum allowable recursion depth for critical section entry (default: 16).
+    \note  Establishes a hard deterministic bound for nested calls to Context::EnterCriticalSection()
+           and Context::UnprivEnterCriticalSection(). This limit is mandatory for safety-critical
+           certification (e.g., ISO 26262, IEC 61508) to prevent unbounded stack usage
+           and identify logic deadlocks.
+    \note  Exceeding this value at runtime shall trigger a Kernel Panic with the code
+           KERNEL_PANIC_CS_NESTING_OVERFLOW to transition the system into a Safe State.
+           Can be overridden in stk_config.h based on Worst-Case Stack Usage (WCSU) analysis.
+*/
+#ifndef STK_CRITICAL_SECTION_NESTINGS_MAX
+    #define STK_CRITICAL_SECTION_NESTINGS_MAX 16
 #endif
 
 /*! \def   STK_ARCH_CPU_COUNT
