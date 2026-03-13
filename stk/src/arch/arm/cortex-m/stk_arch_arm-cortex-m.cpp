@@ -72,6 +72,16 @@ enum ESvc
     #define STK_SVC_HANDLER SVC_Handler
 #endif
 
+// Declarations:
+extern "C" void SVC_Handler_Main(Word *svc_args) __stk_attr_used; // __stk_attr_used required for Link-Time Optimization (-flto)
+
+// Shortcuts:
+#define STK_CORTEX_M_EXIT_FUNCTION() __asm volatile("BX LR")
+#define STK_CORTEX_M_START_SCHEDULING() __asm volatile("SVC %0" : : "I"(SVC_START_SCHEDULING));
+#define STK_CORTEX_M_FORCE_SWITCH() __asm volatile("SVC %0" : : "I"(SVC_FORCE_SWITCH));
+#define STK_CORTEX_M_UNPRIV_ENTER_CRITICAL() __asm volatile("SVC %0" : : "I"(SVC_ENTER_CRITICAL));
+#define STK_CORTEX_M_UNPRIV_EXIT_CRITICAL() __asm volatile("SVC %0" : : "I"(SVC_EXIT_CRITICAL));
+
 /*! \brief  Disable CPU interrupts.
 */
 static __stk_forceinline void HW_DisableInterrupts()
@@ -209,12 +219,6 @@ static __stk_forceinline void HW_SpinLockLock(volatile bool &lock)
     }
 }
 
-#define STK_CORTEX_M_EXIT_FUNCTION() __asm volatile("BX LR")
-#define STK_CORTEX_M_START_SCHEDULING() __asm volatile("SVC %0" : : "I"(SVC_START_SCHEDULING));
-#define STK_CORTEX_M_FORCE_SWITCH() __asm volatile("SVC %0" : : "I"(SVC_FORCE_SWITCH));
-#define STK_CORTEX_M_UNPRIV_ENTER_CRITICAL() __asm volatile("SVC %0" : : "I"(SVC_ENTER_CRITICAL));
-#define STK_CORTEX_M_UNPRIV_EXIT_CRITICAL() __asm volatile("SVC %0" : : "I"(SVC_EXIT_CRITICAL));
-
 //! SVC frame.
 struct SvcFrame
 {
@@ -223,8 +227,8 @@ struct SvcFrame
     Word R2;
     Word R3;
     Word R12;
-    Word R14_LR;
-    Word R15_PC;
+    Word LR;
+    Word PC;
     Word PSR;
 };
 
@@ -349,7 +353,7 @@ void RestoreJmp(JmpFrame &/*f*/, int32_t /*val*/)
         ".syntax unified                \n"
 
     #if (__CORTEX_M >= 3)
-        // ── Cortex-M3/M4/M7: LDMIA loads r4-r11 from offsets 0-28 ───────
+        // Cortex-M3/M4/M7: LDMIA loads r4-r11 from offsets 0-28
         "LDR   sp,  [r0, #32]           \n" // restore SP
     #if STK_CORTEX_M_FPU
         "LDR   r2,  [r0, #40]           \n" // load saved FPSCR
@@ -360,7 +364,7 @@ void RestoreJmp(JmpFrame &/*f*/, int32_t /*val*/)
         "MOV   r0,  r1                  \n" // return val
         "BX    r2                       \n"
     #else
-        // ── Cortex-M0/M0+/M1: Thumb-1 only ─────────────────────────────
+        // Cortex-M0/M0+/M1: Thumb-1 only
         "LDR  r2,  [r0, #36]            \n"
         "MOV  lr,  r2                   \n"
         "LDR  r2,  [r0, #32]            \n"
@@ -385,11 +389,12 @@ void RestoreJmp(JmpFrame &/*f*/, int32_t /*val*/)
 
 // -----------------------------------------------------------------------------
 
-// Declarations:
-extern "C" void SVC_Handler_Main(Word *svc_args) __stk_attr_used; // __stk_attr_used required for Link-Time Optimization (-flto)
-
-//! Check if caller is in Handler Mode (IPSR != 0), i.e. inside ISR.
-static __stk_forceinline bool HW_IsHandlerMode() { return (__get_IPSR() != 0); }
+/*! \brief  Check if caller is in Handler Mode (IPSR != 0), i.e. inside ISR.
+*/
+static __stk_forceinline bool HW_IsHandlerMode()
+{
+    return (__get_IPSR() != 0);
+}
 
 /*! \brief  Check if caller is in Privileged Thread Mode (nPRIV == 0).
     \note   ARM Cortex-M0 is always Privileged Thread Mode (M0 does not support privileges).
