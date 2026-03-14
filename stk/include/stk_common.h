@@ -54,7 +54,8 @@ enum EKernelPanicId
     KERNEL_PANIC_ASSERT              = 3, //!< Internal assertion failed (maps from STK_ASSERT).
     KERNEL_PANIC_HRT_HARD_FAULT      = 4, //!< Kernel running in KERNEL_HRT mode reported deadline failure of the task.
     KERNEL_PANIC_CPU_EXCEPTION       = 5, //!< CPU reported an exception and halted execution.
-    KERNEL_PANIC_CS_NESTING_OVERFLOW = 6  //!< Critical section nesting limit exceeded: violation of STK_CRITICAL_SECTION_NESTINGS_MAX.
+    KERNEL_PANIC_CS_NESTING_OVERFLOW = 6, //!< Critical section nesting limit exceeded: violation of STK_CRITICAL_SECTION_NESTINGS_MAX.
+    KERNEL_PANIC_UNKNOWN_SVC         = 7  //!< Unknown service command received by SVC handler.
 };
 
 /*! \enum  EStackType

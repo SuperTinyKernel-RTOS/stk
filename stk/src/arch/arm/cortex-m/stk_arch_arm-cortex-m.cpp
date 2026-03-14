@@ -36,7 +36,7 @@ using namespace stk;
 #define STK_CORTEX_M_ISR_PRIORITY_HIGHEST  0
 #define STK_CORTEX_M_ISR_PRIORITY_LOWEST   0xFF
 
-enum ESvc
+enum ESvc : uint8_t
 {
     SVC_START_SCHEDULING = 0,
     SVC_ENTER_CRITICAL,
@@ -72,8 +72,39 @@ enum ESvc
     #define STK_SVC_HANDLER SVC_Handler
 #endif
 
-// Declarations:
-extern "C" void SVC_Handler_Main(Word *svc_args) __stk_attr_used; // __stk_attr_used required for Link-Time Optimization (-flto)
+/*! \struct ExceptionFrame
+    \brief  ARMv7-M hardware exception frame (8 words, highest address on the stack).
+*/
+struct ExceptionFrame
+{
+    Word R0;
+    Word R1;
+    Word R2;
+    Word R3;
+    Word R12;
+    Word LR;
+    Word PC;
+    Word PSR;
+};
+
+/*! \struct TaskFrame
+    \brief  Full initial task frame laid out at the top of a new stack.
+
+    On Cortex-M3+ the hardware expects an EXC_RETURN value in LR immediately
+    below the exception frame in the callee-saved register block.
+    Grouping it here eliminates all raw-index arithmetic from InitStack.
+
+    Member order is low-to-high address, matching downward stack growth:
+    EXC_RETURN (lower) sits one word below exc (higher), exactly where
+    OnTaskStart's LDMIA expects it.
+*/
+struct TaskFrame
+{
+#if STK_CORTEX_M_MANAGE_LR
+    Word           EXC_RETURN; //!< Exception return value (LR), loaded by LDMIA in OnTaskStart.
+#endif
+    ExceptionFrame exc;        //!< ARMv7-M hardware exception frame.
+};
 
 // Shortcuts:
 #define STK_CORTEX_M_EXIT_FUNCTION() __asm volatile("BX LR")
@@ -101,6 +132,20 @@ static __stk_forceinline void HW_EnableInterrupts()
     __asm volatile("CPSIE i" : : : "memory");
 #else
     __enable_irq();
+#endif
+}
+
+/*! \brief  Check if interrupts are disabled.
+    \return true if interrupts are disabled (PRIMASK bit 0 is set).
+*/
+static __stk_forceinline bool HW_InterruptsDisabled()
+{
+#if (defined(__clang__) && defined(__ARMCOMPILER_VERSION)) || defined(__ICCARM__)
+    Word primask;
+    __asm volatile("MRS %0, primask" : "=r"(primask));
+    return (primask & 1);
+#else
+    return (__get_PRIMASK() & 1);
 #endif
 }
 
@@ -218,19 +263,6 @@ static __stk_forceinline void HW_SpinLockLock(volatile bool &lock)
         __stk_relax_cpu();
     }
 }
-
-//! SVC frame.
-struct SvcFrame
-{
-    Word R0;
-    Word R1;
-    Word R2;
-    Word R3;
-    Word R12;
-    Word LR;
-    Word PC;
-    Word PSR;
-};
 
 // SaveJmp/RestoreJmp ----------------------------------------------------------
 // ARM Cortex-M callee-saved registers per the AAPCS ABI:
@@ -412,7 +444,7 @@ static __stk_forceinline bool HW_IsPrivilegedThreadMode()
     \note   Unprivileged mode only. No input, but returns a value (will be read from R0).
     \return Previous value of BASEPRI.
 */
-__stk_attr_naked Word SVC_EnterCritical()
+__stk_attr_naked Word HW_SVCEnterCritical()
 {
     STK_CORTEX_M_UNPRIV_ENTER_CRITICAL();
     STK_CORTEX_M_EXIT_FUNCTION();
@@ -421,9 +453,9 @@ __stk_attr_naked Word SVC_EnterCritical()
 /*! \brief     Exit critical section.
     \param[in] prev: Previous value of BASEPRI.
     \note      Unprivileged mode only. Input 'state' is passed in R0; no return value.
-    \see       SVC_EnterCritical
+    \see       HW_SVCEnterCritical
 */
-__stk_attr_naked void SVC_ExitCritical(Word /*prev*/)
+__stk_attr_naked void HW_SVCExitCritical(Word /*prev*/)
 {
     STK_CORTEX_M_UNPRIV_EXIT_CRITICAL();
     STK_CORTEX_M_EXIT_FUNCTION();
@@ -470,6 +502,23 @@ static __stk_forceinline void HW_EnableFullFpuAccess()
 #endif
 }
 
+/*! \brief Start SysTick timer peripheral.
+*/
+static __stk_forceinline void HW_StartSysTick(int32_t tick_resolution)
+{
+    uint32_t result = SysTick_Config((uint32_t)STK_TIME_TO_CPU_TICKS_USEC(SystemCoreClock, tick_resolution));
+    STK_ASSERT(result == 0);
+    (void)result;
+}
+
+/*! \brief Stop SysTick timer peripheral.
+*/
+static __stk_forceinline void HW_StopSysTick()
+{
+    SysTick->CTRL = 0;
+    SCB->ICSR |= SCB_ICSR_PENDSTCLR_Msk;
+}
+
 //! Global lock to synchronize critical sections of multiple cores.
 static volatile bool s_StkCortexmCsuLock = false;
 
@@ -484,10 +533,10 @@ static struct Context : public PlatformContext
     {
         PlatformContext::Initialize(handler, service, exit_trap, resolution_us);
 
-        // we expect Stack::mode member at offset of 0 (first member).
-        STK_STATIC_ASSERT(offsetof(Stack, SP) == 0);
-        // we expect Stack::mode member at offset of 4 (second member).
-        STK_STATIC_ASSERT(offsetof(Stack, mode) == 4);
+        STK_STATIC_ASSERT_DESC_N(SP, offsetof(Stack, SP) == 0,
+            "expect Stack::mode member at offset of 0 (first member)");
+        STK_STATIC_ASSERT_DESC_N(mode, offsetof(Stack, mode) == 4,
+            "expect Stack::mode member at offset of 4 (second member)");
 
         m_csu         = 0;
         m_csu_nesting = 0;
@@ -563,7 +612,7 @@ static struct Context : public PlatformContext
     __stk_forceinline void UnprivEnterCriticalSection()
     {
         // elevate to privileged/disabled state via SVC
-        Word current_ses = SVC_EnterCritical();
+        Word current_ses = HW_SVCEnterCritical();
 
         if (m_csu_nesting == 0)
         {
@@ -597,22 +646,11 @@ static struct Context : public PlatformContext
             HW_SpinLockUnlock(s_StkCortexmCsuLock);
 
             // restore hardware interrupts via SVC
-            SVC_ExitCritical(ses_to_restore);
+            HW_SVCExitCritical(ses_to_restore);
         }
     }
 
-    void Start()
-    {
-        m_exiting = false;
-
-        // save jump location of the Exit trap
-        SaveJmp(m_exit_buf);
-        if (m_exiting)
-            return;
-
-        STK_CORTEX_M_START_SCHEDULING();
-    }
-
+    void Start();
     void OnStart();
     void OnStop();
 
@@ -655,21 +693,23 @@ extern "C" void STK_SYSTICK_HANDLER()
     SEGGER_SYSVIEW_RecordEnterISR();
 #endif
 
+    Context &ctx = GetContext();
+
 #ifdef HAL_MODULE_ENABLED // STM32 HAL
     // make sure STM32 HAL get timing information as it depends on SysTick in delaying procedures
     HAL_IncTick();
 
     // STM32 HAL is starting SysTick on its initialization that will cause a crash on NULL,
     // therefore use additional check if HAL_MODULE_ENABLED is defined
-    if (GetContext().m_started)
+    if (ctx.m_started)
     {
 #else
     {
         // make sure SysTick is enabled by the Kernel::Start(), disable its start anywhere else
-        STK_ASSERT(GetContext().m_started);
-        STK_ASSERT(GetContext().m_handler != nullptr);
+        STK_ASSERT(ctx.m_started);
+        STK_ASSERT(ctx.m_handler != nullptr);
 #endif
-        GetContext().OnTick();
+        ctx.OnTick();
     }
 
 #if STK_SEGGER_SYSVIEW
@@ -780,7 +820,7 @@ extern "C" __stk_attr_naked void STK_PENDSV_HANDLER()
     : /* output: none */
     : [st_idle]   "m" (GetContext().m_stack_idle),
       [st_active] "m" (GetContext().m_stack_active),
-      [priv_val]  "i" (ACCESS_PRIVILEGED)\
+      [priv_val]  "i" (ACCESS_PRIVILEGED)
     : "r0", "r1" /* only r0, r1 are used as a scratchpad */ );
 }
 
@@ -840,8 +880,23 @@ __stk_attr_naked void OnTaskStart()
     : "r0", "r1" /* only r0, r1 are used as a scratchpad */ );
 }
 
+void Context::Start()
+{
+    m_exiting = false;
+
+    // save jump location of the Exit trap
+    SaveJmp(m_exit_buf);
+    if (m_exiting)
+        return;
+
+    STK_CORTEX_M_START_SCHEDULING();
+}
+
 void Context::OnStart()
 {
+    // interrupts must be disabled at this point
+    STK_ASSERT(HW_InterruptsDisabled());
+
     // FPU
     HW_EnableFullFpuAccess();
 
@@ -851,15 +906,14 @@ void Context::OnStart()
     // notify kernel
     m_handler->OnStart(&m_stack_active);
 
-    // schedule ticks
-    uint32_t result = SysTick_Config((uint32_t)STK_TIME_TO_CPU_TICKS_USEC(SystemCoreClock, m_tick_resolution));
-    STK_ASSERT(result == 0);
-    (void)result;
+    // start SysTick timer (it is yet can't fire an interrupt due to HW_DisableInterrupts)
+    HW_StartSysTick(m_tick_resolution);
 
-    // set priority (after SysTick_Config because it may change SysTick priority)
+    // set priority
+    // note: after SysTick_Config because it may change SysTick priority, PendSV and SysTick peripherals
+    // have equal priority to avoid race
     NVIC_SetPriority(PendSV_IRQn, STK_CORTEX_M_ISR_PRIORITY_LOWEST);
     NVIC_SetPriority(SysTick_IRQn, STK_CORTEX_M_ISR_PRIORITY_LOWEST);
-
     // set highest priority for SVC interrupts to support critical section for unprivileged tasks
 #ifdef CONTROL_nPRIV_Msk
     NVIC_SetPriority(SVCall_IRQn, STK_CORTEX_M_ISR_PRIORITY_HIGHEST);
@@ -868,22 +922,32 @@ void Context::OnStart()
     m_started = true;
 }
 
-void SVC_Handler_Main(Word *svc_args)
+// __stk_attr_used required for Link-Time Optimization (-flto)
+extern "C" __stk_attr_used void SVC_Handler_Main(Word *svc_args)
 {
-    // Stack frame layout: r0, r1, r2, r3, r12, r14, the return address and xPSR, First argument (r0) is svc_args[0]
-    // - R0 = stack[0]
-    // - R1 = stack[1]
-    // - R2 = stack[2]
-    // - R3 = stack[3]
-    // - R12 = stack[4]
-    // - LR = stack[5]
-    // - PC = stack[6]
-    // - xPSR= stack[7]
+    // Word is typedef uintptr_t (stk_common.h) — the only integer type the Standard
+    // blesses for lossless pointer round-trips (MISRA C++ 5-2-8, CERT INT36-C)
+    STK_STATIC_ASSERT_DESC_N(PTR, sizeof(Word) == sizeof(void *),
+        "Word must be uintptr_t width for safe pointer round-trip via frame->PC");
 
-    // The SVC instruction is 2 bytes before the stacked PC
-    uint8_t svc_number = ((uint8_t *)svc_args[6])[-2];
+    // priority 0 (NMI, HardFault) unaffected: SVC (priority 0 per OnStart()) remains
+    // reachable so SVC_EXIT_CRITICAL can always unwind
+    STK_STATIC_ASSERT_DESC_N(NVIC, __NVIC_PRIO_BITS < 32u,
+        "NVIC priority bit width exceeds safe shift range");
 
-    switch (svc_number)
+    // 'volatile': R0 is written back to stacked memory, compiler must not eliminate the store
+    volatile ExceptionFrame * const frame = reinterpret_cast<volatile ExceptionFrame *>(svc_args);
+
+    // details: https://developer.arm.com/documentation/ka004005/latest
+    // Thumb SVC encoding: [15:8] = 0xDF, [7:0] = imm8
+    // ---
+    // opcode lives two bytes (one Thumb halfword) before the stacked PC:
+    // do explicit subtraction instead of negative indexing (MISRA C++ 5-0-16),
+    // uint8_t extracted before ESvc cast to avoid impl-defined enum conversion (MISRA 5-2-6)
+    const uint8_t *insn_ptr = hw::WordToPtr<const uint8_t>(frame->PC) - 2;
+    const ESvc     command  = static_cast<ESvc>(*insn_ptr);
+
+    switch (command)
     {
     case SVC_START_SCHEDULING: {
         // disallow any duplicate attempt
@@ -891,8 +955,12 @@ void SVC_Handler_Main(Word *svc_args)
         if (GetContext().m_started)
             return;
 
+        // make sure interrupts do not interfere, OnStart expects interrupts disabled
         HW_DisableInterrupts();
+
         GetContext().OnStart();
+
+        // start first task
         OnTaskStart();
         break; }
 
@@ -902,33 +970,28 @@ void SVC_Handler_Main(Word *svc_args)
 
 #ifdef CONTROL_nPRIV_Msk
     case SVC_ENTER_CRITICAL: {
-        // save current BASEPRI to return to the user (into stacked R0)
-        svc_args[0] = __get_BASEPRI();
-        // block all interrupts except priority 0 (to be able to invoke SVC SVC_EXIT_CRITICAL)
-        __set_BASEPRI(1 << __NVIC_PRIO_BITS);
-        // ensure the disable is recognized before subsequent code
-        __DSB();
-        __ISB();
+        const Word saved_basepri = __get_BASEPRI();
+        __set_BASEPRI(static_cast<uint32_t>(1u) << __NVIC_PRIO_BITS); // mask all configurable-priority interrupts
+        __DSB();                   // BASEPRI write visible to bus before SVC return
+        __ISB();                   // pipeline flush: mask in effect at first caller instruction
+        frame->R0 = saved_basepri; // return saved value via stacked R0
         break; }
 
     case SVC_EXIT_CRITICAL: {
-        // ensure all memory work is finished before re-enabling
-        __DSB();
-        // restore previous BASEPRI state (passed in R0)
-        __set_BASEPRI(svc_args[0]);
-        // synchronization point: any pending interrupt can be serviced immediately at this boundary
-        __ISB();
+        __DSB();                   // drain pending stores before widening interrupt window
+        __set_BASEPRI(frame->R0);  // restore saved BASEPRI (passed in R0)
+        __ISB();                   // pending interrupts at restored priority may fire now
         break; }
-#endif
+#endif // CONTROL_nPRIV_Msk
 
     default: {
-        STK_ASSERT(false);
+        // any SVC number not in ESvc is a defect, panic unconditionally
+        STK_KERNEL_PANIC(KERNEL_PANIC_UNKNOWN_SVC);
         break; }
     }
 }
 
-// source:
-// ARM: How to Write an SVC Function, https://developer.arm.com/documentation/ka004005/latest
+// details: "How to Write an SVC Function", https://developer.arm.com/documentation/ka004005/latest
 extern "C" __stk_attr_naked void STK_SVC_HANDLER()
 {
     __asm volatile(
@@ -1077,6 +1140,11 @@ void PlatformArmCortexM::Start()
 
 bool PlatformArmCortexM::InitStack(EStackType stack_type, Stack *stack, IStackMemory *stack_memory, ITask *user_task)
 {
+    STK_STATIC_ASSERT_DESC_N(ExceptionFrame, (sizeof(ExceptionFrame) == (8 * sizeof(Word))),
+        "ExceptionFrame layout must match the ARMv7-M hardware exception frame exactly");
+    STK_STATIC_ASSERT_DESC_N(TaskFrame, sizeof(TaskFrame) == (8 + STK_CORTEX_M_MANAGE_LR) * sizeof(Word),
+        "TaskFrame size must equal ExceptionFrame plus optional EXC_RETURN word");
+
     STK_ASSERT(stack_memory->GetStackSize() > STK_CORTEX_M_REGISTER_COUNT);
 
     // initialize stack memory
@@ -1085,55 +1153,49 @@ bool PlatformArmCortexM::InitStack(EStackType stack_type, Stack *stack, IStackMe
     // initialize Stack Pointer (SP)
     stack->SP = hw::PtrToWord(stack_top - STK_CORTEX_M_REGISTER_COUNT);
 
-    // xPSR, PC, LR, R12, R3, R2, R1, R0
-    // -1    -2  -3  -4   -5  -6  -7  -8
-
-    Word xPSR = (1 << 24); // set T bit of EPSR sub-regiser to enable execution of instructions (https://developer.arm.com/documentation/ddi0413/c/programmer-s-model/registers/special-purpose-program-status-registers--xpsr-)
-    Word PC, LR, R0;
-
-    stack_top[-1] = xPSR;
+    // place the initial task frame flush against the top of the stack:
+    // TaskFrame::exc (ExceptionFrame) occupies the top 8 words, TaskFrame::EXC_RETURN
+    // (when present) sits immediately below it
+    TaskFrame * const task_frame = reinterpret_cast<TaskFrame *>(stack_top) - 1;
 
     // initialize registers for the user task's first start
     switch (stack_type)
     {
     case STACK_USER_TASK: {
-        PC = hw::PtrToWord(&OnTaskRun) & ~0x1UL; // "Bit [0] is always 0, so instructions are always aligned to halfword boundaries" (https://developer.arm.com/documentation/ddi0413/c/programmer-s-model/registers/general-purpose-registers)
-        LR = hw::PtrToWord(&OnTaskExit);
-        R0 = hw::PtrToWord(user_task);
+        task_frame->exc.PC = hw::PtrToWord(&OnTaskRun) & ~0x1UL;
+        task_frame->exc.LR = hw::PtrToWord(&OnTaskExit);
+        task_frame->exc.R0 = hw::PtrToWord(user_task);
         break; }
 
     case STACK_SLEEP_TRAP: {
-        PC = hw::PtrToWord(GetContext().m_overrider != nullptr ? &OnSchedulerSleepOverride : &OnSchedulerSleep) & ~0x1UL;
-        LR = STK_STACK_MEMORY_FILLER; // should not attempt to exit
-        R0 = 0;
+        task_frame->exc.PC = hw::PtrToWord(GetContext().m_overrider != nullptr ? &OnSchedulerSleepOverride : &OnSchedulerSleep);
+        task_frame->exc.LR = STK_STACK_MEMORY_FILLER; // should not attempt to exit
+        task_frame->exc.R0 = 0;
         break; }
 
     case STACK_EXIT_TRAP: {
-        PC = hw::PtrToWord(&OnSchedulerExit) & ~0x1UL;
-        LR = STK_STACK_MEMORY_FILLER; // should not attempt to exit
-        R0 = 0;
+        task_frame->exc.PC = hw::PtrToWord(&OnSchedulerExit);
+        task_frame->exc.LR = STK_STACK_MEMORY_FILLER; // should not attempt to exit
+        task_frame->exc.R0 = 0;
         break; }
 
     default:
         return false;
     }
 
-    stack_top[-2] = PC;
-    stack_top[-3] = LR;
-    stack_top[-8] = R0;
+    // details: "Program counter: Bit [0] is always 0, so instructions are always aligned to halfword boundaries",
+    // https://developer.arm.com/documentation/ddi0413/c/programmer-s-model/registers/general-purpose-registers
+    task_frame->exc.PC &= ~0x1UL;
 
-    // Exception exit value (LR) if FP is present
+    // set T bit of EPSR sub-register to enable execution of instructions
+    // details: "Special-purpose program status registers (xPSR)": Execution PSR, https://developer.arm.com/documentation/ddi0413/c/programmer-s-model/registers/special-purpose-program-status-registers--xpsr-
+    task_frame->exc.PSR = static_cast<Word>(1u) << 24;
+
 #if STK_CORTEX_M_MANAGE_LR
-    stack_top[-9] = STK_CORTEX_M_EXC_RETURN_THREAD_PSP;
+    task_frame->EXC_RETURN = STK_CORTEX_M_EXC_RETURN_THREAD_PSP;
 #endif
 
     return true;
-}
-
-static __stk_forceinline void SysTick_Stop()
-{
-    SysTick->CTRL = 0;
-    SCB->ICSR |= SCB_ICSR_PENDSTCLR_Msk;
 }
 
 void Context::OnStop()
@@ -1143,7 +1205,7 @@ void Context::OnStop()
 #endif
 
     // stop SysTick timer
-    SysTick_Stop();
+    HW_StopSysTick();
 
     // clear pending PendSV exception
     SCB->ICSR |= SCB_ICSR_PENDSVCLR_Msk;
