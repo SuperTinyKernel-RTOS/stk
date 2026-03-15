@@ -107,40 +107,113 @@ struct TaskFrame
 };
 
 // Shortcuts:
-#define STK_ASM_EXIT_FROM_HANDLER  "BX LR"
+#define STK_ASM_EXIT_FROM_HANDLER  "BX LR"  // use in naked exception/ISR handlers
+#define STK_ASM_EXIT_FROM_FUNCTION "BX LR"  // use in naked C-callable wrapper functions
 #define STK_ASM_DISABLE_INTERRUPTS "CPSID i"
 #define STK_ASM_ENABLE_INTERRUPTS  "CPSIE i"
 
-#define STK_CORTEX_M_EXIT_FUNCTION() __asm volatile(STK_ASM_EXIT_FROM_HANDLER)
-#define STK_CORTEX_M_START_SCHEDULING() __asm volatile("SVC %0" : : "I"(SVC_START_SCHEDULING));
-#define STK_CORTEX_M_FORCE_SWITCH() __asm volatile("SVC %0" : : "I"(SVC_FORCE_SWITCH));
-#define STK_CORTEX_M_UNPRIV_ENTER_CRITICAL() __asm volatile("SVC %0" : : "I"(SVC_ENTER_CRITICAL));
-#define STK_CORTEX_M_UNPRIV_EXIT_CRITICAL() __asm volatile("SVC %0" : : "I"(SVC_EXIT_CRITICAL));
+/*! \brief     Start scheduler.
+    \note      Triggered via SVC. This will transition CPU to SVC Handler.
+*/
+static __stk_forceinline void HW_StartScheduler()
+{
+    __asm volatile("SVC %0"
+    : /* output: none */
+    : "I"(SVC_START_SCHEDULING)
+    : "memory" /* protect against compiler reordering */ );
+}
 
-/*! \brief  Disable CPU interrupts.
+/*! \brief     Force an immediate context switch.
+*/
+#ifdef SVC_FORCE_SWITCH
+static __stk_forceinline void HW_ForceContextSwitch()
+{
+    __asm volatile("SVC %0"
+    : /* output: none */
+    : "I"(SVC_FORCE_SWITCH)
+    : "memory" /* protect against compiler reordering */ );
+}
+#endif
+
+/*! \brief     Enter critical section (unprivileged callers only).
+    \details   Issues SVC_ENTER_CRITICAL, transferring control to SVC_Handler_Main.
+               The handler reads the current BASEPRI, raises it to mask all
+               configurable-priority interrupts, then writes the saved value back
+               into the stacked R0 slot of the exception frame. When the SVC returns,
+               the hardware restores that R0 to the register, making the saved BASEPRI
+               appear as this function's return value per AAPCS.
+    \note      \b Naked function. The compiler emits no prologue or epilogue.
+               A prologue would push registers onto the PSP before the SVC, shifting
+               the exception frame the handler expects, causing it to write the saved
+               BASEPRI to the wrong stack slot and corrupting the return value.
+               \c STK_ASM_EXIT_FROM_FUNCTION replaces the compiler-generated return.
+    \note      Unprivileged thread mode only. In handler mode or privileged thread
+               mode use Context::EnterCriticalSection() directly to avoid the SVC overhead.
+    \return    Previous value of BASEPRI, restored from the stacked R0 by the hardware
+               on SVC return.
+    \see       HW_SVCExitCritical, SVC_Handler_Main
+*/
+__stk_attr_naked Word HW_SVCEnterCritical()
+{
+    __asm volatile(
+    "SVC %0                      \n"
+    STK_ASM_EXIT_FROM_FUNCTION " \n"
+    : /* output: none */
+    : "I"(SVC_ENTER_CRITICAL)
+    : "memory" /* protect against compiler reordering */ );
+}
+
+/*! \brief     Exit critical section (unprivileged callers only).
+    \details   Passes \a prev in R0 per AAPCS, then issues SVC_EXIT_CRITICAL.
+               SVC_Handler_Main reads R0 directly from the stacked exception frame
+               and restores BASEPRI to that value, re-enabling interrupts at the
+               priority level saved by the matching HW_SVCEnterCritical() call.
+    \note      \b Naked function. The compiler emits no prologue or epilogue.
+               A prologue would push registers and adjust SP before the SVC fires,
+               placing R0 (carrying \a prev) at the wrong offset in the exception
+               frame. The handler would then restore BASEPRI from garbage, leaving
+               interrupts permanently masked or unmasked incorrectly.
+               \c STK_ASM_EXIT_FROM_FUNCTION replaces the compiler-generated return.
+    \note      Unprivileged thread mode only. Must be paired with a preceding
+               HW_SVCEnterCritical() call on the same thread. Passing a \a prev value
+               not obtained from HW_SVCEnterCritical() produces undefined behaviour.
+    \param[in] prev: Previous BASEPRI value returned by the matching HW_SVCEnterCritical().
+    \see       HW_SVCEnterCritical, SVC_Handler_Main
+*/
+__stk_attr_naked void HW_SVCExitCritical(Word /*prev*/)
+{
+    __asm volatile(
+    "SVC %0                      \n"
+    STK_ASM_EXIT_FROM_FUNCTION " \n"
+    : /* output: none */
+    : "I"(SVC_EXIT_CRITICAL)
+    : "memory" /* protect against compiler reordering */);
+}
+
+/*! \brief     Disable CPU interrupts.
 */
 static __stk_forceinline void HW_DisableInterrupts()
 {
 #if (defined(__clang__) && defined(__ARMCOMPILER_VERSION)) || defined(__ICCARM__)
-    __asm volatile(STK_ASM_DISABLE_INTERRUPTS : : : "memory");
+    __asm volatile(STK_ASM_DISABLE_INTERRUPTS ::: "memory");
 #else
     __disable_irq();
 #endif
 }
 
-/*! \brief  Enable CPU interrupts.
+/*! \brief     Enable CPU interrupts.
 */
 static __stk_forceinline void HW_EnableInterrupts()
 {
 #if (defined(__clang__) && defined(__ARMCOMPILER_VERSION)) || defined(__ICCARM__)
-    __asm volatile(STK_ASM_ENABLE_INTERRUPTS : : : "memory");
+    __asm volatile(STK_ASM_ENABLE_INTERRUPTS ::: "memory");
 #else
     __enable_irq();
 #endif
 }
 
-/*! \brief  Check if interrupts are disabled.
-    \return true if interrupts are disabled (PRIMASK bit 0 is set).
+/*! \brief     Check if interrupts are disabled.
+    \return    true if interrupts are disabled (PRIMASK bit 0 is set).
 */
 static __stk_forceinline bool HW_InterruptsDisabled()
 {
@@ -153,8 +226,8 @@ static __stk_forceinline bool HW_InterruptsDisabled()
 #endif
 }
 
-/*! \brief  Enter critical section.
-    \return Session value which has to be supplied to HW_ExitCriticalSection().
+/*! \brief     Enter critical section.
+    \return    Session value which has to be supplied to HW_ExitCriticalSection().
 */
 static __stk_forceinline void HW_CriticalSectionStart(uint32_t &SES)
 {
@@ -181,78 +254,171 @@ static __stk_forceinline void HW_CriticalSectionEnd(uint32_t SES)
 }
 
 #ifdef CONTROL_nPRIV_Msk
-    /*! \brief Attempt to lock a spin-lock.
-    */
-    static __stk_forceinline bool HW_SpinLockTryLock(volatile bool &lock)
-    {
-        return !__atomic_test_and_set(&lock, __ATOMIC_ACQUIRE);
-    }
+/*! \brief     Attempt to acquire a spin-lock without blocking (M3/M4/M7).
+    \details   Uses a GCC built-in atomic test-and-set with acquire memory ordering,
+               mapping to an LDREX/STREX sequence on ARMv7-M. If the lock byte was
+               already set the operation fails immediately without modifying state.
+    \param[in] lock: Spin-lock state variable. Must be \c false (released) initially.
+    \retval    true  Lock was free and has been acquired by the caller.
+    \retval    false Lock was already held, caller must retry or back off.
+    \note      ISR-safe. May be called from both thread and handler mode.
+    \note      Pairs with HW_SpinLockUnlock(). Never call HW_SpinLockUnlock() without
+               a preceding successful HW_SpinLockTryLock() or HW_SpinLockLock().
+    \see       HW_SpinLockLock, HW_SpinLockUnlock
+*/
+static __stk_forceinline bool HW_SpinLockTryLock(volatile bool &lock)
+{
+    return !__atomic_test_and_set(&lock, __ATOMIC_ACQUIRE);
+}
 
-    /*! \brief Unlock a spin-lock.
-    */
-    static __stk_forceinline void HW_SpinLockUnlock(volatile bool &lock)
-    {
-        // ensure all data writes (like scheduling metadata) are flushed before the lock is released
-        __asm volatile("dmb ishst" ::: "memory");
-        __atomic_clear(&lock, __ATOMIC_RELEASE);
-    }
+/*! \brief     Release a spin-lock (M3/M4/M7).
+    \details   Issues a \c dmb ishst barrier to flush all store-buffer writes (including
+               scheduler metadata modified under the lock) to the point-of-coherency
+               before clearing the lock byte with a GCC atomic clear at release ordering.
+               This ensures that any core or bus master that subsequently acquires the
+               lock observes all writes made while the lock was held.
+    \param[in] lock: Spin-lock state variable previously acquired by the caller.
+    \warning   Caller must own the lock. Releasing an unowned lock is an unrecoverable
+               error and triggers STK_KERNEL_PANIC(KERNEL_PANIC_SPINLOCK_DEADLOCK).
+    \note      ISR-safe.
+    \see       HW_SpinLockTryLock, HW_SpinLockLock
+*/
+static __stk_forceinline void HW_SpinLockUnlock(volatile bool &lock)
+{
+    if (!lock)
+        STK_KERNEL_PANIC(KERNEL_PANIC_SPINLOCK_DEADLOCK); // release attempt of unowned lock
+
+    // ensure all data writes (like scheduling metadata) are flushed before the lock is released:
+    // __atomic_clear with __ATOMIC_RELEASE provides the required store-release barrier,
+    // the explicit dmb ishst is retained for toolchains that do not lower __ATOMIC_RELEASE
+    // to a full DMB on ARMv7-M (e.g. older GCC versions with -mcpu=cortex-m4)
+    __asm volatile("dmb ishst" ::: "memory");
+
+    __atomic_clear(&lock, __ATOMIC_RELEASE);
+}
 #elif defined(RP2040_H)
-    // Raspberry RP2040 dual-core M0+ implementation, using Hardware Spinlock 0 (SIO base 0xd0000000 + offset)
-    #define STK_SIO_SPINLOCK SIO->SPINLOCK31
+// Raspberry RP2040 dual-core M0+ implementation, using Hardware Spinlock 0 (SIO base 0xd0000000 + offset)
+#define STK_SIO_SPINLOCK SIO->SPINLOCK31
 
-    /*! \brief Attempt to lock a spin-lock.
-    */
-    static __stk_forceinline bool HW_SpinLockTryLock(volatile bool &lock)
+/*! \brief     Attempt to acquire a spin-lock without blocking (RP2040 dual-core M0+).
+    \details   Reads SIO hardware STK_SIO_SPINLOCK. On RP2040 the SIO spinlock register
+               returns a non-zero value exactly once per acquisition attempt, a zero
+               return means another core holds it. On success the software \a lock flag
+               is set to \c true and a full DMB is issued to order all subsequent
+               memory accesses behind the acquire point.
+    \param[in] lock: Software spin-lock state variable. Reflects lock ownership for
+               the local core, the hardware SIO spinlock arbitrates between cores.
+    \retval    true  Hardware spinlock was free and has been acquired by the caller.
+    \retval    false Hardware spinlock was already held by the other core.
+    \note      ISR-safe.
+    \note      Uses SIO STK_SIO_SPINLOCK. Do not use STK_SIO_SPINLOCK anywhere else
+               in the application.
+    \see       HW_SpinLockLock, HW_SpinLockUnlock
+*/
+static __stk_forceinline bool HW_SpinLockTryLock(volatile bool &lock)
+{
+    bool success = (STK_SIO_SPINLOCK == 0 ? false : ((lock) = true, true));
+    __DMB();
+
+    return success;
+}
+
+/*! \brief     Release a spin-lock (RP2040 dual-core M0+).
+    \details   Issues a DMB to drain pending stores, clears the software \a lock flag,
+               then writes any value to SIO STK_SIO_SPINLOCK to release the hardware spinlock.
+               The hardware register must be written last: once released, the other core
+               may immediately acquire and begin modifying shared state, so all local
+               writes must be complete and visible before that point.
+    \param[in] lock: Software spin-lock state variable previously acquired by the caller.
+    \warning   Caller must own the lock. Releasing an unowned lock is an unrecoverable
+               error and triggers STK_KERNEL_PANIC(KERNEL_PANIC_SPINLOCK_DEADLOCK).
+               Only the software \a lock flag is verified at runtime, the hardware SIO
+               spinlock state is not independently checked. Both layers must be consistent:
+               a bug that sets \a lock without acquiring STK_SIO_SPINLOCK, or acquires
+               STK_SIO_SPINLOCK without setting \a lock, will bypass this guard silently.
+    \note      ISR-safe.
+    \see       HW_SpinLockTryLock, HW_SpinLockLock
+*/
+static __stk_forceinline void HW_SpinLockUnlock(volatile bool &lock)
+{
+    if (!lock)
+        STK_KERNEL_PANIC(KERNEL_PANIC_SPINLOCK_DEADLOCK); // release attempt of unowned lock
+
+    __DMB();
+    (lock) = false;
+    STK_SIO_SPINLOCK = 1; // writing any value releases the hardware lock
+}
+
+#undef STK_SIO_SPINLOCK
+#else // !RP2040_H
+// Standard single-core Cortex-M0 implementation:
+
+/*! \brief     Attempt to acquire a spin-lock without blocking (Cortex-M0, single-core).
+    \details   On Cortex-M0/M0+ there is no LDREX/STREX, so atomicity is achieved by
+               raising a critical section (PRIMASK) around the test-and-set. If the lock
+               is already held the critical section is released immediately and the
+               function returns false with no side-effects. On success a DMB is issued
+               before releasing the critical section to ensure the lock acquisition is
+               visible to any bus master before the caller proceeds.
+    \param[in] lock: Spin-lock state variable. Must be \c false (released) initially.
+    \retval    true  Lock was free and has been acquired by the caller.
+    \retval    false Lock was already held, caller must retry or back off.
+    \note      ISR-safe, but temporarily disables interrupts during the test-and-set.
+    \see       HW_SpinLockLock, HW_SpinLockUnlock
+*/
+static __stk_forceinline bool HW_SpinLockTryLock(volatile bool &lock)
+{
+    uint32_t ses;
+    HW_CriticalSectionStart(ses);
+
+    if (lock)
     {
-        bool success = (STK_SIO_SPINLOCK == 0 ? false : ((lock) = true, true));
-        __DMB();
-
-        return success;
-    }
-
-    /*! \brief Unlock a spin-lock.
-    */
-    static __stk_forceinline void HW_SpinLockUnlock(volatile bool &lock)
-    {
-        __DMB();
-        (lock) = false;
-        STK_SIO_SPINLOCK = 1; /* writing any value releases the hardware lock */
-    }
-
-    #undef STK_SIO_SPINLOCK
-#else
-    // Standard single-core Cortex-M0 implementation:
-
-    /*! \brief Attempt to lock a spin-lock.
-    */
-    static __stk_forceinline bool HW_SpinLockTryLock(volatile bool &lock)
-    {
-        uint32_t ses;
-        HW_CriticalSectionStart(ses);
-
-        if (lock)
-        {
-            HW_CriticalSectionEnd(ses);
-            return false;
-        }
-
-        lock = true;
-        __DMB();
-
         HW_CriticalSectionEnd(ses);
-        return true;
+        return false;
     }
 
-    /*! \brief Unlock a spin-lock.
-    */
-    static __stk_forceinline void HW_SpinLockUnlock(volatile bool &lock)
-    {
-        __DMB();
-        lock = false;
-    }
-#endif
+    lock = true;
+    __DMB();
 
-/*! \brief Lock a spin-lock.
+    HW_CriticalSectionEnd(ses);
+    return true;
+}
+
+/*! \brief     Release a spin-lock (Cortex-M0, single-core).
+    \details   Issues a DMB to ensure all writes made while the lock was held are
+               visible to the bus before clearing the lock flag. No critical section is
+               needed for the store itself since a single-byte write on Cortex-M0 is
+               inherently atomic with respect to the local core.
+    \param[in] lock: Spin-lock state variable previously acquired by the caller.
+    \warning   Caller must own the lock. Releasing an unowned lock is an unrecoverable
+               error and triggers STK_KERNEL_PANIC(KERNEL_PANIC_SPINLOCK_DEADLOCK).
+    \note      ISR-safe.
+    \see       HW_SpinLockTryLock, HW_SpinLockLock
+*/
+static __stk_forceinline void HW_SpinLockUnlock(volatile bool &lock)
+{
+    if (!lock)
+        STK_KERNEL_PANIC(KERNEL_PANIC_SPINLOCK_DEADLOCK); // release attempt of unowned lock
+
+    __DMB();
+    lock = false;
+}
+#endif // CONTROL_nPRIV_Msk
+
+/*! \brief     Acquire a spin-lock, blocking until it becomes available.
+    \details   Calls HW_SpinLockTryLock() in a tight retry loop. On each failed attempt
+               \c __stk_relax_cpu() (typically a \c NOP or \c YIELD hint) is executed to
+               reduce bus contention before the next try. A countdown of 0xFFFFFF
+               iterations is enforced: if the lock has not been acquired by the time the
+               counter expires, the kernel invariant has been violated (the lock owner
+               exited without releasing) and STK_KERNEL_PANIC() is called with
+               \c KERNEL_PANIC_SPINLOCK_DEADLOCK.
+    \param[in] lock: Spin-lock state variable. Must be \c false (released) initially.
+    \note      ISR-safe. The timeout is a fixed iteration count, not a wall-clock duration,
+               effective timeout window varies with CPU frequency and bus load.
+    \warning   Must not be called while already holding the same \a lock - the M0 fallback
+               implementation uses a critical section internally and will deadlock.
+    \see       HW_SpinLockTryLock, HW_SpinLockUnlock
 */
 static __stk_forceinline void HW_SpinLockLock(volatile bool &lock)
 {
@@ -268,35 +434,37 @@ static __stk_forceinline void HW_SpinLockLock(volatile bool &lock)
     }
 }
 
-// SaveJmp/RestoreJmp ----------------------------------------------------------
-// ARM Cortex-M callee-saved registers per the AAPCS ABI:
-//   r4-r11, sp (r13), lr (r14)
-//
-// Both functions are naked so the compiler emits no prologue/epilogue:
-//   - SaveJmp captures the *caller's* SP and LR before any frame adjustment.
-//   - RestoreJmp reloads everything and jumps directly to the saved LR, making
-//     SaveJmp's caller see a non-zero return value (val) as if SaveJmp returned
-//     a second time.
-//
-// Cortex-M0/M0+/M1 (Thumb-1 only):
-//   STR/LDR with r8-r11/sp/lr cannot be encoded in 16-bit Thumb-1.
-//   High registers are moved into r1/r2 first, then stored via r0 base.
-//   SP and LR are also moved into low registers before store/load.
-//
-// If FPU is present (STK_CORTEX_M_FPU != 0), FPSCR is also saved/restored
-// to preserve the caller's rounding mode and exception flags across the jump.
-// The callee-saved VFP data registers (d8-d15 / s16-s31) are NOT saved here —
-// the ABI already guarantees they survive any normal call boundary.
-//
-// r0 = &f  (first argument)
-// r1 = val (second argument, RestoreJmp only)
+/*! SaveJmp/RestoreJmp ----------------------------------------------------------
+
+    ARM Cortex-M callee-saved registers per the AAPCS ABI:
+      r4-r11, sp (r13), lr (r14)
+
+    Both functions are naked so the compiler emits no prologue/epilogue:
+      - SaveJmp captures the *caller's* SP and LR before any frame adjustment.
+      - RestoreJmp reloads everything and jumps directly to the saved LR, making
+        SaveJmp's caller see a non-zero return value (val) as if SaveJmp returned
+        a second time.
+
+    Cortex-M0/M0+/M1 (Thumb-1 only):
+      STR/LDR with r8-r11/sp/lr cannot be encoded in 16-bit Thumb-1.
+      High registers are moved into r1/r2 first, then stored via r0 base.
+      SP and LR are also moved into low registers before store/load.
+
+    If FPU is present (STK_CORTEX_M_FPU != 0), FPSCR is also saved/restored
+    to preserve the caller's rounding mode and exception flags across the jump.
+    The callee-saved VFP data registers (d8-d15 / s16-s31) are NOT saved here -
+    the ABI already guarantees they survive any normal call boundary.
+
+    r0 = &f  (first argument)
+    r1 = val (second argument, RestoreJmp only)
+*/
 
 /*! \struct JmpFrame
     \brief  Callee-saved CPU register snapshot used by SaveJmp() and RestoreJmp().
     \note   Layout matches the AAPCS callee-saved register set: r4-r11, sp, lr.
             If an FPU is present, FPSCR is appended to preserve the caller's
             floating-point rounding mode and exception flags across the jump.
-            VFP data registers (d8-d15 / s16-s31) are intentionally excluded —
+            VFP data registers (d8-d15 / s16-s31) are intentionally excluded -
             the ABI guarantees they survive any normal call boundary.
     \see    SaveJmp, RestoreJmp
 */
@@ -314,7 +482,7 @@ struct JmpFrame
     \param[in] f: Frame to save the register snapshot into.
     \return    0 when called directly; RestoreJmp() makes this function appear
                to return \a val a second time at the original call site.
-    \note      Naked function — the compiler emits no prologue or epilogue,
+    \note      Naked function - the compiler emits no prologue or epilogue,
                ensuring the snapshot reflects the *caller's* true register state.
     \note      MISRA deviation: [STK-DEV-003] Rule 7-5-1, 7-5-2, 6-6-4
                (__attribute__((naked))). Required to capture the caller's true
@@ -328,40 +496,38 @@ __stk_attr_naked
 int32_t SaveJmp(JmpFrame &/*f*/)
 {
     __asm volatile(
-        ".syntax unified                \n"
+    ".syntax unified                \n"
+#if (__CORTEX_M >= 3)
+    // Cortex-M3/M4/M7: STMIA stores r4-r11 at r0+0 .. r0+28
+    "STMIA r0,  {r4-r11}            \n" // store r4-r11 at offsets 0-28, no writeback
+    "STR   sp,  [r0, #32]           \n" // SP at offset 32
+    "STR   lr,  [r0, #36]           \n" // LR at offset 36
+#else
+    // Cortex-M0/M0+/M1: Thumb-1 only
+    "STR  r4,  [r0, #0]             \n"
+    "STR  r5,  [r0, #4]             \n"
+    "STR  r6,  [r0, #8]             \n"
+    "STR  r7,  [r0, #12]            \n"
+    "MOV  r1,  r8                   \n"
+    "STR  r1,  [r0, #16]            \n"
+    "MOV  r1,  r9                   \n"
+    "STR  r1,  [r0, #20]            \n"
+    "MOV  r1,  r10                  \n"
+    "STR  r1,  [r0, #24]            \n"
+    "MOV  r1,  r11                  \n"
+    "STR  r1,  [r0, #28]            \n"
+    "MOV  r1,  sp                   \n"
+    "STR  r1,  [r0, #32]            \n"
+    "MOV  r1,  lr                   \n"
+    "STR  r1,  [r0, #36]            \n"
+#endif
 
-    #if (__CORTEX_M >= 3)
-        // Cortex-M3/M4/M7: STMIA stores r4-r11 at r0+0 .. r0+28
-        "STMIA r0,  {r4-r11}            \n" // store r4-r11 at offsets 0-28, no writeback
-        "STR   sp,  [r0, #32]           \n" // SP at offset 32
-        "STR   lr,  [r0, #36]           \n" // LR at offset 36
-    #else
-        // Cortex-M0/M0+/M1: Thumb-1 only
-        "STR  r4,  [r0, #0]             \n"
-        "STR  r5,  [r0, #4]             \n"
-        "STR  r6,  [r0, #8]             \n"
-        "STR  r7,  [r0, #12]            \n"
-        "MOV  r1,  r8                   \n"
-        "STR  r1,  [r0, #16]            \n"
-        "MOV  r1,  r9                   \n"
-        "STR  r1,  [r0, #20]            \n"
-        "MOV  r1,  r10                  \n"
-        "STR  r1,  [r0, #24]            \n"
-        "MOV  r1,  r11                  \n"
-        "STR  r1,  [r0, #28]            \n"
-        "MOV  r1,  sp                   \n"
-        "STR  r1,  [r0, #32]            \n"
-        "MOV  r1,  lr                   \n"
-        "STR  r1,  [r0, #36]            \n"
-    #endif
-
-    #if STK_CORTEX_M_FPU
-        "VMRS r1,  FPSCR                \n"
-        "STR  r1,  [r0, #40]            \n"
-    #endif
-        "MOVS r0,  #0                   \n"
-        "BX   lr                        \n"
-    );
+#if STK_CORTEX_M_FPU
+    "VMRS r1,  FPSCR                \n"
+    "STR  r1,  [r0, #40]            \n"
+#endif
+    "MOVS r0,  #0                   \n"
+    "BX   lr                        \n");
 }
 
 /*! \brief     Restore callee-saved CPU registers from a JmpFrame and jump back
@@ -370,7 +536,7 @@ int32_t SaveJmp(JmpFrame &/*f*/)
     \param[in] val: Value that SaveJmp() will appear to return at the restored
                call site. Should be non-zero to distinguish a restore from
                an original save.
-    \note      Naked noreturn function — execution transfers directly to the
+    \note      Naked noreturn function - execution transfers directly to the
                saved LR; this function never returns to its own caller.
     \note      MISRA deviation: [STK-DEV-003] Rule 7-5-1, 7-5-2, 6-6-4
                (__attribute__((naked))). Required to restore SP and branch to
@@ -386,40 +552,39 @@ __stk_attr_noreturn
 void RestoreJmp(JmpFrame &/*f*/, int32_t /*val*/)
 {
     __asm volatile(
-        ".syntax unified                \n"
-
-    #if (__CORTEX_M >= 3)
-        // Cortex-M3/M4/M7: LDMIA loads r4-r11 from offsets 0-28
-        "LDR   sp,  [r0, #32]           \n" // restore SP
-    #if STK_CORTEX_M_FPU
-        "LDR   r2,  [r0, #40]           \n" // load saved FPSCR
-        "VMSR  FPSCR, r2                \n" // restore rounding mode + flags
-    #endif
-        "LDR   r2,  [r0, #36]           \n" // load saved LR into r2
-        "LDMIA r0,  {r4-r11}            \n" // restore r4-r11, no writeback
-        "MOV   r0,  r1                  \n" // return val
-        "BX    r2                       \n"
-    #else
-        // Cortex-M0/M0+/M1: Thumb-1 only
-        "LDR  r2,  [r0, #36]            \n"
-        "MOV  lr,  r2                   \n"
-        "LDR  r2,  [r0, #32]            \n"
-        "MOV  sp,  r2                   \n"
-        "LDR  r2,  [r0, #28]            \n"
-        "MOV  r11, r2                   \n"
-        "LDR  r2,  [r0, #24]            \n"
-        "MOV  r10, r2                   \n"
-        "LDR  r2,  [r0, #20]            \n"
-        "MOV  r9,  r2                   \n"
-        "LDR  r2,  [r0, #16]            \n"
-        "MOV  r8,  r2                   \n"
-        "LDR  r4,  [r0, #0]             \n"
-        "LDR  r5,  [r0, #4]             \n"
-        "LDR  r6,  [r0, #8]             \n"
-        "LDR  r7,  [r0, #12]            \n"
-        "MOV  r0,  r1                   \n"  // return val
-        "BX   lr                        \n"
-    #endif
+    ".syntax unified                \n"
+#if (__CORTEX_M >= 3)
+    // Cortex-M3/M4/M7: LDMIA loads r4-r11 from offsets 0-28
+    "LDR   sp,  [r0, #32]           \n" // restore SP
+#if STK_CORTEX_M_FPU
+    "LDR   r2,  [r0, #40]           \n" // load saved FPSCR
+    "VMSR  FPSCR, r2                \n" // restore rounding mode + flags
+#endif
+    "LDR   r2,  [r0, #36]           \n" // load saved LR into r2
+    "LDMIA r0,  {r4-r11}            \n" // restore r4-r11, no writeback
+    "MOV   r0,  r1                  \n" // return val
+    "BX    r2                       \n"
+#else
+    // Cortex-M0/M0+/M1: Thumb-1 only
+    "LDR  r2,  [r0, #36]            \n"
+    "MOV  lr,  r2                   \n"
+    "LDR  r2,  [r0, #32]            \n"
+    "MOV  sp,  r2                   \n"
+    "LDR  r2,  [r0, #28]            \n"
+    "MOV  r11, r2                   \n"
+    "LDR  r2,  [r0, #24]            \n"
+    "MOV  r10, r2                   \n"
+    "LDR  r2,  [r0, #20]            \n"
+    "MOV  r9,  r2                   \n"
+    "LDR  r2,  [r0, #16]            \n"
+    "MOV  r8,  r2                   \n"
+    "LDR  r4,  [r0, #0]             \n"
+    "LDR  r5,  [r0, #4]             \n"
+    "LDR  r6,  [r0, #8]             \n"
+    "LDR  r7,  [r0, #12]            \n"
+    "MOV  r0,  r1                   \n"  // return val
+    "BX   lr                        \n"
+#endif
     );
 }
 
@@ -444,40 +609,15 @@ static __stk_forceinline bool HW_IsPrivilegedThreadMode()
 #endif
 }
 
-/*! \brief  Enter critical section.
-    \note   Unprivileged mode only. No input, but returns a value (will be read from R0).
-    \return Previous value of BASEPRI.
-*/
-__stk_attr_naked Word HW_SVCEnterCritical()
-{
-    STK_CORTEX_M_UNPRIV_ENTER_CRITICAL();
-    STK_CORTEX_M_EXIT_FUNCTION();
-}
-
-/*! \brief     Exit critical section.
-    \param[in] prev: Previous value of BASEPRI.
-    \note      Unprivileged mode only. Input 'state' is passed in R0; no return value.
-    \see       HW_SVCEnterCritical
-*/
-__stk_attr_naked void HW_SVCExitCritical(Word /*prev*/)
-{
-    STK_CORTEX_M_UNPRIV_EXIT_CRITICAL();
-    STK_CORTEX_M_EXIT_FUNCTION();
-}
-
 /*! \brief  Get SP of the calling process.
     \return SP register value.
 */
 static __stk_forceinline Word HW_GetCallerSP()
 {
-    // __get_PSP() returns 0 in unprivileged mode, thus get SP (R13) which is available for both modes
-#if 0
-    return __get_PSP();
-#else
-    uint32_t sp;
-    __asm volatile("MOV %0, SP" : "=r" (sp));
+    // use SP (R13) directly: __get_PSP() returns 0 in unprivileged thread mode
+    Word sp;
+    __asm volatile("MOV %0, sp" : "=r" (sp));
     return sp;
-#endif
 }
 
 /*! \brief Schedule context switch via the PendSV interrupt.
@@ -895,7 +1035,7 @@ void Context::Start()
     if (m_exiting)
         return;
 
-    STK_CORTEX_M_START_SCHEDULING();
+    HW_StartScheduler();
 }
 
 void Context::OnStart()
@@ -931,7 +1071,7 @@ void Context::OnStart()
 // __stk_attr_used required for Link-Time Optimization (-flto)
 extern "C" __stk_attr_used void SVC_Handler_Main(Word *svc_args)
 {
-    // Word is typedef uintptr_t (stk_common.h) — the only integer type the Standard
+    // Word is typedef uintptr_t (stk_common.h) - the only integer type the Standard
     // blesses for lossless pointer round-trips (MISRA C++ 5-2-8, CERT INT36-C)
     STK_STATIC_ASSERT_DESC_N(PTR, sizeof(Word) == sizeof(void *),
         "Word must be uintptr_t width for safe pointer round-trip via frame->PC");

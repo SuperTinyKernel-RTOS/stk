@@ -55,7 +55,7 @@ using namespace stk;
    is preferred: lower overhead, simpler control flow, identical scheduling
    behaviour.
 
-   \see STK_SYSTICK_HANDLER, STK_MSI_HANDLER, ScheduleContextSwitch
+   \see STK_SYSTICK_HANDLER, STK_MSI_HANDLER, HW_ScheduleContextSwitch
  */
 //#define _STK_RISCV_USE_PENDSV
 
@@ -302,7 +302,7 @@ struct TaskFrame
 */
 static __stk_forceinline void __DSB()
 {
-    __asm volatile("fence rw, rw" : : : "memory");
+    __asm volatile("fence rw, rw" ::: "memory");
 }
 
 /*! \brief  Flush the instruction cache and pipeline (similar to ARM's __ISB).
@@ -310,7 +310,7 @@ static __stk_forceinline void __DSB()
 static __stk_forceinline void __ISB()
 {
 #ifdef __riscv_zifencei
-    __asm volatile("fence.i" : : : "memory");
+    __asm volatile("fence.i" ::: "memory");
 #else
     __sync_synchronize();
 #endif
@@ -364,7 +364,6 @@ static __stk_forceinline void HW_EnableInterrupts()
 static __stk_forceinline Word HW_EnterCriticalSection()
 {
     Word ses;
-
     __asm volatile("csrrci %0, mstatus, %1"
     : "=r"(ses)
     : "i"(MSTATUS_MIE)
@@ -451,9 +450,7 @@ static __stk_forceinline void HW_SetMtimecmp(uint64_t advance)
 static __stk_forceinline Word HW_GetCallerSP()
 {
     Word sp;
-
-    __asm volatile(
-    "mv %0, sp"
+    __asm volatile("mv %0, sp"
     : "=r"(sp)
     : /* input: none */
     : /* clobbers: none */);
@@ -485,14 +482,40 @@ static __stk_forceinline void HW_CriticalSectionEnd(Word ses)
     __ISB();
 }
 
-/*! \brief Attempt to lock a spin-lock.
+/*! \brief     Attempt to acquire a spin-lock without blocking (RISC-V).
+    \details   Uses a GCC built-in atomic test-and-set with acquire memory ordering.
+               On RISC-V A-extension targets this lowers to an \c amoswap.b.aq
+               (or equivalent LR/SC loop), providing atomicity and acquire fence
+               semantics in a single instruction. If the lock byte was already set
+               the operation fails immediately without modifying state.
+    \param[in] lock: Spin-lock state variable. Must be \c false (released) initially.
+    \retval    true  Lock was free and has been acquired by the caller.
+    \retval    false Lock was already held; caller must retry or back off.
+    \note      ISR-safe. May be called from both thread and handler mode.
+    \note      Pairs with HW_SpinLockUnlock(). Never call HW_SpinLockUnlock() without
+               a preceding successful HW_SpinLockTryLock() or HW_SpinLockLock().
+    \see       HW_SpinLockLock, HW_SpinLockUnlock
 */
 static __stk_forceinline bool HW_SpinLockTryLock(volatile bool &lock)
 {
     return !__atomic_test_and_set(&lock, __ATOMIC_ACQUIRE);
 }
 
-/*! \brief Lock a spin-lock.
+/*! \brief     Acquire a spin-lock, blocking until it becomes available (RISC-V).
+    \details   Calls HW_SpinLockTryLock() in a tight retry loop. On each failed attempt
+               \c __stk_relax_cpu() is executed to reduce bus contention before the next
+               try: on targets with the Zihintpause extension this emits a \c pause hint
+               instruction; on others it falls back to a full memory fence.
+               A countdown of 0xFFFFFF iterations is enforced: if the lock has not been
+               acquired by the time the counter expires, the kernel invariant has been
+               violated (the lock owner exited without releasing) and STK_KERNEL_PANIC()
+               is called with \c KERNEL_PANIC_SPINLOCK_DEADLOCK.
+    \param[in] lock: Spin-lock state variable. Must be \c false (released) initially.
+    \note      ISR-safe. The timeout is a fixed iteration count, not a wall-clock duration,
+               effective timeout window varies with CPU frequency and bus load.
+    \warning   Must not be called while already holding the same \a lock - doing so will
+               spin until the timeout expires and then trigger STK_KERNEL_PANIC().
+    \see       HW_SpinLockTryLock, HW_SpinLockUnlock
 */
 static __stk_forceinline void HW_SpinLockLock(volatile bool &lock)
 {
@@ -509,18 +532,38 @@ static __stk_forceinline void HW_SpinLockLock(volatile bool &lock)
     }
 }
 
-/*! \brief Unlock a spin-lock.
+/*! \brief     Release a spin-lock (RISC-V).
+    \details   Issues a \c fence \c rw,w predecessor barrier to ensure all data writes
+               made while the lock was held (including scheduler metadata) are visible
+               to all harts before the lock is cleared. The lock byte is then cleared
+               with a GCC atomic clear at release ordering.
+               The explicit \c fence \c rw,w is retained alongside \c __ATOMIC_RELEASE
+               for toolchains that do not lower \c __ATOMIC_RELEASE to a full release
+               fence on all RISC-V targets (e.g. older GCC configurations), on conforming
+               toolchains the two fences are equivalent and the explicit one is redundant.
+    \param[in] lock: Spin-lock state variable previously acquired by the caller.
+    \warning   Caller must own the lock. Releasing an unowned lock is an unrecoverable
+               error and triggers STK_KERNEL_PANIC(KERNEL_PANIC_SPINLOCK_DEADLOCK).
+    \note      ISR-safe.
+    \see       HW_SpinLockTryLock, HW_SpinLockLock
 */
-static __stk_forceinline void HW_SpinLockUnlock(volatile bool &LOCK)
+static __stk_forceinline void HW_SpinLockUnlock(volatile bool &lock)
 {
-    // ensure all data writes (like scheduling metadata) are flushed before the lock is released
+    if (!lock)
+        STK_KERNEL_PANIC(KERNEL_PANIC_SPINLOCK_DEADLOCK); // release attempt of unowned lock
+
+    // ensure all data writes (like scheduling metadata) are flushed before the lock is released:
+    // __atomic_clear with __ATOMIC_RELEASE provides the required store-release barrier,
+    // the explicit fence rw,w is retained for toolchains that do not lower __ATOMIC_RELEASE
+    // to a full release fence on all RISC-V targets
     __asm volatile("fence rw, w" ::: "memory");
-    __atomic_clear(&LOCK, __ATOMIC_RELEASE);
+
+    __atomic_clear(&lock, __ATOMIC_RELEASE);
 }
 
 /*! \brief Switch context by scheduling PendSV interrupt.
 */
-static __stk_forceinline void ScheduleContextSwitch(uint8_t hart)
+static __stk_forceinline void HW_ScheduleContextSwitch(uint8_t hart)
 {
 #ifdef _STK_RISCV_USE_PENDSV
     // Pend Machine Software Interrupt (MSI) - equivalent of ARM's PENDSVSET
@@ -644,27 +687,27 @@ __attribute__((naked))
 int32_t SaveJmp(JmpFrame &/*f*/)
 {
     __asm volatile(
-        // a0 = &f - no prologue has touched sp or s0 yet
-        SREG " ra, 0*" REGBYTES "(a0)  \n" // save return address
-        SREG " sp, 1*" REGBYTES "(a0)  \n" // save caller's stack pointer
-        SREG " s0, 2*" REGBYTES "(a0)  \n"
-        SREG " s1, 3*" REGBYTES "(a0)  \n"
-        SREG " s2, 4*" REGBYTES "(a0)  \n"
-        SREG " s3, 5*" REGBYTES "(a0)  \n"
-        SREG " s4, 6*" REGBYTES "(a0)  \n"
-        SREG " s5, 7*" REGBYTES "(a0)  \n"
-        SREG " s6, 8*" REGBYTES "(a0)  \n"
-        SREG " s7, 9*" REGBYTES "(a0)  \n"
-        SREG " s8, 10*" REGBYTES "(a0) \n"
-        SREG " s9, 11*" REGBYTES "(a0) \n"
-        SREG " s10, 12*" REGBYTES "(a0) \n"
-        SREG " s11, 13*" REGBYTES "(a0) \n"
-    #if (STK_RISCV_FPU != 0)
-        "frcsr t0                       \n" // read fcsr (rounding mode + flags)
-        SREG " t0, 14*" REGBYTES "(a0)  \n" // save to JmpFrame::FCSR
-    #endif
-        "li    a0, 0                    \n" // return 0
-        "ret                            \n" // explicit return (naked)
+    // a0 = &f - no prologue has touched sp or s0 yet
+    SREG " ra, 0*" REGBYTES "(a0)  \n" // save return address
+    SREG " sp, 1*" REGBYTES "(a0)  \n" // save caller's stack pointer
+    SREG " s0, 2*" REGBYTES "(a0)  \n"
+    SREG " s1, 3*" REGBYTES "(a0)  \n"
+    SREG " s2, 4*" REGBYTES "(a0)  \n"
+    SREG " s3, 5*" REGBYTES "(a0)  \n"
+    SREG " s4, 6*" REGBYTES "(a0)  \n"
+    SREG " s5, 7*" REGBYTES "(a0)  \n"
+    SREG " s6, 8*" REGBYTES "(a0)  \n"
+    SREG " s7, 9*" REGBYTES "(a0)  \n"
+    SREG " s8, 10*" REGBYTES "(a0) \n"
+    SREG " s9, 11*" REGBYTES "(a0) \n"
+    SREG " s10, 12*" REGBYTES "(a0) \n"
+    SREG " s11, 13*" REGBYTES "(a0) \n"
+#if (STK_RISCV_FPU != 0)
+    "frcsr t0                       \n" // read fcsr (rounding mode + flags)
+    SREG " t0, 14*" REGBYTES "(a0)  \n" // save to JmpFrame::FCSR
+#endif
+    "li    a0, 0                    \n" // return 0
+    "ret                            \n" // explicit return (naked)
     );
 }
 
@@ -689,27 +732,27 @@ __attribute__((naked, noreturn))
 void RestoreJmp(JmpFrame &/*f*/, int32_t /*val*/)
 {
     __asm volatile(
-        // a0 = &f, a1 = val
-        LREG " ra, 0*" REGBYTES "(a0)  \n"
-        LREG " sp, 1*" REGBYTES "(a0)  \n"
-        LREG " s0, 2*" REGBYTES "(a0)  \n"
-        LREG " s1, 3*" REGBYTES "(a0)  \n"
-        LREG " s2, 4*" REGBYTES "(a0)  \n"
-        LREG " s3, 5*" REGBYTES "(a0)  \n"
-        LREG " s4, 6*" REGBYTES "(a0)  \n"
-        LREG " s5, 7*" REGBYTES "(a0)  \n"
-        LREG " s6, 8*" REGBYTES "(a0)  \n"
-        LREG " s7, 9*" REGBYTES "(a0)  \n"
-        LREG " s8, 10*" REGBYTES "(a0) \n"
-        LREG " s9, 11*" REGBYTES "(a0) \n"
-        LREG " s10, 12*" REGBYTES "(a0) \n"
-        LREG " s11, 13*" REGBYTES "(a0) \n"
-    #if (STK_RISCV_FPU != 0)
-        LREG " t0, 14*" REGBYTES "(a0)  \n" // load saved fcsr into t0
-        "fscsr t0                       \n" // restore rounding mode + flags
-    #endif
-        "mv    a0, a1                   \n" // return val to SaveJmp's caller
-        "ret                            \n" // jump to saved RA
+    // a0 = &f, a1 = val
+    LREG " ra, 0*" REGBYTES "(a0)  \n"
+    LREG " sp, 1*" REGBYTES "(a0)  \n"
+    LREG " s0, 2*" REGBYTES "(a0)  \n"
+    LREG " s1, 3*" REGBYTES "(a0)  \n"
+    LREG " s2, 4*" REGBYTES "(a0)  \n"
+    LREG " s3, 5*" REGBYTES "(a0)  \n"
+    LREG " s4, 6*" REGBYTES "(a0)  \n"
+    LREG " s5, 7*" REGBYTES "(a0)  \n"
+    LREG " s6, 8*" REGBYTES "(a0)  \n"
+    LREG " s7, 9*" REGBYTES "(a0)  \n"
+    LREG " s8, 10*" REGBYTES "(a0) \n"
+    LREG " s9, 11*" REGBYTES "(a0) \n"
+    LREG " s10, 12*" REGBYTES "(a0) \n"
+    LREG " s11, 13*" REGBYTES "(a0) \n"
+#if (STK_RISCV_FPU != 0)
+    LREG " t0, 14*" REGBYTES "(a0)  \n" // load saved fcsr into t0
+    "fscsr t0                       \n" // restore rounding mode + flags
+#endif
+    "mv    a0, a1                   \n" // return val to SaveJmp's caller
+    "ret                            \n" // jump to saved RA
     );
 }
 
@@ -770,7 +813,7 @@ static struct Context : public PlatformContext
             s_StkRiscvStackIdle[hart] = m_stack_idle;
         #endif
 
-            ScheduleContextSwitch(hart);
+            HW_ScheduleContextSwitch(hart);
         }
 
         HW_CriticalSectionEnd(cs);
@@ -1101,11 +1144,10 @@ static __stk_forceinline void HW_EnableFullFpuAccess()
 {
 #if (STK_RISCV_FPU != 0)
     __asm volatile(
-    "li t0, %0        \n"
-    "csrs mstatus, t0 \n"
+    "csrs mstatus, %0"
     : /* output: none */
-    : "i"(MSTATUS_FS | MSTATUS_XS)
-    : "t0");
+    : "r"(MSTATUS_FS | MSTATUS_XS)
+    : "memory" /* ensure no FP instructions are moved before this call */);
 #endif
 }
 
@@ -1116,7 +1158,7 @@ static __stk_forceinline void HW_ClearFpuState()
     "fssr x0"
     : /* output: none */
     : /* input: none */
-    : /* clobbers: none */);
+    : "memory" /* ensure flags are cleared before next FP op */);
 #endif
 }
 
@@ -1126,7 +1168,7 @@ static __stk_forceinline void HW_SaveMainSP()
     SREG " sp, %0"
     : "=m"(GetContext().m_stack_main)
     : /* input: none */
-    : /* clobbers: none */);
+    : "memory" /* protect against compiler reordering */ );
 }
 
 static __stk_forceinline void HW_LoadMainSP()
@@ -1135,7 +1177,7 @@ static __stk_forceinline void HW_LoadMainSP()
     LREG " sp, %0"
     : /* output: none */
     : "m"(GetContext().m_stack_main)
-    : /* clobbers: none */);
+    : "memory" /* protect against compiler reordering */ );
 }
 
 static __stk_forceinline bool HW_IsHandlerMode()
