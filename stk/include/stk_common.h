@@ -47,7 +47,7 @@ enum EKernelMode
 /*! \enum  EKernelPanicId
     \brief Identifies the source of a kernel panic.
 */
-enum EKernelPanicId
+enum EKernelPanicId : uint32_t
 {
     KERNEL_PANIC_SPINLOCK_DEADLOCK   = 1, //!< Spin-lock timeout expired: lock owner never released.
     KERNEL_PANIC_STACK_CORRUPT       = 2, //!< Stack integrity check failed.

@@ -293,7 +293,7 @@
     #if defined(__riscv)
         #define STK_STACK_MEMORY_ALIGN 16
     #elif defined(__i386__) || defined(__x86_64__) || defined(_M_IX86) || defined(_M_X64)
-        #define STK_STACK_MEMORY_ALIGN 16
+        #define STK_STACK_MEMORY_ALIGN 8
     #else // ARM, others
         #define STK_STACK_MEMORY_ALIGN 4
     #endif
@@ -394,17 +394,17 @@
     #define STK_ALLOCATE_COUNT(MODE, FLAG, ONTRUE, ONFALSE) ((MODE) & (FLAG) ? (ONTRUE) : (ONFALSE))
 #endif
 
-/*! \def     STK_MIN
-    \brief   Returns the smaller of two values.
-    \warning Arguments are evaluated twice. Do not pass expressions with side effects (e.g. function calls, increments).
+/*! \brief Compile-time minimum of two values.
+    \note  Arguments are evaluated exactly once, safe for any expression type.
 */
-#define STK_MIN(A, B) ((A) < (B) ? (A) : (B))
+template <typename T>
+constexpr T stk_min(T a, T b) noexcept { return (a < b) ? a : b; }
 
-/*! \def     STK_MAX
-    \brief   Returns the larger of two values.
-    \warning Arguments are evaluated twice. Do not pass expressions with side effects (e.g. function calls, increments).
+/*! \brief Compile-time maximum of two values.
+    \note  Arguments are evaluated exactly once, safe for any expression type.
 */
-#define STK_MAX(A, B) ((A) > (B) ? (A) : (B))
+template <typename T>
+constexpr T stk_max(T a, T b) noexcept { return (a < b) ? b : a; }
 
 /*! \def   STK_ENDIAN_IDX_HI
     \brief Array index of the high 32-bit word when a 64-bit value is viewed as \c uint32_t[2].
@@ -436,8 +436,8 @@
                this macro provides compatibility for legacy environments.
 */
 #define STK_NONCOPYABLE_CLASS(TYPE)\
-    TYPE(const TYPE &);\
-    const TYPE &operator=(const TYPE &);
+    TYPE(const TYPE &) = delete;\
+    const TYPE &operator=(const TYPE &) = delete;
 
 /*! \namespace stk
     \brief     Namespace of STK package.
