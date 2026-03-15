@@ -245,20 +245,35 @@
     #endif
 #endif
 
+/*! \def   STK_STATIC_ASSERT_DESC_N
+    \brief Compile-time assertion with a user-defined name suffix.
+    \note  The \a NAME parameter is appended to the internal typedef name, allowing multiple
+           assertions in the same scope without symbol-name collisions. Use STK_STATIC_ASSERT
+           for single assertions where a unique name is not required.
+*/
+#define STK_STATIC_ASSERT_DESC_N(NAME, X, DESC) static_assert((X), DESC)
+
+/*! \def   STK_STATIC_ASSERT_DESC
+    \brief Compile-time assertion. Produces a compilation error if \a X is false.
+    \note  Uses a fixed internal name. If multiple STK_STATIC_ASSERT calls appear in the same
+           scope, use STK_STATIC_ASSERT_N to provide distinct names and avoid duplicate typedef errors.
+*/
+#define STK_STATIC_ASSERT_DESC(X, DESC) STK_STATIC_ASSERT_DESC_N(_, X, DESC)
+
 /*! \def   STK_STATIC_ASSERT_N
     \brief Compile-time assertion with a user-defined name suffix.
     \note  The \a NAME parameter is appended to the internal typedef name, allowing multiple
            assertions in the same scope without symbol-name collisions. Use STK_STATIC_ASSERT
            for single assertions where a unique name is not required.
 */
-#define STK_STATIC_ASSERT_N(NAME, X) typedef char __stk_static_assert_##NAME[(X) ? 1 : -1] __stk_attr_unused
+#define STK_STATIC_ASSERT_N(NAME, X) STK_STATIC_ASSERT_DESC_N(N, (X), #X)
 
 /*! \def   STK_STATIC_ASSERT
     \brief Compile-time assertion. Produces a compilation error if \a X is false.
     \note  Uses a fixed internal name. If multiple STK_STATIC_ASSERT calls appear in the same
            scope, use STK_STATIC_ASSERT_N to provide distinct names and avoid duplicate typedef errors.
 */
-#define STK_STATIC_ASSERT(X) STK_STATIC_ASSERT_N(_, X)
+#define STK_STATIC_ASSERT(X) STK_STATIC_ASSERT_DESC_N(_, (X), #X)
 
 /*! \def   STK_STACK_MEMORY_FILLER
     \brief Sentinel value written to the entire stack region at initialization (stack watermark pattern).
@@ -278,7 +293,7 @@
     #if defined(__riscv)
         #define STK_STACK_MEMORY_ALIGN 16
     #elif defined(__i386__) || defined(__x86_64__) || defined(_M_IX86) || defined(_M_X64)
-        #define STK_STACK_MEMORY_ALIGN 16
+        #define STK_STACK_MEMORY_ALIGN 8
     #else // ARM, others
         #define STK_STACK_MEMORY_ALIGN 4
     #endif
@@ -379,17 +394,17 @@
     #define STK_ALLOCATE_COUNT(MODE, FLAG, ONTRUE, ONFALSE) ((MODE) & (FLAG) ? (ONTRUE) : (ONFALSE))
 #endif
 
-/*! \def     STK_MIN
-    \brief   Returns the smaller of two values.
-    \warning Arguments are evaluated twice. Do not pass expressions with side effects (e.g. function calls, increments).
+/*! \brief Compile-time minimum of two values.
+    \note  Arguments are evaluated exactly once, safe for any expression type.
 */
-#define STK_MIN(A, B) ((A) < (B) ? (A) : (B))
+template <typename T>
+constexpr T stk_min(T a, T b) noexcept { return (a < b) ? a : b; }
 
-/*! \def     STK_MAX
-    \brief   Returns the larger of two values.
-    \warning Arguments are evaluated twice. Do not pass expressions with side effects (e.g. function calls, increments).
+/*! \brief Compile-time maximum of two values.
+    \note  Arguments are evaluated exactly once, safe for any expression type.
 */
-#define STK_MAX(A, B) ((A) > (B) ? (A) : (B))
+template <typename T>
+constexpr T stk_max(T a, T b) noexcept { return (a < b) ? b : a; }
 
 /*! \def   STK_ENDIAN_IDX_HI
     \brief Array index of the high 32-bit word when a 64-bit value is viewed as \c uint32_t[2].
@@ -421,8 +436,8 @@
                this macro provides compatibility for legacy environments.
 */
 #define STK_NONCOPYABLE_CLASS(TYPE)\
-    TYPE(const TYPE &);\
-    const TYPE &operator=(const TYPE &);
+    TYPE(const TYPE &) = delete;\
+    const TYPE &operator=(const TYPE &) = delete;
 
 /*! \namespace stk
     \brief     Namespace of STK package.
