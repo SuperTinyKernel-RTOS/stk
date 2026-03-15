@@ -245,20 +245,35 @@
     #endif
 #endif
 
+/*! \def   STK_STATIC_ASSERT_DESC_N
+    \brief Compile-time assertion with a user-defined name suffix.
+    \note  The \a NAME parameter is appended to the internal typedef name, allowing multiple
+           assertions in the same scope without symbol-name collisions. Use STK_STATIC_ASSERT
+           for single assertions where a unique name is not required.
+*/
+#define STK_STATIC_ASSERT_DESC_N(NAME, X, DESC) static_assert((X), DESC)
+
+/*! \def   STK_STATIC_ASSERT_DESC
+    \brief Compile-time assertion. Produces a compilation error if \a X is false.
+    \note  Uses a fixed internal name. If multiple STK_STATIC_ASSERT calls appear in the same
+           scope, use STK_STATIC_ASSERT_N to provide distinct names and avoid duplicate typedef errors.
+*/
+#define STK_STATIC_ASSERT_DESC(X, DESC) STK_STATIC_ASSERT_DESC_N(_, X, DESC)
+
 /*! \def   STK_STATIC_ASSERT_N
     \brief Compile-time assertion with a user-defined name suffix.
     \note  The \a NAME parameter is appended to the internal typedef name, allowing multiple
            assertions in the same scope without symbol-name collisions. Use STK_STATIC_ASSERT
            for single assertions where a unique name is not required.
 */
-#define STK_STATIC_ASSERT_N(NAME, X) typedef char __stk_static_assert_##NAME[(X) ? 1 : -1] __stk_attr_unused
+#define STK_STATIC_ASSERT_N(NAME, X) STK_STATIC_ASSERT_DESC_N(N, (X), #X)
 
 /*! \def   STK_STATIC_ASSERT
     \brief Compile-time assertion. Produces a compilation error if \a X is false.
     \note  Uses a fixed internal name. If multiple STK_STATIC_ASSERT calls appear in the same
            scope, use STK_STATIC_ASSERT_N to provide distinct names and avoid duplicate typedef errors.
 */
-#define STK_STATIC_ASSERT(X) STK_STATIC_ASSERT_N(_, X)
+#define STK_STATIC_ASSERT(X) STK_STATIC_ASSERT_DESC_N(_, (X), #X)
 
 /*! \def   STK_STACK_MEMORY_FILLER
     \brief Sentinel value written to the entire stack region at initialization (stack watermark pattern).

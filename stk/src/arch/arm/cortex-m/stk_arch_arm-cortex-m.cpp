@@ -107,7 +107,11 @@ struct TaskFrame
 };
 
 // Shortcuts:
-#define STK_CORTEX_M_EXIT_FUNCTION() __asm volatile("BX LR")
+#define STK_ASM_EXIT_FROM_HANDLER  "BX LR"
+#define STK_ASM_DISABLE_INTERRUPTS "CPSID i"
+#define STK_ASM_ENABLE_INTERRUPTS  "CPSIE i"
+
+#define STK_CORTEX_M_EXIT_FUNCTION() __asm volatile(STK_ASM_EXIT_FROM_HANDLER)
 #define STK_CORTEX_M_START_SCHEDULING() __asm volatile("SVC %0" : : "I"(SVC_START_SCHEDULING));
 #define STK_CORTEX_M_FORCE_SWITCH() __asm volatile("SVC %0" : : "I"(SVC_FORCE_SWITCH));
 #define STK_CORTEX_M_UNPRIV_ENTER_CRITICAL() __asm volatile("SVC %0" : : "I"(SVC_ENTER_CRITICAL));
@@ -118,7 +122,7 @@ struct TaskFrame
 static __stk_forceinline void HW_DisableInterrupts()
 {
 #if (defined(__clang__) && defined(__ARMCOMPILER_VERSION)) || defined(__ICCARM__)
-    __asm volatile("CPSID i" : : : "memory");
+    __asm volatile(STK_ASM_DISABLE_INTERRUPTS : : : "memory");
 #else
     __disable_irq();
 #endif
@@ -129,7 +133,7 @@ static __stk_forceinline void HW_DisableInterrupts()
 static __stk_forceinline void HW_EnableInterrupts()
 {
 #if (defined(__clang__) && defined(__ARMCOMPILER_VERSION)) || defined(__ICCARM__)
-    __asm volatile("CPSIE i" : : : "memory");
+    __asm volatile(STK_ASM_ENABLE_INTERRUPTS : : : "memory");
 #else
     __enable_irq();
 #endif
@@ -748,7 +752,7 @@ extern "C" __stk_attr_naked void STK_PENDSV_HANDLER()
     __asm volatile(
     ".syntax unified             \n"
 
-    "CPSID      i                \n" /* inline HW_DisableInterrupts */
+    STK_ASM_DISABLE_INTERRUPTS " \n"
 
     // save stack to inactive (idle) task
     "MRS        r0, psp          \n"
@@ -814,8 +818,9 @@ extern "C" __stk_attr_naked void STK_PENDSV_HANDLER()
 
     "MSR        psp, r0         \n" /* restore psp */
 
-    "CPSIE      i               \n" /* inline HW_EnableInterrupts */
-    "BX         LR              \n" /* inline STK_CORTEX_M_EXIT_FUNCTION */
+    STK_ASM_ENABLE_INTERRUPTS " \n"
+
+    STK_ASM_EXIT_FROM_HANDLER " \n"
 
     : /* output: none */
     : [st_idle]   "m" (GetContext().m_stack_idle),
@@ -870,8 +875,9 @@ __stk_attr_naked void OnTaskStart()
     "MOV        LR, r0          \n"
 #endif
 
-    "CPSIE      i               \n" /* inline HW_EnableInterrupts */
-    "BX         LR              \n" /* inline STK_CORTEX_M_EXIT_FUNCTION */
+    STK_ASM_ENABLE_INTERRUPTS " \n"
+
+    STK_ASM_EXIT_FROM_HANDLER " \n"
 
     : /* output: none */
     : [st_active] "m" (GetContext().m_stack_active),
