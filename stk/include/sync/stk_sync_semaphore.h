@@ -58,15 +58,21 @@ public:
     /*! \brief     Constructor.
         \param[in] initial_count: Starting value of the semaphore.
     */
-    explicit Semaphore(uint32_t initial_count = 0) : m_count(initial_count)
-    {}
+    explicit Semaphore(uint16_t initial_count = 0U, uint16_t max_count = 0xFFFEU)
+        : m_count(initial_count), m_count_max(max_count)
+    {
+        STK_ASSERT(initial_count < max_count); // API contract: initial count must not exceed maximum
+    }
 
     /*! \brief     Destructor.
         \note      If tasks are still waiting at destruction time it is considered a logical
                    error (dangling waiters).
                    An assertion is triggered in debug builds.
     */
-    ~Semaphore() { STK_ASSERT(m_wait_list.IsEmpty()); }
+    ~Semaphore()
+    {
+        STK_ASSERT(m_wait_list.IsEmpty()); // API contract: must not be destroyed with waiting tasks
+    }
 
     /*! \brief     Wait for a signal (decrement counter).
         \param[in] timeout: Maximum time to wait (ticks).
@@ -82,17 +88,21 @@ public:
     */
     void Signal();
 
-    /*! \brief     Get current counter value.
-        \note      ISR-safe.
+#ifdef STK_DIAGNOSTICS
+    /*! \brief     Diagnostic accessor for monitoring and tracing only.
+        \return    Advisory snapshot — never use for acquire/release decisions.
+        \note      Not compiled into production builds. Enable with STK_DIAGNOSTICS.
     */
-    uint32_t GetCount() const { return m_count; }
+    uint16_t GetCount() const { return m_count; }
+#endif
 
 private:
     STK_NONCOPYABLE_CLASS(Semaphore);
 
     bool Tick();
 
-    uint32_t m_count; //!< Internal resource counter
+    uint16_t m_count;     //!< Internal resource counter
+    uint16_t m_count_max; //!< Counter max limit
 };
 
 // ---------------------------------------------------------------------------
@@ -101,27 +111,26 @@ private:
 
 inline bool Semaphore::Wait(Timeout timeout)
 {
-    // not supported inside ISR, may call Wait
-    STK_ASSERT(!hw::IsInsideISR());
+    STK_ASSERT(!hw::IsInsideISR()); // API contract: caller must not be in ISR
 
-    ScopedCriticalSection __cs;
+    ScopedCriticalSection cs_;
 
     // fast path: resource is available
-    if (m_count != 0)
+    if (m_count != 0U)
     {
-        --m_count;
+        m_count = static_cast<uint16_t>(m_count - 1U);
         __stk_full_memfence();
         return true;
     }
 
-    // try lock behavior (timeout 0)
-    if (timeout == 0)
+    // try lock behavior (timeout=NO_WAIT)
+    if (timeout == NO_WAIT)
         return false;
 
     // slow path: block until Signal() or timeout
     // note: after waking, if not a timeout, we effectively own the resource that Signal() produced
     // but didn't put into m_count (see logic of if (m_wait_list.IsEmpty()) in Signal())
-    return !IKernelService::GetInstance()->Wait(this, &__cs, timeout)->IsTimeout();
+    return !IKernelService::GetInstance()->Wait(this, &cs_, timeout)->IsTimeout();
 }
 
 // ---------------------------------------------------------------------------
@@ -130,12 +139,14 @@ inline bool Semaphore::Wait(Timeout timeout)
 
 inline void Semaphore::Signal()
 {
-    ScopedCriticalSection __cs;
+    ScopedCriticalSection cs_;
 
     if (m_wait_list.IsEmpty())
     {
+        STK_ASSERT(m_count < m_count_max); // API contract: the count must not exceed maximum
+
         // no one is waiting, save signal for later
-        ++m_count;
+        m_count = static_cast<uint16_t>(m_count + 1U);
         __stk_full_memfence();
     }
     else
@@ -151,9 +162,17 @@ inline void Semaphore::Signal()
 
 inline bool Semaphore::Tick()
 {
-    // required for multi-core CPU and multiple instances of STK (one per core)
+    // note: ScopedCriticalSection usage
+    //
+    // Single-core: no critical section needed - Tick() runs inside the
+    // SysTick ISR which already executes with interrupts disabled, making
+    // re-entrancy impossible on the local core.
+    //
+    // Multi-core: critical section is required because the tick handler on
+    // each core may call Tick() concurrently for the same Semaphore instance,
+    // and ISyncObject::Tick() is not re-entrant.
 #if (STK_ARCH_CPU_COUNT > 1)
-    ScopedCriticalSection __cs;
+    ScopedCriticalSection cs_;
 #endif
 
     return ISyncObject::Tick();

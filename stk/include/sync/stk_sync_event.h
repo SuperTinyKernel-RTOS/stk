@@ -74,7 +74,10 @@ public:
         \note      If tasks are still waiting at destruction time it is considered a logical error (dangling waiters).
                    An assertion is triggered in debug builds.
     */
-    ~Event() { STK_ASSERT(m_wait_list.IsEmpty()); }
+    ~Event()
+    {
+        STK_ASSERT(m_wait_list.IsEmpty()); // API contract: must not be destroyed with waiting tasks
+    }
 
     /*! \brief     Set event to signaled state.
         \return    \c true if state was changed from non-signaled to signaled,
@@ -140,7 +143,7 @@ private:
 
 inline bool Event::Set()
 {
-    ScopedCriticalSection __cs;
+    ScopedCriticalSection cs_;
 
     if (m_signaled)
         return false;
@@ -162,7 +165,7 @@ inline bool Event::Set()
 
 inline bool Event::Reset()
 {
-    ScopedCriticalSection __cs;
+    ScopedCriticalSection cs_;
 
     bool prev = m_signaled;
 
@@ -178,7 +181,7 @@ inline bool Event::Reset()
 
 inline void Event::Pulse()
 {
-    ScopedCriticalSection __cs;
+    ScopedCriticalSection cs_;
 
     // transition to signaled to be able to Wake waiting tasks
     m_signaled = true;
@@ -204,10 +207,9 @@ inline void Event::Pulse()
 
 inline bool Event::Wait(Timeout timeout)
 {
-    // not supported inside ISR, may call Wait
-    STK_ASSERT(!hw::IsInsideISR());
+    STK_ASSERT(!hw::IsInsideISR()); // API contract: caller must not be in ISR
 
-    ScopedCriticalSection __cs;
+    ScopedCriticalSection cs_;
 
     // fast path: already signaled
     if (m_signaled)
@@ -221,7 +223,7 @@ inline bool Event::Wait(Timeout timeout)
         return true;
     }
 
-    return !IKernelService::GetInstance()->Wait(this, &__cs, timeout)->IsTimeout();
+    return !IKernelService::GetInstance()->Wait(this, &cs_, timeout)->IsTimeout();
 }
 
 // ---------------------------------------------------------------------------
@@ -230,7 +232,7 @@ inline bool Event::Wait(Timeout timeout)
 
 inline bool Event::TryWait()
 {
-    ScopedCriticalSection __cs;
+    ScopedCriticalSection cs_;
 
     if (m_signaled)
     {
@@ -269,9 +271,17 @@ inline void Event::RemoveWaitObject(IWaitObject *wobj)
 
 inline bool Event::Tick()
 {
-    // required for multi-core CPU and multiple instances of STK (one per core)
+    // note: ScopedCriticalSection usage
+    //
+    // Single-core: no critical section needed - Tick() runs inside the
+    // SysTick ISR which already executes with interrupts disabled, making
+    // re-entrancy impossible on the local core.
+    //
+    // Multi-core: critical section is required because the tick handler on
+    // each core may call Tick() concurrently for the same Event instance,
+    // and ISyncObject::Tick() is not re-entrant.
 #if (STK_ARCH_CPU_COUNT > 1)
-    ScopedCriticalSection __cs;
+    ScopedCriticalSection cs_;
 #endif
 
     return ISyncObject::Tick();

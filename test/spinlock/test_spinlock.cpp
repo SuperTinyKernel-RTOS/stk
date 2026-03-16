@@ -23,7 +23,6 @@ STK_TEST_DECL_ASSERT;
 #define _STK_SL_TEST_TASKS_MAX   5
 #define _STK_SL_TEST_SHORT_SLEEP 10
 #define _STK_SL_TEST_LONG_SLEEP  100
-#define _STK_SL_TEST_SPIN_COUNT  10 // low spin count forces cooperative Yield() quickly
 #ifdef __ARM_ARCH_6M__
 #define _STK_SL_STACK_SIZE       128 // ARM Cortex-M0
 #define STK_TASK
@@ -51,7 +50,7 @@ static volatile int32_t g_InstancesDone = 0;
 static Kernel<KERNEL_DYNAMIC, _STK_SL_TEST_TASKS_MAX, SwitchStrategyRR, PlatformDefault> g_Kernel;
 
 // Test spinlock - shared across tasks; low spin count forces Yield() quickly under contention
-static sync::SpinLock g_TestSpinLock(_STK_SL_TEST_SPIN_COUNT);
+static sync::SpinLock g_TestSpinLock;
 
 /*! \class MutualExclusionTask
     \brief Tests that Lock()/Unlock() provides mutual exclusion under concurrent access.

@@ -33,10 +33,10 @@ namespace sync {
     uint32_t g_SharedCounter = 0;
 
     void IncrementCounter() {
-        {                                           // code execution scope starts here
-            sync::CriticalSection::ScopedLock __cs; // critical section starts here
-            g_SharedCounter++;                      // atomic update
-        }                                           // critical section ends here (RAII)
+        {                                                // code execution scope starts here
+            stk::sync::CriticalSection::ScopedLock __cs; // critical section starts here
+            g_SharedCounter++;                           // atomic update
+        }                                                // critical section ends here (RAII)
     }
     \endcode
 

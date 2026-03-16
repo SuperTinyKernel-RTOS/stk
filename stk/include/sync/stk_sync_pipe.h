@@ -75,11 +75,11 @@ public:
     */
     bool Write(const T &data, Timeout timeout = WAIT_INFINITE)
     {
-        ScopedCriticalSection __cs;
+        ScopedCriticalSection cs_;
 
         while (m_count == N)
         {
-            if (!m_cv_full.Wait(__cs, timeout))
+            if (!m_cv_full.Wait(cs_, timeout))
                 return false;
         }
 
@@ -121,14 +121,14 @@ public:
             return 0;
 
         size_t written = 0;
-        ScopedCriticalSection __cs;
+        ScopedCriticalSection cs_;
 
         while (written < count)
         {
             // wait until there is at least 1 slot available
             while (m_count == N)
             {
-                if (!m_cv_full.Wait(__cs, timeout))
+                if (!m_cv_full.Wait(cs_, timeout))
                     return written; // Return partial count on timeout
             }
 
@@ -184,11 +184,11 @@ public:
     */
     bool Read(T &data, Timeout timeout = WAIT_INFINITE)
     {
-        ScopedCriticalSection __cs;
+        ScopedCriticalSection cs_;
 
         while (m_count == 0)
         {
-            if (!m_cv_empty.Wait(__cs, timeout))
+            if (!m_cv_empty.Wait(cs_, timeout))
                 return false;
         }
 
@@ -232,14 +232,14 @@ public:
 
         size_t read_count = 0;
 
-        ScopedCriticalSection __cs;
+        ScopedCriticalSection cs_;
 
         while (read_count < count)
         {
             // wait until there is at least 1 element available
             while (m_count == 0)
             {
-                if (!m_cv_empty.Wait(__cs, timeout))
+                if (!m_cv_empty.Wait(cs_, timeout))
                     return read_count; // return partial count on timeout
             }
 

@@ -123,7 +123,7 @@ inline bool ConditionVariable::Wait(IMutex &mutex, Timeout timeout)
 
 inline void ConditionVariable::NotifyOne()
 {
-    ScopedCriticalSection __cs;
+    ScopedCriticalSection cs_;
     WakeOne();
 }
 
@@ -133,7 +133,7 @@ inline void ConditionVariable::NotifyOne()
 
 inline void ConditionVariable::NotifyAll()
 {
-    ScopedCriticalSection __cs;
+    ScopedCriticalSection cs_;
     WakeAll();
 }
 
@@ -143,9 +143,17 @@ inline void ConditionVariable::NotifyAll()
 
 inline bool ConditionVariable::Tick()
 {
-    // required for multi-core CPU and multiple instances of STK (one per core)
+    // note: ScopedCriticalSection usage
+    //
+    // Single-core: no critical section needed - Tick() runs inside the
+    // SysTick ISR which already executes with interrupts disabled, making
+    // re-entrancy impossible on the local core.
+    //
+    // Multi-core: critical section is required because the tick handler on
+    // each core may call Tick() concurrently for the same ConditionVariable
+    // instance, and ISyncObject::Tick() is not re-entrant.
 #if (STK_ARCH_CPU_COUNT > 1)
-    ScopedCriticalSection __cs;
+    ScopedCriticalSection cs_;
 #endif
 
     return ISyncObject::Tick();

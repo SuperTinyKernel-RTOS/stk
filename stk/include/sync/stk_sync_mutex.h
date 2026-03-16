@@ -56,18 +56,21 @@ class Mutex : public IMutex, public ITraceable, private ISyncObject
 public:
     /*! \brief     Constructor.
     */
-    explicit Mutex() : m_owner_tid(0), m_count(0)
+    explicit Mutex() : m_owner_tid(TID_NONE), m_recursion_count(0u)
     {}
 
     /*! \brief     Destructor.
         \note      If tasks are still waiting at destruction time it is considered a logical error (dangling waiters).
                    An assertion is triggered in debug builds.
     */
-    ~Mutex() { STK_ASSERT(m_wait_list.IsEmpty()); }
+    ~Mutex()
+    {
+        STK_ASSERT(m_wait_list.IsEmpty()); // API contract: must not be destroyed with waiting tasks
+    }
 
     /*! \brief     Acquire lock.
         \param[in] timeout: Maximum time to wait (ticks).
-        \note      Maximum number of recursive locks must not exceed 65534 (UINT16_MAX - 1).
+        \note      Maximum number of recursive locks must not exceed 0xFFFEU.
         \warning   ISR-unsafe.
         \return    True if lock acquired, false if timeout occurred.
     */
@@ -94,8 +97,10 @@ private:
 
     bool Tick();
 
-    TId      m_owner_tid; //!< thread id of the current owner
-    uint16_t m_count;     //!< recursion depth
+    static const uint16_t RECURSION_MAX = 0xFFFEu; //!< maximum nesting depth
+
+    TId      m_owner_tid;       //!< thread id of the current owner
+    uint16_t m_recursion_count; //!< recursion depth
 };
 
 // ---------------------------------------------------------------------------
@@ -104,47 +109,48 @@ private:
 
 inline bool Mutex::TimedLock(Timeout timeout)
 {
-    // not supported inside ISR, may call Wait
-    STK_ASSERT(!hw::IsInsideISR());
+    STK_ASSERT(!hw::IsInsideISR()); // API contract: caller must not be in ISR
 
     IKernelService *svc = IKernelService::GetInstance();
     TId current_tid = svc->GetTid();
 
-    ScopedCriticalSection __cs;
+    ScopedCriticalSection cs_;
 
     // already owned by the calling thread (recursive path)
-    if ((m_count != 0) && (m_owner_tid == current_tid))
+    if ((m_recursion_count != 0u) && (m_owner_tid == current_tid))
     {
-        STK_ASSERT(m_count <= (UINT16_MAX - 1));
+        STK_ASSERT(m_recursion_count < RECURSION_MAX); // API contract: caller must not exceed max recursion depth
 
-        ++m_count;
+        m_recursion_count = static_cast<uint16_t>(m_recursion_count + 1u);
         return true;
     }
 
     // mutex is free (fast path)
-    if (m_count == 0)
+    if (m_recursion_count == 0u)
     {
-        m_count     = 1;
-        m_owner_tid = current_tid;
+        // kernel invariant: counter is zero so owner must be TID_NONE
+        if (m_owner_tid != TID_NONE)
+            STK_KERNEL_PANIC(KERNEL_PANIC_ASSERT);
+
+        m_recursion_count = 1u;
+        m_owner_tid       = current_tid;
         __stk_full_memfence();
 
         return true;
     }
 
     // try lock behavior
-    if (timeout == 0)
+    if (timeout == NO_WAIT)
         return false;
 
     // mutex owned by another thread (slow path/blocking)
-    IWaitObject *wo = svc->Wait(this, &__cs, timeout);
-    STK_ASSERT(wo != nullptr);
-
-    if (wo->IsTimeout())
+    if (svc->Wait(this, &cs_, timeout)->IsTimeout())
         return false;
 
-    // mutex has been taken via Mutex::Unlock()
-    STK_ASSERT(m_count == 1);
-    STK_ASSERT(m_owner_tid == current_tid);
+    // kernel invariant: if either condition is false, the low-level lock and the
+    // recursion counter are out of sync, this is an internal defect, not a caller error
+    if ((m_owner_tid != current_tid) || (m_recursion_count != 1u))
+        STK_KERNEL_PANIC(KERNEL_PANIC_ASSERT);
 
     return true;
 }
@@ -155,15 +161,15 @@ inline bool Mutex::TimedLock(Timeout timeout)
 
 inline void Mutex::Unlock()
 {
-    // can't be locked by ISR
-    STK_ASSERT(!hw::IsInsideISR());
+    STK_ASSERT(!hw::IsInsideISR());      // API contract: caller must not be in ISR
+    STK_ASSERT(m_owner_tid == GetTid()); // API contract: caller must own the lock
+    STK_ASSERT(m_recursion_count != 0u); // API contract: must have matching Lock()
 
-    ScopedCriticalSection __cs;
+    ScopedCriticalSection cs_;
 
-    // ensure the caller actually owns the mutex
-    STK_ASSERT((m_count != 0) && (m_owner_tid == GetTid()));
+    m_recursion_count = static_cast<uint16_t>(m_recursion_count - 1u);
 
-    if (--m_count == 0)
+    if (m_recursion_count == 0u)
     {
         if (!m_wait_list.IsEmpty())
         {
@@ -171,8 +177,8 @@ inline void Mutex::Unlock()
             IWaitObject *waiter = static_cast<IWaitObject *>(m_wait_list.GetFirst());
 
             // transfer ownership to the waiter
-            m_count     = 1;
-            m_owner_tid = waiter->GetTid();
+            m_recursion_count = 1u;
+            m_owner_tid       = waiter->GetTid();
             __stk_full_memfence();
 
             waiter->Wake(false);
@@ -180,7 +186,7 @@ inline void Mutex::Unlock()
         else
         {
             // free completely if there are no waiters
-            m_owner_tid = 0;
+            m_owner_tid = TID_NONE;
             __stk_full_memfence();
         }
     }
@@ -192,9 +198,17 @@ inline void Mutex::Unlock()
 
 inline bool Mutex::Tick()
 {
-    // required for multi-core CPU and multiple instances of STK (one per core)
+    // note: ScopedCriticalSection usage
+    //
+    // Single-core: no critical section needed - Tick() runs inside the
+    // SysTick ISR which already executes with interrupts disabled, making
+    // re-entrancy impossible on the local core.
+    //
+    // Multi-core: critical section is required because the tick handler on
+    // each core may call Tick() concurrently for the same Mutex instance,
+    // and ISyncObject::Tick() is not re-entrant.
 #if (STK_ARCH_CPU_COUNT > 1)
-    ScopedCriticalSection __cs;
+    ScopedCriticalSection cs_;
 #endif
 
     return ISyncObject::Tick();

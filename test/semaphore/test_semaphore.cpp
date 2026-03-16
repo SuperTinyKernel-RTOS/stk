@@ -7,6 +7,8 @@
  * License: MIT License, see LICENSE for a full text.
  */
 
+#define STK_DIAGNOSTICS
+
 #include <stk_config.h>
 #include <stk.h>
 #include <sync/stk_sync_semaphore.h>
