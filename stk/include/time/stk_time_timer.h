@@ -116,10 +116,10 @@ public:
         TASK_COUNT = (1 + STK_TIMER_THREADS_COUNT),
 
         //!< stack memory size of the tick task
-        TASK_TICK_MEMORY_SIZE = stk_max<size_t>(256U, STK_STACK_SIZE_MIN),
+        TASK_TICK_MEMORY_SIZE = stk::Max<size_t>(256U, STK_STACK_SIZE_MIN),
 
         //!< stack memory size of the timer handler task
-        TASK_HANDLER_STACK_SIZE = stk_max<size_t>(STK_TIMER_HANDLER_STACK_SIZE, STK_STACK_SIZE_MIN)
+        TASK_HANDLER_STACK_SIZE = stk::Max<size_t>(STK_TIMER_HANDLER_STACK_SIZE, STK_STACK_SIZE_MIN)
     };
 
     /*! \class Timer
@@ -157,6 +157,8 @@ public:
         uint32_t GetRemainingTime() const;
 
     private:
+        STK_NONCOPYABLE_CLASS(Timer);
+
         Ticks         m_deadline;  //!< absolute expiration time (ticks)
         Ticks         m_timestamp; //!< time at which timer expired (ticks), updated by TimerHost
         uint32_t      m_period;    //!< reload period in ticks (0 = one-shot)
@@ -256,6 +258,8 @@ public:
     Ticks GetTimeNow() const { return hw::ReadVolatile64(&m_now); }
 
 private:
+    STK_NONCOPYABLE_CLASS(TimerHost);
+
     /*! \typedef TimerFuncType
         \brief   Timer task function prototype.
     */
@@ -275,15 +279,15 @@ private:
         EAccessMode GetAccessMode() const { return m_mode; }
         void OnDeadlineMissed(uint32_t duration) { (void)duration; }
         int32_t GetWeight() const         { return m_weight; }
-        TId GetId() const                 { return 0; }
+        TId GetId() const                 { return hw::PtrToWord(this); }
         const char *GetTraceName() const  { return nullptr; }
 
         // IStackMemory
         Word *GetStack() const           { return m_stack; }
         size_t GetStackSize() const      { return m_stack_size; }
-        size_t GetStackSizeBytes() const { return m_stack_size * sizeof(size_t); }
+        size_t GetStackSizeBytes() const { return m_stack_size * sizeof(Word); }
 
-        void Initialize(TimerHost *host, size_t *stack, size_t stack_size, EAccessMode mode, TimerFuncType func)
+        void Initialize(TimerHost *host, Word *stack, size_t stack_size, EAccessMode mode, TimerFuncType func)
         {
             m_host       = host;
             m_func       = func;
@@ -308,7 +312,7 @@ private:
 
     struct TimerCommand
     {
-        enum EId
+        enum EId : uint8_t
         {
             CMD_SHUTDOWN = 0,   //!< shutdown timer host
             CMD_START,          //!< start timer
@@ -359,7 +363,7 @@ inline uint32_t TimerHost::Timer::GetRemainingTime() const
     // remaining would be negative, result fits in uint32_t because delay and
     // period are uint32_t, so remaining time is bounded by uint32_t max
     Ticks remaining = m_deadline - GetTicks();
-    return (remaining > 0 ? (uint32_t)remaining : 0);
+    return (remaining > 0 ? static_cast<uint32_t>(remaining) : 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -388,6 +392,9 @@ inline void TimerHost::Initialize(IKernel *kernel, EAccessMode mode)
 
 inline bool TimerHost::Start(Timer &timer, uint32_t delay, uint32_t period)
 {
+    STK_ASSERT(delay <= static_cast<uint32_t>(WAIT_INFINITE));
+    STK_ASSERT((period == 0U) || (period <= static_cast<uint32_t>(WAIT_INFINITE)));
+
     // timer must not already be active
     if (timer.m_active)
         return false;
@@ -415,8 +422,8 @@ inline bool TimerHost::Stop(Timer &timer)
         .cmd       = TimerCommand::CMD_STOP,
         .timer     = &timer,
         .timestamp = 0,
-        .delay     = 0,
-        .period    = 0
+        .delay     = 0U,
+        .period    = 0U
     });
 }
 
@@ -434,8 +441,8 @@ inline bool TimerHost::Reset(Timer &timer)
         .cmd      = TimerCommand::CMD_RESET,
         .timer     = &timer,
         .timestamp = GetTicks(),
-        .delay     = 0,
-        .period    = 0
+        .delay     = 0U,
+        .period    = 0U
     });
 }
 
@@ -445,6 +452,9 @@ inline bool TimerHost::Reset(Timer &timer)
 
 inline bool TimerHost::Restart(Timer &timer, uint32_t delay, uint32_t period)
 {
+    STK_ASSERT(delay <= static_cast<uint32_t>(WAIT_INFINITE));
+    STK_ASSERT((period == 0U) || (period <= static_cast<uint32_t>(WAIT_INFINITE)));
+
     return PushCommand({
         .cmd       = TimerCommand::CMD_RESTART,
         .timer     = &timer,
@@ -460,6 +470,9 @@ inline bool TimerHost::Restart(Timer &timer, uint32_t delay, uint32_t period)
 
 inline bool TimerHost::StartOrReset(Timer &timer, uint32_t delay, uint32_t period)
 {
+    STK_ASSERT(delay <= static_cast<uint32_t>(WAIT_INFINITE));
+    STK_ASSERT((period == 0U) || (period <= static_cast<uint32_t>(WAIT_INFINITE)));
+
     return PushCommand({
         .cmd       = TimerCommand::CMD_START_OR_RESET,
         .timer     = &timer,
@@ -477,14 +490,17 @@ inline bool TimerHost::SetPeriod(Timer &timer, uint32_t period)
 {
     // period == 0 is rejected: it would silently convert a periodic timer
     // to one-shot semantics, which is better expressed via Stop() + Start()
-    if (!timer.m_active || (timer.m_period == 0) || (period == 0))
+    if (!timer.m_active || (timer.m_period == 0U) || (period == 0U) ||
+        (period > static_cast<uint32_t>(WAIT_INFINITE)))
+    {
         return false;
+    }
 
     return PushCommand({
         .cmd       = TimerCommand::CMD_SET_PERIOD,
         .timer     = &timer,
         .timestamp = 0,
-        .delay     = 0,
+        .delay     = 0U,
         .period    = period
     });
 }
@@ -496,11 +512,11 @@ inline bool TimerHost::SetPeriod(Timer &timer, uint32_t period)
 inline bool TimerHost::Shutdown()
 {
     return PushCommand({
-        .cmd  = TimerCommand::CMD_SHUTDOWN,
-        .timer = nullptr,
+        .cmd       = TimerCommand::CMD_SHUTDOWN,
+        .timer     = nullptr,
         .timestamp = 0,
-        .delay     = 0,
-        .period    = 0
+        .delay     = 0U,
+        .period    = 0U
     });
 }
 
@@ -536,7 +552,7 @@ inline void TimerHost::UpdateTime()
                 }
 
                 bool one_shot = false;
-                int32_t diff = (int32_t)(now - timer->m_deadline);
+                Ticks diff = now - timer->m_deadline;
 
                 if (diff >= 0)
                 {
@@ -550,7 +566,7 @@ inline void TimerHost::UpdateTime()
                     if (timer->m_period != 0)
                     {
                         // reload (use now to avoid drift accumulation)
-                        timer->m_deadline = now + timer->m_period - diff;
+                        timer->m_deadline = now + static_cast<Ticks>(timer->m_period) - diff;
                     }
                     // one-shot
                     else
@@ -573,8 +589,10 @@ inline void TimerHost::UpdateTime()
                 // one-shot timer does not affect next_sleep
                 if (!one_shot)
                 {
-                    Timeout next_deadline = (Timeout)(timer->m_deadline - now);
-                    if (next_deadline < next_sleep)
+                    Timeout next_deadline = static_cast<Timeout>(timer->m_deadline - now);
+                    STK_ASSERT(next_deadline > 0);
+
+                    if ((next_deadline > 0) && (next_deadline < next_sleep))
                         next_sleep = next_deadline;
                 }
             }
@@ -730,10 +748,10 @@ inline bool TimerHost::ProcessCommands(Timeout next_sleep)
         case TimerCommand::CMD_SET_PERIOD: {
             Timer *timer = cmd.timer;
             STK_ASSERT(timer != nullptr);
-            STK_ASSERT(cmd.period != 0);
+            STK_ASSERT(cmd.period != 0U);
 
             // guard: only apply if still active and periodic
-            if (!timer->m_active || (timer->m_period == 0))
+            if (!timer->m_active || (timer->m_period == 0U))
                 continue;
 
             STK_ASSERT(timer->GetHead() == &m_active);

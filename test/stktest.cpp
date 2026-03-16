@@ -48,6 +48,18 @@ void STK_ASSERT_HANDLER(const char *message, const char *file, int32_t line)
 	CHECK_TEXT(false, what.asCharString());
 }
 
+/*! \fn    STK_PANIC_HANDLER_DEFAULT
+    \brief Custom panic handler which intercepts panic invocations from the kernel.
+*/
+void STK_PANIC_HANDLER_DEFAULT(EKernelPanicId id)
+{
+    SimpleString what = "Panic!\n";
+    what += "\n\tid: ";
+    what += StringFrom(id);
+
+    CHECK_TEXT(false, what.asCharString());
+}
+
 IKernelService *IKernelService::GetInstance()
 {
     return g_KernelService;

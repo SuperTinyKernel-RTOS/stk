@@ -84,9 +84,10 @@ public:
         \note  A compile-time assertion enforces MAX_PRIORITIES <= 32, matching the width of the
                32-bit \c m_ready_bitmap. Instantiating with MAX_PRIORITIES > 32 is a compile error.
     */
-    SwitchStrategyFixedPriority() : m_tasks(), m_sleep(), m_ready_bitmap(0), m_prev()
+    SwitchStrategyFixedPriority() : m_tasks(), m_sleep(), m_ready_bitmap(0U), m_prev()
     {
-        STK_STATIC_ASSERT(MAX_PRIORITIES <= 32 && "MAX_PRIORITIES exceeds 32-bit bitmap width");
+        STK_STATIC_ASSERT_DESC(MAX_PRIORITIES <= 32U,
+            "MAX_PRIORITIES exceeds 32-bit bitmap width");
     }
 
     /*! \brief     Add task to the runnable set at its fixed priority level.
@@ -105,9 +106,9 @@ public:
     {
         STK_ASSERT(task != nullptr);
         STK_ASSERT(task->GetHead() == nullptr);
-        STK_ASSERT((uint8_t)task->GetWeight() < MAX_PRIORITIES);
+        STK_ASSERT(GetTaskPriority(task) < MAX_PRIORITIES);
 
-        const uint8_t prio = (uint8_t)task->GetWeight();
+        const Priority prio = GetTaskPriority(task);
 
         bool is_tail = (m_prev[prio] == m_tasks[prio].GetLast());
 
@@ -129,8 +130,8 @@ public:
     void RemoveTask(IKernelTask *task)
     {
         STK_ASSERT(task != nullptr);
-        STK_ASSERT(GetSize() != 0);
-        STK_ASSERT((task->GetHead() == &m_tasks[(uint8_t)task->GetWeight()]) || (task->GetHead() == &m_sleep));
+        STK_ASSERT(GetSize() != 0U);
+        STK_ASSERT((task->GetHead() == &m_tasks[GetTaskPriority(task)]) || (task->GetHead() == &m_sleep));
 
         if (task->GetHead() == &m_sleep)
             m_sleep.Unlink(task);
@@ -149,10 +150,10 @@ public:
     */
     IKernelTask *GetNext()
     {
-        if (m_ready_bitmap == 0)
+        if (m_ready_bitmap == 0U)
             return nullptr; // idle
 
-        const uint8_t prio = GetHighestReadyPriority(m_ready_bitmap);
+        const Priority prio = GetHighestReadyPriority(m_ready_bitmap);
 
         IKernelTask *ret = (*m_prev[prio]->GetNext());
         m_prev[prio] = ret;
@@ -170,12 +171,12 @@ public:
     */
     IKernelTask *GetFirst() const
     {
-        STK_ASSERT(GetSize() != 0);
+        STK_ASSERT(GetSize() != 0U);
 
-        if (m_ready_bitmap == 0)
+        if (m_ready_bitmap == 0U)
             return (*m_sleep.GetFirst());
 
-        const uint8_t prio = GetHighestReadyPriority(m_ready_bitmap);
+        const Priority prio = GetHighestReadyPriority(m_ready_bitmap);
         return (*m_tasks[prio].GetFirst());
     }
 
@@ -187,7 +188,7 @@ public:
     size_t GetSize() const
     {
         size_t total = m_sleep.GetSize();
-        for (uint8_t i = 0; i < MAX_PRIORITIES; ++i)
+        for (Priority i = 0U; i < MAX_PRIORITIES; i += 1U)
             total += m_tasks[i].GetSize();
 
         return total;
@@ -203,7 +204,7 @@ public:
     {
         STK_ASSERT(task != nullptr);
         STK_ASSERT(task->IsSleeping());
-        STK_ASSERT(task->GetHead() == &m_tasks[(uint8_t)task->GetWeight()]);
+        STK_ASSERT(task->GetHead() == &m_tasks[GetTaskPriority(task)]);
 
         RemoveActive(task);
         m_sleep.LinkBack(task);
@@ -239,8 +240,11 @@ public:
     }
 
 protected:
+    //! Priority type.
+    typedef uint8_t Priority;
+
     /*! \brief     Append a task to its priority level's runnable list and update the bitmap.
-        \param[in] task: Task to make runnable. Priority is read from \c GetWeight().
+        \param[in] task: Task to make runnable.
         \note      Appends to the back of \c m_tasks[prio].
         \note      Bitmap and cursor are only updated when the level was previously empty
                    (GetSize() == 1 after LinkBack): \c m_ready_bitmap bit \c prio is set and
@@ -250,21 +254,21 @@ protected:
     */
     void AddActive(IKernelTask *task)
     {
-        const uint8_t prio = (uint8_t)task->GetWeight();
+        const Priority prio = GetTaskPriority(task);
 
         m_tasks[prio].LinkBack(task);
 
         // init pointer
-        if (m_tasks[prio].GetSize() == 1)
+        if (m_tasks[prio].GetSize() == 1U)
         {
             m_prev[prio] = task;
 
-            m_ready_bitmap |= (1u << prio);
+            m_ready_bitmap |= (1U << prio);
         }
     }
 
     /*! \brief     Remove a task from its priority level's runnable list and update the bitmap/cursor.
-        \param[in] task: Runnable task to remove. Priority is read from \c GetWeight().
+        \param[in] task: Runnable task to remove.
         \note      Cursor update algorithm (same as SwitchStrategyRoundRobin::RemoveActive, applied
                    per priority level):
                    - Capture \c next = task->GetNext() \e before unlinking.
@@ -277,7 +281,7 @@ protected:
     */
     void RemoveActive(IKernelTask *task)
     {
-        const uint8_t prio = (uint8_t)task->GetWeight();
+        const Priority prio = GetTaskPriority(task);
         IKernelTask *next = (*task->GetNext());
 
         m_tasks[prio].Unlink(task);
@@ -292,8 +296,17 @@ protected:
             m_prev[prio] = nullptr;
 
             // this will cause a switch to a lower priority task list
-            m_ready_bitmap &= ~(1u << prio);
+            m_ready_bitmap &= ~(1U << prio);
         }
+    }
+
+    /*! \brief     Get priority from the task..
+        \param[in] task: Pointer to the task. Priority is read from \c GetWeight().
+        \return    Priority level.
+    */
+    static __stk_forceinline Priority GetTaskPriority(IKernelTask *task)
+    {
+        return static_cast<Priority>(task->GetWeight());
     }
 
     /*! \brief     Find the index of the highest set bit in \a bitmap.
@@ -305,15 +318,15 @@ protected:
                    (BSR on x86, CLZ on ARM). On other compilers: falls back to a portable
                    O(32) linear scan from bit 31 down to 0.
     */
-    static __stk_forceinline uint8_t GetHighestReadyPriority(uint32_t bitmap)
+    static __stk_forceinline Priority GetHighestReadyPriority(uint32_t bitmap)
     {
     #if defined(__GNUC__)
-        return (uint8_t)(31u - __builtin_clz(bitmap));
+        return static_cast<Priority>(31U - __builtin_clz(bitmap));
     #else
-        for (int32_t i = 31; i >= 0; --i)
+        for (int8_t i = 31; i >= 0; --i)
         {
-            if (bitmap & (1u << i))
-                return (uint8_t)i;
+            if (bitmap & (1U << i))
+                return static_cast<Priority>(i);
         }
         return 0;
     #endif

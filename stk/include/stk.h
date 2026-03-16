@@ -441,7 +441,7 @@ class Kernel : public IKernel, private IPlatform::IEventHandler
 
         /*! \brief     Check if task is pending removal.
         */
-        bool IsPendingRemoval() const { return (m_state & STATE_REMOVE_PENDING) != 0; }
+        bool IsPendingRemoval() const { return ((m_state & STATE_REMOVE_PENDING) != 0); }
 
         /*! \brief     Check if Stack Pointer (SP) belongs to this task.
             \param[in] SP: Stack Pointer.
@@ -1185,7 +1185,7 @@ protected:
 
         // make change to HRT state and sleep time atomic
         {
-            hw::CriticalSection::ScopedLock __cs;
+            hw::CriticalSection::ScopedLock cs_;
 
             if (_Mode & KERNEL_HRT)
             {
@@ -1222,9 +1222,9 @@ protected:
     {
         if (_Mode & KERNEL_SYNC)
         {
-            STK_ASSERT(timeout != 0);
-            STK_ASSERT(sync_obj != nullptr);
-            STK_ASSERT(mutex != nullptr);
+            STK_ASSERT(timeout != 0);        // API contract: caller must not be in ISR
+            STK_ASSERT(sync_obj != nullptr); // API contract: ISyncObject instance must be provided
+            STK_ASSERT(mutex != nullptr);    // API contract: IMutex instance must be provided
             STK_ASSERT((sync_obj->GetHead() == nullptr) || (sync_obj->GetHead() == &m_sync_list[0]));
 
             KernelTask *task = FindTaskBySP(caller_SP);

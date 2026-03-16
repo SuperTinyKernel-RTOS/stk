@@ -394,18 +394,6 @@
     #define STK_ALLOCATE_COUNT(MODE, FLAG, ONTRUE, ONFALSE) ((MODE) & (FLAG) ? (ONTRUE) : (ONFALSE))
 #endif
 
-/*! \brief Compile-time minimum of two values.
-    \note  Arguments are evaluated exactly once, safe for any expression type.
-*/
-template <typename T>
-constexpr T stk_min(T a, T b) noexcept { return (a < b) ? a : b; }
-
-/*! \brief Compile-time maximum of two values.
-    \note  Arguments are evaluated exactly once, safe for any expression type.
-*/
-template <typename T>
-constexpr T stk_max(T a, T b) noexcept { return (a < b) ? b : a; }
-
 /*! \def   STK_ENDIAN_IDX_HI
     \brief Array index of the high 32-bit word when a 64-bit value is viewed as \c uint32_t[2].
     \note  Big-endian: 0 (high word first). Little-endian: 1 (high word second).
@@ -437,12 +425,24 @@ constexpr T stk_max(T a, T b) noexcept { return (a < b) ? b : a; }
 */
 #define STK_NONCOPYABLE_CLASS(TYPE)\
     TYPE(const TYPE &) = delete;\
-    const TYPE &operator=(const TYPE &) = delete;
+    TYPE &operator=(const TYPE &) = delete;
 
 /*! \namespace stk
     \brief     Namespace of STK package.
  */
 namespace stk {
+
+/*! \brief Compile-time minimum of two values.
+    \note  Arguments are evaluated exactly once, safe for any expression type.
+*/
+template <typename T>
+constexpr T Min(T a, T b) noexcept { return (a < b) ? a : b; }
+
+/*! \brief Compile-time maximum of two values.
+    \note  Arguments are evaluated exactly once, safe for any expression type.
+*/
+template <typename T>
+constexpr T Max(T a, T b) noexcept { return (a < b) ? b : a; }
 
 /*! \namespace stk::util
     \brief     Internal utility namespace containing data structure helpers (linked lists, etc.)

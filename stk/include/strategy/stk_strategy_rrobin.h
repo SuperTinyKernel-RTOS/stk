@@ -125,7 +125,7 @@ public:
     */
     IKernelTask *GetFirst() const
     {
-        STK_ASSERT(GetSize() != 0);
+        STK_ASSERT(GetSize() != 0U);
 
         if (!m_tasks.IsEmpty())
             return (*m_tasks.GetFirst());

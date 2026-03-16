@@ -116,7 +116,12 @@ typedef Word TId;
     \brief   Reserved task/thread id representing an ISR context.
     \note    Returned by GetTid() when called from an interrupt service routine.
 */
-const TId TID_ISR = (TId)~0;
+const TId TID_ISR = static_cast<TId>(~0);
+
+/*! \var     TID_NONE
+    \brief   Reserved task/thread id representing zero/none thread id.
+*/
+const TId TID_NONE = static_cast<TId>(0);
 
 /*! \typedef Timeout
     \brief   Timeout time (ticks).
@@ -378,7 +383,10 @@ public:
     public:
         explicit ScopedLock(IMutex &mutex) : m_mutex(mutex) { m_mutex.Lock(); }
         ~ScopedLock() { m_mutex.Unlock(); }
+
     private:
+        STK_NONCOPYABLE_CLASS(ScopedLock);
+
         IMutex &m_mutex;
     };
 
@@ -913,6 +921,7 @@ public:
                    The caller must check IWaitObject::IsTimeout() after this function returns to determine whether
                    the wake was caused by a signal or by timeout expiry. The returned pointer is valid until
                    the calling task re-enters a wait or the wait object is explicitly released by the kernel.
+                   The return value is guaranteed non nullptr and points to a valid IWaitObject.
         \warning   ISR-unsafe.
     */
     virtual IWaitObject *Wait(ISyncObject *sobj, IMutex *mutex, Timeout timeout) = 0;
