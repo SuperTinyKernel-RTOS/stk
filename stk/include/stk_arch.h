@@ -214,8 +214,9 @@ public:
         } // CriticalSection::Exit() called automatically
         \endcode
     */
-    struct ScopedLock
+    class ScopedLock
     {
+    public:
         /*! \brief Enter the critical section.
         */
         explicit ScopedLock() { CriticalSection::Enter(); }
@@ -223,6 +224,9 @@ public:
         /*! \brief Exit the critical section.
         */
         ~ScopedLock() { CriticalSection::Exit(); }
+
+    private:
+        STK_NONCOPYABLE_CLASS(ScopedLock);
     };
 
     /*! \brief   Enter a critical section.

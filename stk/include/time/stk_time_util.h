@@ -59,7 +59,7 @@ public:
                    The first Poll() firing will occur no earlier than \a period ticks
                    after construction.
     */
-    PeriodicTrigger(uint32_t period, bool start = false) : m_next(0), m_period(period)
+    PeriodicTrigger(uint32_t period, bool start = false) : m_next(0U), m_period(period)
     {
         if (start)
             Restart();
@@ -80,7 +80,7 @@ public:
     */
     void SetPeriod(uint32_t period)
     {
-        m_next = (m_next - m_period) + period;
+        m_next = (m_next - static_cast<Ticks>(m_period)) + static_cast<Ticks>(period);
         m_period = period;
     }
 

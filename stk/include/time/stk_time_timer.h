@@ -157,6 +157,8 @@ public:
         uint32_t GetRemainingTime() const;
 
     private:
+        STK_NONCOPYABLE_CLASS(Timer);
+
         Ticks         m_deadline;  //!< absolute expiration time (ticks)
         Ticks         m_timestamp; //!< time at which timer expired (ticks), updated by TimerHost
         uint32_t      m_period;    //!< reload period in ticks (0 = one-shot)
@@ -256,6 +258,8 @@ public:
     Ticks GetTimeNow() const { return hw::ReadVolatile64(&m_now); }
 
 private:
+    STK_NONCOPYABLE_CLASS(TimerHost);
+
     /*! \typedef TimerFuncType
         \brief   Timer task function prototype.
     */
@@ -562,7 +566,7 @@ inline void TimerHost::UpdateTime()
                     if (timer->m_period != 0)
                     {
                         // reload (use now to avoid drift accumulation)
-                        timer->m_deadline = now + static_cast<int64_t>(timer->m_period) - diff;
+                        timer->m_deadline = now + static_cast<Ticks>(timer->m_period) - diff;
                     }
                     // one-shot
                     else

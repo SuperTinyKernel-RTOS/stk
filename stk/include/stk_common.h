@@ -383,7 +383,10 @@ public:
     public:
         explicit ScopedLock(IMutex &mutex) : m_mutex(mutex) { m_mutex.Lock(); }
         ~ScopedLock() { m_mutex.Unlock(); }
+
     private:
+        STK_NONCOPYABLE_CLASS(ScopedLock);
+
         IMutex &m_mutex;
     };
 

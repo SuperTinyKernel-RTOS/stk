@@ -74,7 +74,10 @@ public:
         \note      If tasks are still waiting at destruction time it is considered a logical error (dangling waiters).
                    An assertion is triggered in debug builds.
     */
-    ~ConditionVariable() { STK_ASSERT(m_wait_list.IsEmpty()); }
+    ~ConditionVariable()
+    {
+        STK_ASSERT(m_wait_list.IsEmpty()); // API contract: must not be destroyed with waiting tasks
+    }
 
     /*! \brief     Wait for a signal.
         \details   Atomically releases mutex and blocks the task.

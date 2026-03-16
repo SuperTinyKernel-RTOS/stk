@@ -160,7 +160,7 @@ public:
     void RemoveTask(IKernelTask *task)
     {
         STK_ASSERT(task != nullptr);
-        STK_ASSERT(GetSize() != 0);
+        STK_ASSERT(GetSize() != 0U);
         STK_ASSERT(task->GetHead() == &m_tasks);
 
         m_tasks.Unlink(task);
@@ -210,7 +210,7 @@ public:
     */
     IKernelTask *GetFirst() const
     {
-        STK_ASSERT(m_tasks.GetSize() != 0);
+        STK_ASSERT(m_tasks.GetSize() != 0U);
 
         return (*m_tasks.GetFirst());
     }
@@ -367,13 +367,13 @@ public:
 
         // fill tasks timing
         IKernelTask *itr = (*ktasks->GetFirst()), * const start = itr;
-        uint32_t idx = 0;
+        uint32_t idx = 0U;
         do
         {
             STK_ASSERT(idx < _TaskCount);
-            tasks[idx].period   = (uint32_t)itr->GetHrtPeriodicity();
-            tasks[idx].duration = (uint32_t)itr->GetHrtDeadline();
-            ++idx;
+            tasks[idx].period   = static_cast<uint32_t>(itr->GetHrtPeriodicity());
+            tasks[idx].duration = static_cast<uint32_t>(itr->GetHrtDeadline());
+            idx += 1U;
         }
         while ((itr = (*itr->GetNext())) != start);
         STK_ASSERT(idx == _TaskCount);

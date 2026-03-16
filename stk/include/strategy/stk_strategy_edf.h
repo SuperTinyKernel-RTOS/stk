@@ -100,7 +100,7 @@ public:
     void RemoveTask(IKernelTask *task)
     {
         STK_ASSERT(task != nullptr);
-        STK_ASSERT(GetSize() != 0);
+        STK_ASSERT(GetSize() != 0U);
         STK_ASSERT((task->GetHead() == &m_tasks) || (task->GetHead() == &m_sleep));
 
         if (task->GetHead() == &m_tasks)
@@ -152,7 +152,7 @@ public:
     */
     IKernelTask *GetFirst() const
     {
-        STK_ASSERT(GetSize() != 0);
+        STK_ASSERT(GetSize() != 0U);
 
         if (!m_tasks.IsEmpty())
             return (*m_tasks.GetFirst());

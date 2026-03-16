@@ -441,7 +441,7 @@ class Kernel : public IKernel, private IPlatform::IEventHandler
 
         /*! \brief     Check if task is pending removal.
         */
-        bool IsPendingRemoval() const { return (m_state & STATE_REMOVE_PENDING) != 0; }
+        bool IsPendingRemoval() const { return ((m_state & STATE_REMOVE_PENDING) != 0); }
 
         /*! \brief     Check if Stack Pointer (SP) belongs to this task.
             \param[in] SP: Stack Pointer.
@@ -1185,7 +1185,7 @@ protected:
 
         // make change to HRT state and sleep time atomic
         {
-            hw::CriticalSection::ScopedLock __cs;
+            hw::CriticalSection::ScopedLock cs_;
 
             if (_Mode & KERNEL_HRT)
             {

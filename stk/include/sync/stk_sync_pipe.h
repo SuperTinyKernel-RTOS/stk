@@ -60,7 +60,7 @@ class Pipe
 public:
     /*! \brief     Constructor.
     */
-    explicit Pipe() : m_buffer(), m_head(0), m_tail(0), m_count(0), m_cv_empty(), m_cv_full()
+    explicit Pipe() : m_buffer(), m_head(0U), m_tail(0U), m_count(0U), m_cv_empty(), m_cv_full()
     {}
 
     /*! \brief     Write data to the pipe.
@@ -84,8 +84,8 @@ public:
         }
 
         m_buffer[m_head] = data;
-        m_head = (m_head + 1) % N;
-        ++m_count;
+        m_head = (m_head + 1U) % N;
+        m_count += 1U;
 
         // notify consumer that data is available
         m_cv_empty.NotifyOne();
@@ -117,10 +117,10 @@ public:
     */
     size_t WriteBulk(const T *src, size_t count, Timeout timeout = WAIT_INFINITE)
     {
-        if ((src == nullptr) || (count == 0))
-            return 0;
+        if ((src == nullptr) || (count == 0U))
+            return 0U;
 
-        size_t written = 0;
+        size_t written = 0U;
         ScopedCriticalSection cs_;
 
         while (written < count)
@@ -144,8 +144,8 @@ public:
                 for (size_t i = 0; i < to_write; ++i)
                 {
                     m_buffer[m_head] = src[written++];
-                    m_head = (m_head + 1) % N;
-                    ++m_count;
+                    m_head = (m_head + 1U) % N;
+                    m_count += 1U;
                 }
             }
             else
@@ -186,15 +186,15 @@ public:
     {
         ScopedCriticalSection cs_;
 
-        while (m_count == 0)
+        while (m_count == 0U)
         {
             if (!m_cv_empty.Wait(cs_, timeout))
                 return false;
         }
 
         data = m_buffer[m_tail];
-        m_tail = (m_tail + 1) % N;
-        --m_count;
+        m_tail = (m_tail + 1U) % N;
+        m_count -= 1U;
 
         // notify producer that space is available
         m_cv_full.NotifyOne();
@@ -227,17 +227,17 @@ public:
     */
     size_t ReadBulk(T *dst, size_t count, Timeout timeout = WAIT_INFINITE)
     {
-        if ((dst == nullptr) || (count == 0))
-            return 0;
+        if ((dst == nullptr) || (count == 0U))
+            return 0U;
 
-        size_t read_count = 0;
+        size_t read_count = 0U;
 
         ScopedCriticalSection cs_;
 
         while (read_count < count)
         {
             // wait until there is at least 1 element available
-            while (m_count == 0)
+            while (m_count == 0U)
             {
                 if (!m_cv_empty.Wait(cs_, timeout))
                     return read_count; // return partial count on timeout
@@ -251,11 +251,11 @@ public:
             //       otherwise using faster memcpy version for large scalar arrays
             if (!std::is_scalar<T>::value || (N < 8))
             {
-                for (size_t i = 0; i < to_read; ++i)
+                for (size_t i = 0U; i < to_read; ++i)
                 {
                     dst[read_count++] = m_buffer[m_tail];
                     m_tail = (m_tail + 1) % N;
-                    --m_count;
+                    m_count -= 1U;
                 }
             }
             else
