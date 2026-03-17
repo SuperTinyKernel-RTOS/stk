@@ -88,13 +88,13 @@ public:
     */
     void Signal();
 
-#ifdef STK_DIAGNOSTICS
-    /*! \brief     Diagnostic accessor for monitoring and tracing only.
-        \return    Advisory snapshot — never use for acquire/release decisions.
-        \note      Not compiled into production builds. Enable with STK_DIAGNOSTICS.
+    /*! \brief     Get current counter value.
+        \return    Advisory snapshot of the counter. May be stale by the time the
+                   caller acts on it. Atomic on 32-bit aligned targets.
+        \note      ISR-safe on targets where a 32-bit aligned read is a single instruction
+                   (all supported STK architectures). Not safe for read-modify-write use.
     */
     uint16_t GetCount() const { return m_count; }
-#endif
 
 private:
     STK_NONCOPYABLE_CLASS(Semaphore);

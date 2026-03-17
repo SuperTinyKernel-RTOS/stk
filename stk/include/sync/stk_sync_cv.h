@@ -23,38 +23,38 @@ namespace sync {
     \brief Condition Variable primitive for signaling between tasks based on specific predicates.
 
     Condition Variables are synchronization primitives that enable tasks to wait until a
-    particular condition (predicate) is met. They must be used in conjunction with a
-    \a Mutex to protect the shared state.
+    particular condition (predicate) is met. They must be used in conjunction with an
+    \a IMutex-compatible lock to protect the shared state.
 
     \note  This implementation follows the Monitor pattern: the \c Wait() operation
-           atomically releases the associated \a Mutex and suspends the task. Upon
-           waking (via signal or timeout), the \a Mutex is automatically re-acquired
+           atomically releases the associated lock and suspends the task. Upon
+           waking (via signal or timeout), the lock is automatically re-acquired
            before the function returns.
 
     \code
-    // Usage example: Producer-Consumer pattern
-    stk::sync::Mutex             g_Mtx;
-    stk::sync::ConditionVariable g_Cond;
-    std::queue<int>              g_Queue;
+    // Usage example: Producer-Consumer pattern using a fixed-size pipe
+    stk::sync::Mutex                        g_Mtx;
+    stk::sync::ConditionVariable            g_Cond;
+    stk::sync::Pipe<int, 16>                g_Pipe;
 
     void Task_Consumer() {
         g_Mtx.Lock();
-        while (g_Queue.empty()) {
+        while (g_Pipe.IsEmpty()) {
             // releases g_Mtx and sleeps; re-acquires g_Mtx upon waking
             if (!g_Cond.Wait(g_Mtx, 1000)) {
                 break; // timeout handling
             }
         }
-        if (!g_Queue.empty()) {
-            int data = g_Queue.front();
-            g_Queue.pop();
+        int data;
+        if (g_Pipe.Read(data)) {
+            // ... process data ...
         }
         g_Mtx.Unlock();
     }
 
     void Task_Producer() {
         g_Mtx.Lock();
-        g_Queue.push(42);
+        g_Pipe.Write(42);
         // wake one waiting task
         g_Cond.NotifyOne();
         g_Mtx.Unlock();
@@ -71,8 +71,8 @@ public:
     {}
 
     /*! \brief     Destructor.
-        \note      If tasks are still waiting at destruction time it is considered a logical error (dangling waiters).
-                   An assertion is triggered in debug builds.
+        \note      If tasks are still waiting at destruction time it is considered a logical error
+                   (dangling waiters). An assertion is triggered in debug builds.
     */
     ~ConditionVariable()
     {
@@ -80,12 +80,16 @@ public:
     }
 
     /*! \brief     Wait for a signal.
-        \details   Atomically releases mutex and blocks the task.
-                   The mutex is re-acquired before the function returns.
-        \param[in] mutex: Locked mutex protecting the shared state/condition.
-        \param[in] timeout: Maximum time to wait (ticks).
-        \return    True if signaled, false if timeout occurred.
-        \warning   ISR-unsafe unless timeout is NO_WAIT.
+        \details   Atomically releases \a mutex and blocks the calling task. The \a mutex is
+                   re-acquired before the function returns, regardless of whether the wake
+                   was caused by a signal or a timeout.
+        \param[in] mutex: An \a IMutex-compatible lock that must be held by the calling task
+                   before Wait() is called. The kernel releases it atomically during suspension
+                   and re-acquires it on wake.
+        \param[in] timeout: Maximum time to wait (ticks). Use \a WAIT_INFINITE to block
+                   indefinitely, \a NO_WAIT to return immediately without blocking.
+        \return    \c true if signaled, \c false if timeout occurred or \a NO_WAIT was passed.
+        \warning   ISR-unsafe. Do not call from an ISR context.
     */
     bool Wait(IMutex &mutex, Timeout timeout = WAIT_INFINITE);
 
@@ -111,11 +115,13 @@ private:
 
 inline bool ConditionVariable::Wait(IMutex &mutex, Timeout timeout)
 {
+    STK_ASSERT(!hw::IsInsideISR()); // API contract: caller must not be in ISR
+
+    // API contract: mutex must be locked by the calling task before Wait() is called.
+    // The kernel releases it atomically during suspension and re-acquires it on wake.
+
     if (timeout == NO_WAIT)
         return false;
-
-    // not supported inside ISR, calls Wait
-    STK_ASSERT(!hw::IsInsideISR());
 
     return !IKernelService::GetInstance()->Wait(this, &mutex, timeout)->IsTimeout();
 }
@@ -127,7 +133,7 @@ inline bool ConditionVariable::Wait(IMutex &mutex, Timeout timeout)
 inline void ConditionVariable::NotifyOne()
 {
     ScopedCriticalSection cs_;
-    WakeOne();
+    WakeOne(); // wakes the first task in the wait list (FIFO order), if any
 }
 
 // ---------------------------------------------------------------------------
@@ -137,7 +143,7 @@ inline void ConditionVariable::NotifyOne()
 inline void ConditionVariable::NotifyAll()
 {
     ScopedCriticalSection cs_;
-    WakeAll();
+    WakeAll(); // wakes all tasks in the wait list simultaneously
 }
 
 // ---------------------------------------------------------------------------
