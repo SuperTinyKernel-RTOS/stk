@@ -71,8 +71,8 @@ public:
     {}
 
     /*! \brief     Destructor.
-        \note      If tasks are still waiting at destruction time it is considered a logical error (dangling waiters).
-                   An assertion is triggered in debug builds.
+        \note      If tasks are still waiting at destruction time it is considered a logical error
+                   (dangling waiters). An assertion is triggered in debug builds.
     */
     ~Event()
     {
@@ -84,7 +84,10 @@ public:
                    \c false if event was already signaled.
         \note      - In auto-reset mode: wakes one waiting task (if any) and immediately resets.
                    - In manual-reset mode: wakes all waiting tasks (if any); state remains set.
-                   - If not signaled, does nothing.
+                   - If already signaled, does nothing and returns \c false.
+        \warning   The return value indicates whether the event state changed, not whether any
+                   waiting task was woken. A return of \c false means the event was already
+                   signaled, not that no task woke.
         \note      ISR-safe.
     */
     bool Set();
@@ -106,24 +109,24 @@ public:
     */
     bool Wait(Timeout timeout = WAIT_INFINITE);
 
-    /*! \brief     Poll event state without blocking.
-        \details   This method checks if event is currently signaled. If signaled, it performs the reset
-                   (if auto-reset is enabled) and returns immediately without yielding the CPU or entering
-                   a wait list.
-        \note      ISR-safe.
-        \return    \c true if event was signaled at the time of the call,
-                   \c false if event was not signaled.
+    /*! \brief    Poll event state without blocking.
+        \details  Checks if the event is currently signaled. If signaled, performs the auto-reset
+                  (if auto-reset mode is active) and returns immediately without yielding the CPU
+                  or entering a wait list.
+        \note     ISR-safe.
+        \return   \c true if event was signaled at the time of the call,
+                  \c false if event was not signaled.
     */
     bool TryWait();
 
-    /*! \brief     Pulse event: attempt to release waiters and then reset (Win32 PulseEvent() semantics).
-        \note      Follows Win32 PulseEvent() behavior:
-                    - For auto-reset events: releases one waiting thread (if any) and resets to non-signaled.
-                    - For manual-reset events: releases all waiting threads (if any) and resets to non-signaled.
-                    - If no threads are waiting, resets to non-signaled.
-        \note      ISR-safe.
-        \warning   Pulse semantics are inherently racy and considered unreliable in many Win32 usage scenarios.
-                   Prefer explicit \c Set() + \c Reset() patterns when possible.
+    /*! \brief    Pulse event: attempt to release waiters and then reset (Win32 PulseEvent() semantics).
+        \note     Follows Win32 PulseEvent() behavior:
+                   - For auto-reset events: releases one waiting thread (if any) and resets to non-signaled.
+                   - For manual-reset events: releases all waiting threads (if any) and resets to non-signaled.
+                   - If no threads are waiting, resets to non-signaled.
+        \note     ISR-safe.
+        \warning  Pulse semantics are inherently racy and considered unreliable in many Win32 usage scenarios.
+                  Prefer explicit \c Set() + \c Reset() patterns when possible.
     */
     void Pulse();
 
@@ -154,7 +157,7 @@ inline bool Event::Set()
     if (m_manual_reset)
         WakeAll();
     else
-        WakeOne(); // kernel will auto-reset it in RemoveWaitObject
+        WakeOne(); // auto-reset is applied in RemoveWaitObject when the waiter is removed
 
     return true;
 }
@@ -183,17 +186,19 @@ inline void Event::Pulse()
 {
     ScopedCriticalSection cs_;
 
-    // transition to signaled to be able to Wake waiting tasks
+    // transition to signaled so that WakeOne/WakeAll can release waiters:
+    // m_signaled is only visible as true while this critical section is held —
+    // any woken task will have the event auto-reset in RemoveWaitObject before
+    // it can observe m_signaled via Wait() or TryWait()
     m_signaled = true;
     __stk_full_memfence();
 
-    // kernel will auto-reset to non-sugnaled in RemoveWaitObject
     if (!m_wait_list.IsEmpty())
     {
         if (m_manual_reset)
             WakeAll();
         else
-            WakeOne();
+            WakeOne(); // auto-reset applied in RemoveWaitObject
     }
 
     // force return to non-signaled regardless of whether anyone was waiting
@@ -223,6 +228,11 @@ inline bool Event::Wait(Timeout timeout)
         return true;
     }
 
+    // non-blocking poll: event not signaled, return immediately
+    if (timeout == NO_WAIT)
+        return false;
+
+    // slow path: block until Set() signals the event or timeout expires
     return !IKernelService::GetInstance()->Wait(this, &cs_, timeout)->IsTimeout();
 }
 
@@ -256,8 +266,9 @@ inline void Event::RemoveWaitObject(IWaitObject *wobj)
 {
     ISyncObject::RemoveWaitObject(wobj);
 
-    // if removed wait object did not have timeout then assume it is a wake event
-    // and auto-reset the event: Pulse() or Set()
+    // kernel invariant: auto-reset is applied here, not at the Set()/Pulse() call site,
+    // when a task wakes due to a signal (not a timeout), the event transitions back to
+    // non-signaled so that subsequent Wait() calls block until the next Set().
     if (!m_manual_reset && m_signaled && !wobj->IsTimeout())
     {
         m_signaled = false;
