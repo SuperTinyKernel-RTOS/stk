@@ -624,7 +624,7 @@ static __stk_forceinline Word HW_GetCallerSP()
 */
 static __stk_forceinline void HW_ScheduleContextSwitch()
 {
-    SCB->ICSR |= SCB_ICSR_PENDSVSET_Msk;
+    SCB->ICSR = SCB_ICSR_PENDSVSET_Msk;
 }
 
 /*! \brief Clear FPU state.
@@ -660,7 +660,7 @@ static __stk_forceinline void HW_StartSysTick(int32_t tick_resolution)
 static __stk_forceinline void HW_StopSysTick()
 {
     SysTick->CTRL = 0;
-    SCB->ICSR |= SCB_ICSR_PENDSTCLR_Msk;
+    SCB->ICSR = SCB_ICSR_PENDSTCLR_Msk;
 }
 
 //! Global lock to synchronize critical sections of multiple cores.
@@ -1354,7 +1354,7 @@ void Context::OnStop()
     HW_StopSysTick();
 
     // clear pending PendSV exception
-    SCB->ICSR |= SCB_ICSR_PENDSVCLR_Msk;
+    SCB->ICSR = SCB_ICSR_PENDSVCLR_Msk;
 
     m_started = false;
     m_exiting = true;

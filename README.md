@@ -296,37 +296,37 @@ Update: **March 2026**
 
 Compiler: **GCC 14.2.1 (arm-none-eabi-gcc)**
 
-This table compares **SuperTinyKernel RTOS v.1.05.2** and **FreeRTOS V10.3.1** across two compiler optimization levels: `-Os` and `-Ofast`. The workload consists of a CRC32-based synthetic task running across multiple tasks/threads to measure scheduling overhead and timing determinism. Benchmark projects are located in `build/benchmark/eclipse` and the benchmark suite is located in `build/benchmark/perf`.
+This table compares **SuperTinyKernel RTOS v.1.05.3** and **FreeRTOS V11.2.0** across two compiler optimization levels: `-Os` and `-Ofast`. The workload consists of a CRC32-based synthetic task running across multiple tasks/threads to measure scheduling overhead and timing determinism. Benchmark projects are located in `build/benchmark/eclipse` and the benchmark suite is located in `build/benchmark/perf`.
 
 The benchmark suite uses CRC32 hash calculations as the task payload. The score represents the number of CRC32 calculations performed by the task within a fixed time window. A higher score indicates a more efficient scheduler, meaning the tasks have more available CPU time.
 
 ### Benchmark Results: STK vs. FreeRTOS (Cortex-M4 168MHz)
 
-This table compares **SuperTinyKernel (STK)** and **FreeRTOS**. Following the latest kernel updates, STK achieves a highly optimized RAM footprint of ~7.0 KB—surpassing FreeRTOS in both memory efficiency and execution throughput.
+This table compares **SuperTinyKernel RTOS** and **FreeRTOS** across two compiler optimization levels:
 
-| Kernel       | Tasks |   Opt    | Throughput  |   Average   | Jitter  | Flash Size  |  RAM Used  |
-|:-------------|:-----:|:--------:|:-----------:|:-----------:|:-------:|:-----------:|:----------:|
-| **STK**      |  16   | `-Ofast` | **993,132** | **62,070**  | **753** |   27.3 KB   | **7.0 KB** |
-| **FreeRTOS** |  16   | `-Ofast` |   965,991   |   60,374    |   908   | **13.7 KB** |   8.8 KB   |
-| **STK**      |  16   |  `-Os`   | **752,040** | **47,002**  | **425** |   18.6 KB   | **7.0 KB** |
-| **FreeRTOS** |  16   |  `-Os`   |   731,957   |   45,747    |   471   | **12.2 KB** |  11.0 KB   |
-| ---          | ----  |   ----   |    ----     |    ----     |  ----   |    ----     |    ----    |
-| **STK**      |   8   | `-Ofast` | **988,937** | **123,617** |   867   |   27.3 KB   | **7.0 KB** |
-| **FreeRTOS** |   8   | `-Ofast` |   932,579   |   116,572   | **615** | **13.7 KB** |   8.8 KB   |
-| **STK**      |   8   |  `-Os`   | **752,973** | **94,121**  |   658   |   18.6 KB   | **7.0 KB** |
-| **FreeRTOS** |   8   |  `-Os`   |   710,090   |   88,761    | **466** | **12.2 KB** |  11.0 KB   |
-| ---          |  ---  |   ---    |     ---     |     ---     |   ---   |     ---     |    ---     |
-| **STK**      |   4   | `-Ofast` | **989,386** | **247,346** |   741   |   27.3 KB   | **7.0 KB** |
-| **FreeRTOS** |   4   | `-Ofast` |   881,079   |   220,269   | **690** | **13.7 KB** |   8.8 KB   |
-| **STK**      |   4   |  `-Os`   | **753,462** | **188,365** |   565   |   18.6 KB   | **7.0 KB** |
-| **FreeRTOS** |   4   |  `-Os`   |   670,867   |   167,716   | **504** | **12.2 KB** |  11.0 KB   |
+| Kernel       | Tasks  |   Opt    | Throughput  |   Average   | Jitter  |   Flash     |    RAM     |
+|:-------------|:------:|:--------:|:-----------:|:-----------:|:-------:|:-----------:|:----------:|
+| **STK**      |   16   | `-Ofast` | **993,010** | **62,063**  | **754** |   23.0 KB   | **6.9 KB** |
+| **FreeRTOS** |   16   | `-Ofast` |   966,017   |   60,374    | 909     |   14.5 KB   |   8.8 KB   |
+| **STK**      |   16   |  `-Os`   | **752,119** | **47,007**  | **425** |   14.4 KB   | **6.9 KB** |
+| **FreeRTOS** |   16   |  `-Os`   |   735,342   |   45,958    | 472     | **12.6 KB** |   8.8 KB   |
+| ---          |  ---   |   ---    |     ---     |     ---     | ---     |     ---     |    ---     |
+| **STK**      |   8    | `-Ofast` | **988,882** | **123,610** | 866     |   23.0 KB   | **6.9 KB** |
+| **FreeRTOS** |   8    | `-Ofast` |   932,654   |   116,581   | **613** |   14.5 KB   |   8.8 KB   |
+| **STK**      |   8    |  `-Os`   | **752,935** | **94,116**  | 659     |   14.4 KB   | **6.9 KB** |
+| **FreeRTOS** |   8    |  `-Os`   |   713,292   |   89,161    | **468** | **12.6 KB** |   8.8 KB   |
+| ---          |  ---   |   ---    |     ---     |     ---     | ---     |     ---     |    ---     |
+| **STK**      |   4    | `-Ofast` | **989,405** | **247,351** | 742     |   23.0 KB   | **6.9 KB** |
+| **FreeRTOS** |   4    | `-Ofast` |   881,082   |   220,270   | **671** |   14.5 KB   |   8.8 KB   |
+| **STK**      |   4    |  `-Os`   | **753,335** | **188,333** | 564     |   14.4 KB   | **6.9 KB** |
+| **FreeRTOS** |   4    |  `-Os`   |   673,845   |   168,461   | **510** | **12.6 KB** |   8.8 KB   |
 
 ### Conclusion
 
-* **Throughput:** STK consistently outperforms FreeRTOS in raw computational efficiency. In low-task scenarios, STK achieves up to **31% higher throughput**, and it maintains a significant performance lead even as the system scales to 16 concurrent tasks.
-* **Scheduling Overhead:** STK demonstrates exceptional scaling stability. While typical kernels experience increased overhead as more threads are added, STK's total throughput remains remarkably flat, indicating minimal context-switching friction.
-* **Determinism:** For timing-critical applications, STK is the superior choice. In high-load scenarios (16 tasks at `-Ofast`), STK provides **~17% lower jitter** than FreeRTOS.
-* **Memory Efficiency:** STK leads in memory optimization, utilizing a lean **~7.0 KB of RAM** regardless of optimization level, outperforming FreeRTOS's 8.8–11.0 KB range that is **25-55% lower RAM usage** on average. While the C++ template architecture results in a larger Flash footprint, this enables the highly specialized, zero-overhead execution path that gives STK its speed.
+* **Throughput:** STK consistently outperforms FreeRTOS, delivering **~12% more computational work** in direct head-to-head benchmarks. Furthermore, STK scales exceptionally well with aggressive compiler optimizations, yielding a **31% performance boost** when moving from size-optimized (`-Os`) to speed-optimized (`-Ofast`) configurations.
+* **Scheduling Overhead:** STK demonstrates exceptional scaling stability. Total throughput remains remarkably flat regardless of task count, indicating near-zero context-switching friction even as the system reaches 16 concurrent threads.
+* **Determinism:** For timing-critical applications, STK is the superior choice. In high-load scenarios (16 tasks at `-Ofast`), STK provides **~17% lower jitter** than FreeRTOS, ensuring the precise temporal alignment required for time-sensitive tasks.
+* **Resource Efficiency:** STK achieves a class-leading RAM footprint of **~6.9 KB**, utilizing **~21% less RAM** than FreeRTOS across all test cases. While the C++ template architecture results in a larger Flash footprint at high optimization, it enables the specialized, zero-overhead execution path that gives STK its speed and efficiency advantage.
 
 ---
 

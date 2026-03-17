@@ -51,7 +51,6 @@
 #if defined(__ICCARM__) || defined(__CC_ARM) || defined(__GNUC__)
   #include <stdint.h>
   extern uint32_t SystemCoreClock;
-  void xPortSysTickHandler(void);
 #endif
 #ifndef CMSIS_device_header
 #define CMSIS_device_header "stm32f4xx.h"
@@ -115,7 +114,7 @@ to exclude the API function. */
 #define INCLUDE_xTimerPendFunctionCall       0
 #define INCLUDE_xQueueGetMutexHolder         0
 #define INCLUDE_uxTaskGetStackHighWaterMark  0
-#define INCLUDE_xTaskGetCurrentTaskHandle    0
+#define INCLUDE_xTaskGetCurrentTaskHandle    1
 #define INCLUDE_eTaskGetState                0
 
 /*
@@ -149,7 +148,7 @@ to all Cortex-M ports, and do not rely on any particular library functions. */
 #define configKERNEL_INTERRUPT_PRIORITY 		255//( configLIBRARY_LOWEST_INTERRUPT_PRIORITY << (8 - configPRIO_BITS) )
 /* !!!! configMAX_SYSCALL_INTERRUPT_PRIORITY must not be set to zero !!!!
 See http://www.FreeRTOS.org/RTOS-Cortex-M3-M4.html. */
-#define configMAX_SYSCALL_INTERRUPT_PRIORITY 	255//( configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY << (8 - configPRIO_BITS) )
+#define configMAX_SYSCALL_INTERRUPT_PRIORITY 	240//( configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY << (8 - configPRIO_BITS) )
 
 /* Normal assert() semantics without relying on the provision of an assert.h
 header file. */

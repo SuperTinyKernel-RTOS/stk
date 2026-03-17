@@ -12,6 +12,8 @@
 #include "FreeRTOS.h"
 #include "task.h"
 
+extern "C" void xPortSysTickHandler(void);
+
 #define SLEEP_GRANULARITY (_STK_BENCH_WINDOW / portTICK_PERIOD_MS + 2)
 
 static StackType_t g_TaskStack[_STK_BENCH_TASK_MAX + 1][_STK_BENCH_STACK_SIZE] = {};

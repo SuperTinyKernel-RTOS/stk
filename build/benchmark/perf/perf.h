@@ -12,7 +12,7 @@
 
 #include "crc32.h"
 
-#define _STK_BENCH_TASK_MAX   4
+#define _STK_BENCH_TASK_MAX   16
 #define _STK_BENCH_STACK_SIZE 256
 #define _STK_BENCH_WINDOW     1000
 
