@@ -57,6 +57,9 @@ extern int32_t g_CriticalSectionState;
 //! ISR state.
 extern bool g_InsideISR;
 
+//! Panic value.
+extern EKernelPanicId g_PanicValue;
+
 /*! \class TestAssertPassed
     \brief Throwable class for catching assertions from STK_ASSERT_HANDLER().
 */
@@ -121,6 +124,8 @@ public:
     void Stop()
     {
     	m_started = false;
+
+    	m_event_handler->OnStop();
     }
 
     bool InitStack(EStackType type, Stack *stack, IStackMemory *stack_memory, ITask *user_task)
@@ -168,7 +173,7 @@ public:
 
     void ProcessTick()
     {
-        if (m_event_handler->OnTick(&m_stack_idle, &m_stack_active))
+        if (m_event_handler->OnTick(m_stack_idle, m_stack_active))
             ++m_context_switch_nr;
     }
 
@@ -181,7 +186,7 @@ public:
 
     void EventStart()
     {
-        m_event_handler->OnStart(&m_stack_active);
+        m_event_handler->OnStart(m_stack_active);
     }
 
     void EventTaskExit(Stack *stack)

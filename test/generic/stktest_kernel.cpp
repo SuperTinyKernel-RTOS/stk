@@ -16,10 +16,42 @@ namespace test {
 // ============================== Kernel ====================================== //
 // ============================================================================ //
 
+template <uint8_t TMode, uint32_t TSize, class TStrategy, class TPlatform>
+class KernelMock : public Kernel<TMode, TSize, TStrategy, TPlatform>
+{
+    typedef Kernel<TMode, TSize, TStrategy, TPlatform> BaseType;
+
+public:
+    uint8_t m_fsm_state_mock = KernelMock::FSM_STATE_NONE;
+
+    // Override the getter to bypass the ROM table during tests
+    typename BaseType::EFsmState GetNewFsmState(typename BaseType::KernelTask *&next) override
+    {
+        if (m_fsm_state_mock != (uint8_t)KernelMock::FSM_STATE_NONE)
+            return static_cast<typename BaseType::EFsmState>(m_fsm_state_mock);
+
+        return BaseType::GetNewFsmState(next);
+    }
+
+    void ForceUpdateInvalidFsmState(bool max_val)
+    {
+        m_fsm_state_mock = KernelMock::FSM_STATE_MAX + (max_val ? 0 : 1);
+
+        Stack *idle = nullptr, *active = this->m_task_now->GetUserStack();
+        KernelMock::UpdateFsmState(idle, active);
+    }
+};
+
 TEST_GROUP(Kernel)
 {
     void setup() {}
-    void teardown() {}
+    void teardown()
+    {
+        g_TestContext.RethrowAssertException(true);
+        g_TestContext.ExpectAssert(false);
+        g_TestContext.ExpectPanic(false);
+        test::g_PanicValue = KERNEL_PANIC_NONE;
+    }
 };
 
 TEST(Kernel, MaxTasks)
@@ -31,19 +63,28 @@ TEST(Kernel, MaxTasks)
     CHECK_EQUAL(TASKS, result);
 }
 
-TEST(Kernel, Init)
+TEST(Kernel, State)
 {
     Kernel<KERNEL_STATIC, 1, SwitchStrategyRR, PlatformTestMock> kernel;
+    TaskMock<ACCESS_USER> task;
+
     PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
 
     CHECK_TRUE(platform != NULL);
 
+    CHECK_TRUE(kernel.GetState() == IKernel::STATE_INACTIVE);
+
     kernel.Initialize();
 
-    CHECK_TRUE(((IKernel *)&kernel)->IsInitialized());
+    CHECK_TRUE(kernel.GetState() == IKernel::STATE_READY);
 
     CHECK_TRUE(IKernelService::GetInstance() != NULL);
     CHECK_TRUE(IKernelService::GetInstance() == platform->m_service);
+
+    kernel.AddTask(&task);
+    kernel.Start();
+
+    CHECK_TRUE(kernel.GetState() == IKernel::STATE_RUNNING);
 }
 
 TEST(Kernel, InitDoubleFail)
@@ -508,6 +549,32 @@ TEST(Kernel, ContextSwitchAccessModeChange)
     CHECK_EQUAL(ACCESS_PRIVILEGED, platform->m_stack_active->mode);
 }
 
+TEST(Kernel, ContextSwitchCorruptedFsmMode)
+{
+    KernelMock<KERNEL_STATIC, 1, SwitchStrategyRR, PlatformTestMock> kernel;
+    TaskMock<ACCESS_USER> task;
+    PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
+
+    kernel.Initialize();
+    kernel.AddTask(&task);
+    kernel.Start();
+
+    // ISR calls OnSysTick
+    platform->ProcessTick();
+
+    g_TestContext.ExpectPanic(true);
+
+    kernel.ForceUpdateInvalidFsmState(true);
+    platform->ProcessTick();
+    CHECK_EQUAL(KERNEL_PANIC_BAD_STATE, test::g_PanicValue);
+
+    test::g_PanicValue = KERNEL_PANIC_NONE;
+
+    kernel.ForceUpdateInvalidFsmState(false);
+    platform->ProcessTick();
+    CHECK_EQUAL(KERNEL_PANIC_BAD_STATE, test::g_PanicValue);
+}
+
 TEST(Kernel, SingleTask)
 {
     Kernel<KERNEL_STATIC, 1, SwitchStrategyRR, PlatformTestMock> kernel;
@@ -635,17 +702,9 @@ TEST(Kernel, OnTaskExitUnsupported)
     // ISR calls OnSysTick
     platform->ProcessTick();
 
-    try
-    {
-        g_TestContext.ExpectAssert(true);
-        platform->EventTaskExit(active);
-        CHECK_TEXT(false, "task exiting unsupported in KERNEL_STATIC mode");
-    }
-    catch (TestAssertPassed &pass)
-    {
-        CHECK(true);
-        g_TestContext.ExpectAssert(false);
-    }
+    g_TestContext.ExpectPanic(true);
+    platform->EventTaskExit(active);
+    CHECK_EQUAL(KERNEL_PANIC_BAD_MODE, test::g_PanicValue);
 }
 
 TEST(Kernel, OnTaskNotFoundBySP)
@@ -808,6 +867,8 @@ TEST(Kernel, HrtTaskCompleted)
     platform->ProcessTick();
 
     CHECK_EQUAL(0, strategy->GetSize());
+
+    CHECK_EQUAL(IKernel::STATE_READY, kernel.GetState());
 }
 
 static struct HrtTaskDeadlineMissedRelaxCpuContext

@@ -288,11 +288,14 @@ static struct Context : public PlatformContext
 }
 s_StkPlatformContext[1];
 
+//! Panic id cache for post-mortem inspection.
+static volatile EKernelPanicId g_LastPanicId = KERNEL_PANIC_NONE;
+
 __stk_attr_noinline  // keep out of inlining to preserve stack frame
 __stk_attr_noreturn  // never returns - a trap
 void STK_PANIC_HANDLER_DEFAULT(EKernelPanicId id)
 {
-    (void)id;
+    g_LastPanicId = id;
 
     // spin forever: without a watchdog, a debugger can attach and inspect 'id'
     for (;;)
@@ -342,7 +345,7 @@ void Context::CreateTimerThreadAndJoin()
 {
     m_started = true;
 
-    m_handler->OnStart(&m_stack_active);
+    m_handler->OnStart(m_stack_active);
 
     StartActiveTask();
 
@@ -415,13 +418,16 @@ void Context::Cleanup()
 
     // reset stop signal
     m_stop_signal = false;
+
+    // notify kernel about a full stop
+    m_handler->OnStop();
 }
 
 void Context::ProcessTick()
 {
     Win32ScopedCriticalSection __cs(m_cs);
 
-    if (m_handler->OnTick(&m_stack_idle, &m_stack_active))
+    if (m_handler->OnTick(m_stack_idle, m_stack_active))
         GetContext().SwitchContext();
 }
 

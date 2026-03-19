@@ -29,7 +29,7 @@ extern "C" void SysTick_Handler()
     if (g_Enable)
         ++g_Ticks;
 
-    if (xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED)
+    if (xTaskGetSchedulerState() == taskSCHEDULER_RUNNING)
         xPortSysTickHandler();
 }
 

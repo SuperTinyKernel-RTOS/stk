@@ -30,8 +30,8 @@ public:
         DEFAULT_FAILURE_EXIT_CODE = 1 //!< default exit code for exit() to denote failure of the test
     };
 
-    TestContext() : m_expect_assert(false), m_rethrow_assert(true)
-    { }
+    explicit TestContext() : m_expect_assert(false), m_expect_panic(false), m_rethrow_assert(true)
+    {}
 
     /*! \brief     Start expecting assertion for the test case.
         \param[in] expect: True to expect otherwise False.
@@ -41,6 +41,15 @@ public:
     /*! \brief     Check if test case is expecting assertion.
     */
     bool IsExpectingAssert() const { return m_expect_assert; }
+
+    /*! \brief     Start expecting kernel panic for the test case.
+        \param[in] expect: True to expect otherwise False.
+    */
+    void ExpectPanic(bool expect) { m_expect_panic = expect; }
+
+    /*! \brief     Check if test case is expecting kernel panic.
+    */
+    bool IsExpectingPanic() const { return m_expect_panic; }
 
     /*! \brief     Re-throw assert's exception for the test case.
         \param[in] expect: True to rethrow otherwise False.
@@ -83,6 +92,7 @@ public:
 private:
     static TestContext m_instance; //!< global instance of the TestContext
     bool m_expect_assert;          //!< assert expectation flag
+    bool m_expect_panic;           //!< panic expectation flag
     bool m_rethrow_assert;         //!< rethrow assert's exception
 };
 
@@ -97,6 +107,7 @@ extern TestContext g_TestContext;
 #define STK_TEST_CHECK_EQUAL(expected, actual)\
     if ((expected) != (actual)) {\
         printf("STK_TEST_CHECK_EQUAL failed!\n file: %s\n line: %d\n  expected: %d\n  actual: %d\n", __FILE__, __LINE__, (int)expected, (int)actual);\
+        __stk_debug_break();\
         exit(1);\
     }
 
@@ -107,6 +118,7 @@ extern TestContext g_TestContext;
     extern void STK_ASSERT_HANDLER(const char *message, const char *file, int32_t line)\
     {\
         printf("_STK_ASSERT failed!\n file: %s\n line: %d\n message: %s\n", file, (int)line, message);\
+        __stk_debug_break();\
         abort();\
     }
 

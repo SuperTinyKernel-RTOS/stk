@@ -799,7 +799,7 @@ static struct Context : public PlatformContext
         Word cs;
         HW_CriticalSectionStart(cs);
 
-        if (m_handler->OnTick(&m_stack_idle, &m_stack_active))
+        if (m_handler->OnTick(m_stack_idle, m_stack_active))
         {
             // refresh ISR asm pointer cache so the naked ISR reads the correct
             // (possibly new) active stack SP immediately when jal returns
@@ -911,11 +911,14 @@ void PlatformRiscV::ProcessTick()
 #endif
 }
 
+//! Panic id cache for post-mortem inspection.
+static volatile EKernelPanicId g_LastPanicId = KERNEL_PANIC_NONE;
+
 __stk_attr_noinline // keep out of inlining to preserve stack frame
 __stk_attr_noreturn // never returns - a trap
 void STK_PANIC_HANDLER_DEFAULT(EKernelPanicId id)
 {
-    (void)id;
+    g_LastPanicId = id;
 
     // disable all maskable interrupts: this prevents scheduler from running again and corrupting state further
     HW_DisableInterrupts();
@@ -1442,7 +1445,7 @@ void Context::OnStart()
     HW_ClearFpuState();
 
     // notify kernel
-    m_handler->OnStart(&m_stack_active);
+    m_handler->OnStart(m_stack_active);
 
     // configure timer
     HW_SetMtimecmp(m_tick_period);
@@ -1586,7 +1589,11 @@ void Context::Start()
     // save jump location of the Exit trap
     SaveJmp(m_exit_buf);
     if (m_exiting)
+    {
+        // notify kernel about a full stop
+        m_handler->OnStop();
         return;
+    }
 
     // enable FPU (if available)
     HW_EnableFullFpuAccess();
