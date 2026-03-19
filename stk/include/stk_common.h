@@ -288,6 +288,12 @@ protected:
 class ISyncObject : public util::DListEntry<ISyncObject, false>
 {
 public:
+    /*! \brief Destructor.
+        \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
+    */
+    ~ISyncObject()
+    {}
+
     /*! \typedef   ListHeadType
         \brief     List head type for ISyncObject elements.
     */

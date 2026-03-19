@@ -673,6 +673,12 @@ static struct Context : public PlatformContext
         m_started(false), m_exiting(false)
     {}
 
+    /*! \brief Destructor.
+        \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
+    */
+    ~Context()
+    {}
+
     void Initialize(IPlatform::IEventHandler *handler, IKernelService *service, Stack *exit_trap, int32_t resolution_us)
     {
         PlatformContext::Initialize(handler, service, exit_trap, resolution_us);

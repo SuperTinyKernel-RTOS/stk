@@ -21,6 +21,12 @@ namespace stk {
 class PlatformX86Win32 : public IPlatform
 {
 public:
+    /*! \brief Destructor.
+        \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
+    */
+    ~PlatformX86Win32()
+    {}
+
     void Initialize(IEventHandler *event_handler, IKernelService *service, uint32_t resolution_us, Stack *exit_trap);
     void Start();
     void Stop();

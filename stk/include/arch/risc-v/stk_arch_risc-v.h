@@ -20,6 +20,12 @@ namespace stk {
 class PlatformRiscV : public IPlatform
 {
 public:
+    /*! \brief Destructor.
+        \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
+    */
+    ~PlatformRiscV()
+    {}
+
     /*! \class IEventHandler
         \brief RISC-V specific event handler.
     */

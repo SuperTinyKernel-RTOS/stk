@@ -68,6 +68,7 @@ public:
         \note      If tasks are still waiting at destruction time it is considered a logical
                    error (dangling waiters).
                    An assertion is triggered in debug builds.
+        \note      MISRA deviation: [STK-DEV-005] Rule 10-3-2.
     */
     ~Semaphore()
     {

@@ -72,6 +72,7 @@ public:
         \note   Destroying an RWMutex while readers are active, writers are waiting,
                 or a writer holds the lock is a logical error (dangling state).
                 An assertion is triggered in debug builds.
+        \note   MISRA deviation: [STK-DEV-005] Rule 10-3-2.
     */
     ~RWMutex()
     {

@@ -28,6 +28,12 @@ public:
         m_stack_active(nullptr), m_tick_resolution(0)
     {}
 
+    /*! \brief Destructor.
+        \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
+    */
+    ~PlatformContext()
+    {}
+
     /*! \brief     Initialize context.
         \param[in] handler: Event handler.
         \param[in] exit_trap: Exit trap's stack.

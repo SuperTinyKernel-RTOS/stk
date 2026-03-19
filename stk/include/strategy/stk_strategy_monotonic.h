@@ -84,6 +84,12 @@ public:
     explicit SwitchStrategyMonotonic() : m_tasks()
     {}
 
+    /*! \brief Destructor.
+        \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
+    */
+    ~SwitchStrategyMonotonic()
+    {}
+
     /*! \brief     Add a task to the priority-sorted runnable list.
         \param[in] task: Task to add. Must not be \c NULL and must not already be in any list.
         \note      Performs an O(n) insertion sort into \c m_tasks so that higher-priority tasks

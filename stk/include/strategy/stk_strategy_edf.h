@@ -75,6 +75,12 @@ public:
     explicit SwitchStrategyEDF() : m_tasks(), m_sleep()
     {}
 
+    /*! \brief Destructor.
+        \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
+    */
+    ~SwitchStrategyEDF()
+    {}
+
     /*! \brief     Add task to the runnable set.
         \param[in] task: Task to add. Must not be \c NULL and must not already be in any list.
         \note      The task is appended to the back of \c m_tasks. Unlike RR and FP strategies,

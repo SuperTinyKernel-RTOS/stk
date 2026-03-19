@@ -13,9 +13,9 @@
 
 #ifdef _STK_ARCH_RISC_V
 
-#include "stk_helper.h"
 #include "stk_arch.h"
 #include "arch/stk_arch_common.h"
+#include "stk_helper.h"
 
 using namespace stk;
 
@@ -764,6 +764,12 @@ static struct Context : public PlatformContext
     Context() : PlatformContext(), m_stack_main(), m_stack_isr(), m_stack_isr_mem(),
         m_exit_buf(), m_overrider(nullptr), m_specific(nullptr), m_tick_period(0), m_csu(0), m_csu_nesting(0),
         m_starting(false), m_started(false), m_exiting(false)
+    {}
+
+    /*! \brief Destructor.
+        \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
+    */
+    ~Context()
     {}
 
     void Initialize(IPlatform::IEventHandler *handler, IKernelService *service, Stack *exit_trap, int32_t resolution_us)

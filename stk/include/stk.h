@@ -243,6 +243,12 @@ protected:
         }
 
     protected:
+        /*! \brief Destructor.
+            \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
+        */
+        ~KernelTask()
+        {}
+
         /*! \class SrtInfo
             \brief Per-task soft real-time (SRT) metadata.
             \note  Allocated only when _Mode does not include KERNEL_HRT. Zero-size in HRT mode
@@ -302,6 +308,12 @@ protected:
         struct WaitObject : public IWaitObject
         {
             explicit WaitObject() : m_task(nullptr), m_sync_obj(nullptr), m_timeout(false), m_time_wait(0)
+            {}
+
+            /*! \brief Destructor.
+                \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
+            */
+            ~WaitObject()
             {}
 
             /*! \class WaitRequest
@@ -662,6 +674,12 @@ protected:
         explicit KernelService() : m_platform(nullptr), m_ticks(0)
         {}
 
+        /*! \brief Destructor.
+            \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
+        */
+        ~KernelService()
+        {}
+
         /*! \brief     Initialize instance.
             \note      When call completes Singleton<IKernelService *> will start referencing this
                        instance (see g_KernelService).
@@ -710,6 +728,12 @@ public:
         (void)strategy;
     #endif
     }
+
+    /*! \brief Destructor.
+        \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
+    */
+    ~Kernel()
+    {}
 
     /*! \brief     Prepare kernel for use: reset state, configure the platform, and register the service singleton.
         \param[in] resolution_us: System tick resolution in microseconds per tick (default: PERIODICITY_DEFAULT).
