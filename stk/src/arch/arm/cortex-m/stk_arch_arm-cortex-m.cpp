@@ -697,7 +697,7 @@ static struct Context : public PlatformContext
     {
         HW_DisableInterrupts();
 
-        if (m_handler->OnTick(&m_stack_idle, &m_stack_active))
+        if (m_handler->OnTick(m_stack_idle, m_stack_active))
         {
         #if STK_SEGGER_SYSVIEW
             SEGGER_SYSVIEW_OnTaskStopExec();
@@ -809,16 +809,14 @@ static struct Context : public PlatformContext
 }
 s_StkPlatformContext[STK_ARCH_CPU_COUNT];
 
-void PlatformArmCortexM::ProcessTick()
-{
-    GetContext().OnTick();
-}
+//! Panic id cache for post-mortem inspection.
+static volatile EKernelPanicId g_LastPanicId = KERNEL_PANIC_NONE;
 
 __stk_attr_noinline  // keep out of inlining to preserve stack frame
 __stk_attr_noreturn  // never returns - a trap
 void STK_PANIC_HANDLER_DEFAULT(EKernelPanicId id)
 {
-    (void)id;
+    g_LastPanicId = id;
 
     // disable all maskable interrupts: this prevents scheduler from running again and corrupting state further
     HW_DisableInterrupts();
@@ -829,6 +827,11 @@ void STK_PANIC_HANDLER_DEFAULT(EKernelPanicId id)
     {
         __stk_relax_cpu();
     }
+}
+
+void PlatformArmCortexM::ProcessTick()
+{
+    GetContext().OnTick();
 }
 
 extern "C" void STK_SYSTICK_HANDLER()
@@ -1033,7 +1036,11 @@ void Context::Start()
     // save jump location of the Exit trap
     SaveJmp(m_exit_buf);
     if (m_exiting)
+    {
+        // notify kernel about a full stop
+        m_handler->OnStop();
         return;
+    }
 
     HW_StartScheduler();
 }
@@ -1050,7 +1057,7 @@ void Context::OnStart()
     HW_ClearFpuState();
 
     // notify kernel
-    m_handler->OnStart(&m_stack_active);
+    m_handler->OnStart(m_stack_active);
 
     // start SysTick timer (it is yet can't fire an interrupt due to HW_DisableInterrupts)
     HW_StartSysTick(m_tick_resolution);
@@ -1117,7 +1124,7 @@ extern "C" __stk_attr_used void SVC_Handler_Main(Word *svc_args)
 #ifdef CONTROL_nPRIV_Msk
     case SVC_ENTER_CRITICAL: {
         const Word saved_basepri = __get_BASEPRI();
-        __set_BASEPRI(static_cast<uint32_t>(1u) << __NVIC_PRIO_BITS); // mask all configurable-priority interrupts
+        __set_BASEPRI(static_cast<uint32_t>(1U) << __NVIC_PRIO_BITS); // mask all configurable-priority interrupts
         __DSB();                   // BASEPRI write visible to bus before SVC return
         __ISB();                   // pipeline flush: mask in effect at first caller instruction
         frame->R0 = saved_basepri; // return saved value via stacked R0
@@ -1335,7 +1342,7 @@ bool PlatformArmCortexM::InitStack(EStackType stack_type, Stack *stack, IStackMe
 
     // set T bit of EPSR sub-register to enable execution of instructions
     // details: "Special-purpose program status registers (xPSR)": Execution PSR, https://developer.arm.com/documentation/ddi0413/c/programmer-s-model/registers/special-purpose-program-status-registers--xpsr-
-    task_frame->exc.PSR = static_cast<Word>(1u) << 24;
+    task_frame->exc.PSR = static_cast<Word>(1U) << 24;
 
 #if STK_CORTEX_M_MANAGE_LR
     task_frame->EXC_RETURN = STK_CORTEX_M_EXC_RETURN_THREAD_PSP;

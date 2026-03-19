@@ -17,6 +17,7 @@ TestContext test::g_TestContext;
 void (* g_RelaxCpuHandler)() = NULL;
 IKernelService *test::g_KernelService = NULL;
 int32_t test::g_CriticalSectionState = false;
+EKernelPanicId test::g_PanicValue = KERNEL_PANIC_NONE;
 bool test::g_InsideISR = false;
 uintptr_t g_Tls = 0;
 
@@ -53,7 +54,12 @@ void STK_ASSERT_HANDLER(const char *message, const char *file, int32_t line)
 */
 void STK_PANIC_HANDLER_DEFAULT(EKernelPanicId id)
 {
-    SimpleString what = "Panic!\n";
+    g_PanicValue = id;
+
+    if (g_TestContext.IsExpectingPanic())
+        return;
+
+    SimpleString what = "Kernel panic!\n";
     what += "\n\tid: ";
     what += StringFrom(id);
 

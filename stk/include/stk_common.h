@@ -23,8 +23,8 @@ namespace stk {
 class IKernelService;
 class IKernelTask;
 
-/*! \enum  EAccessMode
-    \brief Hardware access mode by the user task.
+/*! \enum    EAccessMode
+    \brief   Hardware access mode by the user task.
     \warning Type is explicitly 32-bit to be compatible with platform implementations.
 */
 enum EAccessMode : int32_t
@@ -36,7 +36,7 @@ enum EAccessMode : int32_t
 /*! \enum  EKernelMode
     \brief Kernel operating mode.
 */
-enum EKernelMode
+enum EKernelMode : uint8_t
 {
     KERNEL_STATIC  = (1 << 0), //!< All tasks are static and can not exit.
     KERNEL_DYNAMIC = (1 << 1), //!< Tasks can be added or removed and therefore exit when done.
@@ -49,13 +49,16 @@ enum EKernelMode
 */
 enum EKernelPanicId : uint32_t
 {
+    KERNEL_PANIC_NONE                = 0, //!< Panic is absent (no fault).
     KERNEL_PANIC_SPINLOCK_DEADLOCK   = 1, //!< Spin-lock timeout expired: lock owner never released.
     KERNEL_PANIC_STACK_CORRUPT       = 2, //!< Stack integrity check failed.
     KERNEL_PANIC_ASSERT              = 3, //!< Internal assertion failed (maps from STK_ASSERT).
     KERNEL_PANIC_HRT_HARD_FAULT      = 4, //!< Kernel running in KERNEL_HRT mode reported deadline failure of the task.
     KERNEL_PANIC_CPU_EXCEPTION       = 5, //!< CPU reported an exception and halted execution.
     KERNEL_PANIC_CS_NESTING_OVERFLOW = 6, //!< Critical section nesting limit exceeded: violation of STK_CRITICAL_SECTION_NESTINGS_MAX.
-    KERNEL_PANIC_UNKNOWN_SVC         = 7  //!< Unknown service command received by SVC handler.
+    KERNEL_PANIC_UNKNOWN_SVC         = 7, //!< Unknown service command received by SVC handler.
+    KERNEL_PANIC_BAD_STATE           = 8, //!< Kernel entered unexpected (bad) state.
+    KERNEL_PANIC_BAD_MODE            = 9  //!< Kernel is in bad/unsupported mode for the current operation.
 };
 
 /*! \enum  EStackType
@@ -560,13 +563,18 @@ public:
             \note       This event can be used to change hardware access mode for the first task.
             \param[out] active: Stack of the task which must enter Active state (to which context will switch).
         */
-        virtual void OnStart(Stack **active) = 0;
+        virtual void OnStart(Stack *&active) = 0;
+
+        /*! \brief      Called by driver to notify that scheduling is stopped.
+            \param[out] active: Stack of the task which must enter Active state (to which context will switch).
+        */
+        virtual void OnStop() = 0;
 
         /*! \brief      Called by ISR handler to notify about the next system tick.
             \param[out] idle: Stack of the task which must enter Idle state.
             \param[out] active: Stack of the task which must enter Active state (to which context will switch).
         */
-        virtual bool OnTick(Stack **idle, Stack **active) = 0;
+        virtual bool OnTick(Stack *&idle, Stack *&active) = 0;
 
         /*! \brief      Called by Thread process (via IKernelService::SwitchToNext) to switch to a next task.
             \param[in]  caller_SP: Value of Stack Pointer (SP) register (for locating the calling process inside the kernel).
@@ -596,7 +604,7 @@ public:
             \param[in]  caller_SP: Value of Stack Pointer (SP) register (for locating the calling process inside the kernel).
             \return     Task/thread id of the process.
         */
-        virtual TId OnGetTid(Word caller_SP) const = 0;
+        virtual TId OnGetTid(Word caller_SP) = 0;
     };
 
     /*! \class IEventOverrider
@@ -793,6 +801,16 @@ public:
 class IKernel
 {
 public:
+    /*! \enum    EState
+        \brief   Kernel state.
+    */
+    enum EState : uint8_t
+    {
+        STATE_INACTIVE = 0, //!< not ready, IKernel::Initialize() must be called
+        STATE_READY,        //!< ready to start, IKernel::Start() must be called
+        STATE_RUNNING       //!< initialized and running, IKernel::Start() was called successfully
+    };
+
     /*! \brief     Initialize kernel.
         \param[in] resolution_us: Resolution of the system tick (SysTick) timer in microseconds.
                    Defaults to PERIODICITY_DEFAULT (1000 µs = 1 ms).
@@ -800,6 +818,7 @@ public:
         \note      If running on an STM32 device with HAL driver or on QEMU, do not change the default
                    resolution (PERIODICITY_DEFAULT). STM32's HAL expects 1 millisecond resolution and
                    QEMU does not have enough resolution on Windows to operate correctly at sub-millisecond resolution.
+        \note      Kernel must be in \a STATE_INACTIVE state.
     */
     virtual void Initialize(uint32_t resolution_us = PERIODICITY_DEFAULT) = 0;
 
@@ -825,20 +844,15 @@ public:
 
     /*! \brief     Start kernel scheduling.
         \note      This function never returns. Must be called after Initialize() and AddTask().
+        \note      Kernel must be in \a STATE_READY state.
     */
     virtual void Start() = 0;
 
-    /*! \brief     Check if kernel started processing.
-        \return    True if started, otherwise false.
+    /*! \brief     Get a snapshot of the kernel state.
+        \return    Kernel state.
+        \see       EState
     */
-    virtual bool IsStarted() const = 0;
-
-#ifdef _STK_UNDER_TEST
-    /*! \brief     Check if kernel was initialized with IKernel::Initialize().
-        \return    True if initialized, otherwise false.
-    */
-    virtual bool IsInitialized() const = 0;
-#endif
+    virtual EState GetState() const = 0;
 
     /*! \brief     Get platform driver instance.
         \return    Pointer to the IPlatform concrete class instance.

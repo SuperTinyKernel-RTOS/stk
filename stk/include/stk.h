@@ -45,9 +45,9 @@ namespace stk {
                          - stk::KERNEL_SYNC    — enables synchronization primitives (Mutex, Event, etc.).
                          KERNEL_STATIC and KERNEL_DYNAMIC are mutually exclusive.
     \tparam _Size:       Maximum number of concurrent tasks. Must be > 0.
-    \tparam _TyStrategy: Task-switching strategy type (e.g. SwitchStrategyRoundRobin).
+    \tparam TStrategy: Task-switching strategy type (e.g. SwitchStrategyRoundRobin).
                          Must inherit ITaskSwitchStrategy.
-    \tparam _TyPlatform: Platform driver type (e.g. PlatformArmCortexM, or PlatformDefault).
+    \tparam TPlatform: Platform driver type (e.g. PlatformArmCortexM, or PlatformDefault).
                          Must inherit IPlatform.
 
     \note  At least 1 task is required: _Size must be > 0 (enforced by compile-time assertion).
@@ -71,9 +71,10 @@ namespace stk {
     kernel.Start();
     \endcode
 */
-template <int32_t _Mode, uint32_t _Size, class _TyStrategy, class _TyPlatform>
+template <uint8_t TMode, uint32_t TSize, class TStrategy, class TPlatform>
 class Kernel : public IKernel, private IPlatform::IEventHandler
 {
+protected:
     /*! \typedef SleepTrapStackMemory
         \brief   Stack memory wrapper type for the sleep trap.
         \see     SleepTrapStack, STK_SLEEP_TRAP_STACK_SIZE
@@ -143,7 +144,7 @@ class Kernel : public IKernel, private IPlatform::IEventHandler
             m_srt(), m_hrt(), m_rt_weight()
         {
             // bind to wait object
-            if (_Mode & KERNEL_SYNC)
+            if (IsSyncMode())
                 m_wait_obj->m_task = this;
         }
 
@@ -185,25 +186,25 @@ class Kernel : public IKernel, private IPlatform::IEventHandler
         }
 
         /*! \brief     Update the run-time scheduling weight (weighted strategies only).
-            \param[in] weight: New current weight. Ignored unless _TyStrategy::WEIGHT_API is true.
+            \param[in] weight: New current weight. Ignored unless TStrategy::WEIGHT_API is true.
         */
         void SetCurrentWeight(int32_t weight)
         {
-            if (_TyStrategy::WEIGHT_API)
+            if (TStrategy::WEIGHT_API)
                 m_rt_weight[0] = weight;
         }
 
         /*! \brief  Get static scheduling weight from the user task.
             \return ITask::GetWeight() if WEIGHT_API is true; 1 otherwise.
         */
-        int32_t GetWeight() const { return (_TyStrategy::WEIGHT_API ? m_user->GetWeight() : 1); }
+        int32_t GetWeight() const { return (TStrategy::WEIGHT_API ? m_user->GetWeight() : 1); }
 
         /*! \brief  Get current (run-time) scheduling weight.
             \return m_rt_weight[0] if WEIGHT_API is true; 1 otherwise.
             \note   The run-time weight is decremented each tick by the weighted strategy and
                     reset to GetWeight() when exhausted.
         */
-        int32_t GetCurrentWeight() const { return (_TyStrategy::WEIGHT_API ? m_rt_weight[0] : 1); }
+        int32_t GetCurrentWeight() const { return (TStrategy::WEIGHT_API ? m_rt_weight[0] : 1); }
 
         /*! \brief  Get HRT scheduling periodicity.
             \return Period in ticks between successive activations of this task.
@@ -211,9 +212,9 @@ class Kernel : public IKernel, private IPlatform::IEventHandler
         */
         Timeout GetHrtPeriodicity() const
         {
-            STK_ASSERT(_Mode & KERNEL_HRT);
+            STK_ASSERT(IsHrtMode());
 
-            return (_Mode & KERNEL_HRT ? m_hrt[0].periodicity : 0);
+            return (IsHrtMode() ? m_hrt[0].periodicity : 0);
         }
 
         /*! \brief  Get absolute HRT deadline (ticks elapsed since task was activated).
@@ -223,9 +224,9 @@ class Kernel : public IKernel, private IPlatform::IEventHandler
         */
         Timeout GetHrtDeadline() const
         {
-            STK_ASSERT(_Mode & KERNEL_HRT);
+            STK_ASSERT(IsHrtMode());
 
-            return (_Mode & KERNEL_HRT ? m_hrt[0].deadline : 0);
+            return (IsHrtMode() ? m_hrt[0].deadline : 0);
         }
 
         /*! \brief  Get remaining HRT deadline (ticks left before the deadline expires).
@@ -235,13 +236,13 @@ class Kernel : public IKernel, private IPlatform::IEventHandler
         */
         Timeout GetHrtRelativeDeadline() const
         {
-            STK_ASSERT(_Mode & KERNEL_HRT);
+            STK_ASSERT(IsHrtMode());
             STK_ASSERT(!IsSleeping());
 
-            return (_Mode & KERNEL_HRT ? (m_hrt[0].deadline - m_hrt[0].duration) : 0);
+            return (IsHrtMode() ? (m_hrt[0].deadline - m_hrt[0].duration) : 0);
         }
 
-    private:
+    protected:
         /*! \class SrtInfo
             \brief Per-task soft real-time (SRT) metadata.
             \note  Allocated only when _Mode does not include KERNEL_HRT. Zero-size in HRT mode
@@ -388,7 +389,7 @@ class Kernel : public IKernel, private IPlatform::IEventHandler
             \param[in] platform: Platform driver used to initialise the stack frame.
             \param[in] user_task: User task to bind. Asserts that the stack is successfully initialised.
         */
-        void Bind(_TyPlatform *platform, ITask *user_task)
+        void Bind(TPlatform *platform, ITask *user_task)
         {
             // set access mode for this stack
             m_stack.mode = user_task->GetAccessMode();
@@ -418,7 +419,7 @@ class Kernel : public IKernel, private IPlatform::IEventHandler
             m_state      = STATE_NONE;
             m_time_sleep = 0;
 
-            if (_Mode & KERNEL_HRT)
+            if (IsHrtMode())
                 m_hrt[0].Clear();
             else
                 m_srt->Clear();
@@ -432,7 +433,7 @@ class Kernel : public IKernel, private IPlatform::IEventHandler
             ScheduleSleep(INT32_MAX);
 
             // mark it as done HRT task
-            if (_Mode & KERNEL_HRT)
+            if (IsHrtMode())
                 HrtOnWorkCompleted();
 
             // mark it as pending for removal
@@ -441,7 +442,7 @@ class Kernel : public IKernel, private IPlatform::IEventHandler
 
         /*! \brief     Check if task is pending removal.
         */
-        bool IsPendingRemoval() const { return ((m_state & STATE_REMOVE_PENDING) != 0); }
+        bool IsPendingRemoval() const { return ((m_state & STATE_REMOVE_PENDING) != 0U); }
 
         /*! \brief     Check if Stack Pointer (SP) belongs to this task.
             \param[in] SP: Stack Pointer.
@@ -543,7 +544,7 @@ class Kernel : public IKernel, private IPlatform::IEventHandler
             STK_ASSERT(ticks > 0);
 
             // set state first as kernel checks it when task IsSleeping
-            if (_TyStrategy::SLEEP_EVENT_API)
+            if (TStrategy::SLEEP_EVENT_API)
             {
                 if (m_time_sleep >= 0)
                     m_state |= STATE_SLEEP_PENDING;
@@ -557,10 +558,10 @@ class Kernel : public IKernel, private IPlatform::IEventHandler
         Stack             m_stack;      //!< Stack descriptor (SP register value + access mode + optional tid).
         volatile uint32_t m_state;      //!< Bitmask of EStateFlags. Written by task thread, read/cleared by kernel tick.
         volatile Timeout  m_time_sleep; //!< Sleep countdown: negative while sleeping (absolute value = ticks remaining), zero when awake.
-        SrtInfo           m_srt[STK_ALLOCATE_COUNT(_Mode, KERNEL_HRT, 0, 1)];       //!< SRT metadata. Zero-size (no memory) in KERNEL_HRT mode.
-        HrtInfo           m_hrt[STK_ALLOCATE_COUNT(_Mode, KERNEL_HRT, 1, 0)];       //!< HRT metadata. Zero-size (no memory) in non-HRT mode.
-        int32_t           m_rt_weight[STK_ALLOCATE_COUNT(_TyStrategy::WEIGHT_API, 1, 1, 0)]; //!< Run-time weight for weighted-round-robin scheduling. Zero-size for unweighted strategies.
-        WaitObject        m_wait_obj[STK_ALLOCATE_COUNT(_Mode, KERNEL_SYNC, 1, 0)]; //!< Embedded wait object for synchronization. Zero-size (no memory) if KERNEL_SYNC is not set.
+        SrtInfo           m_srt[STK_ALLOCATE_COUNT(TMode, KERNEL_HRT, 0, 1)];       //!< SRT metadata. Zero-size (no memory) in KERNEL_HRT mode.
+        HrtInfo           m_hrt[STK_ALLOCATE_COUNT(TMode, KERNEL_HRT, 1, 0)];       //!< HRT metadata. Zero-size (no memory) in non-HRT mode.
+        int32_t           m_rt_weight[STK_ALLOCATE_COUNT(TStrategy::WEIGHT_API, 1, 1, 0)]; //!< Run-time weight for weighted-round-robin scheduling. Zero-size for unweighted strategies.
+        WaitObject        m_wait_obj[STK_ALLOCATE_COUNT(TMode, KERNEL_SYNC, 1, 0)]; //!< Embedded wait object for synchronization. Zero-size (no memory) if KERNEL_SYNC is not set.
     };
 
     /*! \class KernelService
@@ -616,7 +617,7 @@ class Kernel : public IKernel, private IPlatform::IEventHandler
         */
         __stk_attr_noinline void Sleep(Timeout msec)
         {
-            if ((_Mode & KERNEL_HRT) == 0)
+            if (!IsHrtMode())
             {
                 m_platform->Sleep((Timeout)GetTicksFromMsec(msec, GetTickResolution()));
             }
@@ -643,7 +644,7 @@ class Kernel : public IKernel, private IPlatform::IEventHandler
         */
         IWaitObject *Wait(ISyncObject *sobj, IMutex *mutex, Timeout ticks)
         {
-            if (_Mode & KERNEL_SYNC)
+            if (IsSyncMode())
             {
                 return m_platform->Wait(sobj, mutex, ticks);
             }
@@ -658,7 +659,7 @@ class Kernel : public IKernel, private IPlatform::IEventHandler
         /*! \brief Construct an uninitialised service instance (m_platform = null, m_ticks = 0).
             \note  Fully initialised by Initialize(). Private; constructed only as a member of Kernel.
         */
-        explicit KernelService() : m_platform(0), m_ticks(0)
+        explicit KernelService() : m_platform(nullptr), m_ticks(0)
         {}
 
         /*! \brief     Initialize instance.
@@ -668,7 +669,7 @@ class Kernel : public IKernel, private IPlatform::IEventHandler
         */
         void Initialize(IPlatform *platform)
         {
-            m_platform = static_cast<_TyPlatform *>(platform);
+            m_platform = static_cast<TPlatform *>(platform);
         }
 
         /*! \brief     Increment tick by 1.
@@ -679,7 +680,7 @@ class Kernel : public IKernel, private IPlatform::IEventHandler
             hw::WriteVolatile64(&m_ticks, m_ticks + 1);
         }
 
-        _TyPlatform   *m_platform; //!< Typed platform driver pointer, set at Initialize().
+        TPlatform   *m_platform; //!< Typed platform driver pointer, set at Initialize().
         volatile Ticks m_ticks;    //!< Global tick counter. Written via hw::WriteVolatile64() by IncrementTick() (ISR context); read via hw::ReadVolatile64() by GetTicks() (task context) for a lock-free consistent 64-bit read on 32-bit CPUs.
     };
 
@@ -688,23 +689,23 @@ public:
     */
     enum EConsts
     {
-        TASKS_MAX = _Size //!< Maximum number of concurrently registered tasks. Fixed at compile time. Exceeding this limit in AddTask() triggers a compile-time assert (TASKS_MAX > 0) and a runtime STK_ASSERT.
+        TASKS_MAX = TSize //!< Maximum number of concurrently registered tasks. Fixed at compile time. Exceeding this limit in AddTask() triggers a compile-time assert (TASKS_MAX > 0) and a runtime STK_ASSERT.
     };
 
     /*! \brief Construct the kernel with all storage zero-initialised and the request flag set to ~0
                (indicating uninitialized state; cleared to REQUEST_NONE by Initialize()).
-        \note  In debug builds also verifies that _TyPlatform derives from IPlatform and _TyStrategy
+        \note  In debug builds also verifies that TPlatform derives from IPlatform and TStrategy
                from ITaskSwitchStrategy.
     */
     explicit Kernel() : m_platform(), m_strategy(), m_task_now(nullptr), m_task_storage(), m_sleep_trap(),
-        m_exit_trap(), m_fsm_state(FSM_STATE_NONE), m_request(~0)
+        m_exit_trap(), m_fsm_state(FSM_STATE_NONE), m_request(REQUEST_NONE), m_state(STATE_INACTIVE)
     {
     #ifdef _DEBUG
-        // _TyPlatform must inherit IPlatform
+        // TPlatform must inherit IPlatform
         IPlatform *platform = &m_platform;
         (void)platform;
 
-        // _TyStrategy must inherit ITaskSwitchStrategy
+        // TStrategy must inherit ITaskSwitchStrategy
         ITaskSwitchStrategy *strategy = &m_strategy;
         (void)strategy;
     #endif
@@ -722,12 +723,17 @@ public:
         STK_ASSERT(resolution_us <= PERIODICITY_MAX);
         STK_ASSERT(!IsInitialized());
 
+        // reinitialize key state variables
         m_task_now  = nullptr;
         m_fsm_state = FSM_STATE_NONE;
         m_request   = REQUEST_NONE;
 
         m_service.Initialize(&m_platform);
-        m_platform.Initialize(this, &m_service, resolution_us, (_Mode & KERNEL_DYNAMIC ? &m_exit_trap[0].stack : nullptr));
+
+        m_platform.Initialize(this, &m_service, resolution_us, (IsDynamicMode() ? &m_exit_trap[0].stack : nullptr));
+
+        // now ready to Start()
+        m_state = STATE_READY;
     }
 
     /*! \brief     Register task for a soft real-time (SRT) scheduling.
@@ -740,7 +746,7 @@ public:
     */
     __stk_attr_noinline void AddTask(ITask *user_task)
     {
-        if ((_Mode & KERNEL_HRT) == 0)
+        if (!IsHrtMode())
         {
             STK_ASSERT(user_task != nullptr);
             STK_ASSERT(IsInitialized());
@@ -749,7 +755,7 @@ public:
             // kernel processes this request
             if (IsStarted())
             {
-                if ((_Mode & KERNEL_DYNAMIC) != 0)
+                if (IsDynamicMode())
                 {
                     RequestAddTask(user_task);
                 }
@@ -779,7 +785,7 @@ public:
     */
     __stk_attr_noinline void AddTask(ITask *user_task, Timeout periodicity_tc, Timeout deadline_tc, Timeout start_delay_tc)
     {
-        if (_Mode & KERNEL_HRT)
+        if (IsHrtMode())
         {
             STK_ASSERT(user_task != nullptr);
             STK_ASSERT(IsInitialized());
@@ -803,12 +809,12 @@ public:
     */
     __stk_attr_noinline void RemoveTask(ITask *user_task)
     {
-        if (_Mode & KERNEL_DYNAMIC)
+        if (IsDynamicMode())
         {
             STK_ASSERT(user_task != nullptr);
             STK_ASSERT(!IsStarted());
 
-            KernelTask *task = FindTask(user_task);
+            KernelTask *task = FindTaskByUserTask(user_task);
             if (task != nullptr)
                 RemoveTask(task);
         }
@@ -831,8 +837,6 @@ public:
     {
         STK_ASSERT(IsInitialized());
 
-        m_task_now = nullptr;
-
          // stacks of the traps must be re-initilized on every subsequent Start
         InitTraps();
 
@@ -854,17 +858,24 @@ public:
         \return \c true if Start() has been called and the first task switch has occurred
                 (m_task_now != nullptr), \c false before Start() or after all tasks exit.
     */
-    bool IsStarted() const { return (m_task_now != nullptr); }
+    bool IsStarted() const
+    {
+        return (m_task_now != nullptr);
+    }
 
     /*! \brief  Get platform driver instance owned by this kernel.
-        \return Pointer to the internal _TyPlatform cast to IPlatform*.
+        \return Pointer to the internal TPlatform cast to IPlatform*.
     */
     IPlatform *GetPlatform() { return &m_platform; }
 
     /*! \brief  Get task-switching strategy instance owned by this kernel.
-        \return Pointer to the internal _TyStrategy cast to ITaskSwitchStrategy*.
+        \return Pointer to the internal TStrategy cast to ITaskSwitchStrategy*.
     */
     ITaskSwitchStrategy *GetSwitchStrategy() { return &m_strategy; }
+
+    /*! \brief  Get kernel state.
+    */
+    EState GetState() const { return m_state; }
 
 protected:
     /*! \enum  EFsmState
@@ -878,7 +889,7 @@ protected:
         FSM_STATE_SLEEPING,       //!< All tasks are sleeping, the sleep trap is executing (CPU in low-power state).
         FSM_STATE_WAKING,         //!< At least one task woke up, transitioning from sleep trap back to a user task.
         FSM_STATE_EXITING,        //!< All tasks exited (KERNEL_DYNAMIC only), executing the exit trap to return from Start().
-        FSM_STATE_MAX             //!< Sentinel: number of valid states (used to size the FSM table).
+        FSM_STATE_MAX             //!< Sentinel: number of valid states (used to size the FSM table), denotes uninitialized state
     };
 
     /*! \enum  EFsmEvent
@@ -893,6 +904,14 @@ protected:
         FSM_EVENT_EXIT,       //!< No tasks remain (KERNEL_DYNAMIC), exit scheduling and return from Start().
         FSM_EVENT_MAX         //!< Sentinel: number of valid events (used to size the FSM table).
     };
+
+    /*! \brief     Check if FSM state is valid.
+    */
+    static __stk_forceinline bool IsValidFsmState(EFsmState state)
+    {
+        return (state > FSM_STATE_NONE) &&
+               (state < FSM_STATE_MAX);
+    }
 
     /*! \brief     Initialize stack of the traps.
     */
@@ -912,7 +931,7 @@ protected:
         }
 
         // init stack for an Exit trap
-        if (_Mode & KERNEL_DYNAMIC)
+        if (IsDynamicMode())
         {
             ExitTrapStack &exit = m_exit_trap[0];
 
@@ -1014,7 +1033,7 @@ protected:
     */
     __stk_attr_noinline void RequestAddTask(ITask *user_task)
     {
-        STK_ASSERT(_Mode & KERNEL_DYNAMIC);
+        STK_ASSERT(IsDynamicMode());
 
         KernelTask *caller = FindTaskBySP(m_platform.GetCallerSP());
         STK_ASSERT(caller != nullptr);
@@ -1032,11 +1051,11 @@ protected:
         STK_ASSERT(caller->m_srt[0].add_task_req == nullptr);
     }
 
-    /*! \brief     Find kernel task for the bound ITask instance.
+    /*! \brief     Find kernel task by the bound ITask instance.
         \param[in] user_task: User task.
         \return    Kernel task.
     */
-    __stk_attr_noinline KernelTask *FindTask(const ITask *user_task)
+    __stk_attr_noinline KernelTask *FindTaskByUserTask(const ITask *user_task)
     {
         for (uint32_t i = 0; i < TASKS_MAX; ++i)
         {
@@ -1048,15 +1067,15 @@ protected:
         return nullptr;
     }
 
-    /*! \brief     Find kernel task for the bound Stack instance.
+    /*! \brief     Find kernel task by the bound Stack instance.
         \param[in] stack: Stack.
         \return    Kernel task.
     */
-    KernelTask *FindTask(const Stack *stack) const
+    KernelTask *FindTaskByStack(const Stack *stack)
     {
         for (uint32_t i = 0; i < TASKS_MAX; ++i)
         {
-            KernelTask *task = const_cast<KernelTask *>(&m_task_storage[i]);
+            KernelTask *task = &m_task_storage[i];
             if (task->GetUserStack() == stack)
                 return task;
         }
@@ -1068,7 +1087,7 @@ protected:
         \param[in] SP: Stack pointer.
         \return    Kernel task.
     */
-    __stk_attr_noinline KernelTask *FindTaskBySP(Word SP) const
+    __stk_attr_noinline KernelTask *FindTaskBySP(Word SP)
     {
         STK_ASSERT(m_task_now != nullptr);
 
@@ -1077,14 +1096,14 @@ protected:
 
         for (uint32_t i = 0; i < TASKS_MAX; ++i)
         {
-            const KernelTask *task = &m_task_storage[i];
+            KernelTask *task = &m_task_storage[i];
 
             // skip finished tasks (applicable only for KERNEL_DYNAMIC mode)
-            if ((_Mode & KERNEL_DYNAMIC) && !task->IsBusy())
+            if (IsDynamicMode() && !task->IsBusy())
                 continue;
 
             if (task->IsMemoryOfSP(SP))
-                return const_cast<KernelTask *>(task);
+                return task;
         }
 
         return nullptr;
@@ -1106,12 +1125,12 @@ protected:
         task->Unbind();
     }
 
-    __stk_attr_noinline void OnStart(Stack **active)
+    __stk_attr_noinline void OnStart(Stack *&active)
     {
         STK_ASSERT(m_strategy.GetSize() != 0);
 
         // iterate tasks and generate OnTaskSleep for a strategy for all initially sleeping tasks
-        if (_TyStrategy::SLEEP_EVENT_API)
+        if (TStrategy::SLEEP_EVENT_API)
         {
             for (uint32_t i = 0; i < TASKS_MAX; ++i)
             {
@@ -1119,7 +1138,7 @@ protected:
 
                 if (task->IsSleeping())
                 {
-                    if (task->m_state & KernelTask::STATE_SLEEP_PENDING)
+                    if ((task->m_state & KernelTask::STATE_SLEEP_PENDING) != 0U)
                     {
                         task->m_state &= ~KernelTask::STATE_SLEEP_PENDING;
 
@@ -1135,7 +1154,7 @@ protected:
             m_fsm_state = FSM_STATE_SWITCHING;
 
             KernelTask *next = nullptr;
-            m_fsm_state = GetNewFsmState(&next);
+            m_fsm_state = GetNewFsmState(next);
 
             // expecting only SLEEPING or SWITCHING states
             STK_ASSERT((m_fsm_state == FSM_STATE_SLEEPING) || (m_fsm_state == FSM_STATE_SWITCHING));
@@ -1144,26 +1163,42 @@ protected:
             {
                 m_task_now = next;
 
-                (*active) = next->GetUserStack();
+                active = next->GetUserStack();
 
-                if (_Mode & KERNEL_HRT)
+                if (IsHrtMode())
                     next->HrtOnSwitchedIn();
             }
             else
             if (m_fsm_state == FSM_STATE_SLEEPING)
             {
+                // MISRA 5-2-3 deviation: GetNext/GetFirst returns IKernelTask*, all objects in
+                // the strategy pool are KernelTask instances - downcast is guaranteed safe.
                 m_task_now = static_cast<KernelTask *>(m_strategy.GetFirst());
 
-                (*active) = &m_sleep_trap[0].stack;
+                active = &m_sleep_trap[0].stack;
             }
         }
+
+        // is in running state
+        m_state = STATE_RUNNING;
 
     #if STK_SEGGER_SYSVIEW
         SEGGER_SYSVIEW_OnTaskStartExec(m_task_now->tid);
     #endif
     }
 
-    bool OnTick(Stack **idle, Stack **active)
+    __stk_attr_noinline void OnStop()
+    {
+        if (IsDynamicMode())
+        {
+            m_fsm_state = FSM_STATE_NONE;
+
+            // is in stopped state, i.e. is ready to Start() again
+            m_state = STATE_READY;
+        }
+    }
+
+    bool OnTick(Stack *&idle, Stack *&active)
     {
         m_service.IncrementTick();
         UpdateTasks();
@@ -1187,10 +1222,8 @@ protected:
         {
             hw::CriticalSection::ScopedLock cs_;
 
-            if (_Mode & KERNEL_HRT)
-            {
+            if (IsHrtMode())
                 task->HrtOnWorkCompleted();
-            }
 
             task->ScheduleSleep(ticks);
         }
@@ -1204,9 +1237,9 @@ protected:
 
     void OnTaskExit(Stack *stack)
     {
-        if (_Mode & KERNEL_DYNAMIC)
+        if (IsDynamicMode())
         {
-            KernelTask *task = FindTask(stack);
+            KernelTask *task = FindTaskByStack(stack);
             STK_ASSERT(task != nullptr);
 
             task->ScheduleRemoval();
@@ -1214,13 +1247,13 @@ protected:
         else
         {
             // kernel operating mode must be KERNEL_DYNAMIC for tasks to be able to exit
-            STK_ASSERT(false);
+            STK_KERNEL_PANIC(KERNEL_PANIC_BAD_MODE);
         }
     }
 
     IWaitObject *OnTaskWait(Word caller_SP, ISyncObject *sync_obj, IMutex *mutex, Timeout timeout)
     {
-        if (_Mode & KERNEL_SYNC)
+        if (IsSyncMode())
         {
             STK_ASSERT(timeout != 0);        // API contract: caller must not be in ISR
             STK_ASSERT(sync_obj != nullptr); // API contract: ISyncObject instance must be provided
@@ -1261,7 +1294,7 @@ protected:
         }
     }
 
-    TId OnGetTid(Word caller_SP) const
+    TId OnGetTid(Word caller_SP)
     {
         KernelTask *task = FindTaskBySP(caller_SP);
         STK_ASSERT(task != nullptr);
@@ -1274,7 +1307,7 @@ protected:
     void UpdateTasks()
     {
         // sync objects are updated before UpdateTaskRequest which may add a new object (newly added object must become 1 tick older)
-        if (_Mode & KERNEL_SYNC)
+        if (IsSyncMode())
             UpdateSyncObjects();
 
         UpdateTaskRequest();
@@ -1291,7 +1324,7 @@ protected:
 
             if (task->IsSleeping())
             {
-                if (_Mode & KERNEL_DYNAMIC)
+                if (IsDynamicMode())
                 {
                     // task is pending removal, wait until it is switched out
                     if (task->IsPendingRemoval())
@@ -1307,9 +1340,9 @@ protected:
 
                 // deliver sleep event to strategy
                 // note: only currently scheduled task can be pending to sleep
-                if (_TyStrategy::SLEEP_EVENT_API)
+                if (TStrategy::SLEEP_EVENT_API)
                 {
-                    if (task->m_state & KernelTask::STATE_SLEEP_PENDING)
+                    if ((task->m_state & KernelTask::STATE_SLEEP_PENDING) != 0U)
                     {
                         task->m_state &= ~KernelTask::STATE_SLEEP_PENDING;
 
@@ -1322,7 +1355,7 @@ protected:
                 ++task->m_time_sleep;
 
                 // deliver sleep event to strategy
-                if (_TyStrategy::SLEEP_EVENT_API)
+                if (TStrategy::SLEEP_EVENT_API)
                 {
                     // notify strategy that task woke up
                     if (task->m_time_sleep >= 0)
@@ -1330,7 +1363,7 @@ protected:
                 }
             }
             else
-            if (_Mode & KERNEL_HRT)
+            if (IsHrtMode())
             {
                 // in HRT mode we trace how long task spent in active state (doing some work)
                 if (task->IsBusy())
@@ -1343,7 +1376,7 @@ protected:
                         bool can_recover = false;
 
                         // report deadline overrun to a strategy which supports overrun recovery
-                        if (_TyStrategy::DEADLINE_MISSED_API)
+                        if (TStrategy::DEADLINE_MISSED_API)
                             can_recover = m_strategy.OnTaskDeadlineMissed(task);
 
                         // report failure if it could not be recovered by a scheduling strategy
@@ -1359,7 +1392,7 @@ protected:
     */
     void UpdateSyncObjects()
     {
-        STK_ASSERT(_Mode & KERNEL_SYNC);
+        STK_ASSERT(IsSyncMode());
 
         ISyncObject::ListEntryType *itr = m_sync_list->GetFirst();
 
@@ -1367,6 +1400,8 @@ protected:
         {
             ISyncObject::ListEntryType *next = itr->GetNext();
 
+            // MISRA 5-2-3 deviation: GetNext/GetFirst returns ISyncObject*, all objects in
+            // m_sync_list are ISyncObject instances - downcast is guaranteed safe.
             if (!static_cast<ISyncObject *>(itr)->Tick())
                 m_sync_list->Unlink(itr);
 
@@ -1381,12 +1416,13 @@ protected:
         if (m_request == REQUEST_NONE)
             return;
 
-        // process AddTask requests coming from tasks (KERNEL_DYNAMIC mode only)
-        if (!(_Mode & KERNEL_HRT) && (_Mode & KERNEL_DYNAMIC))
+        // process AddTask requests coming from tasks (KERNEL_DYNAMIC mode only, KERNEL_HRT is
+        // excluded as we assume that HRT tasks must be known to the kernel before a Start())
+        if (IsDynamicMode() && !IsHrtMode())
         {
             // process serialized AddTask request made from another active task, requesting process
             // is currently waiting due to SwitchToNext()
-            if (m_request & REQUEST_ADD_TASK)
+            if ((m_request & REQUEST_ADD_TASK) != 0U)
             {
                 m_request &= ~REQUEST_ADD_TASK;
 
@@ -1406,23 +1442,23 @@ protected:
         }
     }
 
-    /*! \brief     Fetch next event for the FSM.
-        \param[in] next: Next kernel task to which Kernel can switch.
-        \return    FSM event.
+    /*! \brief      Fetch next event for the FSM.
+        \param[out] next: Next kernel task to which Kernel can switch.
+        \return     FSM event.
     */
-    EFsmEvent FetchNextEvent(KernelTask **next)
+    EFsmEvent FetchNextEvent(KernelTask *&next)
     {
-        EFsmEvent type;
-        KernelTask *itr;
+        EFsmEvent type = FSM_EVENT_EXIT;
+        KernelTask *itr = nullptr;
 
-        // check if no tasks left in Dynamic mode and exit
-        if ((_Mode & KERNEL_DYNAMIC) && (m_strategy.GetSize() == 0))
+        // check if no tasks left in KERNEL_DYNAMIC mode and exit, if KERNEL_DYNAMIC is not
+        // set then 'is_empty' will always be false
+        bool is_empty = IsDynamicMode() && (m_strategy.GetSize() == 0U);
+
+        if (!is_empty)
         {
-            itr  = nullptr;
-            type = FSM_EVENT_EXIT;
-        }
-        else
-        {
+            // MISRA 5-2-3 deviation: GetNext/GetFirst returns IKernelTask*, all objects in
+            // the strategy pool are KernelTask instances - downcast is guaranteed safe.
             itr = static_cast<KernelTask *>(m_strategy.GetNext());
 
             // sleep-aware strategy returns nullptr if no active tasks available, start sleeping
@@ -1440,17 +1476,20 @@ protected:
             }
         }
 
-        (*next) = itr;
+        next = itr;
         return type;
     }
 
-    /*! \brief     Get new FSM state.
-        \param[in] next: Next kernel task to which Kernel can switch.
-        \return    FSM state.
+    /*! \brief      Get new FSM state.
+        \param[out] next: Next kernel task to which Kernel can switch.
+        \return     FSM state.
     */
-    EFsmState GetNewFsmState(KernelTask **next)
+#ifdef _STK_UNDER_TEST
+    virtual
+#endif
+    EFsmState GetNewFsmState(KernelTask *&next)
     {
-        STK_ASSERT(m_fsm_state != FSM_STATE_NONE);
+        STK_ASSERT(IsValidFsmState(m_fsm_state));
         return m_fsm[m_fsm_state][FetchNextEvent(next)];
     }
 
@@ -1459,32 +1498,33 @@ protected:
         \param[out] active: Stack of the task which must enter Active state (to which context will switch).
         \return     FSM state.
     */
-    bool UpdateFsmState(Stack **idle, Stack **active)
+    bool UpdateFsmState(Stack *&idle, Stack *&active)
     {
-        KernelTask *now = m_task_now, *next;
-        EFsmState new_state = GetNewFsmState(&next);
-        bool switch_context;
+        KernelTask *now = m_task_now, *next = nullptr;
+        bool switch_context = false;
+
+        EFsmState new_state = GetNewFsmState(next);
 
         switch (new_state)
         {
-        case FSM_STATE_SWITCHING: {
+        case FSM_STATE_SWITCHING:
             switch_context = StateSwitch(now, next, idle, active);
-            break; }
-
-        case FSM_STATE_WAKING: {
-            switch_context = StateWake(now, next, idle, active);
-            break; }
-
-        case FSM_STATE_SLEEPING: {
+            break;
+        case FSM_STATE_SLEEPING:
             switch_context = StateSleep(now, next, idle, active);
-            break; }
-
-        case FSM_STATE_EXITING: {
+            break;
+        case FSM_STATE_WAKING:
+            switch_context = StateWake(now, next, idle, active);
+            break;
+        case FSM_STATE_EXITING:
             switch_context = StateExit(now, next, idle, active);
-            break; }
-
-        default:
-            return false;
+            break;
+        case FSM_STATE_NONE:
+            return switch_context; // valid intermittent non-persisting state: no-transition
+        case FSM_STATE_MAX:
+        default:                   // invalid state value
+            STK_KERNEL_PANIC(KERNEL_PANIC_BAD_STATE);
+            break;
         }
 
         m_fsm_state = new_state;
@@ -1498,7 +1538,7 @@ protected:
         \param[out] idle: Stack of the task which must enter Idle state.
         \param[out] active: Stack of the task which must enter Active state (to which context will switch).
     */
-    bool StateSwitch(KernelTask *now, KernelTask *next, Stack **idle, Stack **active)
+    bool StateSwitch(KernelTask *now, KernelTask *next, Stack *&idle, Stack *&active)
     {
         STK_ASSERT(now != nullptr);
         STK_ASSERT(next != nullptr);
@@ -1507,8 +1547,8 @@ protected:
         if (next == now)
             return false;
 
-        (*idle)   = now->GetUserStack();
-        (*active) = next->GetUserStack();
+        idle   = now->GetUserStack();
+        active = next->GetUserStack();
 
         // if stack memory is exceeded these assertions will be hit
         if (now->IsBusy())
@@ -1520,7 +1560,7 @@ protected:
 
         m_task_now = next;
 
-        if (_Mode & KERNEL_HRT)
+        if ((IsHrtMode()))
         {
             if (now->m_hrt[0].done)
             {
@@ -1544,14 +1584,14 @@ protected:
         \param[out] idle: Stack of the task which must enter Idle state.
         \param[out] active: Stack of the task which must enter Active state (to which context will switch).
     */
-    bool StateWake(KernelTask *now, KernelTask *next, Stack **idle, Stack **active)
+    bool StateWake(KernelTask *now, KernelTask *next, Stack *&idle, Stack *&active)
     {
         (void)now;
 
         STK_ASSERT(next != nullptr);
 
-        (*idle)   = &m_sleep_trap[0].stack;
-        (*active) = next->GetUserStack();
+        idle   = &m_sleep_trap[0].stack;
+        active = next->GetUserStack();
 
         // if stack memory is exceeded these assertions will be hit
         STK_ASSERT(m_sleep_trap[0].memory[0] == STK_STACK_MEMORY_FILLER);
@@ -1563,10 +1603,8 @@ protected:
         SEGGER_SYSVIEW_OnTaskStartReady(next->GetUserStack()->tid);
     #endif
 
-        if (_Mode & KERNEL_HRT)
-        {
+        if ((IsHrtMode()))
             next->HrtOnSwitchedIn();
-        }
 
         return true; // switch context
     }
@@ -1578,15 +1616,15 @@ protected:
         \param[out] idle: Stack of the task which must enter Idle state.
         \param[out] active: Stack of the task which must enter Active state (to which context will switch).
     */
-    bool StateSleep(KernelTask *now, KernelTask *next, Stack **idle, Stack **active)
+    bool StateSleep(KernelTask *now, KernelTask *next, Stack *&idle, Stack *&active)
     {
         (void)next;
 
         STK_ASSERT(now != nullptr);
         STK_ASSERT(m_sleep_trap[0].stack.SP != 0);
 
-        (*idle)   = now->GetUserStack();
-        (*active) = &m_sleep_trap[0].stack;
+        idle   = now->GetUserStack();
+        active = &m_sleep_trap[0].stack;
 
         m_task_now = static_cast<KernelTask *>(m_strategy.GetFirst());
 
@@ -1594,7 +1632,7 @@ protected:
         SEGGER_SYSVIEW_OnTaskStopReady(now->GetUserStack()->tid, TRACE_EVENT_SLEEP);
     #endif
 
-        if (_Mode & KERNEL_HRT)
+        if (IsHrtMode())
         {
             if (!now->IsPendingRemoval())
                 now->HrtOnSwitchedOut(&m_platform);
@@ -1611,18 +1649,18 @@ protected:
         \param[out] idle: Stack of the task which must enter Idle state.
         \param[out] active: Stack of the task which must enter Active state (to which context will switch).
     */
-    bool StateExit(KernelTask *now, KernelTask *next, Stack **idle, Stack **active)
+    bool StateExit(KernelTask *now, KernelTask *next, Stack *&idle, Stack *&active)
     {
         (void)now;
         (void)next;
 
-        if (_Mode & KERNEL_DYNAMIC)
+        if (IsDynamicMode())
         {
             // dynamic tasks are not supported if main processes's stack memory is not provided in Start()
             STK_ASSERT(m_exit_trap[0].stack.SP != 0);
 
-            (*idle)   = nullptr;
-            (*active) = &m_exit_trap[0].stack;
+            idle   = nullptr;
+            active = &m_exit_trap[0].stack;
 
             m_task_now = nullptr;
 
@@ -1638,10 +1676,9 @@ protected:
     }
 
     /*! \brief     Check whether Initialize() has been called and completed successfully.
-        \return    \c true if m_request == REQUEST_NONE (set by Initialize()), \c false if the
-                   kernel is in the pre-Initialize state (m_request == ~0, set by the constructor).
+        \return    \c true if Initialize() was called, \c false otherwise.
     */
-    bool IsInitialized() const { return (m_request == REQUEST_NONE); }
+    bool IsInitialized() const { return (m_state != STATE_INACTIVE); }
 
     /*! \brief     Signal the kernel to process a pending AddTask request on the next tick.
         \note      Sets the REQUEST_ADD_TASK bit in m_request and emits a full memory fence
@@ -1649,8 +1686,8 @@ protected:
     */
     void ScheduleAddTask()
     {
+        hw::CriticalSection::ScopedLock cs_;
         m_request |= REQUEST_ADD_TASK;
-        __stk_full_memfence();
     }
 
 #if STK_SEGGER_SYSVIEW
@@ -1674,19 +1711,25 @@ protected:
     }
 #endif
 
+    // Kernel modes:
+    static __stk_forceinline bool IsStaticMode() { return ((TMode & KERNEL_STATIC) != 0U); }
+    static __stk_forceinline bool IsDynamicMode() { return ((TMode & KERNEL_DYNAMIC) != 0U); }
+    static __stk_forceinline bool IsHrtMode() { return ((TMode & KERNEL_HRT) != 0U); }
+    static __stk_forceinline bool IsSyncMode() { return ((TMode & KERNEL_SYNC) != 0U); }
+
     // If hit here: Kernel<N> expects at least 1 task, e.g. N > 0
     STK_STATIC_ASSERT_N(TASKS_MAX, TASKS_MAX > 0);
 
     // If hit here: Kernel mode must be assigned.
-    STK_STATIC_ASSERT_N(KERNEL_MODE_MUST_BE_SET, (_Mode != 0));
+    STK_STATIC_ASSERT_N(KERNEL_MODE_MUST_BE_SET, (TMode != 0U));
 
     // If hit here: KERNEL_STATIC and KERNEL_DYNAMIC can not be mixed, either one of these is possible.
     STK_STATIC_ASSERT_N(KERNEL_MODE_MIX_NOT_ALLOWED,
-        (((_Mode & KERNEL_STATIC) & (_Mode & KERNEL_DYNAMIC)) == 0));
+        (((TMode & KERNEL_STATIC) & (TMode & KERNEL_DYNAMIC)) == 0U));
 
     // If hit here: KERNEL_HRT must accompany KERNEL_STATIC or KERNEL_DYNAMIC.
-    STK_STATIC_ASSERT_N(KERNEL_MODE_HRT_ALONE, ((_Mode & KERNEL_HRT) == 0) ||
-        ((_Mode & KERNEL_HRT) && ((_Mode & KERNEL_STATIC) || (_Mode & KERNEL_DYNAMIC))));
+    STK_STATIC_ASSERT_N(KERNEL_MODE_HRT_ALONE, (((TMode & KERNEL_HRT) == 0U) ||
+        ((((TMode & KERNEL_HRT) != 0U)) && (((TMode & KERNEL_STATIC) != 0U) || ((TMode & KERNEL_DYNAMIC) != 0U)))));
 
     /*! \typedef TaskStorageType
         \brief   KernelTask array type used as a storage for the KernelTask instances.
@@ -1731,23 +1774,24 @@ protected:
     */
     typedef ISyncObject::ListHeadType SyncObjectList;
 
-    KernelService     m_service;         //!< Kernel service singleton exposed to running tasks via IKernelService::GetInstance().
-    _TyPlatform       m_platform;        //!< Platform driver (SysTick, PendSV, context switch implementation).
-    _TyStrategy       m_strategy;        //!< Task-switching strategy (determines which task runs next).
-    KernelTask       *m_task_now;        //!< Currently executing task, or \c nullptr before Start() or after all tasks exit.
-    TaskStorageType   m_task_storage;    //!< Static pool of _Size KernelTask slots (free slots have m_user == nullptr).
-    SleepTrapStack    m_sleep_trap[1];   //!< Sleep trap (always present): executed when all tasks are sleeping.
-    ExitTrapStack     m_exit_trap[STK_ALLOCATE_COUNT(_Mode, KERNEL_DYNAMIC, 1, 0)]; //!< Exit trap: zero-size in KERNEL_STATIC mode; one entry in KERNEL_DYNAMIC mode.
-    EFsmState         m_fsm_state;       //!< Current FSM state. Drives context-switch decision on every tick.
-    volatile uint32_t m_request;         //!< Bitmask of pending ERequest flags from running tasks. Written by tasks, read/cleared by UpdateTaskRequest() in tick context.
-    SyncObjectList    m_sync_list[STK_ALLOCATE_COUNT(_Mode, KERNEL_SYNC, 1, 0)]; //!< List of active sync objects. Zero-size (no memory) if KERNEL_SYNC is not set.
+    KernelService    m_service;         //!< Kernel service singleton exposed to running tasks via IKernelService::GetInstance().
+    TPlatform        m_platform;        //!< Platform driver (SysTick, PendSV, context switch implementation).
+    TStrategy        m_strategy;        //!< Task-switching strategy (determines which task runs next).
+    KernelTask      *m_task_now;        //!< Currently executing task, or \c nullptr before Start() or after all tasks exit.
+    TaskStorageType  m_task_storage;    //!< Static pool of _Size KernelTask slots (free slots have m_user == nullptr).
+    SleepTrapStack   m_sleep_trap[1];   //!< Sleep trap (always present): executed when all tasks are sleeping.
+    ExitTrapStack    m_exit_trap[STK_ALLOCATE_COUNT(TMode, KERNEL_DYNAMIC, 1, 0)]; //!< Exit trap: zero-size in KERNEL_STATIC mode; one entry in KERNEL_DYNAMIC mode.
+    EFsmState        m_fsm_state;       //!< Current FSM state. Drives context-switch decision on every tick.
+    volatile uint8_t m_request;         //!< Bitmask of pending ERequest flags from running tasks. Written by tasks, read/cleared by UpdateTaskRequest() in tick context.
+    volatile EState  m_state;           //!< Current kernel state.
+    SyncObjectList   m_sync_list[STK_ALLOCATE_COUNT(TMode, KERNEL_SYNC, 1, 0)]; //!< List of active sync objects. Zero-size (no memory) if KERNEL_SYNC is not set.
 
-    const EFsmState m_fsm[FSM_STATE_MAX][FSM_EVENT_MAX] = {
+    const EFsmState  m_fsm[FSM_STATE_MAX][FSM_EVENT_MAX] = {
     //    FSM_EVENT_SWITCH     FSM_EVENT_SLEEP     FSM_EVENT_WAKE    FSM_EVENT_EXIT
         { FSM_STATE_SWITCHING, FSM_STATE_SLEEPING, FSM_STATE_NONE,   FSM_STATE_EXITING }, // FSM_STATE_SWITCHING
         { FSM_STATE_NONE,      FSM_STATE_NONE,     FSM_STATE_WAKING, FSM_STATE_EXITING }, // FSM_STATE_SLEEPING
         { FSM_STATE_SWITCHING, FSM_STATE_SLEEPING, FSM_STATE_NONE,   FSM_STATE_EXITING }, // FSM_STATE_WAKING
-        { FSM_STATE_NONE,      FSM_STATE_NONE,     FSM_STATE_NONE,   FSM_STATE_NONE }     // FSM_STATE_EXITING
+        { FSM_STATE_NONE,      FSM_STATE_NONE,     FSM_STATE_NONE,   FSM_STATE_NONE    }  // FSM_STATE_EXITING
     }; //!< Compile-time FSM transition table. Indexed as m_fsm[current_state][event] -> next_state.
        //!< FSM_STATE_NONE as a next-state means "no transition": the FSM stays in the current state.
        //!< Updated by UpdateFsmState() each tick via GetNewFsmState() -> FetchNextEvent().

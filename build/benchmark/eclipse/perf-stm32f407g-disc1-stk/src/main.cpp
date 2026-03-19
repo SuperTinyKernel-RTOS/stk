@@ -26,7 +26,7 @@ extern "C" void SysTick_Handler()
     if (g_Enable)
         ++g_Ticks;
 
-    if (g_Kernel.IsStarted())
+    if (g_Kernel.GetState() == stk::IKernel::STATE_RUNNING)
         g_Kernel.GetPlatform()->ProcessTick();
 }
 
