@@ -141,6 +141,12 @@ public:
         Timer() : m_deadline(0), m_timestamp(0), m_period(0), m_active(false), m_pending(false)
         {}
 
+        /*! \brief Destructor.
+            \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
+        */
+        ~Timer()
+        {}
+
         virtual void OnExpired(TimerHost *host) = 0;
 
         bool IsActive() const      { return m_active; }
@@ -168,6 +174,12 @@ public:
 
     explicit TimerHost()
         : m_task_tick_memory(), m_task_handler_memory(), m_task_tick(), m_task_process(), m_active(), m_now(0)
+    {}
+
+    /*! \brief Destructor.
+        \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
+    */
+    ~TimerHost()
     {}
 
     /*! \brief     Initialize timer host instance.

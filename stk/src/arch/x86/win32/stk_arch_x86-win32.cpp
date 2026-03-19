@@ -148,6 +148,10 @@ static struct Context : public PlatformContext
 
         LoadWindowsAPI();
     }
+
+    /*! \brief Destructor.
+        \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
+    */
     ~Context()
     {
         if (m_tls != TLS_OUT_OF_INDEXES)

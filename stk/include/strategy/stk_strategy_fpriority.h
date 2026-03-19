@@ -84,11 +84,17 @@ public:
         \note  A compile-time assertion enforces MAX_PRIORITIES <= 32, matching the width of the
                32-bit \c m_ready_bitmap. Instantiating with MAX_PRIORITIES > 32 is a compile error.
     */
-    SwitchStrategyFixedPriority() : m_tasks(), m_sleep(), m_ready_bitmap(0U), m_prev()
+    explicit SwitchStrategyFixedPriority() : m_tasks(), m_sleep(), m_ready_bitmap(0U), m_prev()
     {
         STK_STATIC_ASSERT_DESC(MAX_PRIORITIES <= 32U,
             "MAX_PRIORITIES exceeds 32-bit bitmap width");
     }
+
+    /*! \brief Destructor.
+        \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
+    */
+    ~SwitchStrategyFixedPriority()
+    {}
 
     /*! \brief     Add task to the runnable set at its fixed priority level.
         \param[in] task: Task to add. Must not be \c NULL and must not already be in any list.

@@ -74,7 +74,13 @@ public:
 
     /*! \brief Construct an empty strategy with no tasks and a zero total weight.
     */
-    SwitchStrategySmoothWeightedRoundRobin() : m_tasks(), m_sleep(), m_total_weight(0)
+    explicit SwitchStrategySmoothWeightedRoundRobin() : m_tasks(), m_sleep(), m_total_weight(0)
+    {}
+
+    /*! \brief Destructor.
+        \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
+    */
+    ~SwitchStrategySmoothWeightedRoundRobin()
     {}
 
     /*! \brief     Add task to the runnable set.

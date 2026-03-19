@@ -85,6 +85,8 @@ public:
     virtual const char *GetTraceName() const { return nullptr; }
 
 protected:
+    STK_NONCOPYABLE_CLASS(Task);
+
     /*! \brief Initializes task instance and zero-initializes its internal stack memory.
         
         The constructor is protected to ensure that the Task class can only be 
@@ -92,8 +94,14 @@ protected:
         and zero-initialization of the \ref m_stack member based on the \a _StackSize 
         template parameter.
     */
-    Task() : m_stack() {}
-    STK_NONCOPYABLE_CLASS(Task);
+    Task() : m_stack()
+    {}
+
+    /*! \brief Destructor.
+        \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
+    */
+    ~Task()
+    {}
 
 private:
     typename StackMemoryDef<_StackSize>::Type m_stack; //!< Stack memory region, 16-byte aligned.
@@ -142,6 +150,8 @@ public:
     virtual const char *GetTraceName() const { return nullptr; }
 
 protected:
+    STK_NONCOPYABLE_CLASS(TaskW);
+
     /*! \brief Initializes task instance and zero-initializes its internal stack memory.
         
         The constructor is protected to ensure that the Task class can only be 
@@ -150,7 +160,12 @@ protected:
         template parameter.
     */
     TaskW() : m_stack() {}
-    STK_NONCOPYABLE_CLASS(TaskW);
+
+    /*! \brief Destructor.
+        \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
+    */
+    ~TaskW()
+    {}
 
 private:
     typename StackMemoryDef<_StackSize>::Type m_stack; //!< Stack memory region, 16-byte aligned.
@@ -181,6 +196,12 @@ public:
     {
         STK_STATIC_ASSERT(_StackSize >= STACK_SIZE_MIN);
     }
+
+    /*! \brief Destructor.
+        \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
+    */
+    ~StackMemoryWrapper()
+    {}
 
     /*! \brief Get pointer to the first element of the wrapped stack array.
     */

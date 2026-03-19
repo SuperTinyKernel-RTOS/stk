@@ -103,10 +103,14 @@ public:
     /*! \brief Implicit conversion to a mutable pointer to the host object (T).
         \note  Safe because T must derive from DListEntry<T, _ClosedLoop>.
                Eliminates the need for explicit static_cast at call sites.
+        \note  MISRA deviation: [STK-DEV-004] Rule 5-2-x.
     */
     operator T *() { return static_cast<T *>(this); }
 
     /*! \brief Implicit conversion to a const pointer to the host object (T).
+        \note  Safe because T must derive from DListEntry<T, _ClosedLoop>.
+               Eliminates the need for explicit static_cast at call sites.
+        \note  MISRA deviation: [STK-DEV-004] Rule 5-2-x.
     */
     operator const T *() const { return static_cast<const T *>(this); }
 
