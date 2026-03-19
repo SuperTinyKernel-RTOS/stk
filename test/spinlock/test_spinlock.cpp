@@ -546,8 +546,8 @@ static int32_t RunTest(const char *test_name, int32_t param = 0)
     STK_TASK TaskType task0(0, param);
     STK_TASK TaskType task1(1, param);
     STK_TASK TaskType task2(2, param);
-    STK_TASK TaskType task3(3, param);
-    STK_TASK TaskType task4(4, param);
+    TaskType task3(3, param);
+    TaskType task4(4, param);
 
     g_Kernel.AddTask(&task0);
     g_Kernel.AddTask(&task1);
