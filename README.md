@@ -31,26 +31,27 @@ It is an [open-source project](https://github.com/SuperTinyKernel-RTOS), navigat
 
 ## Key Features
 
-| Feature                                | Description                                                                                        |
-|----------------------------------------|----------------------------------------------------------------------------------------------------|
-| Soft real-time                         | No strict time slots, mixed cooperative (by tasks) and preemptive (by kernel) scheduling           |
-| Hard real-time (`KERNEL_HRT`)          | Guaranteed execution window, deadline monitoring by the kernel                                     |
-| Static task model (`KERNEL_STATIC`)    | Tasks created once at startup                                                                      |
-| Dynamic task model (`KERNEL_DYNAMIC`)  | Tasks can be created and exit at runtime                                                           |
-| Rich scheduling capabilities           | All major scheduling strategies are supported: priority-less, fixed-priority or automatic-priority |
-| Extensible via C++ interfaces          | Kernel functionality can be extended by implementing available C++ interfaces                      |
-| Multi-core support (AMP)               | One STK instance per physical core for optimal, lock-free performance                              |
-| Memory Protection Unit (MPU) support   | Supports privileged `ACCESS_PRIVILEGED` and non-privileged tasks `ACCESS_USER`                     |
-| Low-power aware                        | MCU enters sleep when no task is runnable (sleeping)                                               |
-| Synchronization API                    | Synchronization primitives for building application of any difficulty level                        |
-| Tiny footprint                         | Minimal code unrelated to scheduling                                                               |
-| Safety-critical systems ready          | No dynamic heap memory allocation (satisfies MISRA C++:2008 Rule 18-4-1)                           |
-| C++ and C API                          | Can be used easily in C++ and C projects                                                           |
-| Easy porting                           | Requires very small to none BSP surface                                                            |
-| Traceable                              | Scheduling is fully traceable with a SEGGER SystemView                                             |
-| Development mode (x86)                 | Run the same threaded application on Windows                                                       |
-| 100% test coverage                     | Every source-code line of scheduler logic is covered by unit tests                                 |
-| QEMU test coverage                     | All repository commits are automatically covered by unit tests executed on QEMU for Cortex-M       |
+| Feature                               | Description                                                                                                                                                                                                                           |
+|---------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Soft real-time                        | No strict time slots, mixed cooperative (by tasks) and preemptive (by kernel) scheduling                                                                                                                                              |
+| Hard real-time (`KERNEL_HRT`)         | Guaranteed execution window, deadline monitoring by the kernel                                                                                                                                                                        |
+| Static task model (`KERNEL_STATIC`)   | Tasks created once at startup                                                                                                                                                                                                         |
+| Dynamic task model (`KERNEL_DYNAMIC`) | Tasks can be created and exit at runtime                                                                                                                                                                                              |
+| Rich scheduling capabilities          | All major scheduling strategies are supported: priority-less, fixed-priority or automatic-priority                                                                                                                                    |
+| Mixed-criticality                     | Supports MCAS (2-level) and MCAS4 (4-level) adaptive strategies featuring SWRR-based group scheduling, automatic cascade escalation/recovery, and elastic CPU share adaptation driven by per-group EWMA execution-pressure estimation |
+| Extensible via C++ interfaces         | Kernel functionality can be extended by implementing available C++ interfaces                                                                                                                                                         |
+| Multi-core support (AMP)              | One STK instance per physical core for optimal, lock-free performance                                                                                                                                                                 |
+| Memory Protection Unit (MPU) support  | Supports privileged `ACCESS_PRIVILEGED` and non-privileged tasks `ACCESS_USER`                                                                                                                                                        |
+| Low-power aware                       | MCU enters sleep when no task is runnable (sleeping)                                                                                                                                                                                  |
+| Synchronization API                   | Synchronization primitives for building application of any difficulty level                                                                                                                                                           |
+| Tiny footprint                        | Minimal code unrelated to scheduling                                                                                                                                                                                                  |
+| Safety-critical systems ready         | No dynamic heap memory allocation (satisfies MISRA C++:2008 Rule 18-4-1)                                                                                                                                                              |
+| C++ and C API                         | Can be used easily in C++ and C projects                                                                                                                                                                                              |
+| Easy porting                          | Requires very small to none BSP surface                                                                                                                                                                                               |
+| Traceable                             | Scheduling is fully traceable with a SEGGER SystemView                                                                                                                                                                                |
+| Development mode (x86)                | Run the same threaded application on Windows                                                                                                                                                                                          |
+| 100% test coverage                    | Every source-code line of scheduler logic is covered by unit tests                                                                                                                                                                    |
+| QEMU test coverage                    | All repository commits are automatically covered by unit tests executed on QEMU for Cortex-M                                                                                                                                          |
 
 ---
 
