@@ -7,7 +7,6 @@
  * License: MIT License, see LICENSE for a full text.
  */
 
-#include <stdio.h>
 #include "example.h"
 
 int main(void)

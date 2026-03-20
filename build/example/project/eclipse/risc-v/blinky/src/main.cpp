@@ -7,7 +7,6 @@
  * License: MIT License, see LICENSE for a full text.
  */
 
-#include <stk.h>
 #include "example.h"
 
 int main(int argc, char* argv[])
