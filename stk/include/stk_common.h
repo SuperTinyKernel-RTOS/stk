@@ -38,10 +38,11 @@ enum EAccessMode : int32_t
 */
 enum EKernelMode : uint8_t
 {
-    KERNEL_STATIC  = (1 << 0), //!< All tasks are static and can not exit.
-    KERNEL_DYNAMIC = (1 << 1), //!< Tasks can be added or removed and therefore exit when done.
-    KERNEL_HRT     = (1 << 2), //!< Hard Real-Time (HRT) behavior (tasks are scheduled periodically and have an execution deadline, whole system is failed when task's deadline is failed).
-    KERNEL_SYNC    = (1 << 3), //!< Synchronization support (see \a Event).
+    KERNEL_STATIC   = (1 << 0), //!< All tasks are static and can not exit.
+    KERNEL_DYNAMIC  = (1 << 1), //!< Tasks can be added or removed and therefore exit when done.
+    KERNEL_HRT      = (1 << 2), //!< Hard Real-Time (HRT) behavior (tasks are scheduled periodically and have an execution deadline, whole system is failed when task's deadline is failed).
+    KERNEL_SYNC     = (1 << 3), //!< Synchronization support (see \a Event).
+    KERNEL_TICKLESS = (1 << 4), //!< Tickless mode. To use this mode STK_TICKLESS_IDLE must be defined to 1 in stk_config.h.
 };
 
 /*! \enum  EKernelPanicId
@@ -234,9 +235,11 @@ public:
     virtual bool IsTimeout() const = 0;
 
     /*! \brief     Update wait object's waiting time.
+        \param[in] elapsed_ticks: Number of ticks elapsed between this and previous calls, in case of
+                   KERNEL_TICKLESS mode this value can be >1, for non-tickless mode it is always 1.
         \return    Returns \a true if update caused a timeout of the object, \a false otherwise.
     */
-    virtual bool Tick() = 0;
+    virtual bool Tick(Timeout elapsed_ticks) = 0;
 };
 
 /*! \class ITraceable
@@ -323,12 +326,14 @@ public:
     }
 
     /*! \brief     Called by kernel on every system tick to handle timeout logic of waiting tasks.
+        \param[in] elapsed_ticks: Number of ticks elapsed between this and previous calls, in case of
+                   KERNEL_TICKLESS mode this value can be >1, for non-tickless mode it is always 1.
         \return    \c true if this synchronization object still has waiters with a finite timeout and
                    requires further tick calls. \c false if the wait list is empty or all remaining
                    waiters have infinite timeouts, signaling to the kernel that it may stop calling
                    Tick() for this object until a new waiter is added.
     */
-    virtual bool Tick()
+    virtual bool Tick(Timeout elapsed_ticks)
     {
         IWaitObject *itr = static_cast<IWaitObject *>(m_wait_list.GetFirst());
 
@@ -336,7 +341,7 @@ public:
         {
             IWaitObject *next = static_cast<IWaitObject *>(itr->GetNext());
 
-            if (!itr->Tick())
+            if (!itr->Tick(elapsed_ticks))
                 itr->Wake(true);
 
             itr = next;
@@ -579,8 +584,15 @@ public:
         /*! \brief      Called by ISR handler to notify about the next system tick.
             \param[out] idle: Stack of the task which must enter Idle state.
             \param[out] active: Stack of the task which must enter Active state (to which context will switch).
+            \param[in,out] ticks: On call - number of ticks elapsed, on return - number of ticks to sleep.
+            \note       When tickles API is enabled with STK_TICKLESS_IDLE=1 then OnTick ABI changes by additional
+                        'ticks' input/output parameter.
         */
-        virtual bool OnTick(Stack *&idle, Stack *&active) = 0;
+        virtual bool OnTick(Stack *&idle, Stack *&active
+        #if STK_TICKLESS_IDLE
+            , Timeout &ticks
+        #endif
+        ) = 0;
 
         /*! \brief      Called by Thread process (via IKernelService::SwitchToNext) to switch to a next task.
             \param[in]  caller_SP: Value of Stack Pointer (SP) register (for locating the calling process inside the kernel).
@@ -630,6 +642,10 @@ public:
             \return True if event is handled otherwise False to let driver handle it.
         */
         virtual bool OnHardFault() = 0;
+
+    private:
+        ~IEventOverrider()
+        {}
     };
 
     /*! \brief     Initialize scheduler's context.
@@ -664,7 +680,7 @@ public:
                    Resolution means a number of microseconds between system tick timer ISRs.
         \return    Microseconds.
     */
-    virtual int32_t GetTickResolution() const = 0;
+    virtual uint32_t GetTickResolution() const = 0;
 
     /*! \brief     Switch to a next task.
     */

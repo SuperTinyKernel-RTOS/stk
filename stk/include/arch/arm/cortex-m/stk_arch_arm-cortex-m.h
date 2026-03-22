@@ -30,7 +30,7 @@ public:
     void Start();
     void Stop();
     bool InitStack(EStackType stack_type, Stack *stack, IStackMemory *stack_memory, ITask *user_task);
-    int32_t GetTickResolution() const;
+    uint32_t GetTickResolution() const;
     void SwitchToNext();
     void Sleep(Timeout ticks);
     IWaitObject *Wait(ISyncObject *sync_obj, IMutex *mutex, Timeout timeout);
@@ -72,7 +72,7 @@ __stk_forceinline void SetTls(Word tp)
 } // namespace stk
 
 /*! \def   __stk_dmb
-    \brief Data memory barrier.
+    \brief Hardware memory barrier: ensures visibility across cores and bus masters.
 */
 #define __stk_dmb() __asm volatile("dmb sy" ::: "memory")
 

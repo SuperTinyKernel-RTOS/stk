@@ -29,26 +29,28 @@ using namespace stk;
 #error Expecting __CORTEX_M with value corresponding to Cortex-M model (0, 3, 4, ...)!
 #endif
 
+//! Driver expects at least SysTick presence.
+#if !defined(SysTick)
+    #error "SysTick peripheral definition is missing"
+#endif
+
+//! Driver expects DWT when tickless mode is enabled and STK_TICKLESS_USE_ARM_DWT=1.
+#if (__CORTEX_M > 1U) && STK_TICKLESS_USE_ARM_DWT && !defined(DWT)
+    #error "DWT peripheral definition is missing"
+#endif
+
+//! If (1) then code assumes FPU presence on CPU which is used by the compiler.
+#define STK_CORTEX_M_FPU ((__FPU_PRESENT == 1U) && (__FPU_USED == 1U))
+
+//! If (1), manage Link Register (LR) per task.
+#define STK_CORTEX_M_MANAGE_LR (__CORTEX_M >= 3U)
+
 #define STK_CORTEX_M_EXC_RETURN_HANDLR_MSP 0xFFFFFFF1 // Handler mode, MSP stack (non-secure)
 #define STK_CORTEX_M_EXC_RETURN_THREAD_MSP 0xFFFFFFF9 // Thread mode, MSP stack (non-secure)
 #define STK_CORTEX_M_EXC_RETURN_THREAD_PSP 0xFFFFFFFD // Thread mode, PSP stack (non-secure)
 
 #define STK_CORTEX_M_ISR_PRIORITY_HIGHEST  0
 #define STK_CORTEX_M_ISR_PRIORITY_LOWEST   0xFF
-
-enum ESvc : uint8_t
-{
-    SVC_START_SCHEDULING = 0,
-    SVC_ENTER_CRITICAL,
-    SVC_EXIT_CRITICAL,
-    //SVC_FORCE_SWITCH
-};
-
-//! If (1) then code assumes FPU presence on CPU which is used by the compiler.
-#define STK_CORTEX_M_FPU ((__FPU_PRESENT == 1) && (__FPU_USED == 1))
-
-//! If (1), manage Link Register (LR) per task.
-#define STK_CORTEX_M_MANAGE_LR (__CORTEX_M >= 3)
 
 //! Number of registers kept in stack.
 #if STK_CORTEX_M_MANAGE_LR
@@ -71,6 +73,16 @@ enum ESvc : uint8_t
 #ifndef STK_SVC_HANDLER
     #define STK_SVC_HANDLER SVC_Handler
 #endif
+
+//! SVC commands.
+enum ESvcCommandId : uint8_t
+{
+    SVC_START_SCHEDULING = 0,
+    SVC_ENTER_CRITICAL,
+    SVC_EXIT_CRITICAL,
+    //SVC_FORCE_SWITCH
+};
+
 
 /*! \struct ExceptionFrame
     \brief  ARMv7-M hardware exception frame (8 words, highest address on the stack).
@@ -220,9 +232,9 @@ static __stk_forceinline bool HW_InterruptsDisabled()
 #if (defined(__clang__) && defined(__ARMCOMPILER_VERSION)) || defined(__ICCARM__)
     Word primask;
     __asm volatile("MRS %0, primask" : "=r"(primask));
-    return (primask & 1);
+    return (primask & 1U);
 #else
-    return (__get_PRIMASK() & 1);
+    return (__get_PRIMASK() & 1U);
 #endif
 }
 
@@ -497,7 +509,7 @@ int32_t SaveJmp(JmpFrame &/*f*/)
 {
     __asm volatile(
     ".syntax unified                \n"
-#if (__CORTEX_M >= 3)
+#if (__CORTEX_M >= 3U)
     // Cortex-M3/M4/M7: STMIA stores r4-r11 at r0+0 .. r0+28
     "STMIA r0,  {r4-r11}            \n" // store r4-r11 at offsets 0-28, no writeback
     "STR   sp,  [r0, #32]           \n" // SP at offset 32
@@ -553,7 +565,7 @@ void RestoreJmp(JmpFrame &/*f*/, int32_t /*val*/)
 {
     __asm volatile(
     ".syntax unified                \n"
-#if (__CORTEX_M >= 3)
+#if (__CORTEX_M >= 3U)
     // Cortex-M3/M4/M7: LDMIA loads r4-r11 from offsets 0-28
     "LDR   sp,  [r0, #32]           \n" // restore SP
 #if STK_CORTEX_M_FPU
@@ -594,7 +606,7 @@ void RestoreJmp(JmpFrame &/*f*/, int32_t /*val*/)
 */
 static __stk_forceinline bool HW_IsHandlerMode()
 {
-    return (__get_IPSR() != 0);
+    return (__get_IPSR() != 0U);
 }
 
 /*! \brief  Check if caller is in Privileged Thread Mode (nPRIV == 0).
@@ -603,7 +615,7 @@ static __stk_forceinline bool HW_IsHandlerMode()
 static __stk_forceinline bool HW_IsPrivilegedThreadMode()
 {
 #ifdef CONTROL_nPRIV_Msk
-    return ((__get_CONTROL() & CONTROL_nPRIV_Msk) == 0);
+    return ((__get_CONTROL() & CONTROL_nPRIV_Msk) == 0U);
 #else
     return true;
 #endif
@@ -648,19 +660,83 @@ static __stk_forceinline void HW_EnableFullFpuAccess()
 
 /*! \brief Start SysTick timer peripheral.
 */
-static __stk_forceinline void HW_StartSysTick(int32_t tick_resolution)
+static __stk_forceinline void HW_SysTickStart(uint32_t tick_resolution)
 {
-    uint32_t result = SysTick_Config((uint32_t)STK_TIME_TO_CPU_TICKS_USEC(SystemCoreClock, tick_resolution));
-    STK_ASSERT(result == 0);
+    uint32_t result = SysTick_Config(static_cast<uint32_t>(ConvertTimeToCpuTicks(SystemCoreClock, tick_resolution)));
+    STK_ASSERT(result == 0U);
     (void)result;
 }
 
 /*! \brief Stop SysTick timer peripheral.
 */
-static __stk_forceinline void HW_StopSysTick()
+static __stk_forceinline void HW_SysTickStop()
 {
-    SysTick->CTRL = 0;
+    SysTick->CTRL = 0U;
     SCB->ICSR = SCB_ICSR_PENDSTCLR_Msk;
+}
+
+/*! \brief Pause SysTick timer peripheral.
+*/
+static __stk_forceinline void HW_SysTickDisable()
+{
+    SysTick->CTRL &= ~SysTick_CTRL_ENABLE_Msk;
+}
+
+/*! \brief Get number of elpased ticks of the current period of SysTick timer peripheral.
+*/
+static __stk_forceinline uint32_t HW_SysTickGetElapsed()
+{
+    return SysTick->LOAD - SysTick->VAL;
+}
+
+/*! \brief Rearm SysTick timer peripheral with new period.
+    \note  SysTick peripheral becomes enabled.
+*/
+static __stk_forceinline void HW_SysTickRearm(uint32_t ticks)
+{
+    SysTick->LOAD  = ticks - 1U;
+    SysTick->VAL   = 0U;
+    SysTick->CTRL |= SysTick_CTRL_ENABLE_Msk;
+}
+
+/*! \brief Enable DWT Cycle Counter (CYCCNT).
+*/
+static __stk_forceinline void HW_DWTEnableCounter()
+{
+#if defined(CoreDebug)
+    // enable Trace and Debug blocks (DWT, ITM, ETM, TPIU)
+    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+    __DSB();
+#endif
+
+    // LAR (Lock Access Register) is mandatory for Cortex-M7 to allow register writes,
+    // it is typically not implemented or deprecated on M0, M3, M4, and M33
+#if (__CORTEX_M == 7U)
+    DWT->LAR = 0xC5ACCE55; // unlock DWT unit using standard CoreSight magic key
+    __DSB();
+#endif
+
+#if defined(DWT)
+    // disable counter briefly to safely reset the value to zero
+    DWT->CTRL &= ~DWT_CTRL_CYCCNTENA_Msk;
+    DWT->CYCCNT = 0;
+
+    // enable
+    DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+#endif
+}
+
+/*! \brief   Get current DWT Counter (CYCCNT) value.
+    \return  Counter value.
+    \warning Counter value us prone to periodic wrapping.
+*/
+static __stk_forceinline uint32_t HW_DWTGetCounter()
+{
+#if defined(DWT)
+    return DWT->CYCCNT;
+#else
+    return 0U;
+#endif
 }
 
 //! Global lock to synchronize critical sections of multiple cores.
@@ -669,8 +745,11 @@ static volatile bool s_StkCortexmCsuLock = false;
 //! Internal context.
 static struct Context : public PlatformContext
 {
-    Context() : PlatformContext(), m_exit_buf(), m_overrider(nullptr), m_csu(0), m_csu_nesting(0),
-        m_started(false), m_exiting(false)
+    Context() : PlatformContext(), m_exit_buf(), m_overrider(nullptr),
+    #if STK_TICKLESS_IDLE
+        m_sleep_ticks(1), m_sleep_error(0U),
+    #endif
+        m_csu(0U), m_csu_nesting(0U), m_started(false), m_exiting(false)
     {}
 
     /*! \brief Destructor.
@@ -679,20 +758,29 @@ static struct Context : public PlatformContext
     ~Context()
     {}
 
-    void Initialize(IPlatform::IEventHandler *handler, IKernelService *service, Stack *exit_trap, int32_t resolution_us)
+    void Initialize(IPlatform::IEventHandler *handler, IKernelService *service, Stack *exit_trap,
+        uint32_t resolution_us)
     {
         PlatformContext::Initialize(handler, service, exit_trap, resolution_us);
 
-        STK_STATIC_ASSERT_DESC_N(SP, offsetof(Stack, SP) == 0,
+        STK_STATIC_ASSERT_DESC_N(SP, offsetof(Stack, SP) == 0U,
             "expect Stack::mode member at offset of 0 (first member)");
-        STK_STATIC_ASSERT_DESC_N(mode, offsetof(Stack, mode) == 4,
+        STK_STATIC_ASSERT_DESC_N(mode, offsetof(Stack, mode) == 4U,
             "expect Stack::mode member at offset of 4 (second member)");
 
-        m_csu         = 0;
-        m_csu_nesting = 0;
+        m_csu         = 0U;
+        m_csu_nesting = 0U;
         m_overrider   = nullptr;
         m_started     = false;
         m_exiting     = false;
+    #if STK_TICKLESS_IDLE
+        m_sleep_ticks = 1;
+        m_sleep_error = 0U;
+    #endif
+
+    #if (__CORTEX_M > 1) && STK_TICKLESS_USE_ARM_DWT
+        HW_DWTEnableCounter();
+    #endif
 
     #if STK_SEGGER_SYSVIEW
         SEGGER_SYSVIEW_Init(SystemCoreClock, SystemCoreClock, nullptr, SendSysDesc);
@@ -703,16 +791,33 @@ static struct Context : public PlatformContext
     {
         HW_DisableInterrupts();
 
-        if (m_handler->OnTick(m_stack_idle, m_stack_active))
+    #if STK_TICKLESS_IDLE
+        Timeout ticks = m_sleep_ticks;
+    #endif
+
+        if (m_handler->OnTick(m_stack_idle, m_stack_active
+        #if STK_TICKLESS_IDLE
+                , ticks
+        #endif
+        ))
         {
-        #if STK_SEGGER_SYSVIEW
+            #if STK_SEGGER_SYSVIEW
             SEGGER_SYSVIEW_OnTaskStopExec();
             if (GetContext().m_stack_active->tid != SYS_TASK_ID_SLEEP)
-                SEGGER_SYSVIEW_OnTaskStartExec(GetContext().m_stack_active->tid);
-        #endif
+            SEGGER_SYSVIEW_OnTaskStartExec(GetContext().m_stack_active->tid);
+            #endif
 
             HW_ScheduleContextSwitch();
         }
+
+        // rearm SysTick only if tick period changed
+    #if STK_TICKLESS_IDLE
+        if (ticks != m_sleep_ticks)
+        {
+            ReloadTickPeriod(ticks);
+            m_sleep_ticks = ticks;
+        }
+    #endif
 
         HW_EnableInterrupts();
     }
@@ -723,7 +828,7 @@ static struct Context : public PlatformContext
         uint32_t current_ses;
         HW_CriticalSectionStart(current_ses);
 
-        if (m_csu_nesting == 0)
+        if (m_csu_nesting == 0U)
         {
             // ONLY attempt the global spinlock if we aren't already nested
             HW_SpinLockLock(s_StkCortexmCsuLock);
@@ -742,10 +847,10 @@ static struct Context : public PlatformContext
 
     __stk_forceinline void ExitCriticalSection()
     {
-        STK_ASSERT(m_csu_nesting != 0);
+        STK_ASSERT(m_csu_nesting != 0U);
         --m_csu_nesting;
 
-        if (m_csu_nesting == 0)
+        if (m_csu_nesting == 0U)
         {
             // capture the state before releasing lock
             uint32_t ses_to_restore = m_csu;
@@ -764,7 +869,7 @@ static struct Context : public PlatformContext
         // elevate to privileged/disabled state via SVC
         Word current_ses = HW_SVCEnterCritical();
 
-        if (m_csu_nesting == 0)
+        if (m_csu_nesting == 0U)
         {
             // ONLY attempt the global spinlock if we aren't already nested
             HW_SpinLockLock(s_StkCortexmCsuLock);
@@ -784,10 +889,10 @@ static struct Context : public PlatformContext
     // Unprivileged
     __stk_forceinline void UnprivExitCriticalSection()
     {
-        STK_ASSERT(m_csu_nesting != 0);
+        STK_ASSERT(m_csu_nesting != 0U);
         --m_csu_nesting;
 
-        if (m_csu_nesting == 0)
+        if (m_csu_nesting == 0U)
         {
             // capture the state before releasing lock
             Word ses_to_restore = m_csu;
@@ -803,11 +908,18 @@ static struct Context : public PlatformContext
     void Start();
     void OnStart();
     void OnStop();
+#if STK_TICKLESS_IDLE
+    void ReloadTickPeriod(Timeout ticks_requested);
+#endif
 
     typedef IPlatform::IEventOverrider eovrd_t;
 
     JmpFrame      m_exit_buf;    //!< saved context of the exit point
     eovrd_t      *m_overrider;   //!< platform events overrider
+#if STK_TICKLESS_IDLE
+    Timeout       m_sleep_ticks; //!< sleep ticks of a current session
+    uint32_t      m_sleep_error; //!< sleep error which is accounted in the next sleep
+#endif
     Word          m_csu;         //!< user critical session
     uint8_t       m_csu_nesting; //!< depth of user critical session nesting
     volatile bool m_started;     //!< 'true' when in started state
@@ -840,6 +952,50 @@ void PlatformArmCortexM::ProcessTick()
     GetContext().OnTick();
 }
 
+#if STK_TICKLESS_IDLE
+void Context::ReloadTickPeriod(Timeout ticks_requested)
+{
+    uint32_t reload = static_cast<uint32_t>(ConvertTimeToCpuTicks(SystemCoreClock, m_tick_resolution));
+
+    // guard against uint32_t overflow in the reload calculation
+    STK_ASSERT(static_cast<uint64_t>(ticks_requested) * reload <= UINT32_MAX);
+
+    // disable SysTick to avoid race
+    HW_SysTickDisable();
+
+    // start counting how many CPU cycles further instructions take until SysTick timer is enabled again;
+    // without DWT we will have tick error of around 80 instructions depending on CPU model and compiler optimization
+#if (__CORTEX_M > 1) && STK_TICKLESS_USE_ARM_DWT
+    const uint32_t error = HW_DWTGetCounter();
+    __stk_compiler_barrier(); // prevent reordering, we measure all cycles of instructions below this point
+#endif
+
+    // get already elapsed CPU cycles since SysTick ISR invocation up to SysTick timer stop (see above)
+    // to account for them for a new period value
+    const uint32_t elapsed_till_stop = HW_SysTickGetElapsed();
+
+    // OnTick() should not consume more than next period
+    STK_ASSERT(static_cast<Timeout>(elapsed_till_stop / reload) <= static_cast<Timeout>(ticks_requested));
+
+    const uint32_t cpu_ticks_requested = static_cast<uint32_t>(ticks_requested) * reload;
+
+    // substract number of cycles elapsed till SysTick stop + error from previous round
+    uint32_t new_load = cpu_ticks_requested - elapsed_till_stop - m_sleep_error;
+
+    // clamp: rearm overhead must never push new_load into underflow
+    if (new_load > cpu_ticks_requested)
+        new_load = cpu_ticks_requested;
+
+    // reload with elapsed ticks accounted
+    HW_SysTickRearm(new_load);
+
+#if (__CORTEX_M > 1) && STK_TICKLESS_USE_ARM_DWT
+    // calculate error: subtract cycles consumed by the rearm sequence itself in the next round
+    m_sleep_error = HW_DWTGetCounter() - error;
+#endif
+}
+#endif
+
 extern "C" void STK_SYSTICK_HANDLER()
 {
 #if STK_SEGGER_SYSVIEW
@@ -849,10 +1005,14 @@ extern "C" void STK_SYSTICK_HANDLER()
     Context &ctx = GetContext();
 
 #ifdef HAL_MODULE_ENABLED // STM32 HAL
-    // make sure STM32 HAL get timing information as it depends on SysTick in delaying procedures
+    // make sure STM32 HAL gets timing information as it depends on SysTick in delaying procedures
+#if STK_TICKLESS_IDLE
+    uwTick += ctx.m_sleep_ticks * ctx.m_tick_resolution;
+#else
     HAL_IncTick();
+#endif
 
-    // STM32 HAL is starting SysTick on its initialization that will cause a crash on NULL,
+    // STM32 HAL starts SysTick on its initialization that will cause a crash on NULL,
     // therefore use additional check if HAL_MODULE_ENABLED is defined
     if (ctx.m_started)
     {
@@ -1066,7 +1226,7 @@ void Context::OnStart()
     m_handler->OnStart(m_stack_active);
 
     // start SysTick timer (it is yet can't fire an interrupt due to HW_DisableInterrupts)
-    HW_StartSysTick(m_tick_resolution);
+    HW_SysTickStart(m_tick_resolution);
 
     // set priority
     // note: after SysTick_Config because it may change SysTick priority, PendSV and SysTick peripherals
@@ -1102,9 +1262,9 @@ extern "C" __stk_attr_used void SVC_Handler_Main(Word *svc_args)
     // ---
     // opcode lives two bytes (one Thumb halfword) before the stacked PC:
     // do explicit subtraction instead of negative indexing (MISRA C++ 5-0-16),
-    // uint8_t extracted before ESvc cast to avoid impl-defined enum conversion (MISRA 5-2-6)
-    const uint8_t *insn_ptr = hw::WordToPtr<const uint8_t>(frame->PC) - 2;
-    const ESvc     command  = static_cast<ESvc>(*insn_ptr);
+    // uint8_t extracted before ESvcCommandId cast to avoid impl-defined enum conversion (MISRA 5-2-6)
+    const uint8_t       *insn_ptr = hw::WordToPtr<const uint8_t>(frame->PC) - 2;
+    const ESvcCommandId  command  = static_cast<ESvcCommandId>(*insn_ptr);
 
     switch (command)
     {
@@ -1144,7 +1304,7 @@ extern "C" __stk_attr_used void SVC_Handler_Main(Word *svc_args)
 #endif // CONTROL_nPRIV_Msk
 
     default: {
-        // any SVC number not in ESvc is a defect, panic unconditionally
+        // any SVC number not in ESvcCommandId is a defect, panic unconditionally
         STK_KERNEL_PANIC(KERNEL_PANIC_UNKNOWN_SVC);
         break; }
     }
@@ -1160,7 +1320,7 @@ extern "C" __stk_attr_naked void STK_SVC_HANDLER()
 
 #ifdef STK_CORTEX_M_TRUSTZONE
     // ARMv8-M TrustZone (Cortex-M33)
-    #if (__CORTEX_M >= 33)
+    #if (__CORTEX_M >= 33U)
     "TST    LR, #4              \n" // bit 2: 0 = Main Stack (MSP), 1 = Process Stack (PSP)
     "BNE    .use_psp            \n"
     "TST    LR, #1              \n" // check CONTROL.SFPA (secure state), bit 0: 0 = Secure, 1 = Non-Secure
@@ -1201,7 +1361,7 @@ extern "C" __stk_attr_naked void STK_SVC_HANDLER()
     #endif
 
     ".call_main:                \n"
-#elif (__CORTEX_M >= 3)
+#elif (__CORTEX_M >= 3U)
     // Cortex-M3/M4/M7
     "TST    LR, #4              \n" // check EXC_RETURN bit 2
     "ITE    EQ                  \n"
@@ -1272,8 +1432,8 @@ static void OnSchedulerSleepOverride()
 
 static void OnSchedulerExit()
 {
-    __set_CONTROL(0); // switch to MSP
-    __set_PSP(0);     // clear PSP (for a clean register state)
+    __set_CONTROL(0U); // switch to MSP
+    __set_PSP(0U);     // clear PSP (for a clean register state)
 
     // jump back to SaveJmp's return site with m_exiting already set to true
     RestoreJmp(GetContext().m_exit_buf, 0);
@@ -1329,13 +1489,13 @@ bool PlatformArmCortexM::InitStack(EStackType stack_type, Stack *stack, IStackMe
     case STACK_SLEEP_TRAP: {
         task_frame->exc.PC = hw::PtrToWord(GetContext().m_overrider != nullptr ? &OnSchedulerSleepOverride : &OnSchedulerSleep);
         task_frame->exc.LR = STK_STACK_MEMORY_FILLER; // should not attempt to exit
-        task_frame->exc.R0 = 0;
+        task_frame->exc.R0 = 0U;
         break; }
 
     case STACK_EXIT_TRAP: {
         task_frame->exc.PC = hw::PtrToWord(&OnSchedulerExit);
         task_frame->exc.LR = STK_STACK_MEMORY_FILLER; // should not attempt to exit
-        task_frame->exc.R0 = 0;
+        task_frame->exc.R0 = 0U;
         break; }
 
     default:
@@ -1364,7 +1524,7 @@ void Context::OnStop()
 #endif
 
     // stop SysTick timer
-    HW_StopSysTick();
+    HW_SysTickStop();
 
     // clear pending PendSV exception
     SCB->ICSR = SCB_ICSR_PENDSVCLR_Msk;
@@ -1386,7 +1546,7 @@ void PlatformArmCortexM::Stop()
     OnTaskStart();
 }
 
-int32_t PlatformArmCortexM::GetTickResolution() const
+uint32_t PlatformArmCortexM::GetTickResolution() const
 {
     return GetContext().m_tick_resolution;
 }

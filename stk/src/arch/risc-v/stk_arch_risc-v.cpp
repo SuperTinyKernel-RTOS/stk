@@ -392,6 +392,8 @@ static __stk_forceinline void HW_StopMTimer()
 
 /*! \brief  Get mtime.
     \return Ticks.
+    \note   mtime is a free-running 64-bit counter driven by a fixed-frequency
+            reference clock (not the CPU clock).
 */
 static __stk_forceinline uint64_t HW_GetMtime()
 {
@@ -414,12 +416,10 @@ static __stk_forceinline uint64_t HW_GetMtime()
 }
 
 /*! \brief     Set mtimecmp register.
-    \param[in] advance: Time delay (ticks) till the next interrupt.
+    \param[in] time_next: Time at which to trigger next ISR.
 */
-static __stk_forceinline void HW_SetMtimecmp(uint64_t advance)
+static __stk_forceinline void HW_SetMtimecmp(uint64_t time_next)
 {
-    uint64_t next = HW_GetMtime() + advance;
-
 #if STK_RISCV_CLINT_MTIMECMP_PER_HART
     const uint8_t hart = HW_GetHartId();
 #else
@@ -440,9 +440,19 @@ static __stk_forceinline void HW_SetMtimecmp(uint64_t advance)
     // details: https://riscv.org/wp-content/uploads/2017/05/riscv-privileged-v1.10.pdf, page 31
     (*mtime_hi) = ~0;
 
-    (*mtime_lo) = (uint32_t)(next & 0xFFFFFFFF);
-    (*mtime_hi) = (uint32_t)(next >> 32);
+    (*mtime_lo) = (uint32_t)(time_next & 0xFFFFFFFF);
+    (*mtime_hi) = (uint32_t)(time_next >> 32);
 #endif
+}
+
+/*! \brief     Get elapsed mtime counts since a reference point.
+    \param[in] since: mtime snapshot taken at an earlier point.
+    \return    Elapsed mtime counts. Unsigned subtraction handles the rare
+               64-bit wrap (every ~585 years at 1 GHz) correctly.
+*/
+static __stk_forceinline uint64_t HW_GetMtimeElapsed(uint64_t since)
+{
+    return HW_GetMtime() - since;
 }
 
 /*! \brief Get SP of the calling process.
@@ -762,8 +772,13 @@ void RestoreJmp(JmpFrame &/*f*/, int32_t /*val*/)
 static struct Context : public PlatformContext
 {
     Context() : PlatformContext(), m_stack_main(), m_stack_isr(), m_stack_isr_mem(),
-        m_exit_buf(), m_overrider(nullptr), m_specific(nullptr), m_tick_period(0), m_csu(0), m_csu_nesting(0),
+        m_exit_buf(), m_overrider(nullptr), m_specific(nullptr), m_tick_period(0), m_last_mtime(0ULL),
+    #if STK_TICKLESS_IDLE
+        m_sleep_ticks(1),
+    #endif
+        m_csu(0), m_csu_nesting(0),
         m_starting(false), m_started(false), m_exiting(false)
+
     {}
 
     /*! \brief Destructor.
@@ -793,10 +808,14 @@ static struct Context : public PlatformContext
         m_csu_nesting = 0;
         m_overrider   = NULL;
         m_specific    = NULL;
-        m_tick_period = STK_TIME_TO_CPU_TICKS_USEC(_STK_SYSTEM_CLOCK_VAR, resolution_us);
+        m_tick_period = ConvertTimeToCpuTicks(_STK_SYSTEM_CLOCK_VAR, resolution_us);
+        m_last_mtime  = 0ULL;
         m_starting    = false;
         m_started     = false;
         m_exiting     = false;
+    #if STK_TICKLESS_IDLE
+        m_sleep_ticks = 1;
+    #endif
     }
 
     __stk_forceinline void OnTick()
@@ -805,7 +824,15 @@ static struct Context : public PlatformContext
         Word cs;
         HW_CriticalSectionStart(cs);
 
-        if (m_handler->OnTick(m_stack_idle, m_stack_active))
+    #if STK_TICKLESS_IDLE
+        Timeout ticks = m_sleep_ticks;
+    #endif
+
+        if (m_handler->OnTick(m_stack_idle, m_stack_active
+        #if STK_TICKLESS_IDLE
+            , ticks
+        #endif
+        ))
         {
             // refresh ISR asm pointer cache so the naked ISR reads the correct
             // (possibly new) active stack SP immediately when jal returns
@@ -821,6 +848,10 @@ static struct Context : public PlatformContext
 
             HW_ScheduleContextSwitch(hart);
         }
+
+    #if STK_TICKLESS_IDLE
+        m_sleep_ticks = ticks;
+    #endif
 
         HW_CriticalSectionEnd(cs);
     }
@@ -866,17 +897,43 @@ static struct Context : public PlatformContext
         }
     }
 
+    uint64_t GetSleepTicksPrev()
+    {
+    #if STK_TICKLESS_IDLE
+        uint64_t ticks = (static_cast<uint64_t>(m_sleep_ticks) * static_cast<uint64_t>(m_tick_period));
+    #else
+        uint64_t ticks = (1U * static_cast<uint64_t>(m_tick_period));
+    #endif
+        return ticks;
+    }
+
     __stk_forceinline void OnSwitchContext()
     {
-        // make sure SysTick is enabled by the Kernel::Start(), disable its start anywhere else
+        // capture mtime at ISR entry as the absolute base for the next period;
+        // this eliminates drift from time spent inside OnTick regardless of how
+        // long the scheduler takes to run
+        const uint64_t mtime_now = HW_GetMtime();
+        const uint64_t error = (mtime_now - m_last_mtime) - GetSleepTicksPrev();
+        __stk_compiler_barrier(); // avoid compiler reordering, we count ticks from this point
+
+        // make sure timer is enabled by the Kernel::Start(), disable its start anywhere else
         STK_ASSERT(m_started);
         STK_ASSERT(m_handler != NULL);
 
-        // reschedule timer (note: before OnTick because timer can be stopped in Stop)
-        HW_SetMtimecmp(m_tick_period);
-
-        // process tick - scheduler may update m_stack_active to point at a new task
+        // process tick - scheduler may update m_stack_active and m_sleep_ticks
         OnTick();
+
+        // rearm timer: use the ISR-entry mtime snapshot as the absolute base so
+        // any CPU cycles consumed by OnTick do not accumulate as period drift
+    #if STK_TICKLESS_IDLE
+        // guard against overflow (theoretical at normal tick periods and CPU frequencies)
+        STK_ASSERT((static_cast<uint64_t>(m_sleep_ticks) * static_cast<uint64_t>(m_tick_period)) <= (UINT64_MAX - mtime_now));
+        const uint64_t next_time = (static_cast<uint64_t>(m_sleep_ticks) * static_cast<uint64_t>(m_tick_period));
+    #else
+        const uint64_t next_time = (1U * static_cast<uint64_t>(m_tick_period));
+    #endif
+        HW_SetMtimecmp(mtime_now + next_time - error);
+        m_last_mtime = mtime_now;
     }
 
     void Start();
@@ -893,7 +950,11 @@ static struct Context : public PlatformContext
     JmpFrame  m_exit_buf;      //!< saved context of the exit point
     eovrd_t  *m_overrider;     //!< platform events overrider
     sehndl_t *m_specific;      //!< platform-specific event handler
-    int32_t   m_tick_period;   //!< system tick periodicity (microseconds, ticks)
+    uint32_t  m_tick_period;   //!< system tick periodicity (microseconds, ticks)
+    uint64_t  m_last_mtime;    //!< mtime captured at previous OnTick entry
+#if STK_TICKLESS_IDLE
+    Timeout   m_sleep_ticks;   //!< tick count programmed for the current/last period
+#endif
     Word      m_csu;           //!< user critical session
     uint8_t   m_csu_nesting;   //!< depth of user critical session nesting
     bool      m_starting;      //!< 'true' when in is being started
@@ -1453,8 +1514,9 @@ void Context::OnStart()
     // notify kernel
     m_handler->OnStart(m_stack_active);
 
-    // configure timer
-    HW_SetMtimecmp(m_tick_period);
+    // start timer with default periodicity
+    m_last_mtime = HW_GetMtime();
+    HW_SetMtimecmp(m_last_mtime + m_tick_period);
 
     // change state before enabling interrupt
     m_started  = true;
@@ -1692,7 +1754,7 @@ void PlatformRiscV::Stop()
     OnTaskStart();
 }
 
-int32_t PlatformRiscV::GetTickResolution() const
+uint32_t PlatformRiscV::GetTickResolution() const
 {
     return GetContext().m_tick_resolution;
 }

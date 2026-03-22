@@ -46,7 +46,7 @@ private:
                 // to avoid hot loop and excessive CPU usage sleep 10ms while waiting for the own turn,
                 // if scheduler does not have active threads then it will fall into a sleep mode which is
                 // saving the consumed power
-                stk::Sleep(10);
+                stk::Sleep(100);
                 continue;
             }
 
@@ -98,8 +98,16 @@ void RunExample()
 
     InitLeds();
 
+    // operating in Static mode (tasks never exit) and if config requested also in tickless (STK_TICKLESS_IDLE=1) mode
+    const uint8_t KernelMode =
+        KERNEL_STATIC
+    #if STK_TICKLESS_IDLE
+        | KERNEL_TICKLESS
+    #endif
+    ;
+
     // allocate scheduling kernel for 3 threads (tasks) with Round-Robin scheduling strategy
-    static Kernel<KERNEL_STATIC, 3, SwitchStrategyRR, PlatformDefault> kernel;
+    static Kernel<KernelMode, 3, SwitchStrategyRR, PlatformDefault> kernel;
 
     // note: using ACCESS_PRIVILEGED as Cortex-M3+ may not allow writing to GPIO from a less secure user thread
     static MyTask<ACCESS_PRIVILEGED> task1(0, "LED-red");
