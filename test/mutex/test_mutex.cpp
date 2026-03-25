@@ -49,7 +49,8 @@ static volatile bool    g_TestComplete = false;
 static volatile int32_t g_InstancesDone = 0;
 
 // Kernel
-static Kernel<KERNEL_DYNAMIC | KERNEL_SYNC, _STK_MUTEX_TEST_TASKS_MAX, SwitchStrategyRR, PlatformDefault> g_Kernel;
+static Kernel<KERNEL_DYNAMIC | KERNEL_SYNC | (STK_TICKLESS_IDLE ? KERNEL_TICKLESS : 0),
+    _STK_MUTEX_TEST_TASKS_MAX, SwitchStrategyRR, PlatformDefault> g_Kernel;
 
 // Test mutex
 static sync::Mutex g_TestMutex;
@@ -409,10 +410,10 @@ private:
     \note  Verifies mutex handles multiple recursion levels correctly.
 */
 template <EAccessMode _AccessMode>
-class RecursiveDepthTask : public Task<1024, _AccessMode>
+class RecursiveDepthTask : public Task<_STK_MUTEX_STACK_SIZE, _AccessMode>
 {
     uint8_t m_task_id;
-    enum { DEPTH = 8 };
+    enum { DEPTH = 3 };
 
 public:
     RecursiveDepthTask(uint8_t task_id, int32_t) : m_task_id(task_id)
@@ -432,7 +433,7 @@ private:
 
     void Run()
     {
-        // Recursive lock to depth 50
+        // Recursive lock to depth DEPTH
         RecursiveLock(DEPTH);
 
         ++g_InstancesDone;

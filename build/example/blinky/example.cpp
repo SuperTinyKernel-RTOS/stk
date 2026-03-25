@@ -99,12 +99,7 @@ void RunExample()
     InitLeds();
 
     // operating in Static mode (tasks never exit) and if config requested also in tickless (STK_TICKLESS_IDLE=1) mode
-    const uint8_t KernelMode =
-        KERNEL_STATIC
-    #if STK_TICKLESS_IDLE
-        | KERNEL_TICKLESS
-    #endif
-    ;
+    const uint8_t KernelMode = KERNEL_STATIC | (STK_TICKLESS_IDLE ? KERNEL_TICKLESS : 0);
 
     // allocate scheduling kernel for 3 threads (tasks) with Round-Robin scheduling strategy
     static Kernel<KernelMode, 3, SwitchStrategyRR, PlatformDefault> kernel;

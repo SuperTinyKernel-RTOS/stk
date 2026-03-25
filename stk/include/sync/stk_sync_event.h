@@ -135,7 +135,6 @@ private:
     STK_NONCOPYABLE_CLASS(Event);
 
     void RemoveWaitObject(IWaitObject *wobj);
-    bool Tick();
 
     bool m_manual_reset; //!< \c true = manual-reset event, \c false = auto-reset
     bool m_signaled;     //!< current signaled state of the event
@@ -275,28 +274,6 @@ inline void Event::RemoveWaitObject(IWaitObject *wobj)
         m_signaled = false;
         __stk_full_memfence();
     }
-}
-
-// ---------------------------------------------------------------------------
-// Tick
-// ---------------------------------------------------------------------------
-
-inline bool Event::Tick()
-{
-    // note: ScopedCriticalSection usage
-    //
-    // Single-core: no critical section needed - Tick() runs inside the
-    // SysTick ISR which already executes with interrupts disabled, making
-    // re-entrancy impossible on the local core.
-    //
-    // Multi-core: critical section is required because the tick handler on
-    // each core may call Tick() concurrently for the same Event instance,
-    // and ISyncObject::Tick() is not re-entrant.
-#if (STK_ARCH_CPU_COUNT > 1)
-    ScopedCriticalSection cs_;
-#endif
-
-    return ISyncObject::Tick();
 }
 
 } // namespace sync

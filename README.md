@@ -84,12 +84,11 @@ void AddTask(ITask *user_task)
 AddTask(ITask *user_task, Timeout periodicity_tc, Timeout deadline_tc, Timeout start_delay_tc)
 ```
 
-### Static vs Dynamic
+#### Static vs Dynamic
 
 * `KERNEL_STATIC`: tasks are created once at startup, kernel never returns to `main()`.
 * `KERNEL_DYNAMIC`: tasks may exit, kernel returns to `main()` when all tasks exit.
 
----
 
 ### Tick / Tickless Context Switching
 

@@ -660,11 +660,19 @@ static __stk_forceinline void HW_EnableFullFpuAccess()
 
 /*! \brief Start SysTick timer peripheral.
 */
-static __stk_forceinline void HW_SysTickStart(uint32_t tick_resolution)
+static __stk_forceinline void HW_SysTickStart(uint32_t period_ticks)
 {
-    uint32_t result = SysTick_Config(static_cast<uint32_t>(ConvertTimeToCpuTicks(SystemCoreClock, tick_resolution)));
+    uint32_t result = SysTick_Config(static_cast<uint32_t>(ConvertTimeToCpuTicks(SystemCoreClock, period_ticks)));
     STK_ASSERT(result == 0U);
     (void)result;
+
+    // QEMU workaround (Launchpad Bug #1872237):
+    // SysTick_Config() writes VAL=0 before setting ENABLE=1. On QEMU,
+    // systick_reload() silently discards VAL writes while ENABLE=0, leaving
+    // the internal tick accumulator stale from the previous period.
+    // Writing VAL=0 here, after ENABLE=1 is already set, forces a correct reload.
+    // This is a no-op on real Cortex-M hardware (spec: ARMv7-M ARM B3.3.1).
+    SysTick->VAL = 0U;
 }
 
 /*! \brief Stop SysTick timer peripheral.
@@ -675,18 +683,35 @@ static __stk_forceinline void HW_SysTickStop()
     SCB->ICSR = SCB_ICSR_PENDSTCLR_Msk;
 }
 
-/*! \brief Pause SysTick timer peripheral.
+/*! \brief  Pause SysTick timer peripheral.
 */
 static __stk_forceinline void HW_SysTickDisable()
 {
     SysTick->CTRL &= ~SysTick_CTRL_ENABLE_Msk;
 }
 
-/*! \brief Get number of elpased ticks of the current period of SysTick timer peripheral.
+/*! \brief  Get SysTick value after it was disabled.
+    \return Value of SysTick->VAL register.
 */
-static __stk_forceinline uint32_t HW_SysTickGetElapsed()
+static __stk_forceinline uint32_t HW_SysTickValueAfterDisable()
 {
-    return SysTick->LOAD - SysTick->VAL;
+    // is required for QEMU which then resets SysTick->VAL and thus we can't calculate elapsed time correctly
+    __DSB();
+
+    // check for a QEMU case and discard elapsed result
+    uint32_t VAL = SysTick->VAL;
+    if (VAL == 0)
+        VAL = SysTick->LOAD;
+
+    return VAL;
+}
+
+/*! \brief     Get number of elapsed ticks of the current period of SysTick timer peripheral.
+    \param[in] VAL: a value of SysTick->VAL register.
+*/
+static __stk_forceinline uint32_t HW_SysTickGetElapsed(uint32_t VAL)
+{
+    return SysTick->LOAD - VAL;
 }
 
 /*! \brief Rearm SysTick timer peripheral with new period.
@@ -747,7 +772,7 @@ static struct Context : public PlatformContext
 {
     Context() : PlatformContext(), m_exit_buf(), m_overrider(nullptr),
     #if STK_TICKLESS_IDLE
-        m_sleep_ticks(1), m_sleep_error(0U),
+        m_sleep_ticks(0), m_sleep_error(0U),
     #endif
         m_csu(0U), m_csu_nesting(0U), m_started(false), m_exiting(false)
     {}
@@ -773,10 +798,6 @@ static struct Context : public PlatformContext
         m_overrider   = nullptr;
         m_started     = false;
         m_exiting     = false;
-    #if STK_TICKLESS_IDLE
-        m_sleep_ticks = 1;
-        m_sleep_error = 0U;
-    #endif
 
     #if (__CORTEX_M > 1) && STK_TICKLESS_USE_ARM_DWT
         HW_DWTEnableCounter();
@@ -960,19 +981,19 @@ void Context::ReloadTickPeriod(Timeout ticks_requested)
     // guard against uint32_t overflow in the reload calculation
     STK_ASSERT(static_cast<uint64_t>(ticks_requested) * reload <= UINT32_MAX);
 
-    // disable SysTick to avoid race
-    HW_SysTickDisable();
-
     // start counting how many CPU cycles further instructions take until SysTick timer is enabled again;
-    // without DWT we will have tick error of around 80 instructions depending on CPU model and compiler optimization
+    // without DWT we will have tick error of around 80 cycles depending on CPU model and compiler optimization
 #if (__CORTEX_M > 1) && STK_TICKLESS_USE_ARM_DWT
     const uint32_t error = HW_DWTGetCounter();
     __stk_compiler_barrier(); // prevent reordering, we measure all cycles of instructions below this point
 #endif
 
+    // pause SysTick
+    HW_SysTickDisable();
+
     // get already elapsed CPU cycles since SysTick ISR invocation up to SysTick timer stop (see above)
     // to account for them for a new period value
-    const uint32_t elapsed_till_stop = HW_SysTickGetElapsed();
+    const uint32_t elapsed_till_stop = HW_SysTickGetElapsed(HW_SysTickValueAfterDisable());
 
     // OnTick() should not consume more than next period
     STK_ASSERT(static_cast<Timeout>(elapsed_till_stop / reload) <= static_cast<Timeout>(ticks_requested));
@@ -1224,6 +1245,11 @@ void Context::OnStart()
 
     // notify kernel
     m_handler->OnStart(m_stack_active);
+
+#if STK_TICKLESS_IDLE
+    // reset sleep ticks if kernel was restarted
+    m_sleep_ticks = 1;
+#endif
 
     // start SysTick timer (it is yet can't fire an interrupt due to HW_DisableInterrupts)
     HW_SysTickStart(m_tick_resolution);

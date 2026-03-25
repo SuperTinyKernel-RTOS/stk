@@ -243,10 +243,10 @@ private:
            counter must equal tasks_count * depth.
 */
 template <EAccessMode _AccessMode>
-class RecursiveLockTask : public Task<1024, _AccessMode>
+class RecursiveLockTask : public Task<_STK_SL_STACK_SIZE, _AccessMode>
 {
     uint8_t m_task_id;
-    enum { DEPTH = 8 };
+    enum { DEPTH = 3 };
 
 public:
     RecursiveLockTask(uint8_t task_id, int32_t) : m_task_id(task_id)

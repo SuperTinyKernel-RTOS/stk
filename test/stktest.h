@@ -145,7 +145,7 @@ public:
         return true;
     }
 
-    int32_t GetTickResolution() const
+    uint32_t GetTickResolution() const
     {
         return m_resolution;
     }

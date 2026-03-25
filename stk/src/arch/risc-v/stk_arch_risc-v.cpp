@@ -774,7 +774,7 @@ static struct Context : public PlatformContext
     Context() : PlatformContext(), m_stack_main(), m_stack_isr(), m_stack_isr_mem(),
         m_exit_buf(), m_overrider(nullptr), m_specific(nullptr), m_tick_period(0), m_last_mtime(0ULL),
     #if STK_TICKLESS_IDLE
-        m_sleep_ticks(1),
+        m_sleep_ticks(0),
     #endif
         m_csu(0), m_csu_nesting(0),
         m_starting(false), m_started(false), m_exiting(false)
@@ -813,9 +813,6 @@ static struct Context : public PlatformContext
         m_starting    = false;
         m_started     = false;
         m_exiting     = false;
-    #if STK_TICKLESS_IDLE
-        m_sleep_ticks = 1;
-    #endif
     }
 
     __stk_forceinline void OnTick()
@@ -1513,6 +1510,11 @@ void Context::OnStart()
 
     // notify kernel
     m_handler->OnStart(m_stack_active);
+
+#if STK_TICKLESS_IDLE
+    // reset sleep ticks if kernel was restarted
+    m_sleep_ticks = 1;
+#endif
 
     // start timer with default periodicity
     m_last_mtime = HW_GetMtime();

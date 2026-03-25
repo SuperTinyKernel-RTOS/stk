@@ -335,6 +335,19 @@ public:
     */
     virtual bool Tick(Timeout elapsed_ticks)
     {
+        // note: ScopedCriticalSection usage
+        //
+        // Single-core: no critical section needed - Tick() runs inside the
+        // SysTick ISR which already executes with interrupts disabled, making
+        // re-entrancy impossible on the local core.
+        //
+        // Multi-core: critical section is required because the tick handler on
+        // each core may call Tick() concurrently for the same Semaphore instance,
+        // and ISyncObject::Tick() is not re-entrant.
+    #if (STK_ARCH_CPU_COUNT > 1)
+        hw::CriticalSection::ScopedLock cs_;
+    #endif
+
         IWaitObject *itr = static_cast<IWaitObject *>(m_wait_list.GetFirst());
 
         while (itr != nullptr)

@@ -100,8 +100,6 @@ public:
 private:
     STK_NONCOPYABLE_CLASS(Semaphore);
 
-    bool Tick();
-
     uint16_t m_count;     //!< Internal resource counter
     uint16_t m_count_max; //!< Counter max limit
 };
@@ -155,28 +153,6 @@ inline void Semaphore::Signal()
         // give signal directly to the first waiting task
         WakeOne();
     }
-}
-
-// ---------------------------------------------------------------------------
-// Tick
-// ---------------------------------------------------------------------------
-
-inline bool Semaphore::Tick()
-{
-    // note: ScopedCriticalSection usage
-    //
-    // Single-core: no critical section needed - Tick() runs inside the
-    // SysTick ISR which already executes with interrupts disabled, making
-    // re-entrancy impossible on the local core.
-    //
-    // Multi-core: critical section is required because the tick handler on
-    // each core may call Tick() concurrently for the same Semaphore instance,
-    // and ISyncObject::Tick() is not re-entrant.
-#if (STK_ARCH_CPU_COUNT > 1)
-    ScopedCriticalSection cs_;
-#endif
-
-    return ISyncObject::Tick();
 }
 
 } // namespace sync

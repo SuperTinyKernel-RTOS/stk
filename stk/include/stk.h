@@ -336,6 +336,11 @@ protected:
             */
             bool IsTimeout() const { return m_timeout; }
 
+            /*! \brief  Check if busy with waiting.
+                \return \c true if waiting, \c false if not.
+            */
+            bool IsWaiting() const { return (m_sync_obj != nullptr); }
+
             /*! \brief     Wake the waiting task (called by ISyncObject when it signals).
                 \param[in] timeout: \c true if woken because the timeout expired, \c false if signalled.
                 \note      Clears m_time_wait, records the timeout flag, removes this object from
@@ -343,7 +348,7 @@ protected:
             */
             void Wake(bool timeout)
             {
-                STK_ASSERT(m_sync_obj != nullptr);
+                STK_ASSERT(IsWaiting());
 
                 m_timeout   = timeout;
                 m_time_wait = 0;
@@ -382,7 +387,7 @@ protected:
             */
             void SetupWait(ISyncObject *sync_obj, Timeout timeout)
             {
-                STK_ASSERT(m_sync_obj == nullptr);
+                STK_ASSERT(!IsWaiting());
 
                 m_sync_obj  = sync_obj;
                 m_time_wait = timeout;
@@ -426,6 +431,12 @@ protected:
         */
         void Unbind()
         {
+            if (IsSyncMode())
+            {
+                // should be freed from waiting on task exit
+                STK_ASSERT(!m_wait_obj->IsWaiting());
+            }
+
             m_user       = nullptr;
             m_stack      = {};
             m_state      = STATE_NONE;
@@ -442,7 +453,7 @@ protected:
         void ScheduleRemoval()
         {
             // make this task sleeping to switch it out from scheduling process
-            ScheduleSleep(INT32_MAX);
+            ScheduleSleep(WAIT_INFINITE);
 
             // mark it as done HRT task
             if (IsHrtMode())
@@ -1405,6 +1416,7 @@ protected:
                 }
 
                 // advance sleep time by a tick
+                //STK_ASSERT((task->m_time_sleep + elapsed_ticks) <= 0);
                 task->m_time_sleep += elapsed_ticks;
 
                 // deliver sleep event to strategy
@@ -1440,15 +1452,15 @@ protected:
             }
 
             // get the number ticks the driver has to keep CPU in Idle
-            if (IsTicklessMode() && task->IsBusy())
+            if (IsTicklessMode() && (sleep_ticks > 1) && task->IsBusy())
             {
                 // note: task sleep time is negative
-                Timeout task_sleep = -task->m_time_sleep;
+                Timeout task_sleep = stk::Max<Timeout>(0, -task->m_time_sleep);
 
                 if (IsSyncMode())
                 {
                     // likely task is sleeping during sync operation (see Wait)
-                    if (task_sleep == WAIT_INFINITE)
+                    if (task->m_wait_obj->IsWaiting())
                     {
                         // note: sync wait time is positive
                         task_sleep = task->m_wait_obj->m_time_wait;
