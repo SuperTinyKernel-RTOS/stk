@@ -193,8 +193,7 @@ void stk_kernel_destroy(stk_kernel_t *k)
 // ---------------------------------------------------------------------------
 // Kernel control wrappers
 // ---------------------------------------------------------------------------
-void stk_kernel_init(stk_kernel_t *k,
-                     uint32_t tick_period_us)
+void stk_kernel_init(stk_kernel_t *k, uint32_t tick_period_us)
 {
     STK_ASSERT(k != nullptr);
 

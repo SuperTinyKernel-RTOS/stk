@@ -1241,6 +1241,39 @@ TEST(Kernel, SyncMutexMustBeLocked)
     }
 }
 
+TEST(Kernel, SyncTaskExitAfterWait)
+{
+    Kernel<KERNEL_DYNAMIC | KERNEL_SYNC, 1, SwitchStrategyRR, PlatformTestMock> kernel;
+    PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
+    TaskMock<ACCESS_USER> task;
+
+    MutexMock mutex;
+    SyncObjectMock sobj;
+
+    kernel.Initialize();
+    kernel.AddTask(&task);
+    kernel.Start();
+
+    {
+        //MutexMock::ScopedLock guard(mutex);
+
+        //IKernelService::GetInstance()->Wait(&sobj, &mutex, 10);
+    }
+
+    // task1 exited (will schedule its removal)
+    platform->EventTaskExit(platform->m_stack_active);
+
+    platform->ProcessTick();
+
+    // should be still running here, next tick will result in task exit and kernel stop
+    CHECK_EQUAL(IKernel::STATE_RUNNING, kernel.GetState());
+
+    platform->ProcessTick();
+
+    // should be stopped here
+    CHECK_EQUAL(IKernel::STATE_READY, kernel.GetState());
+}
+
 static struct SyncWaitRelaxCpuContext
 {
     SyncWaitRelaxCpuContext()
