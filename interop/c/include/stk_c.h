@@ -227,11 +227,21 @@ void stk_kernel_remove_task(stk_kernel_t *k, stk_task_t *task);
 */
 void stk_kernel_start(stk_kernel_t *k);
 
-/*! \brief     Check whether scheduler is currently running.
-    \param[in] k: Kernel handle.
-    \return    True if stk_kernel_start() has been called, False otherwise.
+/*! \brief     Kernel state.
+    \note      It is a direct match for IKernel::EState enum.
+    \see       stk_kernel_get_state()
 */
-bool stk_kernel_is_running(const stk_kernel_t *k);
+typedef enum _EKernelState {
+    STK_KERNEL_STATE_INACTIVE = 0, //!< not ready, stk_kernel_init() must be called
+    STK_KERNEL_STATE_READY    = 1, //!< ready to start, stk_kernel_start() must be called
+    STK_KERNEL_STATE_RUNNING  = 2  //!< initialized and running, stk_kernel_start() was called successfully
+} EKernelState;
+
+/*! \brief     Get state of the scheduler.
+    \param[in] k: Kernel handle.
+    \return    State value, see \a EKernelState.
+*/
+EKernelState stk_kernel_get_state(const stk_kernel_t *k);
 
 /*! \brief     Test whether currently configured task set is schedulable.
     \param[in] k: Kernel handle.
@@ -502,10 +512,9 @@ typedef struct stk_spinlock_t stk_spinlock_t;
 /*! \brief     Create a recursive SpinLock.
     \param[in] memory: Pointer to static memory container.
     \param[in] memory_size: Size of the container (must be >= sizeof(stk_spinlock_mem_t)).
-    \param[in] spin_count: Max iterations to spin before yielding (default: 4000).
     \return    SpinLock handle.
 */
-stk_spinlock_t *stk_spinlock_create(stk_spinlock_mem_t *memory, uint32_t memory_size, uint16_t spin_count);
+stk_spinlock_t *stk_spinlock_create(stk_spinlock_mem_t *memory, uint32_t memory_size);
 
 /*! \brief     Destroy the SpinLock.
 */

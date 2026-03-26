@@ -333,35 +333,7 @@ public:
                    waiters have infinite timeouts, signaling to the kernel that it may stop calling
                    Tick() for this object until a new waiter is added.
     */
-    virtual bool Tick(Timeout elapsed_ticks)
-    {
-        // note: ScopedCriticalSection usage
-        //
-        // Single-core: no critical section needed - Tick() runs inside the
-        // SysTick ISR which already executes with interrupts disabled, making
-        // re-entrancy impossible on the local core.
-        //
-        // Multi-core: critical section is required because the tick handler on
-        // each core may call Tick() concurrently for the same Semaphore instance,
-        // and ISyncObject::Tick() is not re-entrant.
-    #if (STK_ARCH_CPU_COUNT > 1)
-        hw::CriticalSection::ScopedLock cs_;
-    #endif
-
-        IWaitObject *itr = static_cast<IWaitObject *>(m_wait_list.GetFirst());
-
-        while (itr != nullptr)
-        {
-            IWaitObject *next = static_cast<IWaitObject *>(itr->GetNext());
-
-            if (!itr->Tick(elapsed_ticks))
-                itr->Wake(true);
-
-            itr = next;
-        }
-
-        return !m_wait_list.IsEmpty();
-    }
+    virtual bool Tick(Timeout elapsed_ticks);
 
 protected:
     /*! \brief     Constructor.

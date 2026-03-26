@@ -208,11 +208,11 @@ void stk_kernel_start(stk_kernel_t *k)
     reinterpret_cast<stk::IKernel *>(k)->Start();
 }
 
-bool stk_kernel_is_running(const stk_kernel_t *k)
+EKernelState stk_kernel_get_state(const stk_kernel_t *k)
 {
     STK_ASSERT(k != nullptr);
 
-    return reinterpret_cast<const stk::IKernel *>(k)->IsStarted();
+    return static_cast<EKernelState>(reinterpret_cast<const stk::IKernel *>(k)->GetState());
 }
 
 bool stk_kernel_is_schedulable(const stk_kernel_t *k)

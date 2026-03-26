@@ -238,7 +238,7 @@ void RunExample()
     InitLeds();
 
     // allocate scheduling kernel for 1 thread (tasks) with Round-Robin scheduling strategy
-    static Kernel<KERNEL_STATIC | KERNEL_SYNC |  | (STK_TICKLESS_IDLE ? KERNEL_TICKLESS : 0), 3,
+    static Kernel<KERNEL_STATIC | KERNEL_SYNC | (STK_TICKLESS_IDLE ? KERNEL_TICKLESS : 0), 3,
         SwitchStrategyRR, PlatformDefault> kernel;
 
     // these are secure/trusted tasks which are allowed to access hardware safely
