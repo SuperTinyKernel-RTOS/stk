@@ -13,6 +13,56 @@ namespace stk {
 namespace test {
 
 // ============================================================================ //
+// =============================== Basic ====================================== //
+// ============================================================================ //
+
+TEST_GROUP(Basic)
+{
+    void setup() {}
+    void teardown() {}
+};
+
+TEST(Basic, MinMax)
+{
+    static_assert(stk::Min(10, 20) == 10, "Min failed at compile time");
+    static_assert(stk::Max(10, 20) == 20, "Max failed at compile time");
+
+    // basic & symmetry
+    CHECK_EQUAL(1, stk::Min(1, 2));
+    CHECK_EQUAL(1, stk::Min(2, 1));
+
+    // negatives
+    CHECK_EQUAL(-5, stk::Min(-5, -2));
+    CHECK_EQUAL(-2, stk::Max(-5, -2));
+
+    // equality
+    CHECK_EQUAL(42, stk::Max(42, 42));
+
+    // boundaries (assuming 32-bit ints)
+    CHECK_EQUAL(2147483647, stk::Max(0, 2147483647));
+
+    // support const vars
+    {
+        const int32_t a = 10;
+        const int32_t b = 20;
+        CHECK_EQUAL(10, stk::Min(a, b));
+    }
+
+    // no duplicate operation
+    {
+        int32_t x = 1;
+        int32_t y = 5;
+
+        // in a macro-based MIN(x++, y), x would become 3, with STK's template-based stk::Min, x should become 2
+        int32_t result = stk::Min(x++, y);
+
+        CHECK_EQUAL(1, result); // the value before increment
+        CHECK_EQUAL(2, x);      // x should only have been incremented once
+        CHECK_EQUAL(5, y);      // y remains untouched
+    }
+}
+
+// ============================================================================ //
 // ============================= UserTask ===================================== //
 // ============================================================================ //
 

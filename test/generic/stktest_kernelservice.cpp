@@ -19,7 +19,10 @@ namespace test {
 TEST_GROUP(KernelService)
 {
     void setup() {}
-    void teardown() {}
+    void teardown()
+    {
+        g_RelaxCpuHandler = NULL;
+    }
 };
 
 TEST(KernelService, GetMsecToTicks)
@@ -296,8 +299,6 @@ TEST(KernelService, SwitchToNext)
 
     // after a switch task 2 is active again
     CHECK_EQUAL(active->SP, (size_t)task2.GetStack());
-
-    g_RelaxCpuHandler = NULL;
 }
 
 TEST(KernelService, SwitchToNextInactiveTask)
@@ -410,8 +411,6 @@ static void TestTaskSleep()
     // ISR calls OnSysTick (task1 = active, task2 = idle)
     platform->ProcessTick();
     CHECK_EQUAL_TEXT(active->SP, (size_t)task1.GetStack(), "expecting task1 after next tick");
-
-    g_RelaxCpuHandler = NULL;
 }
 
 TEST(KernelService, SleepRR)
@@ -487,13 +486,65 @@ TEST(KernelService, SleepAllAndWake)
     kernel.Start();
 
     g_RelaxCpuHandler = SleepAllAndWakeRelaxCpu;
-    g_SleepAllAndWakeRelaxCpuContext.platform = (PlatformTestMock *)kernel.GetPlatform();
-    g_SleepAllAndWakeRelaxCpuContext.task1    = &task;
+    g_SleepAllAndWakeRelaxCpuContext.platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
+    g_SleepAllAndWakeRelaxCpuContext.task1 = &task;
+
+    // task1 calls Sleep
+    Sleep(3);
+}
+
+static struct SleepAndWakeTicklessRelaxCpuContext
+{
+    SleepAndWakeTicklessRelaxCpuContext()
+    {
+        counter  = 0;
+        platform = NULL;
+    }
+
+    uint32_t         counter;
+    PlatformTestMock *platform;
+
+    void Process()
+    {
+        platform->ProcessTick();
+
+        if (counter == 0)
+        {
+            // expecting 2 sleep ticks (Sleep(3) = 1 + 2
+            CHECK_EQUAL(2, platform->m_ticks_count);
+        }
+
+        ++counter;
+    }
+}
+g_SleepAndWakeTicklessRelaxCpuContext;
+
+static void SleepAndWakeTicklessRelaxCpu()
+{
+    g_SleepAndWakeTicklessRelaxCpuContext.Process();
+}
+
+TEST(KernelService, SleepAndWakeTickless)
+{
+    Kernel<KERNEL_STATIC | KERNEL_TICKLESS, 1, SwitchStrategyRR, PlatformTestMock> kernel;
+    TaskMock<ACCESS_USER> task;
+    PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
+
+    kernel.Initialize();
+    kernel.AddTask(&task);
+    kernel.Start();
+
+    g_RelaxCpuHandler = SleepAndWakeTicklessRelaxCpu;
+    g_SleepAndWakeTicklessRelaxCpuContext.platform = platform;
 
     // task1 calls Sleep
     Sleep(3);
 
-    g_RelaxCpuHandler = NULL;
+    // expect 4 ticks (1 + 3 sleep)
+    CHECK_EQUAL(4, platform->m_ticks_count);
+
+    // expect only 2 context switches (1st: Task=Idle, SleepCtx=Active, 2nd: Task=Active, SleepCtx=Idle)
+    CHECK_EQUAL(2, platform->m_context_switch_nr);
 }
 
 // ============================================================================ //

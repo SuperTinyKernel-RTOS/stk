@@ -92,6 +92,7 @@ public:
         m_fail_InitStack    = false;
         m_resolution        = 0;
         m_context_switch_nr = 0;
+        m_ticks_count           = 0;
         m_stack_idle        = NULL;
         m_stack_active      = NULL;
         m_overrider         = NULL;
@@ -173,8 +174,18 @@ public:
 
     void ProcessTick()
     {
-        if (m_event_handler->OnTick(m_stack_idle, m_stack_active))
+        Timeout ticks = 1;
+
+        if (m_event_handler->OnTick(m_stack_idle, m_stack_active
+        #if STK_TICKLESS_IDLE
+            , ticks
+        #endif
+        ))
+        {
             ++m_context_switch_nr;
+        }
+
+        m_ticks_count += ticks;
     }
 
     void SetEventOverrider(IEventOverrider *overrider)
@@ -224,6 +235,7 @@ public:
     bool             m_fail_InitStack;
     int32_t          m_resolution;
     uint32_t         m_context_switch_nr;
+    uint32_t         m_ticks_count;
     bool             m_started;
     bool             m_hard_fault;
     uint32_t         m_switch_to_next_nr;
