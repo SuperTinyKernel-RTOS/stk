@@ -96,8 +96,6 @@ public:
 private:
     STK_NONCOPYABLE_CLASS(Mutex);
 
-    bool Tick();
-
     static const uint16_t RECURSION_MAX = 0xFFFEu; //!< maximum nesting depth
 
     TId      m_owner_tid;       //!< thread id of the current owner
@@ -191,28 +189,6 @@ inline void Mutex::Unlock()
             __stk_full_memfence();
         }
     }
-}
-
-// ---------------------------------------------------------------------------
-// Tick
-// ---------------------------------------------------------------------------
-
-inline bool Mutex::Tick()
-{
-    // note: ScopedCriticalSection usage
-    //
-    // Single-core: no critical section needed - Tick() runs inside the
-    // SysTick ISR which already executes with interrupts disabled, making
-    // re-entrancy impossible on the local core.
-    //
-    // Multi-core: critical section is required because the tick handler on
-    // each core may call Tick() concurrently for the same Mutex instance,
-    // and ISyncObject::Tick() is not re-entrant.
-#if (STK_ARCH_CPU_COUNT > 1)
-    ScopedCriticalSection cs_;
-#endif
-
-    return ISyncObject::Tick();
 }
 
 } // namespace sync

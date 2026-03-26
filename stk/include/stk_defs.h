@@ -13,9 +13,44 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/*! \file  stk_config
+    \brief Contains user-level configuration for STK, refer to examples for details.
+*/
+#include "stk_config.h"
+
 /*! \file  stk_defs.h
     \brief Contains compiler low-level definitions.
 */
+
+/*! \def   STK_TICKLESS_IDLE
+    \brief Configures kernel for a tickless operation during Idle periods.
+*/
+#ifndef STK_TICKLESS_IDLE
+    #define STK_TICKLESS_IDLE 0
+#endif
+
+/*! \def   STK_TICKLESS_USE_ARM_DWT
+    \brief Use DWT timer of ARM Cortex-M for a precise tick calculation.
+    \note  DWT is available on Cortex-M3 and higher only (__CORTEX_M >= 3).
+           It has no effect on Cortex-M0/M0+.
+    \note  STK_TICKLESS_USE_ARM_DWT has no effect on RISC-V targets.
+           RISC-V tickless uses the CLINT mtime absolute timestamp for drift-free
+           timer rearm and does not require rearm-error compensation.
+*/
+#ifndef STK_TICKLESS_USE_ARM_DWT
+    #define STK_TICKLESS_USE_ARM_DWT 1
+#endif
+
+/*! \def   STK_TICKLESS_TICKS_MAX
+    \brief Max number of kernel ticks to allow for a tickless mode when STK_TICKLESS_IDLE=1
+    \see   STK_CONFIG_TICKLESS_IDLE
+*/
+#ifndef STK_TICKLESS_TICKS_MAX
+    #define STK_TICKLESS_TICKS_MAX 10000
+#endif
+#if STK_TICKLESS_TICKS_MAX > 100000
+    #error "STK_TICKLESS_TICKS_MAX is too large: cpu_ticks_requested may overflow uint32_t."
+#endif
 
 /*! \def   STK_NEED_TASK_ID
     \brief When defined as 1, the Stack descriptor (stk::Stack) carries a \c tid field
@@ -162,6 +197,23 @@
     #define __stk_full_memfence() __stk_dmb()
 #else
     #error "__stk_full_memfence() is not implemented for this compiler. Add a definition to stk_defs.h."
+#endif
+
+/*! \def   __stk_compiler_barrier
+    \brief Compiler-only barrier: prevents instruction reordering by the compiler,
+           emits no hardware instruction and costs zero cycles.
+    \note  Use to pin a memory access to its intended position in the instruction
+           stream without any bus or cache side-effects.
+    \note  On MSVC _ReadWriteBarrier() is the equivalent: a compiler fence with
+           no hardware instruction emitted, deprecated in favour of volatile but
+           still the correct lightweight barrier for this purpose.
+*/
+#if defined(__GNUC__) || defined(__clang__)
+    #define __stk_compiler_barrier() __asm volatile("" ::: "memory")
+#elif defined(_MSC_VER)
+    #define __stk_compiler_barrier() _ReadWriteBarrier()
+#else
+    #error "__stk_compiler_barrier() is not implemented for this compiler. Add a definition to stk_defs.h."
 #endif
 
 /*! \def   __stk_relax_cpu

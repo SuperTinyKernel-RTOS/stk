@@ -14,5 +14,6 @@
 
 #define _STK_ASSERT
 #define _STK_ARCH_ARM_CORTEX_M
+#define STK_TICKLESS_IDLE 0
 
 #endif /* STK_CONFIG_H_ */

@@ -41,6 +41,9 @@ __assert_func (const char *file, int line, const char *func,
   trace_printf ("assertion \"%s\" failed: file \"%s\", line %d%s%s\n",
                 failedexpr, file, line, func ? ", function: " : "",
                 func ? func : "");
+
+  __asm volatile("bkpt 0");
+
   abort ();
   /* NOTREACHED */
 }

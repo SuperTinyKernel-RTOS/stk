@@ -83,20 +83,17 @@ bool stk_mutex_timed_lock(stk_mutex_t *mtx, int32_t timeout)
 // ---------------------------------------------------------------------------
 struct stk_spinlock_t
 {
-    stk_spinlock_t(uint16_t spin_count) : handle(spin_count)
-    {}
-
     sync::SpinLock handle;
 };
 
-stk_spinlock_t *stk_spinlock_create(stk_spinlock_mem_t *memory, uint32_t memory_size, uint16_t spin_count)
+stk_spinlock_t *stk_spinlock_create(stk_spinlock_mem_t *memory, uint32_t memory_size)
 {
     STK_ASSERT(memory != nullptr);
     STK_ASSERT(memory_size >= sizeof(stk_spinlock_t));
     if (memory_size < sizeof(stk_spinlock_t))
         return nullptr;
 
-    return (stk_spinlock_t *)new (memory->data) stk_spinlock_t(spin_count);
+    return (stk_spinlock_t *)new (memory->data) stk_spinlock_t();
 }
 
 void stk_spinlock_destroy(stk_spinlock_t *lock)

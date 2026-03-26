@@ -84,6 +84,12 @@ if (BUILD_DOC)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/build/doc)
 endif()
 
+# Declare tickles mode if enabled (see stk_config.h.in)
+if (MODE_TICKLESS)
+    message(STATUS "* tickless mode")
+    set(STK_TICKLESS_IDLE 1)
+endif()
+
 # Create stk_config.h (note: must be defined after inclusion of the projects to catch value of _STK_DEVICE_INC)
 if (WIN32)
     set(_STK_ARCH_X86_WIN32 TRUE)

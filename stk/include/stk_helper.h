@@ -32,17 +32,8 @@ namespace stk {
     template <stk::EAccessMode _AccessMode>
     class MyTask : public stk::Task<256, _AccessMode>
     {
-    public:
-        stk::RunFuncType GetFunc() { return &Run; }
-        void *GetFuncUserData() { return this; }
-
     private:
-        static void Run(void *user_data)
-        {
-            ((MyTask *)user_data)->RunInner();
-        }
-
-        void RunInner()
+        void Run()
         {
             while (true)
             {

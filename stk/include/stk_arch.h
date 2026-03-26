@@ -432,6 +432,38 @@ __stk_forceinline void WriteVolatile64(volatile T *addr, T value)
 }
 
 } // namespace hw
+
+//! Implementation of ISyncObject::Tick, see \a ISyncObject. Placed here as it depends on hw namespace.
+inline bool ISyncObject::Tick(Timeout elapsed_ticks)
+{
+    // note: ScopedCriticalSection usage
+    //
+    // Single-core: no critical section needed - Tick() runs inside the
+    // SysTick ISR which already executes with interrupts disabled, making
+    // re-entrancy impossible on the local core.
+    //
+    // Multi-core: critical section is required because the tick handler on
+    // each core may call Tick() concurrently for the same Semaphore instance,
+    // and ISyncObject::Tick() is not re-entrant.
+#if (STK_ARCH_CPU_COUNT > 1)
+    hw::CriticalSection::ScopedLock cs_;
+#endif
+
+    IWaitObject *itr = static_cast<IWaitObject *>(m_wait_list.GetFirst());
+
+    while (itr != nullptr)
+    {
+        IWaitObject *next = static_cast<IWaitObject *>(itr->GetNext());
+
+        if (!itr->Tick(elapsed_ticks))
+            itr->Wake(true);
+
+        itr = next;
+    }
+
+    return !m_wait_list.IsEmpty();
+}
+
 } // namespace stk
 
 #ifndef STK_PANIC_HANDLER

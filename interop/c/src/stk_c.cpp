@@ -193,8 +193,7 @@ void stk_kernel_destroy(stk_kernel_t *k)
 // ---------------------------------------------------------------------------
 // Kernel control wrappers
 // ---------------------------------------------------------------------------
-void stk_kernel_init(stk_kernel_t *k,
-                     uint32_t tick_period_us)
+void stk_kernel_init(stk_kernel_t *k, uint32_t tick_period_us)
 {
     STK_ASSERT(k != nullptr);
 
@@ -208,11 +207,11 @@ void stk_kernel_start(stk_kernel_t *k)
     reinterpret_cast<stk::IKernel *>(k)->Start();
 }
 
-bool stk_kernel_is_running(const stk_kernel_t *k)
+EKernelState stk_kernel_get_state(const stk_kernel_t *k)
 {
     STK_ASSERT(k != nullptr);
 
-    return reinterpret_cast<const stk::IKernel *>(k)->IsStarted();
+    return static_cast<EKernelState>(reinterpret_cast<const stk::IKernel *>(k)->GetState());
 }
 
 bool stk_kernel_is_schedulable(const stk_kernel_t *k)

@@ -1241,21 +1241,67 @@ TEST(Kernel, SyncMutexMustBeLocked)
     }
 }
 
+TEST(Kernel, SyncTaskExitAfterWait)
+{
+    Kernel<KERNEL_DYNAMIC | KERNEL_SYNC, 1, SwitchStrategyRR, PlatformTestMock> kernel;
+    PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
+    TaskMock<ACCESS_USER> task;
+
+    MutexMock mutex;
+    SyncObjectMock sobj;
+
+    kernel.Initialize();
+    kernel.AddTask(&task);
+    kernel.Start();
+
+    {
+        //MutexMock::ScopedLock guard(mutex);
+
+        //IKernelService::GetInstance()->Wait(&sobj, &mutex, 10);
+    }
+
+    // task1 exited (will schedule its removal)
+    platform->EventTaskExit(platform->m_stack_active);
+
+    platform->ProcessTick();
+
+    // should be still running here, next tick will result in task exit and kernel stop
+    CHECK_EQUAL(IKernel::STATE_RUNNING, kernel.GetState());
+
+    platform->ProcessTick();
+
+    // should be stopped here
+    CHECK_EQUAL(IKernel::STATE_READY, kernel.GetState());
+}
+
 static struct SyncWaitRelaxCpuContext
 {
     SyncWaitRelaxCpuContext()
     {
-        counter  = 0;
-        platform = NULL;
+        Reset();
+    }
+
+    void Reset()
+    {
+        counter        = 0;
+        platform       = NULL;
+        check_tickless = ~0;
     }
 
     uint32_t          counter;
     PlatformTestMock *platform;
+    uint32_t          check_tickless;
 
     void Process()
     {
         platform->ProcessTick();
         ++counter;
+
+        // Wait object affects sleep_ticks, not a task
+        if (counter == check_tickless)
+        {
+            CHECK_EQUAL(2, platform->m_ticks_count);
+        }
     }
 }
 g_SyncWaitRelaxCpuContext;
@@ -1265,15 +1311,17 @@ static void SyncWaitRelaxCpu()
     g_SyncWaitRelaxCpuContext.Process();
 }
 
-TEST(Kernel, SyncWait)
+template <bool TTickless>
+void Test_SyncWait()
 {
-    Kernel<KERNEL_STATIC | KERNEL_SYNC, 1, SwitchStrategyRR, PlatformTestMock> kernel;
+    Kernel<KERNEL_STATIC | KERNEL_SYNC | (TTickless ? KERNEL_TICKLESS : 0), 1, SwitchStrategyRR, PlatformTestMock> kernel;
     PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
     TaskMock<ACCESS_USER> task;
 
     MutexMock mutex;
     SyncObjectMock sobj;
 
+    g_SyncWaitRelaxCpuContext.Reset();
     g_SyncWaitRelaxCpuContext.platform = platform;
     g_RelaxCpuHandler = SyncWaitRelaxCpu;
 
@@ -1290,6 +1338,51 @@ TEST(Kernel, SyncWait)
     CHECK_TRUE(wo->IsTimeout()); // expect timeout
     CHECK_EQUAL(2, g_SyncWaitRelaxCpuContext.counter); // expect 2 ticks after timeout
     CHECK_EQUAL(true, mutex.m_locked); // expect locked mutex after Wait return
+}
+
+TEST(Kernel, SyncWait)
+{
+    Test_SyncWait<false>();
+}
+
+TEST(Kernel, SyncWaitTickless)
+{
+    Test_SyncWait<true>();
+}
+
+TEST(Kernel, SyncWaitTicklessDuration)
+{
+    Kernel<KERNEL_STATIC | KERNEL_SYNC | KERNEL_TICKLESS, 1, SwitchStrategyRR, PlatformTestMock> kernel;
+    PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
+    TaskMock<ACCESS_USER> task;
+
+    MutexMock mutex;
+    SyncObjectMock sobj;
+
+    g_SyncWaitRelaxCpuContext.Reset();
+    g_SyncWaitRelaxCpuContext.platform       = platform;
+    g_SyncWaitRelaxCpuContext.check_tickless = 0; // check first tick
+    g_RelaxCpuHandler = SyncWaitRelaxCpu;
+
+    kernel.Initialize();
+    kernel.AddTask(&task);
+    kernel.Start();
+
+    MutexMock::ScopedLock guard(mutex);
+
+    // sleep_ticks should be equal to 2 on first OnTick call
+    IWaitObject *wo = IKernelService::GetInstance()->Wait(&sobj, &mutex, 3);
+
+    // in total 4 ticks must be elapsed, including sleep ticks
+    CHECK_EQUAL(4, platform->m_ticks_count);
+
+    // at this stage test should pass successfully by validating sleep_ticks in SyncWaitRelaxCpuContext::Process
+
+    CHECK_EQUAL(GetTid(), wo->GetTid());
+    CHECK_TRUE(wo != nullptr);
+    CHECK_TRUE(wo->IsTimeout());
+    CHECK_EQUAL(3, g_SyncWaitRelaxCpuContext.counter);
+    CHECK_EQUAL(true, mutex.m_locked);
 }
 
 } // namespace stk

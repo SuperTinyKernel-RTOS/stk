@@ -107,7 +107,7 @@ public:
 private:
     STK_NONCOPYABLE_CLASS(ConditionVariable);
 
-    bool Tick();
+    bool Tick(Timeout elapsed_ticks);
 };
 
 // ---------------------------------------------------------------------------
@@ -151,7 +151,7 @@ inline void ConditionVariable::NotifyAll()
 // Tick
 // ---------------------------------------------------------------------------
 
-inline bool ConditionVariable::Tick()
+inline bool ConditionVariable::Tick(Timeout elapsed_ticks)
 {
     // note: ScopedCriticalSection usage
     //
@@ -166,7 +166,7 @@ inline bool ConditionVariable::Tick()
     ScopedCriticalSection cs_;
 #endif
 
-    return ISyncObject::Tick();
+    return ISyncObject::Tick(elapsed_ticks);
 }
 
 } // namespace sync

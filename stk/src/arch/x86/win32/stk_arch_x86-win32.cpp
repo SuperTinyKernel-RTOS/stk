@@ -312,7 +312,7 @@ static DWORD WINAPI TimerThread(LPVOID param)
 {
     (void)param;
 
-    DWORD wait_ms = GetContext().m_tick_resolution / 1000;
+    DWORD wait_ms = (1U * GetContext().m_tick_resolution) / 1000U;
     GetContext().m_timer_tid = GetCurrentThreadId();
 
     while (WaitForSingleObject(GetContext().m_timer_thread, wait_ms) == WAIT_TIMEOUT)
@@ -568,7 +568,7 @@ bool PlatformX86Win32::InitStack(EStackType stack_type, Stack *stack, IStackMemo
     return GetContext().InitStack(stack_type, stack, stack_memory, user_task);
 }
 
-int32_t PlatformX86Win32::GetTickResolution() const
+uint32_t PlatformX86Win32::GetTickResolution() const
 {
     return GetContext().m_tick_resolution;
 }
