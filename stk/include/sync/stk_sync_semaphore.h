@@ -82,6 +82,15 @@ public:
     */
     bool Wait(Timeout timeout = WAIT_INFINITE);
 
+    /*! \brief     Poll the semaphore without blocking (decrement counter if available).
+        \details   Checks if a resource token is available. If so, decrements the counter
+                   and returns immediately without yielding the CPU or touching the kernel
+                   wait list. If the counter is zero, returns immediately with \c false.
+        \note      ISR-safe.
+        \return    \c true if a resource token was acquired, \c false if count was zero.
+    */
+    bool TryWait() { return Wait(NO_WAIT); }
+
     /*! \brief     Post a signal (increment counter).
         \note      Gives "token" directly to the waking task. The count is not incremented, and
                    the waking task does not decrement it.
@@ -110,8 +119,6 @@ private:
 
 inline bool Semaphore::Wait(Timeout timeout)
 {
-    STK_ASSERT(!hw::IsInsideISR()); // API contract: caller must not be in ISR
-
     ScopedCriticalSection cs_;
 
     // fast path: resource is available
@@ -125,6 +132,8 @@ inline bool Semaphore::Wait(Timeout timeout)
     // try lock behavior (timeout=NO_WAIT)
     if (timeout == NO_WAIT)
         return false;
+
+    STK_ASSERT(!hw::IsInsideISR()); // API contract: caller must not be in ISR if timeout!=NO_WAIT
 
     // slow path: block until Signal() or timeout
     // note: after waking, if not a timeout, we effectively own the resource that Signal() produced

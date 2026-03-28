@@ -23,21 +23,20 @@
 
     As a general rule, methods that can cause the caller to block or sleep are **STRICTLY FORBIDDEN** in ISRs.
 
-    | Primitive             | ISR Safe Methods                                        |
-    | :-------------------- | :------------------------------------------------------ |
-    | **Event**             | \c Set(), \c Pulse(), \c Reset(), \c TryWait()          |
-    | **Semaphore**         | \c Signal()                                             |
-    | **SpinLock**          | None                                                    |
-    | **Mutex**             | None                                                    |
-    | **RWMutex**           | None                                                    |
-    | **ConditionVariable** | \c NotifyOne(), \c NotifyAll(), \c Wait(NO_WAIT)        |
-    | **Pipe**              | None                                                    |
+    | Primitive             | ISR Safe Methods                                                                                                                                   |
+    | :-------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------- |
+    | **Event**             | \c Set(), \c Pulse(), \c Reset(), \c TryWait()                                                                                                     |
+    | **Semaphore**         | \c Signal(), \c TryWait()                                                                                                                          |
+    | **SpinLock**          | None                                                                                                                                               |
+    | **Mutex**             | None                                                                                                                                               |
+    | **RWMutex**           | None                                                                                                                                               |
+    | **ConditionVariable** | \c NotifyOne(), \c NotifyAll(), \c Wait(NO_WAIT)                                                                                                   |
+    | **Pipe**              | \c Write(NO_WAIT), \c WriteBulk(NO_WAIT), \c TryWrite(), \c TryWriteBulk(), \c Read(NO_WAIT), \c ReadBulk(NO_WAIT), \c TryRead(), \c TryReadBulk() |
 
     NOTE:
     * **SpinLock**, **Mutex**, **RWMutex**: Ownership is tied to a Task ID (\a TId).
       Since ISRs lack a valid Task ID context, and these primitives use internal Mutex 
       logic for state protection, their operations are never safe in ISRs.
-    * **Pipe** uses internal Mutexes for state protection and is therefore not suitable for direct use in ISRs.
     * **ConditionVariable::Notify** methods are safe as they only trigger internal wake-ups without
       blocking the caller.
 

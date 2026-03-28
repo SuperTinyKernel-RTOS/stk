@@ -106,8 +106,6 @@ public:
 
 private:
     STK_NONCOPYABLE_CLASS(ConditionVariable);
-
-    bool Tick(Timeout elapsed_ticks);
 };
 
 // ---------------------------------------------------------------------------
@@ -122,7 +120,7 @@ inline bool ConditionVariable::Wait(IMutex &mutex, Timeout timeout)
     if (timeout == NO_WAIT)
         return false;
 
-    STK_ASSERT(!hw::IsInsideISR()); // API contract: caller must not be in ISR
+    STK_ASSERT(!hw::IsInsideISR()); // API contract: caller must not be in ISR if timeout!=NO_WAIT
 
     return !IKernelService::GetInstance()->Wait(this, &mutex, timeout)->IsTimeout();
 }
@@ -145,28 +143,6 @@ inline void ConditionVariable::NotifyAll()
 {
     ScopedCriticalSection cs_;
     WakeAll(); // wakes all tasks in the wait list simultaneously
-}
-
-// ---------------------------------------------------------------------------
-// Tick
-// ---------------------------------------------------------------------------
-
-inline bool ConditionVariable::Tick(Timeout elapsed_ticks)
-{
-    // note: ScopedCriticalSection usage
-    //
-    // Single-core: no critical section needed - Tick() runs inside the
-    // SysTick ISR which already executes with interrupts disabled, making
-    // re-entrancy impossible on the local core.
-    //
-    // Multi-core: critical section is required because the tick handler on
-    // each core may call Tick() concurrently for the same ConditionVariable
-    // instance, and ISyncObject::Tick() is not re-entrant.
-#if (STK_ARCH_CPU_COUNT > 1)
-    ScopedCriticalSection cs_;
-#endif
-
-    return ISyncObject::Tick(elapsed_ticks);
 }
 
 } // namespace sync
