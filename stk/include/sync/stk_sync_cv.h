@@ -90,7 +90,7 @@ public:
         \param[in] timeout: Maximum time to wait (ticks). Use \a WAIT_INFINITE to block
                    indefinitely, \a NO_WAIT to return immediately without blocking.
         \return    \c true if signaled, \c false if timeout occurred or \a NO_WAIT was passed.
-        \warning   ISR-unsafe. Do not call from an ISR context.
+        \warning   ISR-safe only with timeout=NO_WAIT, ISR-unsafe otherwise.
     */
     bool Wait(IMutex &mutex, Timeout timeout = WAIT_INFINITE);
 
@@ -116,13 +116,13 @@ private:
 
 inline bool ConditionVariable::Wait(IMutex &mutex, Timeout timeout)
 {
-    STK_ASSERT(!hw::IsInsideISR()); // API contract: caller must not be in ISR
-
     // API contract: mutex must be locked by the calling task before Wait() is called.
     // The kernel releases it atomically during suspension and re-acquires it on wake.
 
     if (timeout == NO_WAIT)
         return false;
+
+    STK_ASSERT(!hw::IsInsideISR()); // API contract: caller must not be in ISR
 
     return !IKernelService::GetInstance()->Wait(this, &mutex, timeout)->IsTimeout();
 }

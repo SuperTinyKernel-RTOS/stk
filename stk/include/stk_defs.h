@@ -46,7 +46,7 @@
     \see   STK_CONFIG_TICKLESS_IDLE
 */
 #ifndef STK_TICKLESS_TICKS_MAX
-    #define STK_TICKLESS_TICKS_MAX 10000
+    #define STK_TICKLESS_TICKS_MAX 1000
 #endif
 #if STK_TICKLESS_TICKS_MAX > 100000
     #error "STK_TICKLESS_TICKS_MAX is too large: cpu_ticks_requested may overflow uint32_t."

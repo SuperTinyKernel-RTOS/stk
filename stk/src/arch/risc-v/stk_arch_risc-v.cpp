@@ -62,20 +62,27 @@ using namespace stk;
 // CLINT
 // Details: https://github.com/riscv/riscv-aclint/blob/main/riscv-aclint.adoc
 #ifndef STK_RISCV_CLINT_BASE_ADDR
-    #define STK_RISCV_CLINT_BASE_ADDR (0x2000000)
+    #define STK_RISCV_CLINT_BASE_ADDR (0x2000000U)
 #endif
 #ifndef STK_RISCV_CLINT_MTIMECMP_ADDR
-    #define STK_RISCV_CLINT_MTIMECMP_ADDR (STK_RISCV_CLINT_BASE_ADDR + 0x4000) // 8-byte value, 1 per hart
+    #define STK_RISCV_CLINT_MTIMECMP_ADDR (STK_RISCV_CLINT_BASE_ADDR + 0x4000U) // 8-byte value, 1 per hart
 #endif
 #ifndef STK_RISCV_CLINT_MTIME_ADDR
-    #define STK_RISCV_CLINT_MTIME_ADDR (STK_RISCV_CLINT_BASE_ADDR + 0xBFF8) // 8-byte value, global
+    #define STK_RISCV_CLINT_MTIME_ADDR (STK_RISCV_CLINT_BASE_ADDR + 0xBFF8U) // 8-byte value, global
 #endif
 
 /*! \brief  Size in bytes of the private ISR stack allocated by Context.
     \note   Must be large enough to accommodate TrySwitchContext() and the scheduler call chain.
             Increase if STK_KERNEL_PANIC or other deep call paths are added to the ISR.
 */
-#define STK_RISCV_ISR_STACK_SIZE 256
+#define STK_RISCV_ISR_STACK_SIZE 256U
+
+/*! \def   STK_TIMER_CLOCK_FREQUENCY
+    \brief System clock frequency in Hz. Default: 1 MHz.
+*/
+#ifndef STK_TIMER_CLOCK_FREQUENCY
+    #define STK_TIMER_CLOCK_FREQUENCY 1000000U
+#endif
 
 /*! \brief  Optional section attribute for placing ISR handlers into a dedicated linker section.
     \note   Define before including this file to override (e.g. __attribute__((section(".isr")))).
@@ -390,6 +397,23 @@ static __stk_forceinline void HW_StopMTimer()
     clear_csr(mie, MIP_MTIP);
 }
 
+/*! \brief  Get CPU core clock frequency.
+    \return Frequency in Hz.
+*/
+static __stk_forceinline uint32_t HW_CoreClockFrequency()
+{
+    return SystemCoreClock; // CPU speed, e.g. 125/150 MHz
+}
+
+/*! \brief  Get mtime reference clock frequency.
+    \note   By default mtime is driven by a fixed 1 MHz reference, independent of the CPU PLL.
+    \return Frequency in Hz.
+*/
+static __stk_forceinline uint32_t HW_MtimeClockFrequency()
+{
+    return STK_TIMER_CLOCK_FREQUENCY; // Timer frequency, e.g. 1 MHz
+}
+
 /*! \brief  Get mtime.
     \return Ticks.
     \note   mtime is a free-running 64-bit counter driven by a fixed-frequency
@@ -453,6 +477,30 @@ static __stk_forceinline void HW_SetMtimecmp(uint64_t time_next)
 static __stk_forceinline uint64_t HW_GetMtimeElapsed(uint64_t since)
 {
     return HW_GetMtime() - since;
+}
+
+/*! \brief     Enable cycle counter on CPU core.
+*/
+static __stk_forceinline void HW_EnableCycleCounter()
+{
+    __asm volatile("csrci mcountinhibit, 0x1");
+}
+
+/*! \brief     Get value of cycle counter (for the hart of the caller).
+    \return    Counter value in cycles.
+*/
+static __stk_forceinline Cycles HW_GetCycleCounter()
+{
+    uint32_t high, low, check;
+    do
+    {
+        __asm volatile("csrr %0, mcycleh" : "=r"(high));
+        __asm volatile("csrr %0, mcycle"  : "=r"(low));
+        __asm volatile("csrr %0, mcycleh" : "=r"(check));
+    }
+    while (high != check);
+
+    return (static_cast<Cycles>(high) << 32) | low;
 }
 
 /*! \brief Get SP of the calling process.
@@ -585,10 +633,9 @@ static __stk_forceinline void HW_ScheduleContextSwitch(uint8_t hart)
 #endif
 }
 
-//! Define _STK_SYSTEM_CLOCK_VAR privately by the driver if _STK_SYSTEM_CLOCK_EXTERNAL
-//! is 0 or undefined.
-#if !_STK_SYSTEM_CLOCK_EXTERNAL
-volatile uint32_t _STK_SYSTEM_CLOCK_VAR = _STK_SYSTEM_CLOCK_FREQUENCY;
+//! Define _STK_SYSTEM_CLOCK_VAR privately by the driver if _STK_SYSTEM_CORE_CLOCK_EXTERNAL is undefined.
+#ifndef _STK_SYSTEM_CORE_CLOCK_EXTERNAL
+volatile uint32_t STK_SYSTEM_CORE_CLOCK_VAR = STK_SYSTEM_CORE_CLOCK_FREQUENCY;
 #endif
 
 /*! \brief  Global lock to synchronize critical sections of multiple cores.
@@ -768,6 +815,55 @@ void RestoreJmp(JmpFrame &/*f*/, int32_t /*val*/)
 
 //! ----------------------------------------------------------------------------
 
+//! High resolution clock based on MTIME.
+#if STK_SUBMICORSECOND_PRECISION_TIMER
+class HiResClockCYCLE
+{
+public:
+    static HiResClockCYCLE *GetInstance()
+    {
+        // keep declaration function-local to allow compiler stripping it from the binary if
+        // it is unused by the user code
+        static HiResClockCYCLE clock;
+        return &clock;
+    }
+
+    Cycles GetCycles()
+    {
+        return HW_GetCycleCounter();
+    }
+
+    uint32_t GetFrequency()
+    {
+        return HW_CoreClockFrequency();
+    }
+};
+typedef HiResClockCYCLE HiResClockImpl;
+#else
+class HiResClockMTIME
+{
+public:
+    static HiResClockMTIME *GetInstance()
+    {
+        // keep declaration function-local to allow compiler stripping it from the binary if
+        // it is unused by the user code
+        static HiResClockMTIME clock;
+        return &clock;
+    }
+
+    Cycles GetCycles()
+    {
+        return HW_GetMtime();
+    }
+
+    uint32_t GetFrequency()
+    {
+        return HW_MtimeClockFrequency();
+    }
+};
+typedef HiResClockMTIME HiResClockImpl;
+#endif // !STK_SUBMICORSECOND_PRECISION_TIMER
+
 //! Internal context.
 static struct Context : public PlatformContext
 {
@@ -808,11 +904,16 @@ static struct Context : public PlatformContext
         m_csu_nesting = 0;
         m_overrider   = NULL;
         m_specific    = NULL;
-        m_tick_period = ConvertTimeToCpuTicks(_STK_SYSTEM_CLOCK_VAR, resolution_us);
+        m_tick_period = ConvertTimeUsToClockCycles(STK_TIMER_CLOCK_FREQUENCY, resolution_us);
         m_last_mtime  = 0ULL;
         m_starting    = false;
         m_started     = false;
         m_exiting     = false;
+
+        // mcycle counter must be enabled per-core
+    #if STK_SUBMICORSECOND_PRECISION_TIMER
+        HW_EnableCycleCounter();
+    #endif
     }
 
     __stk_forceinline void OnTick()
@@ -1839,6 +1940,18 @@ bool stk::hw::SpinLock::TryLock()
 bool stk::hw::IsInsideISR()
 {
     return HW_IsHandlerMode();
+}
+
+Cycles stk::hw::HiResClock::GetCycles()
+{
+    return HiResClockImpl::GetInstance()->GetCycles();
+}
+
+uint32_t stk::hw::HiResClock::GetFrequency()
+{
+    uint32_t freq = HiResClockImpl::GetInstance()->GetFrequency();
+    STK_ASSERT(freq != 0);
+    return freq;
 }
 
 #endif // _STK_ARCH_RISC_V

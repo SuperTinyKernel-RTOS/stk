@@ -19,6 +19,7 @@
 #include <arm_cmse.h>
 #endif
 
+#include "stk.h"
 #include "stk_arch.h"
 #include "arch/stk_arch_common.h"
 
@@ -658,11 +659,19 @@ static __stk_forceinline void HW_EnableFullFpuAccess()
 #endif
 }
 
+/*! \brief  Get core clock frequency.
+    \return Frequency in Hz.
+*/
+static __stk_forceinline uint32_t HW_CoreClockFrequency()
+{
+    return SystemCoreClock;
+}
+
 /*! \brief Start SysTick timer peripheral.
 */
 static __stk_forceinline void HW_SysTickStart(uint32_t period_ticks)
 {
-    uint32_t result = SysTick_Config(static_cast<uint32_t>(ConvertTimeToCpuTicks(SystemCoreClock, period_ticks)));
+    uint32_t result = SysTick_Config(static_cast<uint32_t>(ConvertTimeUsToClockCycles(HW_CoreClockFrequency(), period_ticks)));
     STK_ASSERT(result == 0U);
     (void)result;
 
@@ -804,7 +813,11 @@ static struct Context : public PlatformContext
     #endif
 
     #if STK_SEGGER_SYSVIEW
-        SEGGER_SYSVIEW_Init(SystemCoreClock, SystemCoreClock, nullptr, SendSysDesc);
+        SEGGER_SYSVIEW_Init(
+                HW_CoreClockFrequency(),
+                HW_CoreClockFrequency(),
+                nullptr,
+                SendSysDesc);
     #endif
     }
 
@@ -948,6 +961,88 @@ static struct Context : public PlatformContext
 }
 s_StkPlatformContext[STK_ARCH_CPU_COUNT];
 
+//! High resolution clock for Cortex-M3+ using DWT peripheral.
+class HiResClockDWT
+{
+    Cycles   m_acc;
+    uint32_t m_prev;
+
+public:
+    HiResClockDWT() : m_acc(0), m_prev(0U)
+    {
+        HW_DWTEnableCounter();
+
+        m_prev = HW_DWTGetCounter();
+        m_acc  = 0;
+    }
+
+    static HiResClockDWT *GetInstance()
+    {
+        // keep declaration function-local to allow compiler stripping it from the binary if
+        // it is unused by the user code
+        static HiResClockDWT clock;
+        return &clock;
+    }
+
+    void Update()
+    {
+        const uint32_t current = HW_DWTGetCounter();
+
+        // unsigned subtraction handles the wrap-around perfectly
+        uint32_t delta = current - m_prev;
+        m_acc += delta;
+
+        m_prev = current;
+    }
+
+    Cycles GetCycles()
+    {
+        Update();
+        return m_acc;
+    }
+
+    uint32_t GetFrequency()
+    {
+        return HW_CoreClockFrequency();
+    }
+};
+
+//! High resolution clock implementation for Cortex-M0.
+class HiResClockM0
+{
+public:
+    static HiResClockM0 *GetInstance()
+    {
+        // keep declaration function-local to allow compiler stripping it from the binary if
+        // it is unused by the user code
+        static HiResClockM0 clock;
+        return &clock;
+    }
+
+    Cycles GetCycles()
+    {
+        // On M0, combine the coarse OS ticks with the fine-grained SysTick counter
+        Cycles cycles = ConvertTimeUsToClockCycles(HW_CoreClockFrequency(), stk::GetTicks() * GetContext().m_tick_resolution);
+
+        uint32_t val  = SysTick->VAL;  // down-counter (cycles remaining in current tick)
+        uint32_t load = SysTick->LOAD; // current reload value
+
+        // total elapsed cycles
+        return cycles + static_cast<Cycles>(load - val);
+    }
+
+    uint32_t GetFrequency()
+    {
+        return HW_CoreClockFrequency();
+    }
+};
+
+#if (__CORTEX_M >= 3U)
+    typedef HiResClockDWT HiResClockImpl;
+#else
+    typedef HiResClockM0 HiResClockImpl;
+#endif
+
 //! Panic id cache for post-mortem inspection.
 static volatile EKernelPanicId g_LastPanicId = KERNEL_PANIC_NONE;
 
@@ -976,7 +1071,7 @@ void PlatformArmCortexM::ProcessTick()
 #if STK_TICKLESS_IDLE
 void Context::ReloadTickPeriod(Timeout ticks_requested)
 {
-    uint32_t reload = static_cast<uint32_t>(ConvertTimeToCpuTicks(SystemCoreClock, m_tick_resolution));
+    uint32_t reload = static_cast<uint32_t>(ConvertTimeUsToClockCycles(HW_CoreClockFrequency(), m_tick_resolution));
 
     // guard against uint32_t overflow in the reload calculation
     STK_ASSERT(static_cast<uint64_t>(ticks_requested) * reload <= UINT32_MAX);
@@ -1657,6 +1752,18 @@ bool stk::hw::SpinLock::TryLock()
 bool stk::hw::IsInsideISR()
 {
     return HW_IsHandlerMode();
+}
+
+Cycles stk::hw::HiResClock::GetCycles()
+{
+    return HiResClockImpl::GetInstance()->GetCycles();
+}
+
+uint32_t stk::hw::HiResClock::GetFrequency()
+{
+    Cycles freq = HiResClockImpl::GetInstance()->GetFrequency();
+    STK_ASSERT(freq != 0);
+    return freq;
 }
 
 #endif // _STK_ARCH_ARM_CORTEX_M

@@ -90,23 +90,31 @@ __stk_forceinline void SetTls(Word tp)
 */
 #define __stk_dmb() __asm volatile("fence rw, rw" ::: "memory")
 
-/*! \def   _STK_SYSTEM_CLOCK_VAR
-    \brief Definition of the system clock variable holding frequency of the CPU.
+/*! \def   STK_SUBMICORSECOND_PRECISION_TIMER
+    \brief Enables sub-microsecond precision timer, see \a hw::HiResClock.
+    \note  By default timer precision is 1 microsecond.
 */
-#ifndef _STK_SYSTEM_CLOCK_VAR
-    #define _STK_SYSTEM_CLOCK_VAR SystemCoreClock
+#ifndef STK_SUBMICORSECOND_PRECISION_TIMER
+    #define STK_SUBMICORSECOND_PRECISION_TIMER 0
 #endif
 
-/*! \def   _STK_SYSTEM_CLOCK_FREQUENCY
-    \brief System clock frequency (Hz). Default: 1 MHz.
+/*! \def   STK_SYSTEM_CORE_CLOCK_VAR
+    \brief Definition of the system core clock variable holding frequency of the CPU in Hz.
 */
-#ifndef _STK_SYSTEM_CLOCK_FREQUENCY
-    #define _STK_SYSTEM_CLOCK_FREQUENCY 1000000
+#ifndef STK_SYSTEM_CORE_CLOCK_VAR
+    #define STK_SYSTEM_CORE_CLOCK_VAR SystemCoreClock
+#endif
+
+/*! \def   STK_SYSTEM_CORE_CLOCK_FREQUENCY
+    \brief System clock frequency in Hz. Default: 150 MHz.
+*/
+#ifndef STK_SYSTEM_CORE_CLOCK_FREQUENCY
+    #define STK_SYSTEM_CORE_CLOCK_FREQUENCY 150000000U
 #endif
 
 /*! \var   SystemCoreClock
-    \brief System clock frequency (Hz).
+    \brief System clock frequency in Hz.
 */
-extern "C" volatile uint32_t _STK_SYSTEM_CLOCK_VAR;
+extern "C" volatile uint32_t STK_SYSTEM_CORE_CLOCK_VAR;
 
 #endif /* STK_ARCH_RISC_V_H_ */

@@ -26,6 +26,8 @@ using namespace stk;
 #include <list>
 #include <vector>
 
+using namespace stk;
+
 #ifndef WINAPI
 #define WINAPI __stdcall
 #endif
@@ -103,7 +105,40 @@ struct Win32ScopedCriticalSection
     }
 };
 
-using namespace stk;
+class HiResClockQPC
+{
+    LARGE_INTEGER m_freq;
+    LARGE_INTEGER m_start;
+
+public:
+    explicit HiResClockQPC()
+    {
+        QueryPerformanceFrequency(&m_freq);
+        QueryPerformanceCounter(&m_start);
+    }
+
+    static HiResClockQPC *GetInstance()
+    {
+        // keep declaration function-local to allow compiler stripping it from the binary if
+        // it is unused by the user code
+        static HiResClockQPC clock;
+        return &clock;
+    }
+
+    Cycles GetCycles()
+    {
+        LARGE_INTEGER current;
+        QueryPerformanceCounter(&current);
+
+        // relative cycles since simulation start
+        return static_cast<Cycles>(current.QuadPart - m_start.QuadPart);
+    }
+
+    uint32_t GetFrequency()
+    {
+        return static_cast<uint32_t>(m_freq.QuadPart);
+    }
+};
 
 //! Internal context.
 static struct Context : public PlatformContext
@@ -660,6 +695,16 @@ bool stk::hw::SpinLock::TryLock()
 bool stk::hw::IsInsideISR()
 {
     return false;
+}
+
+Cycles stk::hw::HiResClock::GetCycles()
+{
+    return HiResClockQPC::GetInstance()->GetCycles();
+}
+
+uint32_t stk::hw::HiResClock::GetFrequency()
+{
+    return HiResClockQPC::GetInstance()->GetFrequency();
 }
 
 #endif // _STK_ARCH_X86_WIN32

@@ -82,25 +82,28 @@ protected:
     STK_NONCOPYABLE_CLASS(PlatformContext);
 };
 
+/*! \def   STK_ARCH_GET_CPU_ID
+    \brief Get CPU core id of the caller, e.g. if called while running on core 0 then returned value must be 0.
+*/
+#ifndef STK_ARCH_GET_CPU_ID
+    #define STK_ARCH_GET_CPU_ID() (0)
+#endif
+
 /*! \def   GetContext
     \brief Get platform's context.
 */
-/*! \def   SetContext
-    \brief Set platform's context.
-*/
 #ifndef _STK_UNDER_TEST
-#if (STK_ARCH_CPU_COUNT == 1)
-    #define GetContext() s_StkPlatformContext[0]
-#else
     #define GetContext() s_StkPlatformContext[STK_ARCH_GET_CPU_ID()]
 #endif
-#endif
 
-/*! \brief Convert time (microseconds) to CPU ticks.
+/*! \brief     Convert time (microseconds) to core clock cycles.
+    \param[in] clock_freq: Clock frequency.
+    \param[in] time_us: Time (microseconds).
+    \return    Clock cycles.
 */
-static __stk_forceinline Ticks ConvertTimeToCpuTicks(Ticks cpu_freq, Ticks time_us)
+static __stk_forceinline Cycles ConvertTimeUsToClockCycles(Cycles clock_freq, Ticks time_us)
 {
-    return ((cpu_freq * time_us) / 1000000);
+    return ((clock_freq * static_cast<Cycles>(time_us)) / 1000000ULL);
 }
 
 } // namespace stk

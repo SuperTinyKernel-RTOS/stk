@@ -35,9 +35,10 @@ public:
     const char *GetName() const  { return m_name; }
 
 private:
-    void Run()
+    void Run() override
     {
         uint8_t task_id = m_task_id;
+        stk::Ticks ts = 0;
 
         while (true)
         {
@@ -56,8 +57,14 @@ private:
                 SwitchOnLED(task_id);
             }
 
+            ts = stk::hw::HiResClock::GetTimeUs();
+
             // sleep 1s and delegate work to another task switching another LED
             stk::Sleep(1000);
+
+            stk::Cycles diff = stk::hw::HiResClock::GetTimeUs() - ts;
+			(void)diff;
+
             g_TaskSwitch = (task_id + 1) % 3;
         }
     }

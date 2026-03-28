@@ -149,6 +149,11 @@ const Timeout NO_WAIT = 0;
 */
 typedef int64_t Ticks;
 
+/*! \typedef Cycles
+    \brief   Cycles value.
+*/
+typedef uint64_t Cycles;
+
 /*! \class StackMemoryDef
     \brief Stack memory type definition.
     \note  This descriptor provides an encapsulated type only on basis of which you can declare
