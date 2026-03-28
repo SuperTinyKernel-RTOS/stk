@@ -16,42 +16,50 @@
 
 ## Primitives
 
-### 1. Mutex (`sync::Mutex`)
+### 1. Scoped Critical Section (`sync::ScopedCriticalSection`)
+An RAII-style low-level synchronization primitive that disables interrupts on the caller's CPU core and guards against concurrent access from other CPU cores in multi-core systems.
+- **ISR-safe**: The only primitive (alongside `hw::CriticalSection`) safe for guarding code accessible by an ISR or another CPU core.
+- **RAII**: Enters the critical section on construction and exits automatically when the object goes out of scope.
+- **Always available**: Does not depend on `KERNEL_SYNC` configuration.
+- **Use with care**: Has a global effect on the system — long sections will increase interrupt latency.
+
+### 2. Mutex (`sync::Mutex`)
 A recursive mutual exclusion primitive used to protect shared resources.
 - **Features**: Supports `Lock`, `TryLock`, `Unlock`, and `TimedLock`.
 - **Low-Power Aware**: Waiting tasks are suspended by the kernel.
 
-### 2. Spinlock (`sync::SpinLock`)
+### 3. Spinlock (`sync::SpinLock`)
 A high-performance recursive spinlock for very short critical sections.
-- **Configurable Spin Count**: Busy-waits for N iterations before calling `Yield()`, preventing total system stall while waiting for the lock.
-- **Low Latency**: Bypasses the kernel wait-list logic for the "fast path" acquisition.
-- **Low-Power Aware**: Waiting tasks will be switched out if busy-waiting exceeds a threshold.
+- **Features**: Supports `Lock`, `TryLock`, and `Unlock`.
+- **Low Latency**: Bypasses the kernel wait-list logic for the "fast path" acquisition; suitable for sections where a context switch would be more expensive than spinning.
+- **Recursive**: Allows the owning thread to acquire the lock multiple times without deadlocking. Max recursion depth is `0xFFFE`.
 
-### 3. Condition Variable (`sync::ConditionVariable`)
+### 4. Condition Variable (`sync::ConditionVariable`)
 Used in conjunction with a Mutex to wait for specific application states.
-- **Features**: `Wait`, `TryWait`, `NotifyOne`, and `NotifyAll`.
+- **Features**: `Wait`, `NotifyOne`, and `NotifyAll`.
 - **Real-time**: Releases mutex and suspends task atomically, ensuring no "lost wake-up" signals.
 - **Low-Power Aware**: Waiting tasks are suspended by the kernel.
 
-### 4. Event (`sync::Event`)
+### 5. Event (`sync::Event`)
 A binary signaling primitive supporting Auto-reset and Manual-reset modes.
 - **Manual Reset**: Remains signaled until explicitly reset.
 - **Auto Reset**: Resets automatically after waking a single waiting task.
 - **Pulse**: Wakes waiting tasks and immediately resets the event (similar to Win32 API).
 - **Low-Power Aware**: Waiting tasks are suspended by the kernel.
 
-### 5. Semaphore (`sync::Semaphore`)
+### 6. Semaphore (`sync::Semaphore`)
 A counting signaling primitive used for resource tracking or producer-consumer patterns.
 - **Direct Handover**: When semaphore is signaled, kernel immediately transfers the resource to the first waiting task (FIFO ordering).
 - **Low-Power Aware**: Waiting tasks are suspended by the kernel.
 
-### 6. Pipe (`sync::Pipe<T, Capacity>`)
-A thread-safe, lock-free (for single producer/consumer), or mutex-protected FIFO buffer.
+### 7. Pipe (`sync::Pipe<T, Capacity>`)
+A thread-safe FIFO communication channel for inter-task data passing, internally synchronized via a critical section and condition variables.
 - **Template-based**: Supports any data type.
-- **Bulk Operations**: Optimized `ReadBulk` and `WriteBulk` using `memcpy` for high-throughput data like audio samples.
+- **Bulk Operations**: Optimized `ReadBulk` and `WriteBulk` using `memcpy` for scalar types, with a per-element fallback for non-scalar types.
+- **Blocking semantics**: `Write()` blocks if the pipe is full; `Read()` blocks if the pipe is empty, until the timeout expires.
 - **Low-Power Aware**: Waiting tasks are suspended by the kernel.
 
-### 7. Reader-Writer Mutex (`sync::RWMutex`)
+### 8. Reader-Writer Mutex (`sync::RWMutex`)
 A synchronization primitive that allows multiple concurrent readers or one exclusive writer.
 - **Writer Preference Policy**: Prevents writer starvation by blocking new readers when writers are waiting.
 - **Shared Access**: Multiple tasks can acquire `ReadLock()` simultaneously for read-only operations.
@@ -67,8 +75,9 @@ STK primitives follow strict rules for **Interrupt Service Routine (ISR)** conte
 
 The following operations are ISR-safe:
 * **sync::Event**: `Set()`, `Pulse()`, `Reset()`, `TryWait()`
-* **sync::Semaphore**: `Signal()`
+* **sync::Semaphore**: `Signal()`, `TryWait()`
 * **sync::ConditionVariable**: `NotifyOne()`, `NotifyAll()`, `Wait(NO_WAIT)`
+* **sync::Pipe**: `Write(NO_WAIT)`, `WriteBulk(NO_WAIT)`, `TryWrite()`, `TryWriteBulk()`, `Read(NO_WAIT)`, `ReadBulk(NO_WAIT)`, `TryRead()`, `TryReadBulk()`
 
 ---
 
@@ -79,8 +88,8 @@ The following operations are ISR-safe:
 
 ### Eclipse projects:
 * STM32F407G-DISC1, C++: [sync-stm32f407g-disc1](https://github.com/dmitrykos/stk/tree/main/build/example/project/eclipse/stm/sync-stm32f407g-disc1)
-* Raspberry RP2350 ARM Cortex-M (dual or single core cases), C++: [sync_c-rp2350w](https://github.com/dmitrykos/stk/tree/main/build/example/project/eclipse/rpi/sync-rp2350w)
-* Raspberry RP2350 ARM Cortex-M (dual or single core cases), C: [sync-rp2350w](https://github.com/dmitrykos/stk/tree/main/build/example/project/eclipse/rpi/sync_c-rp2350w)
+* Raspberry RP2350 ARM Cortex-M (dual or single core cases), C++: [sync-rp2350w](https://github.com/dmitrykos/stk/tree/main/build/example/project/eclipse/rpi/sync-rp2350w)
+* Raspberry RP2350 ARM Cortex-M (dual or single core cases), C: [sync_c-rp2350w](https://github.com/dmitrykos/stk/tree/main/build/example/project/eclipse/rpi/sync_c-rp2350w)
 * Raspberry RP2350 RISC-V (dual or single core cases), C++: [sync-rp2350w-riscv](https://github.com/dmitrykos/stk/tree/main/build/example/project/eclipse/rpi/sync-rp2350w)
 
 ### C++ Usage Demo

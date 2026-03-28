@@ -93,6 +93,15 @@ public:
         return true;
     }
 
+    /*! \brief     Attempt to write data to the pipe.
+        \details   Attempts to push an element into the FIFO queue. If pipe is full, a false
+                   will be returned without waiting for a free space.
+        \param[in] data: Reference to the data element to be copied into the pipe.
+        \warning   ISR-safe.
+        \return    \c true if data was successfully written, \c false if no space is available.
+    */
+    bool TryWrite(const T &data) { return Write(data, NO_WAIT); }
+
     /*! \brief     Write multiple elements to the pipe.
         \details   Copies a block of data into the FIFO. If the pipe does not have
                    enough space for the entire block, it will block until the full
@@ -172,13 +181,26 @@ public:
         return written;
     }
 
+    /*! \brief     Attempt to write multiple elements to the pipe.
+        \details   Copies as many elements as possible into the FIFO without blocking.
+                   If the pipe does not have enough space for the entire block, only
+                   the elements that fit are written and the rest are discarded.
+        \param[in] src: Pointer to the source array.
+        \param[in] count: Number of elements to write.
+        \warning   ISR-safe.
+        \return    Number of elements actually written. This will be equal to \c count
+                   if all elements were written successfully, or less if the pipe was full
+                   or became full before all elements could be written.
+    */
+    size_t TryWriteBulk(const T *src, size_t count) { return WriteBulk(src, count, NO_WAIT); }
+
     /*! \brief      Read data from the pipe.
         \details    Attempts to retrieve an element from the FIFO queue. If pipe is empty,
                     the calling task will be suspended until data is provided by a
                     producer or the timeout expires.
         \param[out] data: Reference to the variable where the retrieved data will be stored.
         \param[in]  timeout: Maximum time to wait for data (ticks). Default: \c WAIT_INFINITE.
-        \warning    ISR-unsafe.
+        \warning    ISR-safe only with timeout=NO_WAIT, ISR-unsafe otherwise.
         \return     \c true if data was successfully read, \c false if timeout expired before
                     any data became available.
     */
@@ -202,6 +224,16 @@ public:
         return true;
     }
 
+    /*! \brief      Attempt to read data from the pipe.
+        \details    Checks if an element is available in the FIFO and retrieves it
+                    immediately without blocking. If the pipe is empty, returns \c false
+                    without yielding the CPU or touching the kernel wait list.
+        \param[out] data: Reference to the variable where the retrieved data will be stored.
+        \warning    ISR-safe.
+        \return     \c true if data was successfully read, \c false if the pipe was empty.
+    */
+    bool TryRead(T &data) { return Read(data, NO_WAIT); }
+
     /*! \brief      Read multiple elements from the pipe.
         \details    Attempts to retrieve a block of data from the FIFO. If pipe does not
                     contain enough elements to satisfy the requested count, it will block
@@ -209,7 +241,7 @@ public:
         \param[out] dst: Pointer to the destination array.
         \param[in]  count: Number of elements to read.
         \param[in]  timeout: Maximum time to wait for data (ticks). Default: \c WAIT_INFINITE.
-        \warning    ISR-unsafe.
+        \warning    ISR-safe only with timeout=NO_WAIT, ISR-unsafe otherwise.
         \return     Number of elements actually read. This will be equal to \c count
                     unless a timeout occurred.
         \code
@@ -281,6 +313,19 @@ public:
 
         return read_count;
     }
+
+    /*! \brief      Attempt to read multiple elements from the pipe.
+        \details    Reads as many elements as are currently available in the FIFO without
+                    blocking. If fewer elements than requested are available, only the
+                    available elements are read.
+        \param[out] dst: Pointer to the destination array.
+        \param[in]  count: Number of elements to read.
+        \warning    ISR-safe.
+        \return     Number of elements actually read. This will be equal to \c count
+                    if all requested elements were available, or less if the pipe was empty
+                    or became empty before all elements could be read.
+    */
+    size_t TryReadBulk(T *dst, size_t count) { return ReadBulk(dst, count, NO_WAIT); }
 
     /*! \brief     Get the current number of elements in the pipe.
         \return    The number of elements currently stored in the FIFO buffer.

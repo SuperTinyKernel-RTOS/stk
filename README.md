@@ -37,14 +37,15 @@ It is an [open-source project](https://github.com/SuperTinyKernel-RTOS), navigat
 | Hard real-time (`KERNEL_HRT`)         | Guaranteed execution window, deadline monitoring by the kernel                                                                                                                                                                        |
 | Static task model (`KERNEL_STATIC`)   | Tasks created once at startup                                                                                                                                                                                                         |
 | Dynamic task model (`KERNEL_DYNAMIC`) | Tasks can be created and exit at runtime                                                                                                                                                                                              |
-| Rich scheduling capabilities          | All major scheduling strategies are supported: priority-less, fixed-priority or automatic-priority                                                                                                                                    |
+| Rich scheduling capabilities          | All major scheduling strategies are supported: priority-less (Round-Robin), fixed-priority, weighted (SWRR), earliest-deadline-first (EDF), and mixed-criticality adaptive (MCAS/MCAS4)                                            |
 | Mixed-criticality                     | Supports MCAS (2-level) and MCAS4 (4-level) adaptive strategies featuring SWRR-based group scheduling, automatic cascade escalation/recovery, and elastic CPU share adaptation driven by per-group EWMA execution-pressure estimation |
 | Tick or Tickless modes                | Supports fixed-interval periodic interrupts (Tick) for simplicity, or dynamic timer-based wakeups (Tickless, `KERNEL_TICKLESS`) to maximize CPU sleep duration and power efficiency                                                   |
 | Extensible via C++ interfaces         | Kernel functionality can be extended by implementing available C++ interfaces                                                                                                                                                         |
 | Multi-core support (AMP)              | One STK instance per physical core for optimal, lock-free performance                                                                                                                                                                 |
 | Memory Protection Unit (MPU) support  | Supports privileged `ACCESS_PRIVILEGED` and non-privileged tasks `ACCESS_USER`                                                                                                                                                        |
 | Low-power aware                       | MCU enters sleep when no task is runnable (sleeping)                                                                                                                                                                                  |
-| Synchronization API                   | Synchronization primitives for building application of any difficulty level                                                                                                                                                           |
+| Synchronization API                   | Rich set of primitives in `stk::sync`: `Mutex`, `RWMutex`, `Semaphore`, `Event`, `ConditionVariable`, `Pipe`, `SpinLock`, `ScopedCriticalSection` — plus low-level `hw::CriticalSection` and `hw::SpinLock`                          |
+| Thread-Local Storage (TLS)            | Per-task TLS via a dedicated CPU register (`r9` on ARM Cortex-M, `tp/x4` on RISC-V). `GetTls()` / `SetTls()` are inline zero-overhead helpers                                                                                    |
 | Tiny footprint                        | Minimal code unrelated to scheduling                                                                                                                                                                                                  |
 | Safety-critical systems ready         | No dynamic heap memory allocation (satisfies `MISRA C++:2008 Rule 18-4-1`)                                                                                                                                                            |
 | C++ and C API                         | Can be used easily in C++ and C projects                                                                                                                                                                                              |
@@ -52,7 +53,7 @@ It is an [open-source project](https://github.com/SuperTinyKernel-RTOS), navigat
 | Traceable                             | Scheduling is fully traceable with a SEGGER SystemView                                                                                                                                                                                |
 | Development mode (x86)                | Run the same threaded application on Windows                                                                                                                                                                                          |
 | 100% test coverage                    | Every source-code line of scheduler logic is covered by unit tests                                                                                                                                                                    |
-| QEMU test coverage                    | All repository commits are automatically covered by unit tests executed on QEMU for Cortex-M                                                                                                                                          |
+| QEMU test coverage                    | All repository commits are automatically covered by unit tests executed on QEMU for Cortex-M and RISC-V                                                                                                                             |
 
 ---
 
@@ -76,7 +77,7 @@ void AddTask(ITask *user_task)
 * Periodic tasks with strict execution windows
 * Tasks must notify kernel when the work is done by using `Yield()`
 * Kernel enforces deadlines
-* Any violation fails the application deterministically (`ITask::OnDeadlineMissed` callback is called)
+* Any violation fails the application deterministically (`ITask::OnDeadlineMissed(uint32_t duration)` callback is called, where `duration` is the overrun amount in ticks)
 * Dedicated HRT task switching strategies (`SwitchStrategyRoundRobin`, `SwitchStrategyRM`, `SwitchStrategyDM`, `SwitchStrategyEDF`)
 
 ```cpp
@@ -126,12 +127,12 @@ STK is the only known RTOS that offers all popular switching strategies to match
 
 | Strategy Name                            | Mode       | Description                                                                                                                                                                                                                      |
 |------------------------------------------|------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `SwitchStrategyRoundRobin`               | Soft / HRT | Round-Robin scheduling strategy (Default). Each runnable task receives one time slice per tick in turn. Allows 100% CPU utilization.                                                                                             |
-| `SwitchStrategySmoothWeightedRoundRobin` | Soft / HRT | Smooth Weighted Round-Robin (SWRR). Distributes CPU time proportionally to per-task weights with burst-free interleaving. Includes a wake-up priority boost to prevent I/O-bound task starvation.                                |
+| `SwitchStrategyRoundRobin` / `SwitchStrategyRR` | Soft / HRT | Round-Robin scheduling strategy (Default). Each runnable task receives one time slice per tick in turn. Allows 100% CPU utilization.                                                                                             |
+| `SwitchStrategySmoothWeightedRoundRobin` / `SwitchStrategySWRR` | Soft / HRT | Smooth Weighted Round-Robin (SWRR). Distributes CPU time proportionally to per-task weights with burst-free interleaving. On each tick: every task's current weight is incremented by its static weight; the task with the highest current weight runs and then has the total weight sum deducted. Includes a wake-up priority boost to prevent I/O-bound task starvation.  |
 | `SwitchStrategyFixedPriority`            | Soft / HRT | Fixed-Priority Round-Robin. Tasks have fixed priorities (up to 32 levels); same-priority tasks are scheduled in Round-Robin order. Behavior is similar to FreeRTOS's scheduler.                                                  |
 | `SwitchStrategyRM`                       | HRT        | Rate-Monotonic (RM). Assigns fixed priorities based on task periodicity — shorter period means higher priority. Optimal among all fixed-priority policies for independent periodic tasks. Includes WCRT schedulability analysis. |
 | `SwitchStrategyDM`                       | HRT        | Deadline-Monotonic (DM). Assigns fixed priorities based on task deadlines — shorter deadline means higher priority. Generalizes RM; optimal when deadlines ≤ periods. Includes WCRT schedulability analysis.                     |
-| `SwitchStrategyEDF`                      | HRT        | Earliest Deadline First (EDF). Always runs the task closest to its deadline. Provably optimal for single-processor systems — if a feasible schedule exists, EDF will find it.                                                    |
+| `SwitchStrategyEDF`                      | HRT        | Earliest Deadline First (EDF). Selects the runnable task with the smallest relative deadline (`deadline − elapsed_duration`) via an O(n) linear scan each tick. Provably optimal for single-processor systems — if a feasible schedule exists, EDF will find it.  |
 | `SwitchStrategyMCAS` 🔒                  | HRT        | Mixed-Criticality Adaptive Scheduler (2-level). SWRR within each criticality group (LO / HI) with automatic escalation to a protected HI-only mode on budget overrun. **Commercial License**                                     |
 | `SwitchStrategyMCAS4` 🔒                 | HRT        | Mixed-Criticality Adaptive Scheduler (4-level). Extends MCAS with four criticality levels, cascade escalation/recovery, and elastic CPU share adaptation via per-group EWMA pressure estimation. **Commercial License**          |
 | **Custom**                               | Soft / HRT | Custom algorithm implemented via the `ITaskSwitchStrategy` interface. By implementing the `ITaskSwitchStrategy` interface you can provide your own unique scheduling strategy without changing anything inside the kernel.       |
@@ -255,22 +256,23 @@ For a seamless integration with C projects STK provides a dedicated, fully-featu
 
 ---
 
-## Synchronization API
+## Synchronization API (`stk/stk_sync.h`)
 
 STK provides a feature-rich synchronization API which is located in [stk/sync](https://github.com/SuperTinyKernel-RTOS/stk/tree/main/stk/include/sync) and resides in a dedicated namespace `stk::sync`. It is a high-performance framework designed for both single-core and multicore embedded systems and provides a robust mechanism for inter-task and inter-core communication.
 
 | Primitive                 | Description                                                                                                                                                                                     |
 |---------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `hw::CriticalSection`     | Low-level primitive (including RAII version `hw::CriticalSection::ScopedLock`) that ensures atomicity by preventing preemption. Always available and independent of `KERNEL_SYNC` mode.         |
-| `hw::SpinLock`            | High-performance non-recursive primitive for short critical sections. A key primitive for inter-core synchronization. Always available and independent of `KERNEL_SYNC` mode.                   |
-| `sync::ConditionVariable` | Monitor-pattern signaling used with a `Mutex`. Allows tasks to sleep until a specific condition is met, with atomic unlock/relock semantics.                                                    |
-| `sync::Event`             | State-based signaling object. Supports manual or auto-reset behavior to wake one or multiple tasks upon a specific system occurrence.                                                           |
-| `sync::Mutex`             | Re-entrant recursive mutual exclusion primitive. Ensures exclusive resource access with ownership tracking to prevent unauthorized release.                                                     |
-| `sync::RWMutex`           | Reader-Writer Lock for shared (read) and exclusive (write) access. Implements a "Writer Preference" policy to prevent starvation and is optimized for frequently read data.                     |
-| `sync::SpinLock`          | High-performance recursive primitive for short critical sections. Uses atomic busy-waiting with a configurable spin-count threshold that cooperatively yields the CPU to prevent system stalls. |
-| `sync::Semaphore`         | Counting primitive for resource throttling. Features a "Direct Handover" policy, passing tokens directly to waiting tasks to ensure deterministic behavior.                                     |
-| `sync::Pipe`              | Thread-safe FIFO ring buffer for inter-task data passing. Supports blocking single and bulk I/O with zero dynamic memory allocation.                                                            |
-| Custom                    | Extensible architecture where any class inheriting from `ISyncObject` can implement custom synchronization logic integrated with the kernel scheduler.                                          |
+| `hw::CriticalSection`        | Low-level primitive (including RAII version `hw::CriticalSection::ScopedLock`) that ensures atomicity by preventing preemption. Always available and independent of `KERNEL_SYNC` mode.                           |
+| `hw::SpinLock`               | High-performance non-recursive primitive for short critical sections. A key primitive for inter-core synchronization. Always available and independent of `KERNEL_SYNC` mode.                                     |
+| `sync::ScopedCriticalSection`| RAII wrapper around `hw::CriticalSection` (disables interrupts + multicore guard). Used as a building brick by all other `stk::sync` primitives. Always available, independent of `KERNEL_SYNC` mode.            |
+| `sync::ConditionVariable`    | Monitor-pattern signaling used with an `IMutex`-compatible lock. Atomically releases the lock and blocks the caller; re-acquires it on wake. Supports `Wait()`, `NotifyOne()`, and `NotifyAll()`.                 |
+| `sync::Event`                | Binary state-based signaling object. Supports manual-reset (wake all) and auto-reset (wake one) modes. Also provides `Pulse()` (Win32-compatible semantics) and non-blocking `TryWait()`.                        |
+| `sync::Mutex`                | Recursive mutual exclusion primitive. Tracks ownership and recursion depth; the same task may lock multiple times. Ownership transfers directly to the first waiter (FIFO) on `Unlock()`.                        |
+| `sync::RWMutex`              | Reader-Writer Lock for shared (read) and exclusive (write) access. Implements a Writer Preference policy to prevent writer starvation. Provides RAII guards `ScopedTimedLock` and `ScopedTimedReadMutex`.         |
+| `sync::SpinLock`             | High-performance recursive spinlock for very short critical sections where context-switch overhead is unacceptable. Busy-waits until the lock is free; ISR-unsafe (use `hw::CriticalSection` from ISR context).  |
+| `sync::Semaphore`            | Counting semaphore for resource throttling and signaling. Features a Direct Handover policy: `Signal()` passes the token directly to the first waiting task without touching the internal counter.                |
+| `sync::Pipe`                 | Thread-safe FIFO ring buffer for inter-task data passing. Supports blocking and non-blocking single-element and bulk (`WriteBulk` / `ReadBulk`) I/O with zero dynamic memory allocation.                         |
+| Custom                       | Extensible: any class inheriting from `ISyncObject` can implement custom synchronization logic integrated with the kernel scheduler.                                                                               |
 
 > **Note:** Synchronization can be enabled in the kernel selectively by adding `KERNEL_SYNC` flag. If application does not need `sync` primitives and `KERNEL_SYNC` is not set to the kernel then synchronization-related implementation is stripped by the compiler saving FLASH and RAM.
 
@@ -278,9 +280,9 @@ STK provides a feature-rich synchronization API which is located in [stk/sync](h
 
 ## Traceable by SEGGER SystemView
 
-Scheduling can be analyzed be the [SEGGER SystemView](https://www.segger.com/products/development-tools/systemview).
+Scheduling can be analyzed with the [SEGGER SystemView](https://www.segger.com/products/development-tools/systemview).
 
-There is a ready to try Blinky example with SEGGER SystemView tracing enabled: `build\example\project\eclipse\stm\blinky-stm32f407g-disc1-segger`
+There is a ready to try Blinky example with SEGGER SystemView tracing enabled: `build/example/project/eclipse/stm/blinky-stm32f407g-disc1-segger`
 
 ![SEGGER SystemView](docs/img/SEGGER_SystemView_STK_tasks_screenshot.png)
 
@@ -333,8 +335,6 @@ This table compares **SuperTinyKernel RTOS v.1.05.3** and **FreeRTOS V11.2.0** a
 The benchmark suite uses CRC32 hash calculations as the task payload. The score represents the number of CRC32 calculations performed by the task within a fixed time window. A higher score indicates a more efficient scheduler, meaning the tasks have more available CPU time.
 
 ### Benchmark Results: STK vs. FreeRTOS (Cortex-M4 168MHz)
-
-This table compares **SuperTinyKernel RTOS** and **FreeRTOS** across two compiler optimization levels:
 
 | Kernel       | Tasks  |   Opt    | Throughput  |   Average   | Jitter  |   Flash     |    RAM     |
 |:-------------|:------:|:--------:|:-----------:|:-----------:|:-------:|:-----------:|:----------:|
@@ -542,7 +542,7 @@ void RunExample()
 
 ### Add using Git & CMake:
 
-#### 1. Add STK to your project using Git & CMake
+#### 1. Clone STK into your project
 
 You can include STK in your project using `git submodule` or by copying the source into a `libs/` or `third_party/` folder:
 ```bash
@@ -677,7 +677,7 @@ Example (GCC, ARM Cortex-M MCU):
 SRCS += libs/stk/src/arch/arm/cortex-m/stk_arch_arm-cortex-m.cpp
 ```
 
-#### 4. Build
+#### 5. Build
 
 Build your project normally — STK will now be compiled together with it.
 
