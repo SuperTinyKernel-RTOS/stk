@@ -1,5 +1,5 @@
 /*
- * SuperTinyKernel(TM) (STK): Lightweight High-Performance Deterministic C++ RTOS for Embedded Systems.
+ * SuperTinyKernel(TM) RTOS: Lightweight High-Performance Deterministic C++ RTOS for Embedded Systems.
  *
  * Source: https://github.com/SuperTinyKernel-RTOS
  *
@@ -336,11 +336,6 @@ protected:
             */
             bool IsTimeout() const { return m_timeout; }
 
-            /*! \brief  Check if busy with waiting.
-                \return \c true if waiting, \c false if not.
-            */
-            bool IsWaiting() const { return (m_sync_obj != nullptr); }
-
             /*! \brief     Wake the waiting task (called by ISyncObject when it signals).
                 \param[in] timeout: \c true if woken because the timeout expired, \c false if signalled.
                 \note      Clears m_time_wait, records the timeout flag, removes this object from
@@ -348,7 +343,7 @@ protected:
             */
             void Wake(bool timeout)
             {
-                STK_ASSERT(IsWaiting());
+                STK_ASSERT(m_sync_obj != nullptr);
 
                 m_timeout   = timeout;
                 m_time_wait = 0;
@@ -387,7 +382,7 @@ protected:
             */
             void SetupWait(ISyncObject *sync_obj, Timeout timeout)
             {
-                STK_ASSERT(!IsWaiting());
+                STK_ASSERT(m_sync_obj == nullptr);
 
                 m_sync_obj  = sync_obj;
                 m_time_wait = timeout;
@@ -431,12 +426,6 @@ protected:
         */
         void Unbind()
         {
-            if (IsSyncMode())
-            {
-                // should be freed from waiting on task exit
-                STK_ASSERT(!m_wait_obj->IsWaiting());
-            }
-
             m_user       = nullptr;
             m_stack      = {};
             m_state      = STATE_NONE;
@@ -453,7 +442,7 @@ protected:
         void ScheduleRemoval()
         {
             // make this task sleeping to switch it out from scheduling process
-            ScheduleSleep(WAIT_INFINITE);
+            ScheduleSleep(INT32_MAX);
 
             // mark it as done HRT task
             if (IsHrtMode())
@@ -701,8 +690,8 @@ protected:
             m_platform = static_cast<TPlatform *>(platform);
         }
 
-        /*! \brief     Increment counter by value.
-            \param[in] advance: Number of ticks to add to the counter.
+
+        /*! \brief     Increment tick by value.
         */
         void IncrementTicks(Ticks advance)
         {
@@ -1239,14 +1228,13 @@ protected:
         }
     }
 
-    bool OnTick(Stack *&idle, Stack *&active
-    #if STK_TICKLESS_IDLE
-        , Timeout &ticks
-    #endif
-    )
+#if STK_TICKLESS_IDLE
+    bool OnTick(Stack *&idle, Stack *&active, Timeout &ticks)
+#else
+    bool OnTick(Stack *&idle, Stack *&active)
+#endif
     {
     #if !STK_TICKLESS_IDLE
-        // in non-tickless mode kernel is advancing strictly by 1 tick on every OnTick call
         enum { ticks = 1 };
     #endif
 
@@ -1255,12 +1243,9 @@ protected:
 
         // consume elapsed and update to ticks to sleep
     #if STK_TICKLESS_IDLE
-        ticks = (
-    #else
-        // notify compiler that we ignore a return value of UpdateTasks
-        static_cast<void>(
+        ticks =
     #endif
-        UpdateTasks(ticks));
+        UpdateTasks(ticks);
 
         // decide on a context switch
         return UpdateFsmState(idle, active);
@@ -1365,7 +1350,12 @@ protected:
 
     /*! \brief     Update tasks (sleep, requests).
     */
-    Timeout UpdateTasks(const Timeout elapsed_ticks)
+#if STK_TICKLESS_IDLE
+    Timeout
+#else
+    void
+#endif
+    UpdateTasks(Timeout elapsed_ticks)
     {
         // sync objects are updated before UpdateTaskRequest which may add a new object (newly added object must become 1 tick older)
         if (IsSyncMode())
@@ -1373,14 +1363,22 @@ protected:
 
         UpdateTaskRequest();
 
-        return UpdateTaskState(elapsed_ticks);
+    #if STK_TICKLESS_IDLE
+        return
+    #endif
+            UpdateTaskState(elapsed_ticks);
     }
 
     /*! \brief     Update task state (removal, sleep, duration of HRT task).
     */
-    Timeout UpdateTaskState(const Timeout elapsed_ticks)
+#if STK_TICKLESS_IDLE
+    Timeout
+#else
+    void
+#endif
+    UpdateTaskState(Timeout elapsed_ticks)
     {
-        Timeout sleep_ticks = (IsTicklessMode() ? STK_TICKLESS_TICKS_MAX : 1);
+        Timeout sleep_ticks = STK_TICKLESS_TICKS_MAX;
 
         for (uint32_t i = 0; i < TASKS_MAX; ++i)
         {
@@ -1416,7 +1414,6 @@ protected:
                 }
 
                 // advance sleep time by a tick
-                //STK_ASSERT((task->m_time_sleep + elapsed_ticks) <= 0);
                 task->m_time_sleep += elapsed_ticks;
 
                 // deliver sleep event to strategy
@@ -1452,15 +1449,15 @@ protected:
             }
 
             // get the number ticks the driver has to keep CPU in Idle
-            if (IsTicklessMode() && (sleep_ticks > 1) && task->IsBusy())
+            if (IsTicklessMode() && task->IsBusy())
             {
                 // note: task sleep time is negative
-                Timeout task_sleep = stk::Max<Timeout>(0, -task->m_time_sleep);
+                Timeout task_sleep = -task->m_time_sleep;
 
                 if (IsSyncMode())
                 {
                     // likely task is sleeping during sync operation (see Wait)
-                    if (task->m_wait_obj->IsWaiting())
+                    if (task_sleep == WAIT_INFINITE)
                     {
                         // note: sync wait time is positive
                         task_sleep = task->m_wait_obj->m_time_wait;
@@ -1484,12 +1481,14 @@ protected:
             }
         }
 
+    #if STK_TICKLESS_IDLE
         return sleep_ticks;
+    #endif
     }
 
     /*! \brief     Update synchronization objects.
     */
-    void UpdateSyncObjects(const Timeout elapsed_ticks)
+    void UpdateSyncObjects(Timeout elapsed_ticks)
     {
         STK_ASSERT(IsSyncMode());
 
