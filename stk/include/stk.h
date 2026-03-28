@@ -701,8 +701,8 @@ protected:
             m_platform = static_cast<TPlatform *>(platform);
         }
 
-
-        /*! \brief     Increment tick by value.
+        /*! \brief     Increment counter by value.
+            \param[in] advance: Number of ticks to add to the counter.
         */
         void IncrementTicks(Ticks advance)
         {

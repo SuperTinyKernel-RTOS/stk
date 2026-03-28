@@ -431,6 +431,36 @@ __stk_forceinline void WriteVolatile64(volatile T *addr, T value)
     }
 }
 
+/*! \class HiResClock
+    \brief High-resolution clock for high-precision measurements.
+*/
+struct HiResClock
+{
+    /*! \brief  Get number of clock cycles elapsed.
+        \note   ISR-safe.
+        \return Clock cycles.
+    */
+    static Cycles GetCycles();
+
+    /*! \brief  Get clock frequency.
+        \note   ISR-safe.
+        \return Frequency in Hz.
+    */
+    static uint32_t GetFrequency();
+
+    /*! \brief  Get elapsed time in microseconds.
+        \note   ISR-safe.
+        \return Microseconds.
+    */
+    static inline Ticks GetTimeUs()
+    {
+        uint32_t freq = GetFrequency();
+        STK_ASSERT(freq != 0); // guaranteed non-zero
+
+        return static_cast<Ticks>((GetCycles() * 1000000ULL) / freq);
+    }
+};
+
 } // namespace hw
 
 //! Implementation of ISyncObject::Tick, see \a ISyncObject. Placed here as it depends on hw namespace.

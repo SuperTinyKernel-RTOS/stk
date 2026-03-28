@@ -69,7 +69,7 @@ public:
                    consumer or the timeout expires.
         \param[in] data: Reference to the data element to be copied into the pipe.
         \param[in] timeout: Maximum time to wait for space (ticks). Default: \c WAIT_INFINITE.
-        \warning   ISR-unsafe.
+        \warning   ISR-safe only with timeout=NO_WAIT, ISR-unsafe otherwise.
         \return    \c true if data was successfully written, \c false if timeout expired
                    before space became available.
     */
@@ -100,7 +100,7 @@ public:
         \param[in] src: Pointer to the source array.
         \param[in] count: Number of elements to write.
         \param[in] timeout: Maximum time to wait for sufficient space (ticks).
-        \warning   ISR-unsafe.
+        \warning   ISR-safe only with timeout=NO_WAIT, ISR-unsafe otherwise.
         \return    Number of elements actually written. This will be equal to \c count
                    unless a timeout occurred.
         \code
