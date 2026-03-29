@@ -22,7 +22,9 @@
            task-switching strategies.
 
     Include this single header in user application code. It transitively pulls in:
-     - stk_helper.h             — Task, TaskW, StackMemoryWrapper, and time/synchronization utilities.
+     - stk_helper.h             — Task, TaskW, StackMemoryWrapper; and free-function helpers:
+                                   GetTid, GetTicks, GetTickResolution, GetTicksFromMsec,
+                                   GetMsecFromTicks, GetTimeNowMsec, Delay, Sleep, Yield.
      - stk_strategy_rrobin.h    — SwitchStrategyRoundRobin.
      - stk_strategy_swrrobin.h  — SwitchStrategySmoothWeightedRoundRobin.
      - stk_strategy_monotonic.h — SwitchStrategyMonotonic (SRT rate-monotonic).
@@ -38,21 +40,26 @@ namespace stk {
     All configuration is expressed as template parameters. No virtual dispatch, no heap
     allocation - the entire kernel, tasks, and traps live in statically reserved storage.
 
-    \tparam _Mode:       Bitmask of EKernelMode flags that configures kernel features:
-                         - stk::KERNEL_STATIC  — fixed task list, no add/remove after Start().
-                         - stk::KERNEL_DYNAMIC — tasks may be added or removed at runtime.
-                         - stk::KERNEL_HRT     — Hard Real-Time mode (must combine with STATIC or DYNAMIC).
-                         - stk::KERNEL_SYNC    — enables synchronization primitives (Mutex, Event, etc.).
-                         KERNEL_STATIC and KERNEL_DYNAMIC are mutually exclusive.
-    \tparam _Size:       Maximum number of concurrent tasks. Must be > 0.
-    \tparam TStrategy: Task-switching strategy type (e.g. SwitchStrategyRoundRobin).
-                         Must inherit ITaskSwitchStrategy.
-    \tparam TPlatform: Platform driver type (e.g. PlatformArmCortexM, or PlatformDefault).
-                         Must inherit IPlatform.
+    \tparam TMode:     Bitmask of EKernelMode flags that configures kernel features:
+                        - KERNEL_STATIC   — fixed task list, no add/remove after Start().
+                        - KERNEL_DYNAMIC  — tasks may be added or removed at runtime.
+                        - KERNEL_HRT      — Hard Real-Time mode (must combine with STATIC or DYNAMIC).
+                        - KERNEL_SYNC     — enables synchronization primitives (Mutex, Event, etc.).
+                        - KERNEL_TICKLESS — enables tickless low-power operation. Requires
+                                           STK_TICKLESS_IDLE=1 in stk_config.h. Incompatible with
+                                           KERNEL_HRT (tickless suppresses the timer, which destroys
+                                           the precise periodicity HRT depends on — enforced by the
+                                           compile-time assertion TICKLESS_HRT_CONFLICT).
+                       KERNEL_STATIC and KERNEL_DYNAMIC are mutually exclusive.
+    \tparam TSize:     Maximum number of concurrent tasks. Must be > 0.
+    \tparam TStrategy: Task-switching strategy type (e.g. SwitchStrategyRoundRobin). Must inherit ITaskSwitchStrategy.
+    \tparam TPlatform: Platform driver type (e.g. PlatformArmCortexM, or PlatformDefault). Must inherit IPlatform.
 
-    \note  At least 1 task is required: _Size must be > 0 (enforced by compile-time assertion).
+    \note  At least 1 task is required: TSize must be > 0 (enforced by compile-time assertion).
     \note  KERNEL_HRT is incompatible with weighted scheduling strategies (WEIGHT_API == true),
            also enforced by a compile-time assertion.
+    \note  KERNEL_TICKLESS is incompatible with KERNEL_HRT, also enforced by a compile-time
+           assertion (TICKLESS_HRT_CONFLICT).
 
     Usage example:
     \code
@@ -106,7 +113,7 @@ protected:
         pointers rather than ITask pointers directly.
 
         A slot is "free" when m_user == NULL (IsBusy() == false). The Kernel pre-allocates
-        _Size slots in m_task_storage; AddTask() finds a free slot and calls Bind().
+        TSize slots in m_task_storage; AddTask() finds a free slot and calls Bind().
     */
     class KernelTask : public IKernelTask
     {
@@ -251,7 +258,7 @@ protected:
 
         /*! \class SrtInfo
             \brief Per-task soft real-time (SRT) metadata.
-            \note  Allocated only when _Mode does not include KERNEL_HRT. Zero-size in HRT mode
+            \note  Allocated only when TMode does not include KERNEL_HRT. Zero-size in HRT mode
                    (STK_ALLOCATE_COUNT resolves to 0 on GCC/Clang).
         */
         struct SrtInfo
@@ -276,7 +283,7 @@ protected:
 
         /*! \class HrtInfo
             \brief Per-task Hard Real-Time (HRT) scheduling metadata.
-            \note  Allocated only when _Mode includes KERNEL_HRT. Zero-size in SRT mode.
+            \note  Allocated only when TMode includes KERNEL_HRT. Zero-size in SRT mode.
         */
         struct HrtInfo
         {
@@ -301,7 +308,7 @@ protected:
 
         /*! \class WaitObject
             \brief Concrete implementation of IWaitObject, embedded in each KernelTask slot.
-            \note  Allocated only when _Mode includes KERNEL_SYNC. Zero-size otherwise.
+            \note  Allocated only when TMode includes KERNEL_SYNC. Zero-size otherwise.
             \note  One WaitObject per KernelTask, the back-pointer m_task is wired at
                    KernelTask construction and never changes.
         */
@@ -726,6 +733,8 @@ public:
                (indicating uninitialized state; cleared to REQUEST_NONE by Initialize()).
         \note  In debug builds also verifies that TPlatform derives from IPlatform and TStrategy
                from ITaskSwitchStrategy.
+        \note  If TMode includes KERNEL_TICKLESS, a compile-time assertion fires unless
+               STK_TICKLESS_IDLE is defined to 1 in stk_config.h.
     */
     explicit Kernel() : m_platform(), m_strategy(), m_task_now(nullptr), m_task_storage(), m_sleep_trap(),
         m_exit_trap(), m_fsm_state(FSM_STATE_NONE), m_request(REQUEST_NONE), m_state(STATE_INACTIVE)
@@ -1166,6 +1175,16 @@ protected:
         task->Unbind();
     }
 
+    /*! \brief      Called by platform driver immediately after a scheduler start (first tick).
+        \param[out] active: Set to the stack of the first task to run, or to the sleep-trap stack if
+                    all tasks are initially sleeping.
+        \note       Delivers initial OnTaskSleep notifications to sleep-aware strategies for any tasks
+                    that were added in a sleeping state before Start() was called.
+        \note       Selects the first runnable task via GetNewFsmState() and transitions the kernel
+                    to STATE_RUNNING.
+        \note       If STK_SEGGER_SYSVIEW is enabled, emits a task-start trace event for the first task.
+        \warning    At least one task must have been added via AddTask(); asserts if the strategy pool is empty.
+    */
     __stk_attr_noinline void OnStart(Stack *&active)
     {
         STK_ASSERT(m_strategy.GetSize() != 0);
@@ -1228,6 +1247,11 @@ protected:
     #endif
     }
 
+    /*! \brief  Called by the platform driver after a scheduler stop (all tasks have exited).
+        \note   KERNEL_DYNAMIC mode only: resets FSM to FSM_STATE_NONE and transitions
+                kernel back to STATE_READY so Start() may be called again.
+        \note   Has no effect in KERNEL_STATIC mode (static kernels never stop).
+    */
     __stk_attr_noinline void OnStop()
     {
         if (IsDynamicMode())
@@ -1239,6 +1263,22 @@ protected:
         }
     }
 
+    /*! \brief      Process one scheduler tick. Called from the platform timer/tick ISR.
+        \param[out] idle: Stack descriptor to context-switch out (\c nullptr if no switch needed).
+        \param[out] active: Stack descriptor to context-switch in (\c nullptr if no switch needed).
+        \param[in,out] ticks: (KERNEL_TICKLESS builds only) On entry: actual number of ticks elapsed
+                    since the last call, as measured by the platform driver. On return:
+                    the number of ticks the hardware timer may suppress before the next
+                    required wakeup, computed as the minimum remaining sleep across all
+                    active tasks, clamped to [1, STK_TICKLESS_TICKS_MAX]. The platform
+                    driver programs this value into the timer to avoid unnecessary wakeups.
+                    This parameter is absent in non-tickless builds.
+        \return     \c true if a context switch is required (\a idle and \a active are valid);
+                    \c false if the current task continues running.
+        \note       In non-tickless mode the internal tick counter always advances by exactly 1 per call.
+        \note       In tickless mode (KERNEL_TICKLESS) the counter advances by the \a ticks value
+                    supplied by the platform driver, which may be greater than 1 after a suppressed interval.
+    */
     bool OnTick(Stack *&idle, Stack *&active
     #if STK_TICKLESS_IDLE
         , Timeout &ticks
@@ -1376,7 +1416,14 @@ protected:
         return UpdateTaskState(elapsed_ticks);
     }
 
-    /*! \brief     Update task state (removal, sleep, duration of HRT task).
+    /*! \brief     Update task state: process removals, advance sleep timers, and track HRT durations.
+        \param[in] elapsed_ticks: Number of ticks elapsed since the previous call.
+                   Always 1 in non-tickless mode, may be >1 in tickless mode.
+        \return    In non-tickless mode: always 1.
+                   In tickless mode (KERNEL_TICKLESS): the minimum remaining sleep ticks across all
+                   active tasks, clamped to [1, STK_TICKLESS_TICKS_MAX]. The platform driver uses
+                   this value to program the next timer wakeup interval, suppressing timer/tick ISR for
+                   that many ticks when the system would otherwise be idle.
     */
     Timeout UpdateTaskState(const Timeout elapsed_ticks)
     {
@@ -1676,7 +1723,7 @@ protected:
     }
 
     /*! \brief      Wakes up after sleeping.
-        \note       FSM state: stk::FSM_STATE_AWAKENING.
+        \note       FSM state: stk::FSM_STATE_WAKING.
         \param[in]  now: Currently active kernel task (ignored).
         \param[in]  next: Next kernel task.
         \param[out] idle: Stack of the task which must enter Idle state.
@@ -1882,7 +1929,7 @@ protected:
     TPlatform        m_platform;        //!< Platform driver (SysTick, PendSV, context switch implementation).
     TStrategy        m_strategy;        //!< Task-switching strategy (determines which task runs next).
     KernelTask      *m_task_now;        //!< Currently executing task, or \c nullptr before Start() or after all tasks exit.
-    TaskStorageType  m_task_storage;    //!< Static pool of _Size KernelTask slots (free slots have m_user == nullptr).
+    TaskStorageType  m_task_storage;    //!< Static pool of TSize KernelTask slots (free slots have m_user == nullptr).
     SleepTrapStack   m_sleep_trap[1];   //!< Sleep trap (always present): executed when all tasks are sleeping.
     ExitTrapStack    m_exit_trap[STK_ALLOCATE_COUNT(TMode, KERNEL_DYNAMIC, 1, 0)]; //!< Exit trap: zero-size in KERNEL_STATIC mode; one entry in KERNEL_DYNAMIC mode.
     EFsmState        m_fsm_state;       //!< Current FSM state. Drives context-switch decision on every tick.

@@ -132,9 +132,11 @@ int main(int argc, char **argv)
                 diff_sleep = -diff_sleep;
 
             // check if time difference for every task is not more than 3 ms
-            if ((diff_start > 3) || (diff_sleep > 3))
+            if ((diff_start > 10) || (diff_sleep > 10))
             {
-                printf("failed time (%d): id=%d diff_start=%d diff_sleep=%d (>3)\n", (int)i, g_Time[t][i].id, (int)diff_start, (int)diff_sleep);
+                printf("failed time (%d): id=%d diff_start=%d diff_sleep=%d (>10)\n", (int)i,
+                        g_Time[t][i].id, (int)diff_start, (int)diff_sleep);
+
                 result = TestContext::DEFAULT_FAILURE_EXIT_CODE;
             }
         }

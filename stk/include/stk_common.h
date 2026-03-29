@@ -337,6 +337,9 @@ public:
                    requires further tick calls. \c false if the wait list is empty or all remaining
                    waiters have infinite timeouts, signaling to the kernel that it may stop calling
                    Tick() for this object until a new waiter is added.
+        \note      When this method returns \c false, the kernel unlinks this object from its active
+                   sync list. It will be re-linked automatically when the next waiter is added via
+                   AddWaitObject().
     */
     virtual bool Tick(Timeout elapsed_ticks);
 
@@ -410,8 +413,18 @@ public:
 
     Usage example:
     \code
-    Task<ACCESS_USER> task1(0), task2(1);
+    class MyTask : public stk::Task<256, ACCESS_USER>
+    {
+        void Run() override
+        {
+            while (true)
+            {
+                // task logic here
+            }
+        }
+    };
 
+    MyTask task1, task2;
     kernel.AddTask(&task1);
     kernel.AddTask(&task2);
     \endcode
@@ -440,8 +453,11 @@ public:
     virtual EAccessMode GetAccessMode() const = 0;
 
     /*! \brief     Called by the scheduler if deadline of the task is missed when Kernel is operating in Hard Real-Time mode (see stk::KERNEL_HRT).
-        \param[in] duration: Actual duration value which will always be larger than a deadline value which was missed.
-        \note      Optional handler. Use it for logging of the faulty task.
+        \param[in] duration: Elapsed active time in ticks at the point the deadline was detected.
+                   Always greater than the task's configured deadline (ticks).
+        \note      Optional handler. Use it for fault logging.
+        \note      After this call returns, IPlatform::ProcessHardFault() is invoked and the
+                   system enters a safe state. This function should not attempt to recover scheduling.
     */
     virtual void OnDeadlineMissed(uint32_t duration) = 0;
 
@@ -465,9 +481,13 @@ public:
 };
 
 /*! \class IKernelTask
-    \brief Interface for a kernel task.
+    \brief Scheduling-strategy-facing interface for a kernel task slot.
 
-    Kernel task hosts user task.
+    Wraps a user ITask and exposes the metadata that task-switching strategy
+    implementations (ITaskSwitchStrategy) need to make scheduling decisions:
+    sleep state (IsSleeping, Wake), HRT timing (GetHrtPeriodicity, GetHrtDeadline,
+    GetHrtRelativeDeadline), and weighted-round-robin support
+    (GetWeight, GetCurrentWeight, SetCurrentWeight).
 */
 class IKernelTask : public util::DListEntry<IKernelTask, true>
 {
@@ -517,12 +537,12 @@ public:
     virtual Timeout GetHrtPeriodicity() const = 0;
 
     /*! \brief     Get HRT task deadline (max allowed task execution time).
-      \return      Deadline of the task (ticks).
+        \return    Deadline of the task (ticks).
     */
     virtual Timeout GetHrtDeadline() const = 0;
 
     /*! \brief     Get HRT task's relative deadline.
-      \return      Relative deadline of the task (ticks).
+        \return    Relative deadline of the task (ticks).
     */
     virtual Timeout GetHrtRelativeDeadline() const = 0;
 
@@ -531,8 +551,10 @@ public:
     */
     virtual bool IsSleeping() const = 0;
 
-    /*! \brief     Wake task from sleeping.
-        \note      Does nothing if not sleeping.
+    /*! \brief     Wake a sleeping task on the next scheduling tick.
+        \warning   The task must currently be sleeping (IsSleeping() == true).
+                   Calling Wake() on a non-sleeping task is a programming error and
+                   will trigger an assertion in the concrete implementation.
     */
     virtual void Wake() = 0;
 };
@@ -566,17 +588,25 @@ public:
         */
         virtual void OnStart(Stack *&active) = 0;
 
-        /*! \brief      Called by driver to notify that scheduling is stopped.
-            \param[out] active: Stack of the task which must enter Active state (to which context will switch).
+        /*! \brief  Called by driver to notify that scheduling is stopped.
+            \note   Resets internal kernel state so that Start() may be called again
+                    (KERNEL_DYNAMIC mode only). Has no effect in KERNEL_STATIC mode.
         */
         virtual void OnStop() = 0;
 
         /*! \brief      Called by ISR handler to notify about the next system tick.
             \param[out] idle: Stack of the task which must enter Idle state.
             \param[out] active: Stack of the task which must enter Active state (to which context will switch).
-            \param[in,out] ticks: On call - number of ticks elapsed, on return - number of ticks to sleep.
-            \note       When tickles API is enabled with STK_TICKLESS_IDLE=1 then OnTick ABI changes by additional
-                        'ticks' input/output parameter.
+            \param[in,out] ticks: (STK_TICKLESS_IDLE=1 only) On entry: actual ticks elapsed since the
+                        previous call, as measured by the platform driver. On return: the minimum remaining
+                        sleep ticks across all active tasks, clamped to [1, STK_TICKLESS_TICKS_MAX].
+                        Platform driver programs this value into the hardware timer to suppress unnecessary
+                        wakeups. Absent in non-tickless builds.
+            \note       To use a custom tick handler instead of the driver's built-in one, disable the
+                        driver's handler in stk_config.h and call ProcessTick() manually:
+                        \code
+                        #define STK_SYSTICK_HANDLER _STK_SYSTICK_HANDLER_DISABLE
+                        \endcode
         */
         virtual bool OnTick(Stack *&idle, Stack *&active
         #if STK_TICKLESS_IDLE

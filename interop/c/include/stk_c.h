@@ -102,6 +102,8 @@ typedef struct stk_task_t stk_task_t;
     \param[in] arg: User-supplied argument (may be NULL)
     \note      If \a KERNEL_STATIC, the function must never return.
                If \a KERNEL_DYNAMIC, it may return and then task will be considered as finished.
+    \note      \a KERNEL_TICKLESS is compatible with both \a KERNEL_STATIC and \a KERNEL_DYNAMIC,
+               but is incompatible with \a KERNEL_HRT (see kernel type definitions below).
 */
 typedef void (*stk_task_entry_t)(void *arg);
 
@@ -119,6 +121,15 @@ typedef void (*stk_task_entry_t)(void *arg);
 
 /* Available kernel type definitions:
 
+   Kernel mode flags (may be OR-combined, subject to the constraints listed below):
+     KERNEL_STATIC   — fixed task list; tasks must never return from their entry function.
+     KERNEL_DYNAMIC  — tasks may be added/removed at runtime and may return when done.
+     KERNEL_HRT      — Hard Real-Time mode; must be combined with KERNEL_STATIC or KERNEL_DYNAMIC.
+     KERNEL_SYNC     — enables synchronization primitives (Mutex, Event, Semaphore, etc.).
+     KERNEL_TICKLESS — tickless low-power idle; suppresses the SysTick when all tasks sleep.
+                       Requires STK_TICKLESS_IDLE=1 in stk_config.h.
+                       INCOMPATIBLE with KERNEL_HRT (HRT requires a continuous tick).
+
 // Standard variants
 Kernel<KERNEL_STATIC,  STK_C_KERNEL_MAX_TASKS, SwitchStrategyRR, PlatformDefault>
 Kernel<KERNEL_DYNAMIC, STK_C_KERNEL_MAX_TASKS, SwitchStrategyRR, PlatformDefault>
@@ -127,7 +138,7 @@ Kernel<KERNEL_DYNAMIC, STK_C_KERNEL_MAX_TASKS, SwitchStrategySWRR, PlatformDefau
 Kernel<KERNEL_STATIC,  STK_C_KERNEL_MAX_TASKS, SwitchStrategyFP32, PlatformDefault>
 Kernel<KERNEL_DYNAMIC, STK_C_KERNEL_MAX_TASKS, SwitchStrategyFP32, PlatformDefault>
 
-// HRT variants
+// HRT variants (KERNEL_TICKLESS must NOT be combined with any of these)
 Kernel<KERNEL_STATIC  | KERNEL_HRT, STK_C_KERNEL_MAX_TASKS, SwitchStrategyRR, PlatformDefault>
 Kernel<KERNEL_DYNAMIC | KERNEL_HRT, STK_C_KERNEL_MAX_TASKS, SwitchStrategyRR, PlatformDefault>
 Kernel<KERNEL_STATIC  | KERNEL_HRT, STK_C_KERNEL_MAX_TASKS, SwitchStrategyRM, PlatformDefault>
@@ -138,27 +149,47 @@ Kernel<KERNEL_STATIC  | KERNEL_HRT, STK_C_KERNEL_MAX_TASKS, SwitchStrategyEDF, P
 Kernel<KERNEL_DYNAMIC | KERNEL_HRT, STK_C_KERNEL_MAX_TASKS, SwitchStrategyEDF, PlatformDefault>
 
 // Standard variants with KERNEL_SYNC
-Kernel<KERNEL_STATIC  | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, SwitchStrategyRR,  PlatformDefault>
-Kernel<KERNEL_DYNAMIC | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, SwitchStrategyRR,  PlatformDefault>
+Kernel<KERNEL_STATIC  | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, SwitchStrategyRR,   PlatformDefault>
+Kernel<KERNEL_DYNAMIC | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, SwitchStrategyRR,   PlatformDefault>
 Kernel<KERNEL_STATIC  | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, SwitchStrategySWRR, PlatformDefault>
 Kernel<KERNEL_DYNAMIC | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, SwitchStrategySWRR, PlatformDefault>
 Kernel<KERNEL_STATIC  | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, SwitchStrategyFP32, PlatformDefault>
 Kernel<KERNEL_DYNAMIC | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, SwitchStrategyFP32, PlatformDefault>
 
 // HRT variants with KERNEL_SYNC
-Kernel<KERNEL_STATIC  | KERNEL_HRT | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, SwitchStrategyRR, PlatformDefault>
-Kernel<KERNEL_DYNAMIC | KERNEL_HRT | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, SwitchStrategyRR, PlatformDefault>
-Kernel<KERNEL_STATIC  | KERNEL_HRT | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, SwitchStrategyRM, PlatformDefault>
-Kernel<KERNEL_DYNAMIC | KERNEL_HRT | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, SwitchStrategyRM, PlatformDefault>
-Kernel<KERNEL_STATIC  | KERNEL_HRT | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, SwitchStrategyDM, PlatformDefault>
-Kernel<KERNEL_DYNAMIC | KERNEL_HRT | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, SwitchStrategyDM, PlatformDefault>
+Kernel<KERNEL_STATIC  | KERNEL_HRT | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, SwitchStrategyRR,  PlatformDefault>
+Kernel<KERNEL_DYNAMIC | KERNEL_HRT | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, SwitchStrategyRR,  PlatformDefault>
+Kernel<KERNEL_STATIC  | KERNEL_HRT | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, SwitchStrategyRM,  PlatformDefault>
+Kernel<KERNEL_DYNAMIC | KERNEL_HRT | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, SwitchStrategyRM,  PlatformDefault>
+Kernel<KERNEL_STATIC  | KERNEL_HRT | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, SwitchStrategyDM,  PlatformDefault>
+Kernel<KERNEL_DYNAMIC | KERNEL_HRT | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, SwitchStrategyDM,  PlatformDefault>
 Kernel<KERNEL_STATIC  | KERNEL_HRT | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, SwitchStrategyEDF, PlatformDefault>
 Kernel<KERNEL_DYNAMIC | KERNEL_HRT | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, SwitchStrategyEDF, PlatformDefault>
+
+// Tickless variants (low-power; KERNEL_TICKLESS requires STK_TICKLESS_IDLE=1 in stk_config.h)
+Kernel<KERNEL_STATIC  | KERNEL_TICKLESS, STK_C_KERNEL_MAX_TASKS, SwitchStrategyRR,   PlatformDefault>
+Kernel<KERNEL_DYNAMIC | KERNEL_TICKLESS, STK_C_KERNEL_MAX_TASKS, SwitchStrategyRR,   PlatformDefault>
+Kernel<KERNEL_STATIC  | KERNEL_TICKLESS, STK_C_KERNEL_MAX_TASKS, SwitchStrategySWRR, PlatformDefault>
+Kernel<KERNEL_DYNAMIC | KERNEL_TICKLESS, STK_C_KERNEL_MAX_TASKS, SwitchStrategySWRR, PlatformDefault>
+Kernel<KERNEL_STATIC  | KERNEL_TICKLESS, STK_C_KERNEL_MAX_TASKS, SwitchStrategyFP32, PlatformDefault>
+Kernel<KERNEL_DYNAMIC | KERNEL_TICKLESS, STK_C_KERNEL_MAX_TASKS, SwitchStrategyFP32, PlatformDefault>
+
+// Tickless variants with KERNEL_SYNC
+Kernel<KERNEL_STATIC  | KERNEL_TICKLESS | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, SwitchStrategyRR,   PlatformDefault>
+Kernel<KERNEL_DYNAMIC | KERNEL_TICKLESS | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, SwitchStrategyRR,   PlatformDefault>
+Kernel<KERNEL_STATIC  | KERNEL_TICKLESS | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, SwitchStrategySWRR, PlatformDefault>
+Kernel<KERNEL_DYNAMIC | KERNEL_TICKLESS | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, SwitchStrategySWRR, PlatformDefault>
+Kernel<KERNEL_STATIC  | KERNEL_TICKLESS | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, SwitchStrategyFP32, PlatformDefault>
+Kernel<KERNEL_DYNAMIC | KERNEL_TICKLESS | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, SwitchStrategyFP32, PlatformDefault>
 */
 
 /*! \def       STK_C_KERNEL_TYPE_CPU_X
     \brief     Kernel type definition per CPU core.
     \note      STK_C_KERNEL_TYPE_CPU_X type will be assigned to X core.
+    \note      Supported mode flags: KERNEL_STATIC, KERNEL_DYNAMIC, KERNEL_HRT, KERNEL_SYNC,
+               KERNEL_TICKLESS. See the "Available kernel type definitions" block above for
+               valid combinations. KERNEL_TICKLESS requires STK_TICKLESS_IDLE=1 in stk_config.h
+               and must NOT be combined with KERNEL_HRT.
 
     \code
     // Example of kernel type definition for 8 cores.
@@ -170,6 +201,9 @@ Kernel<KERNEL_DYNAMIC | KERNEL_HRT | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, Switch
     #define STK_C_KERNEL_TYPE_CPU_5 Kernel<KERNEL_STATIC, STK_C_KERNEL_MAX_TASKS, SwitchStrategyRR, PlatformDefault>
     #define STK_C_KERNEL_TYPE_CPU_6 Kernel<KERNEL_STATIC, STK_C_KERNEL_MAX_TASKS, SwitchStrategyRR, PlatformDefault>
     #define STK_C_KERNEL_TYPE_CPU_7 Kernel<KERNEL_STATIC, STK_C_KERNEL_MAX_TASKS, SwitchStrategyRR, PlatformDefault>
+
+    // Tickless example — CPU enters low-power state when all tasks are sleeping:
+    #define STK_C_KERNEL_TYPE_CPU_0 Kernel<KERNEL_STATIC | KERNEL_TICKLESS, STK_C_KERNEL_MAX_TASKS, SwitchStrategyRR, PlatformDefault>
     \endcode
  */
 
@@ -358,7 +392,12 @@ void stk_delay_ms(uint32_t ms);
 
 /*! \brief     Put current task to sleep (non-HRT kernels only).
     \param[in] ms: Milliseconds to sleep.
-    \note      CPU may enter low-power mode if all tasks are sleeping.
+    \note      Unlike stk_delay_ms(), this function does not spin and allows the kernel to
+               idle the CPU. When \a KERNEL_TICKLESS is active and all tasks are sleeping,
+               the SysTick is suppressed and the CPU enters a low-power WFI state until the
+               nearest wake-up deadline.
+    \note      Unsupported in \a KERNEL_HRT mode; in HRT mode tasks sleep automatically
+               according to their periodicity and workload.
 */
 void stk_sleep_ms(uint32_t ms);
 

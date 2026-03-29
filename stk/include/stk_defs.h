@@ -13,17 +13,24 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/*! \file  stk_config
-    \brief Contains user-level configuration for STK, refer to examples for details.
+/*! \file  stk_defs.h
+    \brief Compiler and platform low-level definitions for STK.
+    \note  Includes stk_config.h first so user-level configuration macros (e.g.
+           STK_TICKLESS_IDLE, STK_SEGGER_SYSVIEW) are visible to all definitions below.
+           Refer to stk_config.h and project examples for configuration details.
 */
 #include "stk_config.h"
 
-/*! \file  stk_defs.h
-    \brief Contains compiler low-level definitions.
-*/
-
 /*! \def   STK_TICKLESS_IDLE
-    \brief Configures kernel for a tickless operation during Idle periods.
+    \brief Enables tickless (dynamic-tick) low-power operation during idle periods.
+    \note  Set to 1 in stk_config.h to activate. Default: 0 (disabled).
+    \note  When enabled, the tick timer is suppressed while all tasks are sleeping
+           and re-armed for the nearest wakeup deadline, reducing idle power consumption.
+    \note  Requires the Kernel template to be instantiated with the KERNEL_TICKLESS flag.
+           KERNEL_TICKLESS is incompatible with KERNEL_HRT.
+    \note  The platform driver must support tickless operation (i.e. implement the
+           variable-advance OnTick overload). Not all platform back-ends support this.
+    \see   KERNEL_TICKLESS, STK_TICKLESS_USE_ARM_DWT, STK_TICKLESS_TICKS_MAX
 */
 #ifndef STK_TICKLESS_IDLE
     #define STK_TICKLESS_IDLE 0
@@ -42,8 +49,14 @@
 #endif
 
 /*! \def   STK_TICKLESS_TICKS_MAX
-    \brief Max number of kernel ticks to allow for a tickless mode when STK_TICKLESS_IDLE=1
-    \see   STK_CONFIG_TICKLESS_IDLE
+    \brief Maximum number of kernel ticks the hardware timer may be suppressed in one
+           tickless idle interval when STK_TICKLESS_IDLE=1. Default: 1000.
+    \note  Must not exceed 100000. Values above this limit cause a compile-time error
+           because the internal tick-request calculation uses a uint32_t accumulator
+           that would overflow at higher values.
+    \note  Increase to allow longer uninterrupted sleep intervals; decrease to improve
+           wakeup responsiveness at the cost of more frequent timer interrupts.
+    \see   STK_TICKLESS_IDLE, KERNEL_TICKLESS
 */
 #ifndef STK_TICKLESS_TICKS_MAX
     #define STK_TICKLESS_TICKS_MAX 1000
@@ -55,7 +68,9 @@
 /*! \def   STK_NEED_TASK_ID
     \brief When defined as 1, the Stack descriptor (stk::Stack) carries a \c tid field
            used by the SEGGER SystemView trace back-end to identify tasks during context switches.
-    \note  Automatically set to 1 when STK_SEGGER_SYSVIEW is enabled. Not intended for manual override.
+    \note  Set unconditionally (no \c #ifndef guard) whenever STK_SEGGER_SYSVIEW is enabled.
+           Any prior manual definition will be silently overwritten. Do not define this macro
+           manually; enable STK_SEGGER_SYSVIEW instead.
     \see   STK_SEGGER_SYSVIEW, stk::Stack
 */
 #if STK_SEGGER_SYSVIEW
@@ -219,9 +234,13 @@
 /*! \def   __stk_relax_cpu
     \brief Emits a CPU pipeline-relaxation hint for use inside hot busy-wait (spin) loops (in-code statement).
     \note  Reduces power consumption and memory-bus contention while spinning by signalling to the CPU
-           that the current thread is in a spin-wait. On x86 this maps to the PAUSE instruction;
-           on RISC-V with Zihintpause it maps to the PAUSE hint, on other targets it falls back to
-           a full memory fence which at minimum prevents compiler reordering.
+           that the current thread is in a spin-wait. Platform-specific expansions:
+           - x86/x64 (GCC/Clang/MSVC): the \c PAUSE instruction via \c __builtin_ia32_pause() or \c _mm_pause().
+           - RISC-V with Zihintpause (GCC/Clang): the \c PAUSE hint via \c __builtin_riscv_pause().
+           - RISC-V without Zihintpause (GCC/Clang): falls back to \c __stk_full_memfence().
+           - ARM Cortex-M (MSVC): the \c YIELD instruction via \c __yield().
+           - ARM Cortex-M (GCC/Clang): falls back to \c __stk_full_memfence() (no dedicated hint).
+           - Other/unknown targets: falls back to \c __stk_full_memfence().
     \note  Can be redefined externally (e.g. in test harnesses) to intercept control inside kernel
            waiting loops without modifying kernel source.
 */
@@ -256,8 +275,15 @@
 
 /*! \def   __stk_debug_break
     \brief Triggers a hardware breakpoint, halting execution in an attached debugger (in-code statement).
-    \note  Active only when \c DEBUG or \c _DEBUG is defined (i.e. in debug builds).
-           In release builds, or when no known architecture is detected, expands to nothing.
+    \note  Behaviour by build and architecture:
+           - Release build (neither \c DEBUG nor \c _DEBUG defined): always expands to nothing,
+             regardless of architecture.
+           - Debug build with a recognised architecture (\c _STK_ARCH_ARM_CORTEX_M,
+             \c _STK_ARCH_RISC_V, or \c _STK_ARCH_X86_WIN32): emits the appropriate
+             breakpoint instruction (\c bkpt, \c ebreak, or \c __debugbreak / \c int $3).
+           - Debug build with no recognised architecture: the macro is left \b undefined.
+             Any usage site will produce a compiler error. Add a definition for your
+             architecture in stk_defs.h or define it to nothing in stk_config.h to suppress.
     \note  Used in assertion handlers and fault paths to halt the system at the exact failure point
            rather than continuing into undefined state.
 */
@@ -279,11 +305,19 @@
 
 /*! \def   STK_ASSERT
     \brief Runtime assertion. Halts execution if the expression \a e evaluates to false.
-    \note  By default maps to the standard \c assert() macro from \c <assert.h>.
-           Define \c _STK_ASSERT_REDIRECT to redirect to a custom handler \c STK_ASSERT_HANDLER
-           with the signature: \code void STK_ASSERT_HANDLER(const char *expr, const char *file, int32_t line); \endcode
-           This is useful for embedded targets where the standard assert handler is unavailable
-           or where a custom fault logger or LED indicator is preferred.
+    \note  Behaviour depends on build configuration:
+           - If \c _STK_ASSERT_REDIRECT is defined: always redirects to the custom handler
+             \c STK_ASSERT_HANDLER (regardless of debug/release build type). Signature:
+             \code void STK_ASSERT_HANDLER(const char *expr, const char *file, int32_t line); \endcode
+             Use this on embedded targets where the standard assert handler is unavailable,
+             or where a custom fault logger or LED indicator is preferred.
+           - Else if \c DEBUG or \c _DEBUG is defined (debug build): maps to the standard
+             \c assert() macro from \c <assert.h>, which halts execution on failure.
+           - Else (release build): expands to nothing. The expression \a e is completely
+             elided, including any side effects. Do not rely on side effects inside STK_ASSERT.
+    \warning In release builds without \c _STK_ASSERT_REDIRECT, all assertions are silently
+             removed. Safety-critical applications (ISO 26262, IEC 61508) should define
+             \c _STK_ASSERT_REDIRECT to retain fault detection in all build configurations.
 */
 #ifdef _STK_ASSERT_REDIRECT
     extern void STK_ASSERT_HANDLER(const char *, const char *, int32_t);
@@ -298,32 +332,37 @@
 #endif
 
 /*! \def   STK_STATIC_ASSERT_DESC_N
-    \brief Compile-time assertion with a user-defined name suffix.
-    \note  The \a NAME parameter is appended to the internal typedef name, allowing multiple
-           assertions in the same scope without symbol-name collisions. Use STK_STATIC_ASSERT
-           for single assertions where a unique name is not required.
+    \brief Compile-time assertion with a user-defined name suffix and a custom error description.
+    \note  \a NAME is appended to the internal symbol name, allowing multiple assertions in the
+           same scope without symbol-name collisions.
+    \note  \a DESC is a string literal shown in the compiler diagnostic — use it to provide a
+           human-readable explanation of the constraint. Prefer this over STK_STATIC_ASSERT_N
+           when the expression alone would not be self-explanatory in a compiler error.
 */
 #define STK_STATIC_ASSERT_DESC_N(NAME, X, DESC) static_assert((X), DESC)
 
 /*! \def   STK_STATIC_ASSERT_DESC
-    \brief Compile-time assertion. Produces a compilation error if \a X is false.
-    \note  Uses a fixed internal name. If multiple STK_STATIC_ASSERT calls appear in the same
-           scope, use STK_STATIC_ASSERT_N to provide distinct names and avoid duplicate typedef errors.
+    \brief Compile-time assertion with a custom error description. Produces a compilation error if \a X is false.
+    \note  Uses a fixed internal symbol name. If more than one STK_STATIC_ASSERT_DESC appears in
+           the same scope, use STK_STATIC_ASSERT_DESC_N to provide distinct name suffixes and
+           avoid duplicate symbol errors.
 */
 #define STK_STATIC_ASSERT_DESC(X, DESC) STK_STATIC_ASSERT_DESC_N(_, X, DESC)
 
 /*! \def   STK_STATIC_ASSERT_N
     \brief Compile-time assertion with a user-defined name suffix.
-    \note  The \a NAME parameter is appended to the internal typedef name, allowing multiple
-           assertions in the same scope without symbol-name collisions. Use STK_STATIC_ASSERT
-           for single assertions where a unique name is not required.
+    \note  \a NAME is appended to the internal symbol name, allowing multiple assertions in the
+           same scope without symbol-name collisions.
+    \note  The compiler diagnostic message is the stringified form of expression \a X.
+           Use STK_STATIC_ASSERT_DESC_N instead when you need a more descriptive error message.
 */
 #define STK_STATIC_ASSERT_N(NAME, X) STK_STATIC_ASSERT_DESC_N(N, (X), #X)
 
 /*! \def   STK_STATIC_ASSERT
     \brief Compile-time assertion. Produces a compilation error if \a X is false.
-    \note  Uses a fixed internal name. If multiple STK_STATIC_ASSERT calls appear in the same
-           scope, use STK_STATIC_ASSERT_N to provide distinct names and avoid duplicate typedef errors.
+    \note  Uses a fixed internal symbol name. If more than one STK_STATIC_ASSERT appears in
+           the same scope, use STK_STATIC_ASSERT_N to provide distinct name suffixes and
+           avoid duplicate symbol errors.
 */
 #define STK_STATIC_ASSERT(X) STK_STATIC_ASSERT_DESC_N(_, (X), #X)
 
