@@ -18,7 +18,7 @@ jobs:
       uses: msys2/setup-msys2@v2
     
     - name: Checkout
-      uses: actions/checkout@v3
+      uses: actions/checkout@v6
 
     - name: Configure CMake
       run: cmake -G "Unix Makefiles" -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DBUILD_LIB=ON -DBUILD_C_IFACE=ON -DBUILD_TESTS=ON -DTEST_GENERIC=ON -DTEST_SWITCH=ON -DTEST_CHAIN=ON -DTEST_SLEEP=ON

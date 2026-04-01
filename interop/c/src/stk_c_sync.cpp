@@ -271,6 +271,68 @@ void stk_sem_signal(stk_sem_t *sem)
 }
 
 // ---------------------------------------------------------------------------
+// EventFlags
+// ---------------------------------------------------------------------------
+struct stk_ef_t
+{
+    stk_ef_t(uint32_t initial_flags) : handle(initial_flags)
+    {}
+
+    EventFlags handle;
+};
+
+stk_ef_t *stk_ef_create(stk_ef_mem_t *memory, uint32_t memory_size, uint32_t initial_flags)
+{
+    STK_ASSERT(memory != nullptr);
+    STK_ASSERT(memory_size >= sizeof(stk_ef_t));
+    if (memory_size < sizeof(stk_ef_t))
+        return nullptr;
+
+    return (stk_ef_t *)new (memory->data) stk_ef_t(initial_flags);
+}
+
+void stk_ef_destroy(stk_ef_t *ef)
+{
+    if (ef != nullptr)
+        ef->~stk_ef_t();
+}
+
+uint32_t stk_ef_set(stk_ef_t *ef, uint32_t flags)
+{
+    STK_ASSERT(ef != nullptr);
+
+    return ef->handle.Set(flags);
+}
+
+uint32_t stk_ef_clear(stk_ef_t *ef, uint32_t flags)
+{
+    STK_ASSERT(ef != nullptr);
+
+    return ef->handle.Clear(flags);
+}
+
+uint32_t stk_ef_get(stk_ef_t *ef)
+{
+    STK_ASSERT(ef != nullptr);
+
+    return ef->handle.Get();
+}
+
+uint32_t stk_ef_wait(stk_ef_t *ef, uint32_t flags, uint32_t options, int32_t timeout)
+{
+    STK_ASSERT(ef != nullptr);
+
+    return ef->handle.Wait(flags, options, timeout);
+}
+
+uint32_t stk_ef_trywait(stk_ef_t *ef, uint32_t flags, uint32_t options)
+{
+    STK_ASSERT(ef != nullptr);
+
+    return ef->handle.TryWait(flags, options);
+}
+
+// ---------------------------------------------------------------------------
 // Pipe (template instantiation for stk_word_t, STK_PIPE_SIZE)
 // ---------------------------------------------------------------------------
 typedef Pipe<stk_word_t, STK_PIPE_SIZE> PipeX;

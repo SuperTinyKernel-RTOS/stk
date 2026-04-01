@@ -29,7 +29,7 @@ jobs:
       run: arm-none-eabi-gcc --version
 
     - name: Checkout
-      uses: actions/checkout@v3
+      uses: actions/checkout@v6
 
     - name: ${{matrix.name}}
       run: cmake -G "Unix Makefiles" -B ${{github.workspace}}/build -DCMAKE_TOOLCHAIN_FILE=build/cmake/toolchain/arm-none-eabi-gcc.cmake ${{matrix.cmake_flags}} -DENABLE_LTO=ON -DBUILD_LIB=ON -DBUILD_C_IFACE=ON -DBUILD_TESTS=ON -DTEST_GENERIC=ON

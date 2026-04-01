@@ -56,7 +56,7 @@ class Mutex : public IMutex, public ITraceable, private ISyncObject
 public:
     /*! \brief     Constructor.
     */
-    explicit Mutex() : m_owner_tid(TID_NONE), m_recursion_count(0u)
+    explicit Mutex() : m_owner_tid(TID_NONE), m_recursion_count(0U)
     {}
 
     /*! \brief     Destructor.
@@ -116,22 +116,22 @@ inline bool Mutex::TimedLock(Timeout timeout)
     ScopedCriticalSection cs_;
 
     // already owned by the calling thread (recursive path)
-    if ((m_recursion_count != 0u) && (m_owner_tid == current_tid))
+    if ((m_recursion_count != 0U) && (m_owner_tid == current_tid))
     {
         STK_ASSERT(m_recursion_count < RECURSION_MAX); // API contract: caller must not exceed max recursion depth
 
-        m_recursion_count = static_cast<uint16_t>(m_recursion_count + 1u);
+        m_recursion_count = static_cast<uint16_t>(m_recursion_count + 1U);
         return true;
     }
 
     // mutex is free (fast path)
-    if (m_recursion_count == 0u)
+    if (m_recursion_count == 0U)
     {
         // kernel invariant: counter is zero so owner must be TID_NONE
         if (m_owner_tid != TID_NONE)
             STK_KERNEL_PANIC(KERNEL_PANIC_ASSERT);
 
-        m_recursion_count = 1u;
+        m_recursion_count = 1U;
         m_owner_tid       = current_tid;
         __stk_full_memfence();
 
@@ -148,7 +148,7 @@ inline bool Mutex::TimedLock(Timeout timeout)
 
     // kernel invariant: if either condition is false, the low-level lock and the
     // recursion counter are out of sync, this is an internal defect, not a caller error
-    if ((m_owner_tid != current_tid) || (m_recursion_count != 1u))
+    if ((m_owner_tid != current_tid) || (m_recursion_count != 1U))
         STK_KERNEL_PANIC(KERNEL_PANIC_ASSERT);
 
     return true;
@@ -162,13 +162,13 @@ inline void Mutex::Unlock()
 {
     STK_ASSERT(!hw::IsInsideISR());      // API contract: caller must not be in ISR
     STK_ASSERT(m_owner_tid == GetTid()); // API contract: caller must own the lock
-    STK_ASSERT(m_recursion_count != 0u); // API contract: must have matching Lock()
+    STK_ASSERT(m_recursion_count != 0U); // API contract: must have matching Lock()
 
     ScopedCriticalSection cs_;
 
-    m_recursion_count = static_cast<uint16_t>(m_recursion_count - 1u);
+    m_recursion_count = static_cast<uint16_t>(m_recursion_count - 1U);
 
-    if (m_recursion_count == 0u)
+    if (m_recursion_count == 0U)
     {
         if (!m_wait_list.IsEmpty())
         {
@@ -176,7 +176,7 @@ inline void Mutex::Unlock()
             IWaitObject *waiter = static_cast<IWaitObject *>(m_wait_list.GetFirst());
 
             // transfer ownership to the waiter
-            m_recursion_count = 1u;
+            m_recursion_count = 1U;
             m_owner_tid       = waiter->GetTid();
             __stk_full_memfence();
 

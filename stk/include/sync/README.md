@@ -59,7 +59,15 @@ A thread-safe FIFO communication channel for inter-task data passing, internally
 - **Blocking semantics**: `Write()` blocks if the pipe is full; `Read()` blocks if the pipe is empty, until the timeout expires.
 - **Low-Power Aware**: Waiting tasks are suspended by the kernel.
 
-### 8. Reader-Writer Mutex (`sync::RWMutex`)
+### 8. Event Flags (`sync::EventFlags`)
+A 32-bit multi-flag synchronization primitive for coordinating multiple independent events within a single object.
+- **OR semantics** (`OPT_WAIT_ANY`): Unblocks when any one of the requested flag bits is set (default).
+- **AND semantics** (`OPT_WAIT_ALL`): Unblocks only when all requested flag bits are simultaneously set.
+- **Non-destructive read**: `Get()` returns a snapshot of the flags word without consuming any bit.
+- **Selective clear**: By default matched bits are atomically cleared on a successful `Wait()`; pass `OPT_NO_CLEAR` to suppress this, allowing multiple concurrent waiters to each satisfy on the same `Set()`.
+- **Low-Power Aware**: Waiting tasks are suspended by the kernel.
+
+### 9. Reader-Writer Mutex (`sync::RWMutex`)
 A synchronization primitive that allows multiple concurrent readers or one exclusive writer.
 - **Writer Preference Policy**: Prevents writer starvation by blocking new readers when writers are waiting.
 - **Shared Access**: Multiple tasks can acquire `ReadLock()` simultaneously for read-only operations.
@@ -75,6 +83,7 @@ STK primitives follow strict rules for **Interrupt Service Routine (ISR)** conte
 
 The following operations are ISR-safe:
 * **sync::Event**: `Set()`, `Pulse()`, `Reset()`, `TryWait()`
+* **sync::EventFlags**: `Set()`, `Clear()`, `Get()`, `TryWait()`, `Wait(NO_WAIT)`
 * **sync::Semaphore**: `Signal()`, `TryWait()`
 * **sync::ConditionVariable**: `NotifyOne()`, `NotifyAll()`, `Wait(NO_WAIT)`
 * **sync::Pipe**: `Write(NO_WAIT)`, `WriteBulk(NO_WAIT)`, `TryWrite()`, `TryWriteBulk()`, `Read(NO_WAIT)`, `ReadBulk(NO_WAIT)`, `TryRead()`, `TryReadBulk()`
@@ -97,8 +106,12 @@ The following operations are ISR-safe:
 ```cpp
 #include <sync/stk_sync.h>
 
-stk::sync::Mutex g_Mutex;
-stk::sync::Event g_DataReady(false); // auto-reset
+stk::sync::Mutex      g_Mutex;
+stk::sync::Event      g_DataReady(false); // auto-reset
+stk::sync::EventFlags g_SensorFlags;
+
+static const uint32_t FLAG_GPS = (1U << 0);
+static const uint32_t FLAG_IMU = (1U << 1);
 
 void TaskA() {
     g_Mutex.Lock();
@@ -113,6 +126,23 @@ void TaskB() {
     // wait up to 1000ms for signaling
     if (g_DataReady.Wait(1000)) {
         // ... process data ...
+    }
+}
+
+void ISR_GPS() {
+    g_SensorFlags.Set(FLAG_GPS); // ISR-safe
+}
+
+void ISR_IMU() {
+    g_SensorFlags.Set(FLAG_IMU); // ISR-safe
+}
+
+void TaskFusion() {
+    // block until BOTH GPS and IMU flags are set simultaneously
+    uint32_t raised = g_SensorFlags.Wait(FLAG_GPS | FLAG_IMU,
+                                         stk::sync::EventFlags::OPT_WAIT_ALL, 5000);
+    if (!stk::sync::EventFlags::IsError(raised)) {
+        // ... process fused sensor data ...
     }
 }
 ```
