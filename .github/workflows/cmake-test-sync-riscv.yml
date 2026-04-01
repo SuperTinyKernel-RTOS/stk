@@ -17,7 +17,7 @@ jobs:
 
     steps:
     - name: Checkout
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
 
     - name: Setup Docker Buildx
       uses: docker/setup-buildx-action@v3
@@ -50,6 +50,11 @@ jobs:
             cmake_flag: TEST_EVENT=ON
             elf: test-event.elf
             dir: event
+            
+          - name: sync::EventFlags
+            cmake_flag: TEST_EVENTFLAGS=ON
+            elf: test-eventflags.elf
+            dir: eventflags
 
           - name: sync::Mutex
             cmake_flag: TEST_MUTEX=ON

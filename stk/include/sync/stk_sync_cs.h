@@ -53,6 +53,7 @@ namespace sync {
 class ScopedCriticalSection : private IMutex
 {
     friend class Event;
+    friend class EventFlags;
     friend class Mutex;
     friend class RWMutex;
     friend class Semaphore;

@@ -31,7 +31,7 @@ jobs:
       run: sudo apt update && sudo apt install -y lcov
     
     - name: Checkout
-      uses: actions/checkout@v3
+      uses: actions/checkout@v6
       with:
         ref: ${{ github.event.pull_request.head.sha || github.sha }}
     

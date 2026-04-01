@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <projectDescription>
-	<name>blinky_c-mingw32</name>
+	<name>test-eventflags</name>
 	<comment></comment>
 	<projects>
 	</projects>
@@ -31,12 +31,7 @@
 			<locationURI>virtual:/virtual</locationURI>
 		</link>
 		<link>
-			<name>src/blinky_c</name>
-			<type>2</type>
-			<locationURI>virtual:/virtual</locationURI>
-		</link>
-		<link>
-			<name>src/driver</name>
+			<name>deps/test</name>
 			<type>2</type>
 			<locationURI>virtual:/virtual</locationURI>
 		</link>
@@ -46,34 +41,19 @@
 			<locationURI>virtual:/virtual</locationURI>
 		</link>
 		<link>
-			<name>deps/stk/interop</name>
-			<type>2</type>
-			<locationURI>virtual:/virtual</locationURI>
-		</link>
-		<link>
 			<name>deps/stk/src</name>
 			<type>2</type>
 			<locationURI>virtual:/virtual</locationURI>
 		</link>
 		<link>
-			<name>src/blinky_c/example.c</name>
+			<name>deps/test/stktest_context.h</name>
 			<type>1</type>
-			<locationURI>PARENT-4-PROJECT_LOC/blinky_c/example.c</locationURI>
+			<locationURI>PARENT-4-PROJECT_LOC/test/stktest_context.h</locationURI>
 		</link>
 		<link>
-			<name>src/blinky_c/example.h</name>
+			<name>deps/test/test_eventflags.cpp</name>
 			<type>1</type>
-			<locationURI>PARENT-4-PROJECT_LOC/blinky_c/example.h</locationURI>
-		</link>
-		<link>
-			<name>src/driver/led.h</name>
-			<type>1</type>
-			<locationURI>PARENT-4-PROJECT_LOC/driver/led.h</locationURI>
-		</link>
-		<link>
-			<name>src/driver/portable</name>
-			<type>2</type>
-			<locationURI>virtual:/virtual</locationURI>
+			<locationURI>PARENT-4-PROJECT_LOC/test/eventflags/test_eventflags.cpp</locationURI>
 		</link>
 		<link>
 			<name>deps/stk/include/arch</name>
@@ -83,32 +63,32 @@
 		<link>
 			<name>deps/stk/include/stk.h</name>
 			<type>1</type>
-			<locationURI>PARENT-6-PROJECT_LOC/stk/include/stk.h</locationURI>
+			<locationURI>PARENT-4-PROJECT_LOC/stk/include/stk.h</locationURI>
 		</link>
 		<link>
 			<name>deps/stk/include/stk_arch.h</name>
 			<type>1</type>
-			<locationURI>PARENT-6-PROJECT_LOC/stk/include/stk_arch.h</locationURI>
+			<locationURI>PARENT-4-PROJECT_LOC/stk/include/stk_arch.h</locationURI>
 		</link>
 		<link>
 			<name>deps/stk/include/stk_common.h</name>
 			<type>1</type>
-			<locationURI>PARENT-6-PROJECT_LOC/stk/include/stk_common.h</locationURI>
+			<locationURI>PARENT-4-PROJECT_LOC/stk/include/stk_common.h</locationURI>
 		</link>
 		<link>
 			<name>deps/stk/include/stk_defs.h</name>
 			<type>1</type>
-			<locationURI>PARENT-6-PROJECT_LOC/stk/include/stk_defs.h</locationURI>
+			<locationURI>PARENT-4-PROJECT_LOC/stk/include/stk_defs.h</locationURI>
 		</link>
 		<link>
 			<name>deps/stk/include/stk_helper.h</name>
 			<type>1</type>
-			<locationURI>PARENT-6-PROJECT_LOC/stk/include/stk_helper.h</locationURI>
+			<locationURI>PARENT-4-PROJECT_LOC/stk/include/stk_helper.h</locationURI>
 		</link>
 		<link>
 			<name>deps/stk/include/stk_linked_list.h</name>
 			<type>1</type>
-			<locationURI>PARENT-6-PROJECT_LOC/stk/include/stk_linked_list.h</locationURI>
+			<locationURI>PARENT-4-PROJECT_LOC/stk/include/stk_linked_list.h</locationURI>
 		</link>
 		<link>
 			<name>deps/stk/include/strategy</name>
@@ -121,7 +101,7 @@
 			<locationURI>virtual:/virtual</locationURI>
 		</link>
 		<link>
-			<name>deps/stk/interop/c</name>
+			<name>deps/stk/include/time</name>
 			<type>2</type>
 			<locationURI>virtual:/virtual</locationURI>
 		</link>
@@ -131,11 +111,6 @@
 			<locationURI>virtual:/virtual</locationURI>
 		</link>
 		<link>
-			<name>src/driver/portable/led.cpp</name>
-			<type>1</type>
-			<locationURI>PARENT-4-PROJECT_LOC/driver/portable/led.cpp</locationURI>
-		</link>
-		<link>
 			<name>deps/stk/include/arch/arm</name>
 			<type>2</type>
 			<locationURI>virtual:/virtual</locationURI>
@@ -143,7 +118,7 @@
 		<link>
 			<name>deps/stk/include/arch/stk_arch_common.h</name>
 			<type>1</type>
-			<locationURI>PARENT-6-PROJECT_LOC/stk/include/arch/stk_arch_common.h</locationURI>
+			<locationURI>PARENT-4-PROJECT_LOC/stk/include/arch/stk_arch_common.h</locationURI>
 		</link>
 		<link>
 			<name>deps/stk/include/arch/x86</name>
@@ -153,82 +128,92 @@
 		<link>
 			<name>deps/stk/include/strategy/stk_strategy_edf.h</name>
 			<type>1</type>
-			<locationURI>PARENT-6-PROJECT_LOC/stk/include/strategy/stk_strategy_edf.h</locationURI>
+			<locationURI>PARENT-4-PROJECT_LOC/stk/include/strategy/stk_strategy_edf.h</locationURI>
 		</link>
 		<link>
 			<name>deps/stk/include/strategy/stk_strategy_fpriority.h</name>
 			<type>1</type>
-			<locationURI>PARENT-6-PROJECT_LOC/stk/include/strategy/stk_strategy_fpriority.h</locationURI>
+			<locationURI>PARENT-4-PROJECT_LOC/stk/include/strategy/stk_strategy_fpriority.h</locationURI>
 		</link>
 		<link>
 			<name>deps/stk/include/strategy/stk_strategy_monotonic.h</name>
 			<type>1</type>
-			<locationURI>PARENT-6-PROJECT_LOC/stk/include/strategy/stk_strategy_monotonic.h</locationURI>
+			<locationURI>PARENT-4-PROJECT_LOC/stk/include/strategy/stk_strategy_monotonic.h</locationURI>
 		</link>
 		<link>
 			<name>deps/stk/include/strategy/stk_strategy_rrobin.h</name>
 			<type>1</type>
-			<locationURI>PARENT-6-PROJECT_LOC/stk/include/strategy/stk_strategy_rrobin.h</locationURI>
+			<locationURI>PARENT-4-PROJECT_LOC/stk/include/strategy/stk_strategy_rrobin.h</locationURI>
 		</link>
 		<link>
 			<name>deps/stk/include/strategy/stk_strategy_swrrobin.h</name>
 			<type>1</type>
-			<locationURI>PARENT-6-PROJECT_LOC/stk/include/strategy/stk_strategy_swrrobin.h</locationURI>
+			<locationURI>PARENT-4-PROJECT_LOC/stk/include/strategy/stk_strategy_swrrobin.h</locationURI>
+		</link>
+		<link>
+			<name>deps/stk/include/sync/README.md</name>
+			<type>1</type>
+			<locationURI>PARENT-4-PROJECT_LOC/stk/include/sync/README.md</locationURI>
 		</link>
 		<link>
 			<name>deps/stk/include/sync/stk_sync.h</name>
 			<type>1</type>
-			<locationURI>PARENT-6-PROJECT_LOC/stk/include/sync/stk_sync.h</locationURI>
+			<locationURI>PARENT-4-PROJECT_LOC/stk/include/sync/stk_sync.h</locationURI>
 		</link>
 		<link>
 			<name>deps/stk/include/sync/stk_sync_cs.h</name>
 			<type>1</type>
-			<locationURI>PARENT-6-PROJECT_LOC/stk/include/sync/stk_sync_cs.h</locationURI>
+			<locationURI>PARENT-4-PROJECT_LOC/stk/include/sync/stk_sync_cs.h</locationURI>
 		</link>
 		<link>
 			<name>deps/stk/include/sync/stk_sync_cv.h</name>
 			<type>1</type>
-			<locationURI>PARENT-6-PROJECT_LOC/stk/include/sync/stk_sync_cv.h</locationURI>
+			<locationURI>PARENT-4-PROJECT_LOC/stk/include/sync/stk_sync_cv.h</locationURI>
 		</link>
 		<link>
 			<name>deps/stk/include/sync/stk_sync_event.h</name>
 			<type>1</type>
-			<locationURI>PARENT-6-PROJECT_LOC/stk/include/sync/stk_sync_event.h</locationURI>
+			<locationURI>PARENT-4-PROJECT_LOC/stk/include/sync/stk_sync_event.h</locationURI>
 		</link>
 		<link>
 			<name>deps/stk/include/sync/stk_sync_eventflags.h</name>
 			<type>1</type>
-			<locationURI>PARENT-6-PROJECT_LOC/stk/include/sync/stk_sync_eventflags.h</locationURI>
-		</link>
-		<link>
-			<name>deps/stk/include/sync/stk_sync_mutex.h</name>
-			<type>1</type>
-			<locationURI>PARENT-6-PROJECT_LOC/stk/include/sync/stk_sync_mutex.h</locationURI>
+			<locationURI>PARENT-4-PROJECT_LOC/stk/include/sync/stk_sync_eventflags.h</locationURI>
 		</link>
 		<link>
 			<name>deps/stk/include/sync/stk_sync_pipe.h</name>
 			<type>1</type>
-			<locationURI>PARENT-6-PROJECT_LOC/stk/include/sync/stk_sync_pipe.h</locationURI>
+			<locationURI>PARENT-4-PROJECT_LOC/stk/include/sync/stk_sync_pipe.h</locationURI>
 		</link>
 		<link>
 			<name>deps/stk/include/sync/stk_sync_rwmutex.h</name>
 			<type>1</type>
-			<locationURI>PARENT-6-PROJECT_LOC/stk/include/sync/stk_sync_rwmutex.h</locationURI>
+			<locationURI>PARENT-4-PROJECT_LOC/stk/include/sync/stk_sync_rwmutex.h</locationURI>
 		</link>
 		<link>
 			<name>deps/stk/include/sync/stk_sync_semaphore.h</name>
 			<type>1</type>
-			<locationURI>PARENT-6-PROJECT_LOC/stk/include/sync/stk_sync_semaphore.h</locationURI>
+			<locationURI>PARENT-4-PROJECT_LOC/stk/include/sync/stk_sync_semaphore.h</locationURI>
 		</link>
 		<link>
-			<name>deps/stk/interop/c/include</name>
-			<type>2</type>
-			<locationURI>virtual:/virtual</locationURI>
+			<name>deps/stk/include/sync/stk_sync_spinlock.h</name>
+			<type>1</type>
+			<locationURI>PARENT-4-PROJECT_LOC/stk/include/sync/stk_sync_spinlock.h</locationURI>
 		</link>
 		<link>
-			<name>deps/stk/interop/c/src</name>
-			<type>2</type>
-			<locationURI>virtual:/virtual</locationURI>
+			<name>deps/stk/include/time/stk_time.h</name>
+			<type>1</type>
+			<locationURI>PARENT-4-PROJECT_LOC/stk/include/time/stk_time.h</locationURI>
+		</link>
+		<link>
+			<name>deps/stk/include/time/stk_time_timer.h</name>
+			<type>1</type>
+			<locationURI>PARENT-4-PROJECT_LOC/stk/include/time/stk_time_timer.h</locationURI>
+		</link>
+		<link>
+			<name>deps/stk/include/time/stk_time_util.h</name>
+			<type>1</type>
+			<locationURI>PARENT-4-PROJECT_LOC/stk/include/time/stk_time_util.h</locationURI>
 		</link>
 		<link>
 			<name>deps/stk/src/arch/arm</name>
@@ -251,31 +236,6 @@
 			<locationURI>virtual:/virtual</locationURI>
 		</link>
 		<link>
-			<name>deps/stk/interop/c/include/stk_c.h</name>
-			<type>1</type>
-			<locationURI>PARENT-6-PROJECT_LOC/interop/c/include/stk_c.h</locationURI>
-		</link>
-		<link>
-			<name>deps/stk/interop/c/include/stk_c_time.h</name>
-			<type>1</type>
-			<locationURI>PARENT-6-PROJECT_LOC/interop/c/include/stk_c_time.h</locationURI>
-		</link>
-		<link>
-			<name>deps/stk/interop/c/src/stk_c.cpp</name>
-			<type>1</type>
-			<locationURI>PARENT-6-PROJECT_LOC/interop/c/src/stk_c.cpp</locationURI>
-		</link>
-		<link>
-			<name>deps/stk/interop/c/src/stk_c_sync.cpp</name>
-			<type>1</type>
-			<locationURI>PARENT-6-PROJECT_LOC/interop/c/src/stk_c_sync.cpp</locationURI>
-		</link>
-		<link>
-			<name>deps/stk/interop/c/src/stk_c_time.cpp</name>
-			<type>1</type>
-			<locationURI>PARENT-6-PROJECT_LOC/interop/c/src/stk_c_time.cpp</locationURI>
-		</link>
-		<link>
 			<name>deps/stk/src/arch/arm/cortex-m</name>
 			<type>2</type>
 			<locationURI>virtual:/virtual</locationURI>
@@ -288,28 +248,22 @@
 		<link>
 			<name>deps/stk/include/arch/arm/cortex-m/stk_arch_arm-cortex-m.h</name>
 			<type>1</type>
-			<locationURI>PARENT-6-PROJECT_LOC/stk/include/arch/arm/cortex-m/stk_arch_arm-cortex-m.h</locationURI>
+			<locationURI>PARENT-4-PROJECT_LOC/stk/include/arch/arm/cortex-m/stk_arch_arm-cortex-m.h</locationURI>
 		</link>
 		<link>
 			<name>deps/stk/include/arch/x86/win32/stk_arch_x86-win32.h</name>
 			<type>1</type>
-			<locationURI>PARENT-6-PROJECT_LOC/stk/include/arch/x86/win32/stk_arch_x86-win32.h</locationURI>
+			<locationURI>PARENT-4-PROJECT_LOC/stk/include/arch/x86/win32/stk_arch_x86-win32.h</locationURI>
 		</link>
 		<link>
 			<name>deps/stk/src/arch/arm/cortex-m/stk_arch_arm-cortex-m.cpp</name>
 			<type>1</type>
-			<locationURI>PARENT-6-PROJECT_LOC/stk/src/arch/arm/cortex-m/stk_arch_arm-cortex-m.cpp</locationURI>
+			<locationURI>PARENT-4-PROJECT_LOC/stk/src/arch/arm/cortex-m/stk_arch_arm-cortex-m.cpp</locationURI>
 		</link>
 		<link>
 			<name>deps/stk/src/arch/x86/win32/stk_arch_x86-win32.cpp</name>
 			<type>1</type>
-			<locationURI>PARENT-6-PROJECT_LOC/stk/src/arch/x86/win32/stk_arch_x86-win32.cpp</locationURI>
+			<locationURI>PARENT-4-PROJECT_LOC/stk/src/arch/x86/win32/stk_arch_x86-win32.cpp</locationURI>
 		</link>
 	</linkedResources>
-	<variableList>
-		<variable>
-			<name>copy_PARENT</name>
-			<value>$%7BPARENT-2-ECLIPSE_HOME%7D/SVN/private/stk/build/example/project</value>
-		</variable>
-	</variableList>
 </projectDescription>

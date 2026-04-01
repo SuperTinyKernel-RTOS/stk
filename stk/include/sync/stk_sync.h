@@ -26,6 +26,7 @@
     | Primitive             | ISR Safe Methods                                                                                                                                   |
     | :-------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------- |
     | **Event**             | \c Set(), \c Pulse(), \c Reset(), \c TryWait()                                                                                                     |
+    | **EventFlags**        | \c Set(), \c Clear(), \c Get(), \c TryWait(), \c Wait(NO_WAIT)                                                                                     |                                                                                                        |
     | **Semaphore**         | \c Signal(), \c TryWait()                                                                                                                          |
     | **SpinLock**          | None                                                                                                                                               |
     | **Mutex**             | None                                                                                                                                               |
@@ -52,6 +53,7 @@ namespace sync {
 #include "stk_sync_cs.h"
 #include "stk_sync_cv.h"
 #include "stk_sync_event.h"
+#include "stk_sync_eventflags.h"
 #include "stk_sync_spinlock.h"
 #include "stk_sync_mutex.h"
 #include "stk_sync_semaphore.h"
