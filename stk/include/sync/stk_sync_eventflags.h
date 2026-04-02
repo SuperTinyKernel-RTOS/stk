@@ -1,5 +1,5 @@
 /*
- * SuperTinyKernel™ (STK): Lightweight High-Performance Deterministic C++ RTOS for Embedded Systems.
+ * SuperTinyKernel(TM) RTOS: Lightweight High-Performance Deterministic C++ RTOS for Embedded Systems.
  *
  * Source: https://github.com/SuperTinyKernel-RTOS
  *
@@ -10,7 +10,6 @@
 #ifndef STK_SYNC_EVENT_FLAGS_H_
 #define STK_SYNC_EVENT_FLAGS_H_
 
-#include "stk_sync_cs.h"
 #include "stk_sync_cv.h"
 
 /*! \file  stk_sync_event_flags.h
