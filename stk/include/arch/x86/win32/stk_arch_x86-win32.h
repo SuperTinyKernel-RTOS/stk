@@ -12,6 +12,10 @@
 
 #include "stk_common.h"
 
+/*! \file  stk_arch_x86-win32.h
+    \brief Platform port for Windows Win32 (STK emulator).
+*/
+
 namespace stk {
 
 /*! \class PlatformX86Win32

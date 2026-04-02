@@ -15,7 +15,7 @@
 #include "stk_sync_cv.h"
 
 /*! \file  stk_sync_rwmutex.h
-    \brief Implementation of synchronization primitive: Read-Write Mutex.
+    \brief Implementation of synchronization primitive: stk::sync::RWMutex.
 */
 
 namespace stk {

@@ -12,7 +12,7 @@
 
 /*! \file  stk_strategy_fpriority.h
     \brief Fixed-priority preemptive task-switching strategy with round-robin within each
-           priority level (SwitchStrategyFixedPriority / SwitchStrategyFP32).
+           priority level (stk::SwitchStrategyFixedPriority / stk::SwitchStrategyFP32).
 */
 
 #include "stk_common.h"

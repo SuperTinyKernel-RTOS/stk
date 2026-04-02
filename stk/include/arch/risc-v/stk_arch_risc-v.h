@@ -12,6 +12,10 @@
 
 #include "stk_common.h"
 
+/*! \file  stk_arch_risc-v.h
+    \brief Platform port for RISC-V.
+*/
+
 namespace stk {
 
 /*! \class PlatformRiscV

@@ -12,8 +12,8 @@
 
 #include "stk_sync_cv.h"
 
-/*! \file  stk_sync_event_flags.h
-    \brief Implementation of synchronization primitive: EventFlags.
+/*! \file  stk_sync_eventflags.h
+    \brief Implementation of synchronization primitive: stk::sync::EventFlags.
 */
 
 namespace stk {

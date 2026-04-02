@@ -16,7 +16,7 @@
 #include "stk_sync_cv.h"
 
 /*! \file  stk_sync_pipe.h
-    \brief Implementation of synchronization primitive: Pipe.
+    \brief Implementation of synchronization primitive: stk::sync::Pipe.
 */
 
 namespace stk {

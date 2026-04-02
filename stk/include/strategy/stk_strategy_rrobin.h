@@ -11,7 +11,7 @@
 #define STK_STRATEGY_RROBIN_H_
 
 /*! \file  stk_strategy_rrobin.h
-    \brief Round-Robin task-switching strategy (SwitchStrategyRoundRobin / SwitchStrategyRR).
+    \brief Round-Robin task-switching strategy (stk::SwitchStrategyRoundRobin / stk::SwitchStrategyRR).
 */
 
 #include "stk_common.h"

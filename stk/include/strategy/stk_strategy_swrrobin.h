@@ -12,7 +12,7 @@
 
 /*! \file  stk_strategy_swrrobin.h
     \brief Smooth Weighted Round-Robin task-switching strategy
-           (SwitchStrategySmoothWeightedRoundRobin / SwitchStrategySWRR).
+           (stk::SwitchStrategySmoothWeightedRoundRobin / stk::SwitchStrategySWRR).
 */
 
 #include "stk_common.h"

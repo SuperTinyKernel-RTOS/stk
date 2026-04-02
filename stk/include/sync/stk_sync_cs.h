@@ -13,7 +13,7 @@
 #include "stk_helper.h"
 
 /*! \file  stk_sync_cs.h
-    \brief Implementation of critical section primitive: ScopedCriticalSection.
+    \brief Implementation of synchronization primitive: stk::sync::ScopedCriticalSection.
 */
 
 namespace stk {

@@ -13,7 +13,7 @@
 #include "stk_sync_cs.h"
 
 /*! \file  stk_sync_cv.h
-    \brief Implementation of synchronization primitive: ConditionVariable.
+    \brief Implementation of synchronization primitive: stk::sync::ConditionVariable.
 */
 
 namespace stk {

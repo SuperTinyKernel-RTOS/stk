@@ -11,7 +11,7 @@
 #define STK_TIME_UTIL_H_
 
 /*! \file  stk_time_util.h
-    \brief Time-related utilities (PeriodicTrigger).
+    \brief Time-related utilities: stk::time::PeriodicTrigger.
 */
 
 namespace stk {

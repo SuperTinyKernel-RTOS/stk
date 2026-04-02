@@ -13,7 +13,7 @@
 #include "stk_sync_cs.h"
 
 /*! \file  stk_sync_semaphore.h
-    \brief Implementation of synchronization primitive: Semaphore.
+    \brief Implementation of synchronization primitive: stk::sync::Semaphore.
 */
 
 namespace stk {

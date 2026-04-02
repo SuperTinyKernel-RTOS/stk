@@ -13,7 +13,7 @@
 #include "stk_common.h"
 
 /*! \file  stk_sync_spinlock.h
-    \brief Implementation of synchronization primitive: SpinLock.
+    \brief Implementation of synchronization primitive: stk::sync::SpinLock.
 */
 
 namespace stk {

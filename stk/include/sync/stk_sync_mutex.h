@@ -13,7 +13,7 @@
 #include "stk_sync_cs.h"
 
 /*! \file  stk_sync_mutex.h
-    \brief Implementation of synchronization primitive: Mutex.
+    \brief Implementation of synchronization primitive: stk::sync::Mutex.
 */
 
 namespace stk {

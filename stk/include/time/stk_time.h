@@ -11,7 +11,7 @@
 #define STK_TIME_H_
 
 /*! \file  stk_time.h
-    \brief Implementation of time-related primitives.
+    \brief Collection of time-related primitives (\c stk::time namespace).
 */
 
 /*! \namespace stk::time

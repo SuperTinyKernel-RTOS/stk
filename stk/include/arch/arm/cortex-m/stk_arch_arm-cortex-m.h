@@ -12,6 +12,10 @@
 
 #include "stk_common.h"
 
+/*! \file  stk_arch_arm-cortex-m.h
+    \brief Platform port for ARM Cortex-M.
+*/
+
 namespace stk {
 
 /*! \class PlatformArmCortexM

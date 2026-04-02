@@ -13,7 +13,7 @@
 #include "stk_sync_cs.h"
 
 /*! \file  stk_sync_event.h
-    \brief Implementation of synchronization primitive: Event.
+    \brief Implementation of synchronization primitive: stk::sync::Event.
 */
 
 namespace stk {

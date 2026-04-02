@@ -14,7 +14,8 @@
 #include "sync/stk_sync_pipe.h"
 
 /*! \file  stk_time_timer.h
-    \brief Implementation of TimerHost, a software timer multiplexer that manages multiple Timer instances.
+    \brief Implementation of stk::time::TimerHost, a software timer multiplexer that manages multiple
+           stk::time::TimerHost::Timer instances.
 */
 
 namespace stk {

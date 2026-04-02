@@ -11,7 +11,7 @@
 #define STK_STRATEGY_EDF_H_
 
 /*! \file  stk_strategy_edf.h
-    \brief Earliest Deadline First (EDF) task-switching strategy (SwitchStrategyEDF).
+    \brief Earliest Deadline First (EDF) task-switching strategy (stk::SwitchStrategyEDF).
 */
 
 #include "stk_common.h"

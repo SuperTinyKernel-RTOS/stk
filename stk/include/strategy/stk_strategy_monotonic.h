@@ -12,7 +12,7 @@
 
 /*! \file  stk_strategy_monotonic.h
     \brief Rate-Monotonic (RM) and Deadline-Monotonic (DM) task-switching strategies
-           (SwitchStrategyMonotonic / SwitchStrategyRM / SwitchStrategyDM), and the
+           (stk::SwitchStrategyMonotonic / stk::SwitchStrategyRM / stk::SwitchStrategyDM), and the
            SchedulabilityCheck utility for Worst-Case Response Time (WCRT) analysis.
 */
 
