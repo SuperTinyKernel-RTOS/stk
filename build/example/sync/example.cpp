@@ -117,7 +117,7 @@ class CtrlTask : public stk::Task<TASK_STACK_SIZE, _AccessMode>
 private:
     void Run()
     {
-        int64_t task_start = stk::GetTimeNowMsec();
+        int64_t task_start = stk::GetTimeNowMs();
 
     #if !STK_EXAMPLE_USE_PIPE
         g_EventReady.Set();
@@ -134,13 +134,13 @@ private:
 
             // sleep 1s and delegate work to another task switching another LED, hw thread could have
             // some latency, thus account for it
-            int32_t sleep = 250 + (int32_t)(task_start - stk::GetTimeNowMsec());
+            int32_t sleep = 250 + (int32_t)(task_start - stk::GetTimeNowMs());
             if (sleep > 0)
                 stk::Sleep(sleep);
 
             led_sw = !led_sw;
 
-            task_start = stk::GetTimeNowMsec();
+            task_start = stk::GetTimeNowMs();
 
         #if STK_EXAMPLE_USE_PIPE
             if (!g_CtrlSignalPipe.Write(led_sw ? LED_ON : LED_OFF))

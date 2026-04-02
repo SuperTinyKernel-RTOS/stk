@@ -223,9 +223,9 @@ private:
         {
             // Read() on empty pipe with short timeout must expire and return false
             int32_t value   = -1;
-            int64_t start   = GetTimeNowMsec();
+            int64_t start   = GetTimeNowMs();
             bool    ok      = g_TestPipe.Read(value, 50);
-            int64_t elapsed = GetTimeNowMsec() - start;
+            int64_t elapsed = GetTimeNowMs() - start;
 
             if (!ok && elapsed >= 45 && elapsed <= 65)
                 ++g_SharedCounter; // 1: read timeout returned false in correct window
@@ -241,9 +241,9 @@ private:
                 g_TestPipe.Write(i, _STK_PIPE_TEST_TIMEOUT);
 
             // Write() on full pipe with short timeout must expire and return false
-            int64_t start   = GetTimeNowMsec();
+            int64_t start   = GetTimeNowMs();
             bool    ok      = g_TestPipe.Write(99, 50);
-            int64_t elapsed = GetTimeNowMsec() - start;
+            int64_t elapsed = GetTimeNowMs() - start;
 
             if (!ok && elapsed >= 45 && elapsed <= 65)
                 ++g_SharedCounter; // 2: write timeout returned false in correct window

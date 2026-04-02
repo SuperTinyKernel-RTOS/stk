@@ -31,10 +31,10 @@ TEST(KernelService, GetMsecToTicks)
     mock.m_ticks = 1;
 
     mock.m_resolution = 1000;
-    CHECK_EQUAL(10, (int32_t)GetMsecFromTicks(10, mock.GetTickResolution()));
+    CHECK_EQUAL(10, (int32_t)GetMsFromTicks(10, mock.GetTickResolution()));
 
     mock.m_resolution = 10000;
-    CHECK_EQUAL(100, (int32_t)GetMsecFromTicks(10, mock.GetTickResolution()));
+    CHECK_EQUAL(100, (int32_t)GetMsFromTicks(10, mock.GetTickResolution()));
 }
 
 static struct DelayContext
@@ -156,7 +156,7 @@ TEST(KernelService, GetTicks)
     CHECK_EQUAL(2, (int32_t)stk::GetTicks());
 }
 
-TEST(KernelService, GetTimeNowMsec)
+TEST(KernelService, GetTimeNowMs)
 {
     Kernel<KERNEL_STATIC, 1, SwitchStrategyRR, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task1;
@@ -166,17 +166,17 @@ TEST(KernelService, GetTimeNowMsec)
     kernel.AddTask(&task1);
     kernel.Start();
 
-    CHECK_EQUAL(0, (int32_t)stk::GetTimeNowMsec());
+    CHECK_EQUAL(0, (int32_t)stk::GetTimeNowMs());
 
     // make 1000 ticks
     for (int32_t i = 0; i < 1000; ++i)
         platform->ProcessTick();
 
     // 1000 usec * 1000 ticks = 1000 ms
-    CHECK_EQUAL(1000, (int32_t)stk::GetTimeNowMsec());
+    CHECK_EQUAL(1000, (int32_t)stk::GetTimeNowMs());
 }
 
-TEST(KernelService, GetTimeNowMsecWith10UsecTick)
+TEST(KernelService, GetTimeNowMsWith10UsecTick)
 {
     Kernel<KERNEL_STATIC, 1, SwitchStrategyRR, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task1;
@@ -187,14 +187,14 @@ TEST(KernelService, GetTimeNowMsecWith10UsecTick)
     kernel.AddTask(&task1);
     kernel.Start();
 
-    CHECK_EQUAL(0, (int32_t)stk::GetTimeNowMsec());
+    CHECK_EQUAL(0, (int32_t)stk::GetTimeNowMs());
 
     // make 1000 ticks
     for (int32_t i = 0; i < 1000; ++i)
         platform->ProcessTick();
 
     // 10 usec * 1000 ticks = 10 ms
-    CHECK_EQUAL(10, (int32_t)stk::GetTimeNowMsec());
+    CHECK_EQUAL(10, (int32_t)stk::GetTimeNowMs());
 }
 
 static struct SwitchToNextRelaxCpuContext

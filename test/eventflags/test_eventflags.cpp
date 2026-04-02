@@ -327,9 +327,9 @@ private:
             stk::Sleep(_STK_EF_TEST_SHORT_SLEEP);
 
             // Wait with a 50-tick timeout; must expire before task 0 fires Set()
-            int64_t start   = GetTimeNowMsec();
+            int64_t start   = GetTimeNowMs();
             uint32_t result = g_Flags.Wait(FLAG_A, sync::EventFlags::OPT_WAIT_ANY, 50);
-            int64_t elapsed = GetTimeNowMsec() - start;
+            int64_t elapsed = GetTimeNowMs() - start;
 
             if ((result == sync::EventFlags::ERROR_TIMEOUT) && (elapsed >= 45) && (elapsed <= 60))
                 ++g_SharedCounter;
@@ -381,9 +381,9 @@ private:
         if (m_task_id == 1)
         {
             // TryWait on a non-set flag must return immediately with an error
-            int64_t  start   = GetTimeNowMsec();
+            int64_t  start   = GetTimeNowMs();
             uint32_t result  = g_Flags.TryWait(FLAG_A);
-            int64_t  elapsed = GetTimeNowMsec() - start;
+            int64_t  elapsed = GetTimeNowMs() - start;
 
             if (sync::EventFlags::IsError(result) && (elapsed < _STK_EF_TEST_SHORT_SLEEP))
                 ++g_SharedCounter;
@@ -394,9 +394,9 @@ private:
             // Set FLAG_A then TryWait; must succeed and auto-clear
             g_Flags.Set(FLAG_A);
 
-            int64_t  start   = GetTimeNowMsec();
+            int64_t  start   = GetTimeNowMs();
             uint32_t result  = g_Flags.TryWait(FLAG_A);
-            int64_t  elapsed = GetTimeNowMsec() - start;
+            int64_t  elapsed = GetTimeNowMs() - start;
 
             if (!sync::EventFlags::IsError(result) && (elapsed < _STK_EF_TEST_SHORT_SLEEP))
                 ++g_SharedCounter;

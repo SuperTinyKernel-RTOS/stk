@@ -68,7 +68,7 @@ public:
     {
         ++g_ExpiredCount;
         g_LastExpired[m_timer_id].Set();
-        g_ExpiredTime[m_timer_id] = GetTimeNowMsec();
+        g_ExpiredTime[m_timer_id] = GetTimeNowMs();
     }
 };
 
@@ -93,7 +93,7 @@ private:
 
         if (m_task_id == 1)
         {
-            int64_t start = GetTimeNowMsec();
+            int64_t start = GetTimeNowMs();
             g_TimerHost.Start(timer, 50); // 50-tick one-shot
 
             // Wait until timer fires
@@ -309,7 +309,7 @@ private:
                 stk::Sleep(_STK_TIMER_TEST_SHORT_SLEEP);
 
             // Reset: deadline should be now + 40ms
-            int64_t reset_time = GetTimeNowMsec();
+            int64_t reset_time = GetTimeNowMs();
             g_TimerHost.Reset(timer);
 
             // Wait for second firing
@@ -375,7 +375,7 @@ private:
             // Restart is asynchronous, wait for command to process
             stk::Sleep(2);
 
-            int64_t restart_time = GetTimeNowMsec();
+            int64_t restart_time = GetTimeNowMs();
 
             // Wait for next firing (count increases beyond count_before_restart)
             while (g_ExpiredCount <= count_before_restart)
@@ -452,7 +452,7 @@ private:
             // StartOrReset is asynchronous, wait for command to process
             stk::Sleep(2);
 
-            int64_t reset_time = GetTimeNowMsec();
+            int64_t reset_time = GetTimeNowMs();
 
             // Wait for second firing (count increases from 1 to 2)
             while (g_ExpiredCount == 1)

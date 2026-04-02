@@ -662,10 +662,6 @@ public:
             \return True if event is handled otherwise False to let driver handle it.
         */
         virtual bool OnHardFault() = 0;
-
-    private:
-        ~IEventOverrider()
-        {}
     };
 
     /*! \brief     Initialize scheduler's context.
@@ -944,26 +940,23 @@ public:
     /*! \brief     Delay calling process.
         \note      Unlike Sleep this function delays code execution by spinning in a loop until deadline expiry.
         \note      Use with care in HRT mode to avoid missed deadline (see stk::KERNEL_HRT, ITask::OnDeadlineMissed).
-        \param[in] msec: Delay time (milliseconds).
+        \param[in] ticks: Delay time (ticks).
         \warning   ISR-unsafe.
+        \see       Delay
     */
-    virtual void Delay(Timeout msec) = 0;
+    virtual void Delay(Timeout ticks) = 0;
 
     /*! \brief     Put calling process into a sleep state.
         \note      Unlike Delay this function does not waste CPU cycles and allows kernel to put CPU into a low-power state.
         \note      Unsupported in HRT mode (see stk::KERNEL_HRT); in HRT mode tasks sleep automatically according to their periodicity and workload.
-        \param[in] msec: Sleep time (milliseconds).
+        \param[in] ticks: Sleep time (ticks).
         \warning   ISR-unsafe.
-        \warning   Caller must lock the hw::CriticalSection with hw::CriticalSection::Enter() before calling this function.
-                   Kernel will exit the hw::CriticalSection with hw::CriticalSection::Exit() upon return from this function.
     */
-    virtual void Sleep(Timeout msec) = 0;
+    virtual void Sleep(Timeout ticks) = 0;
 
     /*! \brief     Notify scheduler to switch to the next task (yield).
         \note      A cooperation mechanism in HRT mode (see stk::KERNEL_HRT).
         \warning   ISR-unsafe.
-        \warning   Caller must lock the hw::CriticalSection with hw::CriticalSection::Enter() before calling this function.
-                   Kernel will exit the hw::CriticalSection with hw::CriticalSection::Exit() upon return from this function.
     */
     virtual void SwitchToNext() = 0;
 

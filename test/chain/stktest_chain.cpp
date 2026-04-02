@@ -61,7 +61,7 @@ template<> void TestTask<ACCESS_PRIVILEGED>::Run()
 {
     uint8_t task_id = m_task_id;
 
-    g_Time[task_id] = stk::GetTimeNowMsec();
+    g_Time[task_id] = stk::GetTimeNowMs();
 
     printf("id=%d time=%d\n", task_id, (int)g_Time[task_id]);
 

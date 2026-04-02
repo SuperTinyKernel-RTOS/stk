@@ -51,11 +51,11 @@ private:
         // task 1: sleep 200 ms
         // task 2: sleep 300 ms
 
-        int64_t start = GetTimeNowMsec();
+        int64_t start = GetTimeNowMs();
 
         stk::Sleep(_STK_SLEEP_TEST_SLEEP_TIME * (m_task_id + 1));
 
-        int64_t diff = GetTimeNowMsec() - start;
+        int64_t diff = GetTimeNowMs() - start;
 
         printf("id=%d time=%d\n", m_task_id, (int)diff);
 

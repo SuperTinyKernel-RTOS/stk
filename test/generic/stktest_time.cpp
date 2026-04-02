@@ -16,7 +16,7 @@ namespace test {
 // ============================= PeriodicTimer ================================ //
 // ============================================================================ //
 
-//! Mock of GetTimeNowMsec().
+//! Mock of GetTimeNowMs().
 namespace stk
 {
     static struct KernelServiceMock : public IKernelService
@@ -28,8 +28,8 @@ namespace stk
         TId GetTid() const { return 0; }
         Ticks GetTicks() const { return ticks; }
         int32_t GetTickResolution() const { return resolution; }
-        void Delay(Timeout msec) { (void)msec; }
-        void Sleep(Timeout msec) { (void)msec; }
+        void Delay(Timeout ticks) { (void)ticks; }
+        void Sleep(Timeout ticks) { (void)ticks; }
         void SwitchToNext() {}
         IWaitObject *Wait(ISyncObject *sobj, IMutex *mutex, Timeout timeout)
         {
@@ -46,7 +46,7 @@ namespace stk
         test::g_KernelService = &s_KernelServiceMock;
 
         s_KernelServiceMock.resolution = 1000;
-        s_KernelServiceMock.ticks = GetTicksFromMsec(now, s_KernelServiceMock.resolution);
+        s_KernelServiceMock.ticks = GetTicksFromMs(now, s_KernelServiceMock.resolution);
     }
 }
 

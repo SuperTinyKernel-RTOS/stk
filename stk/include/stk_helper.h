@@ -216,8 +216,6 @@ private:
 */
 __stk_forceinline TId GetTid()
 {
-    STK_ASSERT(!hw::IsInsideISR());
-
     return IKernelService::GetInstance()->GetTid();
 }
 
@@ -227,20 +225,20 @@ __stk_forceinline TId GetTid()
     \return    Equivalent time in milliseconds.
     \note      ISR-safe (performs only arithmetic, no kernel calls).
 */
-__stk_forceinline int64_t GetMsecFromTicks(int64_t ticks, int32_t resolution)
+__stk_forceinline int64_t GetMsFromTicks(int64_t ticks, int32_t resolution)
 {
     return (ticks * resolution) / 1000;
 }
 
 /*! \brief     Convert milliseconds to ticks.
-    \param[in] msec: Time in milliseconds to convert.
+    \param[in] ms: Time in milliseconds to convert.
     \param[in] resolution: Microseconds per tick, as returned by IKernelService::GetTickResolution().
     \return    Equivalent tick count.
     \note      ISR-safe (performs only arithmetic, no kernel calls).
 */
-__stk_forceinline Ticks GetTicksFromMsec(int64_t msec, int32_t resolution)
+__stk_forceinline Ticks GetTicksFromMs(int64_t ms, int32_t resolution)
 {
-    return msec * 1000 / resolution;
+    return ms * 1000 / resolution;
 }
 
 /*! \brief     Get number of ticks elapsed since kernel start.
@@ -263,15 +261,15 @@ __stk_forceinline int32_t GetTickResolution()
 }
 
 /*! \brief     Convert milliseconds to ticks using the current kernel tick resolution.
-    \param[in] msec: Time in milliseconds to convert.
+    \param[in] ms: Time in milliseconds to convert.
     \return    Equivalent tick count.
     \note      Convenience overload that queries GetTickResolution() automatically.
-               Use the two-argument form GetTicksFromMsec(msec, resolution) in ISR context.
+               Use the two-argument form GetTicksFromMsec(ms, resolution) in ISR context.
     \warning   ISR-unsafe (internally calls GetTickResolution() which accesses the kernel service).
 */
-__stk_forceinline Ticks GetTicksFromMsec(int64_t msec)
+__stk_forceinline Ticks GetTicksFromMs(int64_t ms)
 {
-    return GetTicksFromMsec(msec, GetTickResolution());
+    return GetTicksFromMs(ms, GetTickResolution());
 }
 
 /*! \brief     Get current time in milliseconds since kernel start.
@@ -280,7 +278,7 @@ __stk_forceinline Ticks GetTicksFromMsec(int64_t msec)
     \note      When the tick resolution is exactly 1000 µs (1 ms, the default PERIODICITY_DEFAULT),
                the tick count is returned directly without multiplication, avoiding a 64-bit multiply.
 */
-__stk_forceinline int64_t GetTimeNowMsec()
+static inline int64_t GetTimeNowMs()
 {
     IKernelService *service = IKernelService::GetInstance();
     int32_t resolution = service->GetTickResolution();
@@ -294,37 +292,55 @@ __stk_forceinline int64_t GetTimeNowMsec()
 /*! \brief     Delay calling process by busy-waiting until the deadline expires.
     \note      Unlike Sleep this function delays code execution by spinning in a loop until deadline expiry.
     \note      Use with care in HRT mode to avoid missed deadline (see stk::KERNEL_HRT, ITask::OnDeadlineMissed).
-    \param[in] msec: Delay time (milliseconds).
-    \warning   ISR-unsafe. Calling from an ISR would spin indefinitely, deadlocking the system.
+    \param[in] ticks: Delay time (ticks).
+    \warning   ISR-unsafe. Calling from an ISR context is not permitted and will trigger an assertion.
 */
-__stk_forceinline void Delay(uint32_t msec)
+__stk_forceinline void Delay(uint32_t ticks)
 {
-    STK_ASSERT(!hw::IsInsideISR());
+    IKernelService::GetInstance()->Delay(ticks);
+}
 
-    IKernelService::GetInstance()->Delay(msec);
+/*! \brief     Delay calling process by busy-waiting until the deadline expires.
+    \note      Unlike Sleep this function delays code execution by spinning in a loop until deadline expiry.
+    \note      Use with care in HRT mode to avoid missed deadline (see stk::KERNEL_HRT, ITask::OnDeadlineMissed).
+    \param[in] ms: Delay time (milliseconds).
+    \warning   ISR-unsafe. Calling from an ISR context is not permitted and will trigger an assertion.
+*/
+static inline void DelayMs(uint32_t ms)
+{
+    Delay(static_cast<Timeout>(GetTicksFromMs(ms)));
 }
 
 /*! \brief     Put calling process into a sleep state.
     \note      Unlike Delay this function does not waste CPU cycles and allows kernel to put CPU into a low-power state.
     \note      Unsupported in HRT mode (see stk::KERNEL_HRT); in HRT mode tasks sleep automatically according to their periodicity and workload.
-    \param[in] msec: Sleep time (milliseconds).
-    \warning   ISR-unsafe. Calling from an ISR would block the scheduler indefinitely, deadlocking the system.
+    \param[in] ticks: Sleep time (ticks).
+    \warning   ISR-unsafe. Calling from an ISR context is not permitted and will trigger an assertion.
 */
-__stk_forceinline void Sleep(uint32_t msec)
+__stk_forceinline void Sleep(uint32_t ticks)
 {
-    STK_ASSERT(!hw::IsInsideISR());
+    IKernelService::GetInstance()->Sleep(ticks);
+}
 
-    IKernelService::GetInstance()->Sleep(msec);
+/*! \brief     Put calling process into a sleep state.
+    \note      Unlike Delay this function does not waste CPU cycles and allows kernel to put CPU into a low-power state.
+    \note      Unsupported in HRT mode (see stk::KERNEL_HRT); in HRT mode tasks sleep automatically according to their periodicity and workload.
+    \note      Converts ms to ticks and calls IKernelService::SleepTicks() which schedules the calling
+               task to sleep and spins until the kernel switches it back in.
+    \param[in] ms: Sleep time (milliseconds).
+    \warning   ISR-unsafe. Calling from an ISR context is not permitted and will trigger an assertion.
+*/
+static inline void SleepMs(uint32_t ms)
+{
+    Sleep(static_cast<Timeout>(GetTicksFromMs(ms)));
 }
 
 /*! \brief     Notify scheduler to switch to the next runnable task.
     \note      A cooperative scheduling mechanism. In HRT mode acts as a cooperation point (see stk::KERNEL_HRT).
-    \warning   ISR-unsafe. Calling from an ISR would block the scheduler indefinitely, deadlocking the system.
+    \warning   ISR-unsafe. Calling from an ISR context is not permitted and will trigger an assertion.
 */
 __stk_forceinline void Yield()
 {
-    STK_ASSERT(!hw::IsInsideISR());
-
     IKernelService::GetInstance()->SwitchToNext();
 }
 

@@ -43,7 +43,7 @@ HeartbeatTimer g_Heartbeat;
 g_TimerHost.Initialize(&g_Kernel, stk::ACCESS_USER);
 
 // Start 500ms periodic heartbeat
-uint32_t period = stk::GetTicksFromMsec(500);
+uint32_t period = stk::GetTicksFromMs(500);
 g_TimerHost.Start(g_Heartbeat, period, period);
 ```
 
