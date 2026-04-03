@@ -162,6 +162,11 @@ public:
         m_event_handler->OnTaskSleep(GetCallerSP(), ticks);
     }
 
+    void SleepUntil(Ticks timestamp)
+    {
+        m_event_handler->OnTaskSleepUntil(GetCallerSP(), timestamp);
+    }
+
     IWaitObject *Wait(ISyncObject *sobj, IMutex *mutex, Timeout timeout)
     {
         return m_event_handler->OnTaskWait(GetCallerSP(), sobj, mutex, timeout);
@@ -291,6 +296,11 @@ public:
     void Sleep(Timeout ticks)
     {
         (void)ticks;
+    }
+
+    void SleepUntil(Ticks timestamp)
+    {
+        (void)timestamp;
     }
 
     void SwitchToNext()

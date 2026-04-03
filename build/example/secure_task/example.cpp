@@ -79,7 +79,7 @@ class CtrlTask : public stk::Task<256, _AccessMode>
 private:
     void Run()
     {
-        int64_t task_start = stk::GetTimeNowMsec();
+        int64_t task_start = stk::GetTimeNowMs();
 
         while (true)
         {
@@ -94,7 +94,7 @@ private:
 
             // sleep 1s and delegate work to another task switching another LED, hw thread could have
             // some latency, thus account for it
-            int32_t sleep = 1000 + (int32_t)(task_start - stk::GetTimeNowMsec());
+            int32_t sleep = 1000 + (int32_t)(task_start - stk::GetTimeNowMs());
             if (sleep > 0)
                 stk::Sleep(sleep);
 
@@ -111,7 +111,7 @@ private:
                 break;
             }
 
-            task_start = stk::GetTimeNowMsec();
+            task_start = stk::GetTimeNowMs();
         }
     }
 };

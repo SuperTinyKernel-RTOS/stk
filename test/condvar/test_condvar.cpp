@@ -190,9 +190,9 @@ private:
             stk::Sleep(_STK_CV_TEST_SHORT_SLEEP);
 
             g_TestMutex.Lock();
-            int64_t start   = GetTimeNowMsec();
+            int64_t start   = GetTimeNowMs();
             bool    woken   = g_TestCond.Wait(g_TestMutex, 50);
-            int64_t elapsed = GetTimeNowMsec() - start;
+            int64_t elapsed = GetTimeNowMs() - start;
             g_TestMutex.Unlock();
 
             // Must return false (timeout), and elapsed must be within the 50-tick window
@@ -456,9 +456,9 @@ private:
         {
             // NO_WAIT must return false immediately with no blocking
             g_TestMutex.Lock();
-            int64_t start   = GetTimeNowMsec();
+            int64_t start   = GetTimeNowMs();
             bool    woken   = g_TestCond.Wait(g_TestMutex, NO_WAIT);
-            int64_t elapsed = GetTimeNowMsec() - start;
+            int64_t elapsed = GetTimeNowMs() - start;
             g_TestMutex.Unlock();
 
             if (!woken && elapsed < _STK_CV_TEST_SHORT_SLEEP)

@@ -187,9 +187,9 @@ private:
             // Task 1: Try to acquire while held — must fail immediately
             stk::Sleep(_STK_MUTEX_TEST_SHORT_SLEEP); // Let task 0 acquire first
 
-            int64_t start = GetTimeNowMsec();
+            int64_t start = GetTimeNowMs();
             bool acquired = g_TestMutex.TryLock();
-            int64_t elapsed = GetTimeNowMsec() - start;
+            int64_t elapsed = GetTimeNowMs() - start;
 
             if (!acquired && (elapsed < _STK_MUTEX_TEST_SHORT_SLEEP))
                 g_TestResult = 1;
@@ -234,9 +234,9 @@ private:
             // Task 1: Try to acquire with timeout
             stk::Sleep(_STK_MUTEX_TEST_SHORT_SLEEP); // Let task 0 acquire first
 
-            int64_t start = GetTimeNowMsec();
+            int64_t start = GetTimeNowMs();
             bool acquired = g_TestMutex.TimedLock(50); // 50ms timeout
-            int64_t elapsed = GetTimeNowMsec() - start;
+            int64_t elapsed = GetTimeNowMs() - start;
 
             // Should timeout after ~50ms
             if (!acquired && elapsed >= 45 && elapsed <= 60)

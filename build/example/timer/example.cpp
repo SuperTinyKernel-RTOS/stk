@@ -74,8 +74,8 @@ void RunExample()
 
     g_Kernel.Initialize();
     g_Timers.Initialize(&g_Kernel, stk::ACCESS_PRIVILEGED);
-    g_Timers.Start(g_LedTimer, 0, stk::GetTicksFromMsec(1000)); // periodic timer, triggered every 1s
-    g_Timers.Start(g_ShutdownTimer, stk::GetTicksFromMsec(20000), 0); // one-shot timer, triggered once in 20s
+    g_Timers.Start(g_LedTimer, 0, stk::GetTicksFromMs(1000)); // periodic timer, triggered every 1s
+    g_Timers.Start(g_ShutdownTimer, stk::GetTicksFromMs(20000), 0); // one-shot timer, triggered once in 20s
     g_Kernel.Start();
 
     for (;;) {}

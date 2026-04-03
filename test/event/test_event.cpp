@@ -226,9 +226,9 @@ private:
             // Task 1: Wait with 50-tick timeout; must expire before task 0 fires Set()
             stk::Sleep(_STK_EVT_TEST_SHORT_SLEEP);
 
-            int64_t start   = GetTimeNowMsec();
+            int64_t start   = GetTimeNowMs();
             bool acquired   = g_TestEvent.Wait(50);
-            int64_t elapsed = GetTimeNowMsec() - start;
+            int64_t elapsed = GetTimeNowMs() - start;
 
             if (!acquired && elapsed >= 45 && elapsed <= 60)
                 ++g_SharedCounter;
@@ -278,9 +278,9 @@ private:
         if (m_task_id == 1)
         {
             // TryWait on a non-signaled event must return false immediately
-            int64_t start   = GetTimeNowMsec();
+            int64_t start   = GetTimeNowMs();
             bool acquired   = g_TestEvent.TryWait();
-            int64_t elapsed = GetTimeNowMsec() - start;
+            int64_t elapsed = GetTimeNowMs() - start;
 
             if (!acquired && elapsed < _STK_EVT_TEST_SHORT_SLEEP)
                 ++g_SharedCounter;
@@ -291,9 +291,9 @@ private:
             // Signal the event, then TryWait must return true and auto-reset it
             g_TestEvent.Set();
 
-            int64_t start   = GetTimeNowMsec();
+            int64_t start   = GetTimeNowMs();
             bool acquired   = g_TestEvent.TryWait();
-            int64_t elapsed = GetTimeNowMsec() - start;
+            int64_t elapsed = GetTimeNowMs() - start;
 
             if (acquired && elapsed < _STK_EVT_TEST_SHORT_SLEEP)
                 ++g_SharedCounter;

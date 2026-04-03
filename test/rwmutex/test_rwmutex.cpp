@@ -209,9 +209,9 @@ private:
             // Writer: wait briefly then attempt write lock (should not starve)
             stk::Sleep(_STK_RWMUTEX_TEST_SHORT_SLEEP);
 
-            int64_t start = GetTimeNowMsec();
+            int64_t start = GetTimeNowMs();
             g_TestRWMutex.Lock();
-            int64_t elapsed = GetTimeNowMsec() - start;
+            int64_t elapsed = GetTimeNowMs() - start;
 
             // Verify writer acquired within reasonable time (< 200ms)
             if (elapsed < 200)
@@ -260,9 +260,9 @@ private:
             stk::Sleep(_STK_RWMUTEX_TEST_SHORT_SLEEP);
 
             // TimedReadLock(50) must time out
-            int64_t start = GetTimeNowMsec();
+            int64_t start = GetTimeNowMs();
             bool acquired = g_TestRWMutex.TimedReadLock(50);
-            int64_t elapsed = GetTimeNowMsec() - start;
+            int64_t elapsed = GetTimeNowMs() - start;
 
             if (!acquired && elapsed >= 45 && elapsed <= 65)
                 ++g_SharedCounter; // 2: timed out correctly
@@ -328,9 +328,9 @@ private:
             stk::Sleep(_STK_RWMUTEX_TEST_SHORT_SLEEP);
 
             // TimedLock(50) must time out
-            int64_t start = GetTimeNowMsec();
+            int64_t start = GetTimeNowMs();
             bool acquired = g_TestRWMutex.TimedLock(50);
-            int64_t elapsed = GetTimeNowMsec() - start;
+            int64_t elapsed = GetTimeNowMs() - start;
 
             if (!acquired && elapsed >= 45 && elapsed <= 65)
                 ++g_SharedCounter; // 2: timed out correctly
@@ -393,9 +393,9 @@ private:
                 stk::Yield();
 
             // TryReadLock must fail immediately while writer holds lock
-            int64_t start = GetTimeNowMsec();
+            int64_t start = GetTimeNowMs();
             bool acquired = g_TestRWMutex.TryReadLock();
-            int64_t elapsed = GetTimeNowMsec() - start;
+            int64_t elapsed = GetTimeNowMs() - start;
 
             if (!acquired && elapsed < _STK_RWMUTEX_TEST_SHORT_SLEEP)
                 ++g_SharedCounter; // 2: correctly failed immediately
@@ -469,9 +469,9 @@ private:
             while (g_ReaderCount < 2)
                 stk::Yield();
 
-            int64_t start = GetTimeNowMsec();
+            int64_t start = GetTimeNowMs();
             g_TestRWMutex.Lock();
-            int64_t elapsed = GetTimeNowMsec() - start;
+            int64_t elapsed = GetTimeNowMs() - start;
 
             // Verify woken quickly after last reader released (< 50ms)
             if (g_SharedCounter == 1 && elapsed < 50)

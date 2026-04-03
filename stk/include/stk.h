@@ -23,8 +23,8 @@
 
     Include this single header in user application code. It transitively pulls in:
      - stk_helper.h             — Task, TaskW, StackMemoryWrapper; and free-function helpers:
-                                   GetTid, GetTicks, GetTickResolution, GetTicksFromMsec,
-                                   GetMsecFromTicks, GetTimeNowMsec, Delay, Sleep, Yield.
+                                  GetTid, GetTicks, GetTickResolution, GetTicksFromMsec,
+                                  GetMsecFromTicks, GetTimeNowMsec, Delay, Sleep, SleepUntil, Yield.
      - stk_strategy_rrobin.h    — SwitchStrategyRoundRobin.
      - stk_strategy_swrrobin.h  — SwitchStrategySmoothWeightedRoundRobin.
      - stk_strategy_monotonic.h — SwitchStrategyMonotonic (SRT rate-monotonic).
@@ -127,7 +127,7 @@ protected:
         {
             STATE_NONE           = 0,        //!< No pending state flags.
             STATE_REMOVE_PENDING = (1 << 0), //!< Task returned from its Run function; slot will be freed on the next tick (KERNEL_DYNAMIC only).
-            STATE_SLEEP_PENDING  = (1 << 1)  //!< Task called Sleep/Yield; strategy's OnTaskSleep() will be invoked on the next tick (sleep-aware strategies only).
+            STATE_SLEEP_PENDING  = (1 << 1)  //!< Task called Sleep/SleepUntil/Yield; strategy's OnTaskSleep() will be invoked on the next tick (sleep-aware strategies only).
         };
 
     public:
@@ -608,9 +608,14 @@ protected:
     public:
         /*! \brief  Get the TId of the calling task.
             \return TId via platform->GetTid(), which resolves by stack pointer.
-            \warning ISR-unsafe. Asserted in the helper-layer wrapper stk::GetTid().
+            \warning ISR-unsafe.
         */
-        TId GetTid() const { return m_platform->GetTid(); }
+        TId GetTid() const
+        {
+            STK_ASSERT(!hw::IsInsideISR());
+
+            return m_platform->GetTid();
+        }
 
         /*! \brief  Get the current tick count since kernel start.
             \return Atomically-read 64-bit tick counter (via hw::ReadVolatile64).
@@ -624,32 +629,57 @@ protected:
         */
         int32_t GetTickResolution() const  { return m_platform->GetTickResolution(); }
 
-        /*! \brief     Busy-wait until \a msec milliseconds have elapsed.
-            \param[in] msec: Delay in milliseconds.
+        /*! \brief     Busy-wait until \a ticks have elapsed.
+            \param[in] ticks: Delay time in ticks.
             \note      Spins calling __stk_relax_cpu() in a loop. Does not yield the CPU.
             \warning   ISR-unsafe. In HRT mode, long busy-waits will cause deadline misses.
         */
-        __stk_attr_noinline void Delay(Timeout msec)
+        __stk_attr_noinline void Delay(Timeout ticks)
         {
-            Ticks deadline = GetTicks() + GetTicksFromMsec(msec, GetTickResolution());
-            while (GetTicks() < deadline)
+            STK_ASSERT(!hw::IsInsideISR());
+
+            Ticks now = GetTicks();
+            const Ticks deadline = now + ticks;
+            STK_ASSERT(deadline >= now);
+
+            for (; now < deadline; now = GetTicks())
             {
                 __stk_relax_cpu();
             }
         }
 
-        /*! \brief     Yield the CPU for \a msec milliseconds, allowing the scheduler to run other tasks.
-            \param[in] msec: Sleep time in milliseconds.
-            \note      Converts msec to ticks and calls platform->Sleep() which schedules the calling
-                       task to sleep and spins until the kernel switches it back in.
+        /*! \brief     Yield the CPU for \a ticks, allowing the scheduler to run other tasks.
+            \param[in] ticks: Sleep time in ticks.
             \warning   ISR-unsafe. Asserts (never returns) in KERNEL_HRT mode — HRT tasks sleep
                        automatically according to their periodicity, not via explicit Sleep() calls.
         */
-        __stk_attr_noinline void Sleep(Timeout msec)
+        __stk_attr_noinline void Sleep(Timeout ticks)
         {
+            STK_ASSERT(!hw::IsInsideISR());
+
             if (!IsHrtMode())
             {
-                m_platform->Sleep((Timeout)GetTicksFromMsec(msec, GetTickResolution()));
+                m_platform->Sleep(ticks);
+            }
+            else
+            {
+                // sleeping is not supported in HRT mode, task will sleep according to its periodicity and workload
+                STK_ASSERT(false);
+            }
+        }
+
+        /*! \brief     Yield the CPU till \a timestamp, allowing the scheduler to run other tasks.
+            \param[in] timestamp: Absolute time, a deadline for a sleep period.
+            \warning   ISR-unsafe. Asserts (never returns) in KERNEL_HRT mode — HRT tasks sleep
+                       automatically according to their periodicity, not via explicit SleepUntil() calls.
+        */
+        __stk_attr_noinline void SleepUntil(Ticks timestamp)
+        {
+            STK_ASSERT(!hw::IsInsideISR());
+
+            if (!IsHrtMode())
+            {
+                m_platform->SleepUntil(timestamp);
             }
             else
             {
@@ -663,7 +693,12 @@ protected:
                    another task on the very next tick. The calling task is rescheduled promptly.
             \warning ISR-unsafe.
         */
-        void SwitchToNext() { m_platform->SwitchToNext(); }
+        void SwitchToNext()
+        {
+            STK_ASSERT(!hw::IsInsideISR());
+
+            m_platform->SwitchToNext();
+        }
 
         /*! \brief     Block the calling task until a synchronization object signals or the timeout expires.
             \param[in] sobj: Sync object to wait on. Must belong to this kernel's m_sync_list or be unregistered.
@@ -1325,6 +1360,33 @@ protected:
 
             if (IsHrtMode())
                 task->HrtOnWorkCompleted();
+
+            task->ScheduleSleep(ticks);
+        }
+
+        // note: we do not spin long here, kernel will switch this task out from scheduling on the next tick
+        while (task->IsSleeping())
+        {
+            __stk_relax_cpu();
+        }
+    }
+
+    void OnTaskSleepUntil(Word caller_SP, Ticks timestamp)
+    {
+        STK_ASSERT(!IsHrtMode());
+
+        KernelTask *task = FindTaskBySP(caller_SP);
+        STK_ASSERT(task != nullptr);
+
+        // make change to HRT state and sleep time atomic
+        {
+            hw::CriticalSection::ScopedLock cs_;
+
+            Ticks ticks = timestamp - m_service.m_ticks;
+
+            // if provided timestamp expired, just ignore any sleep for this task
+            if (ticks <= 0)
+                return;
 
             task->ScheduleSleep(ticks);
         }

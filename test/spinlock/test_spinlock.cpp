@@ -209,9 +209,9 @@ private:
             while (g_SharedCounter == 0)
                 stk::Yield();
 
-            int64_t start   = GetTimeNowMsec();
+            int64_t start   = GetTimeNowMs();
             bool acquired   = g_TestSpinLock.TryLock();
-            int64_t elapsed = GetTimeNowMsec() - start;
+            int64_t elapsed = GetTimeNowMs() - start;
 
             // Must fail immediately: task 0 holds the lock
             if (!acquired && elapsed < _STK_SL_TEST_SHORT_SLEEP)

@@ -31,10 +31,10 @@ TEST(KernelService, GetMsecToTicks)
     mock.m_ticks = 1;
 
     mock.m_resolution = 1000;
-    CHECK_EQUAL(10, (int32_t)GetMsecFromTicks(10, mock.GetTickResolution()));
+    CHECK_EQUAL(10, (int32_t)GetMsFromTicks(10, mock.GetTickResolution()));
 
     mock.m_resolution = 10000;
-    CHECK_EQUAL(100, (int32_t)GetMsecFromTicks(10, mock.GetTickResolution()));
+    CHECK_EQUAL(100, (int32_t)GetMsFromTicks(10, mock.GetTickResolution()));
 }
 
 static struct DelayContext
@@ -80,6 +80,25 @@ TEST(KernelService, Delay)
     g_RelaxCpuHandler = NULL;
 
     CHECK_EQUAL(10, (int32_t)g_KernelService->GetTicks());
+}
+
+TEST(KernelService, DelayMs)
+{
+    Kernel<KERNEL_STATIC, 1, SwitchStrategyRR, PlatformTestMock> kernel;
+    TaskMock<ACCESS_USER> task;
+
+    kernel.Initialize(2000); // decrease resolution to 1 tick = 2 ms
+    kernel.AddTask(&task);
+    kernel.Start();
+
+    g_RelaxCpuHandler = DelayRelaxCpu;
+    g_DelayContext.platform = kernel.GetPlatform();
+
+    DelayMs(10);
+
+    g_RelaxCpuHandler = NULL;
+
+    CHECK_EQUAL(5, (int32_t)g_KernelService->GetTicks());
 }
 
 TEST(KernelService, InitStackFailure)
@@ -156,7 +175,7 @@ TEST(KernelService, GetTicks)
     CHECK_EQUAL(2, (int32_t)stk::GetTicks());
 }
 
-TEST(KernelService, GetTimeNowMsec)
+TEST(KernelService, GetTimeNowMs)
 {
     Kernel<KERNEL_STATIC, 1, SwitchStrategyRR, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task1;
@@ -166,17 +185,17 @@ TEST(KernelService, GetTimeNowMsec)
     kernel.AddTask(&task1);
     kernel.Start();
 
-    CHECK_EQUAL(0, (int32_t)stk::GetTimeNowMsec());
+    CHECK_EQUAL(0, (int32_t)stk::GetTimeNowMs());
 
     // make 1000 ticks
     for (int32_t i = 0; i < 1000; ++i)
         platform->ProcessTick();
 
     // 1000 usec * 1000 ticks = 1000 ms
-    CHECK_EQUAL(1000, (int32_t)stk::GetTimeNowMsec());
+    CHECK_EQUAL(1000, (int32_t)stk::GetTimeNowMs());
 }
 
-TEST(KernelService, GetTimeNowMsecWith10UsecTick)
+TEST(KernelService, GetTimeNowMsWith10UsecTick)
 {
     Kernel<KERNEL_STATIC, 1, SwitchStrategyRR, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task1;
@@ -187,14 +206,14 @@ TEST(KernelService, GetTimeNowMsecWith10UsecTick)
     kernel.AddTask(&task1);
     kernel.Start();
 
-    CHECK_EQUAL(0, (int32_t)stk::GetTimeNowMsec());
+    CHECK_EQUAL(0, (int32_t)stk::GetTimeNowMs());
 
     // make 1000 ticks
     for (int32_t i = 0; i < 1000; ++i)
         platform->ProcessTick();
 
     // 10 usec * 1000 ticks = 10 ms
-    CHECK_EQUAL(10, (int32_t)stk::GetTimeNowMsec());
+    CHECK_EQUAL(10, (int32_t)stk::GetTimeNowMs());
 }
 
 static struct SwitchToNextRelaxCpuContext
@@ -377,7 +396,7 @@ static void SleepRelaxCpu()
 }
 
 template <class _SwitchStrategy>
-static void TestTaskSleep()
+static void TestTaskSleep(bool until)
 {
     Kernel<KERNEL_STATIC, 2, _SwitchStrategy, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task1, task2;
@@ -403,7 +422,14 @@ static void TestTaskSleep()
     g_SleepRelaxCpuContext.task2    = &task2;
 
     // task2 calls Sleep to become idle
-    Sleep(2);
+    if (until)
+    {
+        SleepUntil(GetTicks() + 2);
+    }
+    else
+    {
+        Sleep(2);
+    }
 
     // task2 slept 2 ticks and became active again when became a tail of previously active task1
     CHECK_EQUAL_TEXT(active->SP, (size_t)task2.GetStack(), "expecting task2 after sleep");
@@ -415,17 +441,104 @@ static void TestTaskSleep()
 
 TEST(KernelService, SleepRR)
 {
-    TestTaskSleep<SwitchStrategyRR>();
+    TestTaskSleep<SwitchStrategyRR>(false);
 }
 
 TEST(KernelService, SleepSWRR)
 {
-    TestTaskSleep<SwitchStrategySWRR>();
+    TestTaskSleep<SwitchStrategySWRR>(false);
 }
 
 TEST(KernelService, SleepFP31)
 {
-    TestTaskSleep<SwitchStrategyFP32>();
+    TestTaskSleep<SwitchStrategyFP32>(false);
+}
+
+TEST(KernelService, SleepUntilRR)
+{
+    TestTaskSleep<SwitchStrategyRR>(true);
+}
+
+TEST(KernelService, SleepUntilSWRR)
+{
+    TestTaskSleep<SwitchStrategySWRR>(true);
+}
+
+TEST(KernelService, SleepUntilFP31)
+{
+    TestTaskSleep<SwitchStrategyFP32>(true);
+}
+
+TEST(KernelService, SleepMsRR)
+{
+    Kernel<KERNEL_STATIC, 2, SwitchStrategyRR, PlatformTestMock> kernel;
+    TaskMock<ACCESS_USER> task1, task2;
+    PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
+    Stack *&active = platform->m_stack_active;
+
+    kernel.Initialize();
+    kernel.AddTask(&task1);
+    kernel.AddTask(&task2);
+    kernel.Start();
+
+    // on start Round-Robin selects the very first task
+    CHECK_EQUAL_TEXT(active->SP, (size_t)task1.GetStack(), "expecting task1");
+
+    // ISR calls OnSysTick (task1 = idle, task2 = active)
+    platform->ProcessTick();
+    CHECK_EQUAL_TEXT(active->SP, (size_t)task2.GetStack(), "expecting task2");
+
+    g_RelaxCpuHandler = SleepRelaxCpu;
+    g_SleepRelaxCpuContext.Clear();
+    g_SleepRelaxCpuContext.platform = platform;
+    g_SleepRelaxCpuContext.task1    = &task1;
+    g_SleepRelaxCpuContext.task2    = &task2;
+
+    // task2 calls Sleep to become idle
+    SleepMs(2);
+
+    // task2 slept 2 ticks and became active again when became a tail of previously active task1
+    CHECK_EQUAL_TEXT(active->SP, (size_t)task2.GetStack(), "expecting task2 after sleep");
+
+    // ISR calls OnSysTick (task1 = active, task2 = idle)
+    platform->ProcessTick();
+    CHECK_EQUAL_TEXT(active->SP, (size_t)task1.GetStack(), "expecting task1 after next tick");
+}
+
+TEST(KernelService, SleepUntilMissDeadline)
+{
+    Kernel<KERNEL_STATIC, 2, SwitchStrategyRR, PlatformTestMock> kernel;
+    TaskMock<ACCESS_USER> task1, task2;
+    PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
+    Stack *&active = platform->m_stack_active;
+
+    kernel.Initialize();
+    kernel.AddTask(&task1);
+    kernel.AddTask(&task2);
+    kernel.Start();
+
+    // on start Round-Robin selects the very first task
+    CHECK_EQUAL_TEXT(active->SP, (size_t)task1.GetStack(), "expecting task1");
+
+    // ISR calls OnSysTick (task1 = idle, task2 = active)
+    platform->ProcessTick();
+    CHECK_EQUAL_TEXT(active->SP, (size_t)task2.GetStack(), "expecting task2");
+
+    g_RelaxCpuHandler = SleepRelaxCpu;
+    g_SleepRelaxCpuContext.Clear();
+    g_SleepRelaxCpuContext.platform = platform;
+    g_SleepRelaxCpuContext.task1    = &task1;
+    g_SleepRelaxCpuContext.task2    = &task2;
+
+    Ticks now = GetTicks();
+
+    // task2 calls Sleep to become idle
+    SleepUntil(now);
+
+    CHECK_EQUAL(now, GetTicks());
+
+    // task2 is still active as it did not sleep
+    CHECK_EQUAL_TEXT(active->SP, (size_t)task2.GetStack(), "expecting task2 after sleep");
 }
 
 static struct SleepAllAndWakeRelaxCpuContext
@@ -582,6 +695,18 @@ TEST(KernelServiceIsrSafety, Common)
         g_TestContext.ExpectAssert(true);
         Sleep(10);
         CHECK_TEXT(false, "Sleep is not allowed inside ISR");
+    }
+    catch (TestAssertPassed &pass)
+    {
+        CHECK(true);
+        g_TestContext.ExpectAssert(false);
+    }
+
+    try
+    {
+        g_TestContext.ExpectAssert(true);
+        SleepUntil(GetTicks() + 10);
+        CHECK_TEXT(false, "SleepUntil is not allowed inside ISR");
     }
     catch (TestAssertPassed &pass)
     {

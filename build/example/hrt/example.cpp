@@ -159,7 +159,7 @@ void RunExample()
     static PlatformEventHandler event_overrider;
     kernel.GetPlatform()->SetEventOverrider(&event_overrider);
 
-#define MSEC(MS) GetTicksFromMsec(MS, PERIODICITY_DEFAULT)
+#define MSEC(MS) GetTicksFromMs(MS, PERIODICITY_DEFAULT)
 
     //                    periodicity  deadline   start delay
     kernel.AddTask(&ctrl, MSEC(200),   MSEC(100), MSEC(0));

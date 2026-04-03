@@ -181,9 +181,9 @@ private:
             // Task 1: Wait with 50-tick timeout while semaphore stays at zero
             stk::Sleep(_STK_SEM_TEST_SHORT_SLEEP); // let task 0 establish the zero state
 
-            int64_t start   = GetTimeNowMsec();
+            int64_t start   = GetTimeNowMs();
             bool acquired   = g_TestSemaphore.Wait(50); // 50-tick timeout
-            int64_t elapsed = GetTimeNowMsec() - start;
+            int64_t elapsed = GetTimeNowMs() - start;
 
             // Should time out after ~50 ms and return false
             if (!acquired && elapsed >= 45 && elapsed <= 60)
@@ -234,9 +234,9 @@ private:
         if (m_task_id == 1)
         {
             // Wait(0) on a zero-count semaphore must return false immediately
-            int64_t start   = GetTimeNowMsec();
+            int64_t start   = GetTimeNowMs();
             bool acquired   = g_TestSemaphore.Wait(NO_WAIT);
-            int64_t elapsed = GetTimeNowMsec() - start;
+            int64_t elapsed = GetTimeNowMs() - start;
 
             if (!acquired && elapsed < _STK_SEM_TEST_SHORT_SLEEP)
                 ++g_SharedCounter;
@@ -247,9 +247,9 @@ private:
             // Pre-load one permit then Wait(0) must succeed immediately
             g_TestSemaphore.Signal();
 
-            int64_t start   = GetTimeNowMsec();
+            int64_t start   = GetTimeNowMs();
             bool acquired   = g_TestSemaphore.Wait(NO_WAIT);
-            int64_t elapsed = GetTimeNowMsec() - start;
+            int64_t elapsed = GetTimeNowMs() - start;
 
             if (acquired && elapsed < _STK_SEM_TEST_SHORT_SLEEP)
                 ++g_SharedCounter;

@@ -38,6 +38,7 @@ public:
     uint32_t GetTickResolution() const;
     void SwitchToNext();
     void Sleep(Timeout ticks);
+    void SleepUntil(Ticks timestamp);
     IWaitObject *Wait(ISyncObject *sync_obj, IMutex *mutex, Timeout timeout);
     void ProcessTick();
     void ProcessHardFault();

@@ -846,6 +846,18 @@ TEST(Kernel, HrtSleepNotAllowed)
         CHECK(true);
         g_TestContext.ExpectAssert(false);
     }
+
+    try
+    {
+        g_TestContext.ExpectAssert(true);
+        SleepUntil(GetTicks() + 1);
+        CHECK_TEXT(false, "IKernelService::SleepUntil not allowed in HRT mode");
+    }
+    catch (TestAssertPassed &pass)
+    {
+        CHECK(true);
+        g_TestContext.ExpectAssert(false);
+    }
 }
 
 TEST(Kernel, HrtTaskCompleted)
