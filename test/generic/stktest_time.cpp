@@ -30,6 +30,7 @@ namespace stk
         int32_t GetTickResolution() const { return resolution; }
         void Delay(Timeout ticks) { (void)ticks; }
         void Sleep(Timeout ticks) { (void)ticks; }
+        void SleepUntil(Ticks timestamp) { (void)timestamp; }
         void SwitchToNext() {}
         IWaitObject *Wait(ISyncObject *sobj, IMutex *mutex, Timeout timeout)
         {

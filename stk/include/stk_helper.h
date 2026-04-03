@@ -289,28 +289,6 @@ static inline int64_t GetTimeNowMs()
         return (service->GetTicks() * resolution) / 1000;
 }
 
-/*! \brief     Delay calling process by busy-waiting until the deadline expires.
-    \note      Unlike Sleep this function delays code execution by spinning in a loop until deadline expiry.
-    \note      Use with care in HRT mode to avoid missed deadline (see stk::KERNEL_HRT, ITask::OnDeadlineMissed).
-    \param[in] ticks: Delay time (ticks).
-    \warning   ISR-unsafe. Calling from an ISR context is not permitted and will trigger an assertion.
-*/
-__stk_forceinline void Delay(uint32_t ticks)
-{
-    IKernelService::GetInstance()->Delay(ticks);
-}
-
-/*! \brief     Delay calling process by busy-waiting until the deadline expires.
-    \note      Unlike Sleep this function delays code execution by spinning in a loop until deadline expiry.
-    \note      Use with care in HRT mode to avoid missed deadline (see stk::KERNEL_HRT, ITask::OnDeadlineMissed).
-    \param[in] ms: Delay time (milliseconds).
-    \warning   ISR-unsafe. Calling from an ISR context is not permitted and will trigger an assertion.
-*/
-static inline void DelayMs(uint32_t ms)
-{
-    Delay(static_cast<Timeout>(GetTicksFromMs(ms)));
-}
-
 /*! \brief     Put calling process into a sleep state.
     \note      Unlike Delay this function does not waste CPU cycles and allows kernel to put CPU into a low-power state.
     \note      Unsupported in HRT mode (see stk::KERNEL_HRT); in HRT mode tasks sleep automatically according to their periodicity and workload.
@@ -335,6 +313,17 @@ static inline void SleepMs(uint32_t ms)
     Sleep(static_cast<Timeout>(GetTicksFromMs(ms)));
 }
 
+/*! \brief     Put calling process into a sleep state until the specified timestamp.
+    \note      Unlike Delay this function does not waste CPU cycles and allows kernel to put CPU into a low-power state.
+    \note      Unsupported in HRT mode (see stk::KERNEL_HRT); in HRT mode tasks sleep automatically according to their periodicity and workload.
+    \param[in] timestamp: Absolute timestamp (ticks).
+    \warning   ISR-unsafe. Calling from an ISR context is not permitted and will trigger an assertion.
+*/
+__stk_forceinline void SleepUntil(Ticks timestamp)
+{
+    IKernelService::GetInstance()->SleepUntil(timestamp);
+}
+
 /*! \brief     Notify scheduler to switch to the next runnable task.
     \note      A cooperative scheduling mechanism. In HRT mode acts as a cooperation point (see stk::KERNEL_HRT).
     \warning   ISR-unsafe. Calling from an ISR context is not permitted and will trigger an assertion.
@@ -342,6 +331,28 @@ static inline void SleepMs(uint32_t ms)
 __stk_forceinline void Yield()
 {
     IKernelService::GetInstance()->SwitchToNext();
+}
+
+/*! \brief     Delay calling process by busy-waiting until the deadline expires.
+    \note      Unlike Sleep this function delays code execution by spinning in a loop until deadline expiry.
+    \note      Use with care in HRT mode to avoid missed deadline (see stk::KERNEL_HRT, ITask::OnDeadlineMissed).
+    \param[in] ticks: Delay time (ticks).
+    \warning   ISR-unsafe. Calling from an ISR context is not permitted and will trigger an assertion.
+*/
+__stk_forceinline void Delay(uint32_t ticks)
+{
+    IKernelService::GetInstance()->Delay(ticks);
+}
+
+/*! \brief     Delay calling process by busy-waiting until the deadline expires.
+    \note      Unlike Sleep this function delays code execution by spinning in a loop until deadline expiry.
+    \note      Use with care in HRT mode to avoid missed deadline (see stk::KERNEL_HRT, ITask::OnDeadlineMissed).
+    \param[in] ms: Delay time (milliseconds).
+    \warning   ISR-unsafe. Calling from an ISR context is not permitted and will trigger an assertion.
+*/
+static inline void DelayMs(uint32_t ms)
+{
+    Delay(static_cast<Timeout>(GetTicksFromMs(ms)));
 }
 
 } // namespace stk

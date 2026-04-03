@@ -625,6 +625,12 @@ public:
         */
         virtual void OnTaskSleep(Word caller_SP, Timeout ticks) = 0;
 
+        /*! \brief      Called by Thread process (via IKernelService::SleepUntil) for exclusion of the calling process from scheduling (sleeping).
+            \param[in]  caller_SP: Value of Stack Pointer (SP) register (for locating the calling process inside the kernel).
+            \param[in]  timestamp: Absolute timestamp (ticks).
+        */
+        virtual void OnTaskSleepUntil(Word caller_SP, Ticks timestamp) = 0;
+
         /*! \brief      Called from the Thread process when task finished (its Run function exited by return).
             \param[out] stack: Stack of the exited task.
         */
@@ -707,6 +713,14 @@ public:
         \param[in] ticks: Time to sleep (ticks).
     */
     virtual void Sleep(Timeout ticks) = 0;
+
+    /*! \brief     Put calling process into a sleep state until the specified timestamp.
+        \note      Unlike Delay this function does not waste CPU cycles and allows kernel to put CPU into a low-power state.
+        \note      Unsupported in HRT mode (see stk::KERNEL_HRT); in HRT mode tasks sleep automatically according to their periodicity and workload.
+        \param[in] timestamp: Absolute timestamp (ticks).
+        \warning   ISR-unsafe. Calling from an ISR context is not permitted and will trigger an assertion.
+    */
+    virtual void SleepUntil(Ticks timestamp) = 0;
 
     /*! \brief     Process one tick.
         \note      Normally system tick is processed by the platform driver implementation.
@@ -920,7 +934,7 @@ public:
 
     /*! \brief     Get thread Id of the currently running task.
         \return    Thread Id.
-        \warning   ISR-unsafe. Calling from an ISR context will trigger an assertion.
+        \warning   ISR-unsafe. Calling from an ISR context is not permitted and will trigger an assertion.
     */
     virtual TId GetTid() const = 0;
 
@@ -941,7 +955,7 @@ public:
         \note      Unlike Sleep this function delays code execution by spinning in a loop until deadline expiry.
         \note      Use with care in HRT mode to avoid missed deadline (see stk::KERNEL_HRT, ITask::OnDeadlineMissed).
         \param[in] ticks: Delay time (ticks).
-        \warning   ISR-unsafe.
+        \warning   ISR-unsafe. Calling from an ISR context is not permitted and will trigger an assertion.
         \see       Delay
     */
     virtual void Delay(Timeout ticks) = 0;
@@ -950,9 +964,17 @@ public:
         \note      Unlike Delay this function does not waste CPU cycles and allows kernel to put CPU into a low-power state.
         \note      Unsupported in HRT mode (see stk::KERNEL_HRT); in HRT mode tasks sleep automatically according to their periodicity and workload.
         \param[in] ticks: Sleep time (ticks).
-        \warning   ISR-unsafe.
+        \warning   ISR-unsafe. Calling from an ISR context is not permitted and will trigger an assertion.
     */
     virtual void Sleep(Timeout ticks) = 0;
+
+    /*! \brief     Put calling process into a sleep state until the specified timestamp.
+        \note      Unlike Delay this function does not waste CPU cycles and allows kernel to put CPU into a low-power state.
+        \note      Unsupported in HRT mode (see stk::KERNEL_HRT); in HRT mode tasks sleep automatically according to their periodicity and workload.
+        \param[in] timestamp: Absolute timestamp (ticks).
+        \warning   ISR-unsafe. Calling from an ISR context is not permitted and will trigger an assertion.
+    */
+    virtual void SleepUntil(Ticks timestamp) = 0;
 
     /*! \brief     Notify scheduler to switch to the next task (yield).
         \note      A cooperation mechanism in HRT mode (see stk::KERNEL_HRT).

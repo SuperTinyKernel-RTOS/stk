@@ -386,9 +386,26 @@ static inline int64_t stk_ticks_from_ms_r(int64_t msec, int32_t resolution)
 int64_t stk_time_now_ms(void);
 
 /*! \brief     Busy-wait delay (other tasks continue to run).
+    \param[in] ticks: Ticks to delay.
+*/
+void stk_delay(uint32_t ticks);
+
+/*! \brief     Busy-wait delay (other tasks continue to run).
     \param[in] ms: Milliseconds to delay.
 */
 void stk_delay_ms(uint32_t ms);
+
+/*! \brief     Put current task to sleep (non-HRT kernels only).
+    \param[in] ms: Ticks to sleep.
+    \note      Unlike stk_delay_ms(), this function does not spin and allows the kernel to
+               idle the CPU. When \a KERNEL_TICKLESS is active and all tasks are sleeping,
+               the SysTick is suppressed and the CPU enters a low-power WFI state until the
+               nearest wake-up deadline.
+    \note      Unsupported in \a KERNEL_HRT mode; in HRT mode tasks sleep automatically
+               according to their periodicity and workload, use stk_yield instead.
+    \see       stk_sleep_ms, stk_sleep_until, stk_ticks
+*/
+void stk_sleep(uint32_t ticks);
 
 /*! \brief     Put current task to sleep (non-HRT kernels only).
     \param[in] ms: Milliseconds to sleep.
@@ -397,9 +414,22 @@ void stk_delay_ms(uint32_t ms);
                the SysTick is suppressed and the CPU enters a low-power WFI state until the
                nearest wake-up deadline.
     \note      Unsupported in \a KERNEL_HRT mode; in HRT mode tasks sleep automatically
-               according to their periodicity and workload.
+               according to their periodicity and workload, use stk_yield instead.
+    \see       stk_sleep, stk_sleep_until, stk_ticks
 */
 void stk_sleep_ms(uint32_t ms);
+
+/*! \brief     Put current task to sleep (non-HRT kernels only).
+    \param[in] ts: Absolute time, a deadline for a sleep period.
+    \note      Unlike stk_delay_ms(), this function does not spin and allows the kernel to
+               idle the CPU. When \a KERNEL_TICKLESS is active and all tasks are sleeping,
+               the SysTick is suppressed and the CPU enters a low-power WFI state until the
+               nearest wake-up deadline.
+    \note      Unsupported in \a KERNEL_HRT mode; in HRT mode tasks sleep automatically
+               according to their periodicity and workload, use stk_yield instead.
+    \see       stk_sleep, stk_sleep_ms, stk_ticks
+*/
+void stk_sleep_until(int64_t ts);
 
 /*! \brief     Voluntarily give up CPU to another ready task (cooperative yield).
 */

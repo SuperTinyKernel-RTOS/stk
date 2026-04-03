@@ -23,8 +23,8 @@
 
     Include this single header in user application code. It transitively pulls in:
      - stk_helper.h             — Task, TaskW, StackMemoryWrapper; and free-function helpers:
-                                   GetTid, GetTicks, GetTickResolution, GetTicksFromMsec,
-                                   GetMsecFromTicks, GetTimeNowMsec, Delay, Sleep, Yield.
+                                  GetTid, GetTicks, GetTickResolution, GetTicksFromMsec,
+                                  GetMsecFromTicks, GetTimeNowMsec, Delay, Sleep, SleepUntil, Yield.
      - stk_strategy_rrobin.h    — SwitchStrategyRoundRobin.
      - stk_strategy_swrrobin.h  — SwitchStrategySmoothWeightedRoundRobin.
      - stk_strategy_monotonic.h — SwitchStrategyMonotonic (SRT rate-monotonic).
@@ -127,7 +127,7 @@ protected:
         {
             STATE_NONE           = 0,        //!< No pending state flags.
             STATE_REMOVE_PENDING = (1 << 0), //!< Task returned from its Run function; slot will be freed on the next tick (KERNEL_DYNAMIC only).
-            STATE_SLEEP_PENDING  = (1 << 1)  //!< Task called Sleep/Yield; strategy's OnTaskSleep() will be invoked on the next tick (sleep-aware strategies only).
+            STATE_SLEEP_PENDING  = (1 << 1)  //!< Task called Sleep/SleepUntil/Yield; strategy's OnTaskSleep() will be invoked on the next tick (sleep-aware strategies only).
         };
 
     public:
@@ -660,6 +660,26 @@ protected:
             if (!IsHrtMode())
             {
                 m_platform->Sleep(ticks);
+            }
+            else
+            {
+                // sleeping is not supported in HRT mode, task will sleep according to its periodicity and workload
+                STK_ASSERT(false);
+            }
+        }
+
+        /*! \brief     Yield the CPU till \a timestamp, allowing the scheduler to run other tasks.
+            \param[in] timestamp: Absolute time, a deadline for a sleep period.
+            \warning   ISR-unsafe. Asserts (never returns) in KERNEL_HRT mode — HRT tasks sleep
+                       automatically according to their periodicity, not via explicit SleepUntil() calls.
+        */
+        __stk_attr_noinline void SleepUntil(Ticks timestamp)
+        {
+            STK_ASSERT(!hw::IsInsideISR());
+
+            if (!IsHrtMode())
+            {
+                m_platform->SleepUntil(timestamp);
             }
             else
             {
@@ -1340,6 +1360,33 @@ protected:
 
             if (IsHrtMode())
                 task->HrtOnWorkCompleted();
+
+            task->ScheduleSleep(ticks);
+        }
+
+        // note: we do not spin long here, kernel will switch this task out from scheduling on the next tick
+        while (task->IsSleeping())
+        {
+            __stk_relax_cpu();
+        }
+    }
+
+    void OnTaskSleepUntil(Word caller_SP, Ticks timestamp)
+    {
+        STK_ASSERT(!IsHrtMode());
+
+        KernelTask *task = FindTaskBySP(caller_SP);
+        STK_ASSERT(task != nullptr);
+
+        // make change to HRT state and sleep time atomic
+        {
+            hw::CriticalSection::ScopedLock cs_;
+
+            Ticks ticks = timestamp - m_service.m_ticks;
+
+            // if provided timestamp expired, just ignore any sleep for this task
+            if (ticks <= 0)
+                return;
 
             task->ScheduleSleep(ticks);
         }

@@ -261,6 +261,7 @@ static struct Context : public PlatformContext
     void SwitchContext();
     void SwitchToNext();
     void Sleep(Timeout ticks);
+    void SleepUntil(Ticks timestamp);
     IWaitObject *Wait(ISyncObject *sync_obj, IMutex *mutex, Timeout timeout);
     void Stop();
     Word GetCallerSP() const;
@@ -540,6 +541,11 @@ void Context::Sleep(Timeout ticks)
     m_handler->OnTaskSleep(GetCallerSP(), ticks);
 }
 
+void Context::SleepUntil(Ticks timestamp)
+{
+    m_handler->OnTaskSleepUntil(GetCallerSP(), timestamp);
+}
+
 IWaitObject *Context::Wait(ISyncObject *sync_obj, IMutex *mutex, Timeout timeout)
 {
     return m_handler->OnTaskWait(GetCallerSP(), sync_obj, mutex, timeout);
@@ -616,6 +622,11 @@ void PlatformX86Win32::SwitchToNext()
 void PlatformX86Win32::Sleep(Timeout ticks)
 {
     GetContext().Sleep(ticks);
+}
+
+void PlatformX86Win32::SleepUntil(Ticks timestamp)
+{
+    GetContext().SleepUntil(timestamp);
 }
 
 IWaitObject *PlatformX86Win32::Wait(ISyncObject *sync_obj, IMutex *mutex, Timeout timeout)
