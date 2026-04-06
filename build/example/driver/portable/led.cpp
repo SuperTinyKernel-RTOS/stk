@@ -48,11 +48,3 @@ void Led::Set(Id led, bool state)
 {
     Log("LED_SET_STATE", led, state);
 }
-
-// C interface
-extern "C" {
-
-void Led_Init(LedId led, bool init_state) { Led::Init(led, init_state); }
-void Led_Set(LedId led, bool state) { Led::Set(led, state); }
-
-} // extern "C"

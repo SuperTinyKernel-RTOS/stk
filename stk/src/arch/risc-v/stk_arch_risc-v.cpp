@@ -1348,6 +1348,22 @@ static __stk_forceinline void HW_LoadMainSP()
     : "memory" /* protect against compiler reordering */ );
 }
 
+/*! \brief  Get active machine exception/interrupt cause code.
+    \note   Reads the \c mcause CSR directly. Valid only when called from a trap
+            handler context (i.e. when \c HW_IsHandlerMode() returns \c true).
+            In thread context \c mcause retains its last trap value and must not
+            be used for ISR detection - use \c HW_IsHandlerMode() for that.
+    \return Raw \c mcause value:
+              bit[31]    = 1 for asynchronous interrupt, 0 for synchronous exception.
+              bits[30:0] = cause code, unique per interrupt/exception source.
+*/
+static __stk_forceinline Word HW_GetCurrentException()
+{
+    Word mcause;
+    __asm volatile("csrr %0, mcause" : "=r"(mcause));
+    return mcause;
+}
+
 static __stk_forceinline bool HW_IsHandlerMode()
 {
     Word current_sp = HW_GetCallerSP();
@@ -1642,11 +1658,7 @@ void Context::OnStart()
 
 STK_RISCV_ISR void STK_SVC_HANDLER()
 {
-    Word cause;
-    __asm volatile("csrr %0, mcause"
-    : "=r"(cause)
-    : /* input : none */
-    : /* clobbers: none */);
+    Word cause = HW_GetCurrentException();
 
     /*if (cause & (1UL << (__riscv_xlen - 1)))
     {
@@ -1884,6 +1896,25 @@ IWaitObject *PlatformRiscV::Wait(ISyncObject *sync_obj, IMutex *mutex, Timeout t
 
 TId PlatformRiscV::GetTid() const
 {
+    if (HW_IsHandlerMode())
+    {
+        // to avoid the collision with TID_ISR_N mask, extract and fit into available space:
+
+        const Word exc = HW_GetCurrentException();
+
+        Word num = (exc & 0x7FFU);
+
+    #if (__riscv_xlen > 32)
+        Word interrupt_bit = ((exc & (1ULL << (__riscv_xlen - 1))) ? 0x800U : 0);
+    #else
+        Word interrupt_bit = ((exc & (1U << (__riscv_xlen - 1))) ? 0x800U : 0);
+    #endif
+
+        TId isr_tid = TID_ISR_N | num | interrupt_bit;
+        STK_ASSERT(IsIsrTid(isr_tid));
+        return isr_tid;
+    }
+
     return GetContext().m_handler->OnGetTid(HW_GetCallerSP());
 }
 

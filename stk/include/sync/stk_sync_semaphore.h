@@ -77,7 +77,7 @@ public:
 
     /*! \brief     Wait for a signal (decrement counter).
         \param[in] timeout: Maximum time to wait (ticks).
-        \warning   ISR-unsafe.
+        \warning   ISR-safe only with \a timeout = \c NO_WAIT, ISR-unsafe otherwise.
         \return    True if acquired, false if timeout occurred.
     */
     bool Wait(Timeout timeout = WAIT_INFINITE);

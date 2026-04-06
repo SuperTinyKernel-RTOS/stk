@@ -289,16 +289,17 @@ private:
         {}
 
         // ITask
-        EAccessMode GetAccessMode() const { return m_mode; }
-        void OnDeadlineMissed(uint32_t duration) { (void)duration; }
-        int32_t GetWeight() const         { return m_weight; }
-        TId GetId() const                 { return hw::PtrToWord(this); }
-        const char *GetTraceName() const  { return nullptr; }
+        EAccessMode GetAccessMode() const override { return m_mode; }
+        void OnDeadlineMissed(uint32_t)   override {}
+        void OnExit()                     override {}
+        int32_t GetWeight()         const override { return m_weight; }
+        TId GetId()                 const override { return hw::PtrToWord(this); }
+        const char *GetTraceName()  const override { return nullptr; }
 
         // IStackMemory
-        Word *GetStack() const           { return m_stack; }
-        size_t GetStackSize() const      { return m_stack_size; }
-        size_t GetStackSizeBytes() const { return m_stack_size * sizeof(Word); }
+        Word *GetStack()            const override { return m_stack; }
+        size_t GetStackSize()       const override { return m_stack_size; }
+        size_t GetStackSizeBytes()  const override { return m_stack_size * sizeof(Word); }
 
         void Initialize(TimerHost *host, Word *stack, size_t stack_size, EAccessMode mode, TimerFuncType func)
         {
@@ -313,7 +314,7 @@ private:
         void SetWeight(int32_t weight) { m_weight = weight; }
 
     private:
-        void Run() { m_func(m_host); }
+        void Run() override { m_func(m_host); }
 
         TimerFuncType m_func;
         TimerHost    *m_host;

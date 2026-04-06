@@ -116,33 +116,10 @@ typedef uintptr_t Word;
 */
 typedef Word TId;
 
-/*! \var     TID_ISR
-    \brief   Reserved task/thread id representing an ISR context.
-    \note    Returned by GetTid() when called from an interrupt service routine.
-*/
-const TId TID_ISR = static_cast<TId>(~0);
-
-/*! \var     TID_NONE
-    \brief   Reserved task/thread id representing zero/none thread id.
-*/
-const TId TID_NONE = static_cast<TId>(0);
-
 /*! \typedef Timeout
     \brief   Timeout time (ticks).
 */
 typedef int32_t Timeout;
-
-/*! \var     WAIT_INFINITE
-    \brief   Timeout value: block indefinitely until the synchronization object is signaled.
-    \note    Pass as the \a timeout argument to IKernelService::Wait().
-*/
-const Timeout WAIT_INFINITE = INT32_MAX;
-
-/*! \var     NO_WAIT
-    \brief   Timeout value: return immediately if the synchronization object is not yet signaled (non-blocking poll).
-    \note    Pass as the \a timeout argument to IKernelService::Wait().
-*/
-const Timeout NO_WAIT = 0;
 
 /*! \typedef Ticks
     \brief   Ticks value.
@@ -153,6 +130,66 @@ typedef int64_t Ticks;
     \brief   Cycles value.
 */
 typedef uint64_t Cycles;
+
+/*! \var     TID_ISR_N
+    \brief   Bitmask sentinel for ISR-context task identifiers.
+
+    The upper 20 bits of the TId space are reserved for ISR contexts.
+    When GetTid() is called from an interrupt service routine, it returns
+    \c TID_ISR_N | exception_number, where exception_number is the raw
+    value:
+
+    \code
+    //  bits[31:12] = 0xFFFFF (this sentinel mask)
+    //  bits[11:0]  = exception number
+    \endcode
+
+    This encoding guarantees uniqueness per exception, so two ISRs at
+    different priority levels or with different exception numbers are never
+    treated as the same owner by synchronization primitives.
+
+    Task TIds are word-aligned pointers. On all supported Cortex-M and RISC-V targets
+    they fall in the range \c 0x00000000..0xEFFFFFFF, so no overlap with
+    the \c 0xFFFFF000..0xFFFFFFFF sentinel range is possible.
+
+    \note  Use \c IsIsrTid() to test for this sentinel rather than comparing
+           against this constant directly.
+    \see   IsIsrTid()
+*/
+static constexpr TId TID_ISR_N = static_cast<TId>(0xFFFFF000U);
+
+/*! \var     TID_NONE
+    \brief   Reserved task/thread id representing zero/none thread id.
+*/
+static constexpr TId TID_NONE = static_cast<TId>(0U);
+
+/*! \var     WAIT_INFINITE
+    \brief   Timeout value: block indefinitely until the synchronization object is signaled.
+    \note    Pass as the \a timeout argument to IKernelService::Wait().
+*/
+static constexpr Timeout WAIT_INFINITE = INT32_MAX;
+
+/*! \var     NO_WAIT
+    \brief   Timeout value: return immediately if the synchronization object is not yet signaled (non-blocking poll).
+    \note    Pass as the \a timeout argument to IKernelService::Wait().
+*/
+static constexpr Timeout NO_WAIT = 0;
+
+/*! \brief     Test whether a task identifier represents an ISR context.
+
+    Returns \c true if \a tid was produced by GetTid() called from an
+    interrupt service routine, i.e. its upper 20 bits match \c TID_ISR_N.
+    Use this predicate instead of comparing against \c TID_ISR_N directly.
+
+    \param[in] tid: Task identifier to test.
+    \return    \c true if \a tid encodes an ISR context, \c false otherwise.
+    \note      ISR-safe (bitmask arithmetic only, no kernel calls).
+    \see       TID_ISR_N
+*/
+static inline bool IsIsrTid(TId tid)
+{
+    return ((tid & TID_ISR_N) == TID_ISR_N);
+}
 
 /*! \class StackMemoryDef
     \brief Stack memory type definition.
@@ -268,7 +305,7 @@ public:
     #if STK_SYNC_DEBUG_NAMES
         m_trace_name = name;
     #else
-        (void)name;
+        STK_UNUSED(name);
     #endif
     }
 
@@ -461,6 +498,16 @@ public:
     */
     virtual void OnDeadlineMissed(uint32_t duration) = 0;
 
+    /*! \brief     Called by the kernel before removal from the scheduling (see stk::KERNEL_DYNAMIC).
+        \note      The task's stack is no longer in use but the ITask object itself is still valid.
+        \note      The default no-op implementation is sufficient for detached tasks.
+                   Override to implement join semantics (signal a waiting joiner).
+        \note      Called in kernel/tick context - keep it short. ISR-safe primitives
+                   only (e.g. stk::sync::Semaphore::Signal(), stk::sync::EventFlags::Set()).
+        \note      KERNEL_DYNAMIC only. Never called in KERNEL_STATIC mode.
+    */
+    virtual void OnExit() = 0;
+
     /*! \brief     Get static base weight of the task.
         \return    Static weight value of the task (must be non-zero, positive 24-bit number).
         \see       SwitchStrategySmoothWeightedRoundRobin, IKernelTask::GetWeight
@@ -646,7 +693,7 @@ public:
 
         /*! \brief      Called from the Thread process when for getting task/thread id of the process.
             \param[in]  caller_SP: Value of Stack Pointer (SP) register (for locating the calling process inside the kernel).
-            \return     Task/thread id of the process.
+            \return     Task/thread id of the process (returns always valid TId belonging to a task).
         */
         virtual TId OnGetTid(Word caller_SP) = 0;
     };
@@ -752,6 +799,8 @@ public:
 
     /*! \brief     Get thread Id.
         \return    Thread Id.
+        \warning   ISR-safe.
+        \see       TID_ISR_N, TID_NONE, IsIsrTid
     */
     virtual TId GetTid() const = 0;
 };
@@ -889,10 +938,38 @@ public:
     */
     virtual void AddTask(ITask *user_task, Timeout periodicity_tc, Timeout deadline_tc, Timeout start_delay_tc) = 0;
 
-    /*! \brief     Remove user task.
-        \param[in] user_task: Pointer to the user task to remove.
+    /*! \brief     Remove a previously added task from the kernel before Start().
+        \param[in] user_task: User task to remove. Must not be \c nullptr.
+        \note      Only valid before Start() (i.e. while the kernel is not running).
+                   To remove tasks after Start() the task should return from its Run function
+                   (in KERNEL_DYNAMIC mode the slot is freed automatically on the next tick).
+        \warning   Must only be called when kernel is not running, otherwise call ScheduleTaskRemoval.
+        \warning   KERNEL_DYNAMIC mode only. Asserts if called in KERNEL_STATIC or KERNEL_HRT mode,
+                   or if called after Start().
+        \see       ScheduleTaskRemoval
     */
     virtual void RemoveTask(ITask *user_task) = 0;
+
+    /*! \brief     Schedule task removal from scheduling (exit).
+        \param[in] user_task: User task to remove. Must not be \c nullptr.
+        \warning   KERNEL_DYNAMIC mode only. Asserts if called in KERNEL_STATIC or KERNEL_HRT mode,
+                   or if called after Start(). Use RemoveTask to remove task if kernel is not running.
+        \see       RemoveTask
+    */
+    virtual void ScheduleTaskRemoval(ITask *user_task) = 0;
+
+    /*! \brief      Suspend task.
+        \param[in]  user_task: Pointer to the user task to suspend.
+        \param[out] suspended: Set to true if task is suspended.
+        \note       hw::CriticalSection must not be active otherwise a deadlock will
+                    happen if task is suspending self.
+    */
+    virtual void SuspendTask(ITask *user_task, bool &suspended) = 0;
+
+    /*! \brief     Resume task.
+        \param[in] user_task: Pointer to the user task to resume.
+    */
+    virtual void ResumeTask(ITask *user_task) = 0;
 
     /*! \brief     Start kernel scheduling.
         \note      This function never returns. Must be called after Initialize() and AddTask().
@@ -934,7 +1011,8 @@ public:
 
     /*! \brief     Get thread Id of the currently running task.
         \return    Thread Id.
-        \warning   ISR-unsafe. Calling from an ISR context is not permitted and will trigger an assertion.
+        \warning   ISR-safe.
+        \see       TID_ISR_N, TID_NONE, IsIsrTid
     */
     virtual TId GetTid() const = 0;
 

@@ -66,6 +66,9 @@ namespace sync {
 */
 class ConditionVariable : private ISyncObject, public ITraceable
 {
+    friend class RWMutex;
+    template <typename T, size_t N> friend class Pipe;
+
 public:
     explicit ConditionVariable()
     {}

@@ -584,6 +584,16 @@ protected:
             __stk_full_memfence();
         }
 
+        /*! \brief  Block further execution of the task's context while in sleeping state.
+        */
+        void BusyWaitWhileSleeping() const
+        {
+            while (IsSleeping())
+            {
+                __stk_relax_cpu();
+            }
+        }
+
         ITask            *m_user;       //!< Bound user task, or \c NULL when slot is free.
         Stack             m_stack;      //!< Stack descriptor (SP register value + access mode + optional tid).
         volatile uint32_t m_state;      //!< Bitmask of EStateFlags. Written by task thread, read/cleared by kernel tick.
@@ -608,14 +618,9 @@ protected:
     public:
         /*! \brief  Get the TId of the calling task.
             \return TId via platform->GetTid(), which resolves by stack pointer.
-            \warning ISR-unsafe.
+            \warning ISR-safe.
         */
-        TId GetTid() const
-        {
-            STK_ASSERT(!hw::IsInsideISR());
-
-            return m_platform->GetTid();
-        }
+        TId GetTid() const { return m_platform->GetTid(); }
 
         /*! \brief  Get the current tick count since kernel start.
             \return Atomically-read 64-bit tick counter (via hw::ReadVolatile64).
@@ -777,11 +782,11 @@ public:
     #ifdef _DEBUG
         // TPlatform must inherit IPlatform
         IPlatform *platform = &m_platform;
-        (void)platform;
+        STK_UNUSED(platform);
 
         // TStrategy must inherit ITaskSwitchStrategy
         ITaskSwitchStrategy *strategy = &m_strategy;
-        (void)strategy;
+        STK_UNUSED(strategy);
     #endif
 
     #if !STK_TICKLESS_IDLE
@@ -796,11 +801,14 @@ public:
     ~Kernel()
     {}
 
-    /*! \brief     Prepare kernel for use: reset state, configure the platform, and register the service singleton.
-        \param[in] resolution_us: System tick resolution in microseconds per tick (default: PERIODICITY_DEFAULT).
-                   Valid range: 1 .. PERIODICITY_MAX. Asserts if 0 or out of range.
-        \note      Must be called before AddTask() or Start(). Calling twice without an intervening
-                   Stop() asserts (IsInitialized() is false until this call completes).
+    /*! \brief     Initialize kernel.
+        \param[in] resolution_us: Resolution of the system tick (SysTick) timer in microseconds.
+                   Defaults to PERIODICITY_DEFAULT (1000 µs = 1 ms).
+        \note      Must be called before AddTask() and Start().
+        \note      If running on an STM32 device with HAL driver or on QEMU, do not change the default
+                   resolution (PERIODICITY_DEFAULT). STM32's HAL expects 1 millisecond resolution and
+                   QEMU does not have enough resolution on Windows to operate correctly at sub-millisecond resolution.
+        \note      Kernel must be in \a STATE_INACTIVE state.
     */
     __stk_attr_noinline void Initialize(uint32_t resolution_us = PERIODICITY_DEFAULT)
     {
@@ -908,6 +916,86 @@ public:
             // kernel operating mode must be KERNEL_DYNAMIC for tasks to be able to be removed
             STK_ASSERT(false);
         }
+    }
+
+    /*! \brief     Schedule task removal from scheduling (exit).
+        \param[in] user_task: User task to remove. Must not be \c nullptr.
+        \warning   KERNEL_DYNAMIC mode only. Asserts if called in KERNEL_STATIC or KERNEL_HRT mode,
+                   or if called after Start().
+    */
+    __stk_attr_noinline void ScheduleTaskRemoval(ITask *user_task)
+    {
+        if (IsDynamicMode())
+        {
+            STK_ASSERT(user_task != nullptr);
+            STK_ASSERT(IsStarted());
+
+            hw::CriticalSection::ScopedLock cs_;
+
+            KernelTask *task = FindTaskByUserTask(user_task);
+            if (task != nullptr)
+                task->ScheduleRemoval();
+        }
+        else
+        {
+            // kernel operating mode must be KERNEL_DYNAMIC for tasks to be able to be removed
+            STK_ASSERT(false);
+        }
+    }
+
+    /*! \brief      Suspend task.
+        \param[in]  user_task: Pointer to the user task to suspend.
+        \param[out] suspended: Set to true if task is suspended.
+        \note       hw::CriticalSection must not be active otherwise a deadlock will
+                    happen if task is suspending self.
+    */
+    void SuspendTask(ITask *user_task, bool &suspended)
+    {
+        STK_ASSERT(user_task != nullptr);
+
+        bool self = false;
+        KernelTask *task = nullptr;
+
+        // avoid race with OnTick
+        {
+            hw::CriticalSection::ScopedLock cs_;
+
+            task = FindTaskByUserTask(user_task);
+            STK_ASSERT(task != nullptr);
+
+            // only suspend if the task is currently awake: if it is already sleeping
+            // (e.g. blocked on a mutex or timed Sleep), do not overwrite m_time_sleep,
+            // that would corrupt the original sleep state and, for sync-object waits,
+            // would interfere with WaitObject::Tick()
+            if ((suspended = !task->IsSleeping()) == true)
+            {
+                task->ScheduleSleep(WAIT_INFINITE);
+
+                // check if suspending self
+                self = (task == m_task_now);
+            }
+        }
+
+        // note: we do not spin long here, kernel will switch this task out from scheduling on the next tick
+        if (self)
+            task->BusyWaitWhileSleeping();
+    }
+
+    /*! \brief     Resume task.
+        \param[in] user_task: Pointer to the user task to resume.
+    */
+    void ResumeTask(ITask *user_task)
+    {
+        STK_ASSERT(user_task != nullptr);
+
+        // avoid race with OnTick
+        hw::CriticalSection::ScopedLock cs_;
+
+        KernelTask *task = FindTaskByUserTask(user_task);
+        STK_ASSERT(task != nullptr);
+
+        if (task->IsSleeping())
+            task->Wake();
     }
 
     /*! \brief     Start the scheduler. This call does not return until all tasks have exited
@@ -1206,6 +1294,9 @@ protected:
         SEGGER_SYSVIEW_OnTaskTerminate(task->GetUserStack()->tid);
     #endif
 
+        // notify task about pending exit
+        task->GetUserTask()->OnExit();
+
         m_strategy.RemoveTask(task);
         task->Unbind();
     }
@@ -1365,10 +1456,7 @@ protected:
         }
 
         // note: we do not spin long here, kernel will switch this task out from scheduling on the next tick
-        while (task->IsSleeping())
-        {
-            __stk_relax_cpu();
-        }
+        task->BusyWaitWhileSleeping();
     }
 
     void OnTaskSleepUntil(Word caller_SP, Ticks timestamp)
@@ -1392,10 +1480,7 @@ protected:
         }
 
         // note: we do not spin long here, kernel will switch this task out from scheduling on the next tick
-        while (task->IsSleeping())
-        {
-            __stk_relax_cpu();
-        }
+        task->BusyWaitWhileSleeping();
     }
 
     void OnTaskExit(Stack *stack)
@@ -1405,6 +1490,7 @@ protected:
             KernelTask *task = FindTaskByStack(stack);
             STK_ASSERT(task != nullptr);
 
+            // notify kernel to execute removal
             task->ScheduleRemoval();
         }
         else
@@ -1440,10 +1526,7 @@ protected:
             mutex->Unlock();
 
             // note: we do not spin long here, kernel will switch this task out from scheduling on the next tick
-            while (task->IsSleeping())
-            {
-                __stk_relax_cpu();
-            }
+            task->BusyWaitWhileSleeping();
 
             // re-lock mutex when returning to the task's execution space
             mutex->Lock();
@@ -1793,7 +1876,7 @@ protected:
     */
     bool StateWake(KernelTask *now, KernelTask *next, Stack *&idle, Stack *&active)
     {
-        (void)now;
+        STK_UNUSED(now);
 
         STK_ASSERT(next != nullptr);
 
@@ -1825,7 +1908,7 @@ protected:
     */
     bool StateSleep(KernelTask *now, KernelTask *next, Stack *&idle, Stack *&active)
     {
-        (void)next;
+        STK_UNUSED(next);
 
         STK_ASSERT(now != nullptr);
         STK_ASSERT(m_sleep_trap[0].stack.SP != 0);
@@ -1858,8 +1941,8 @@ protected:
     */
     bool StateExit(KernelTask *now, KernelTask *next, Stack *&idle, Stack *&active)
     {
-        (void)now;
-        (void)next;
+        STK_UNUSED(now);
+        STK_UNUSED(next);
 
         if (IsDynamicMode())
         {
@@ -1875,8 +1958,8 @@ protected:
         }
         else
         {
-            (void)idle;
-            (void)active;
+            STK_UNUSED(idle);
+            STK_UNUSED(active);
         }
 
         return false;

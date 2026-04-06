@@ -603,11 +603,18 @@ void RestoreJmp(JmpFrame &/*f*/, int32_t /*val*/)
 
 // -----------------------------------------------------------------------------
 
+/*! \brief  Get current exception (not 0 if inside ISR).
+*/
+static __stk_forceinline Word HW_GetCurrentException()
+{
+    return __get_IPSR();
+}
+
 /*! \brief  Check if caller is in Handler Mode (IPSR != 0), i.e. inside ISR.
 */
 static __stk_forceinline bool HW_IsHandlerMode()
 {
-    return (__get_IPSR() != 0U);
+    return (HW_GetCurrentException() != 0U);
 }
 
 /*! \brief  Check if caller is in Privileged Thread Mode (nPRIV == 0).
@@ -1694,6 +1701,16 @@ IWaitObject *PlatformArmCortexM::Wait(ISyncObject *sync_obj, IMutex *mutex, Time
 
 TId PlatformArmCortexM::GetTid() const
 {
+    Word isr = HW_GetCurrentException();
+
+    // return special TId which denotes ISR
+    if (isr != 0U)
+    {
+        TId isr_tid = TID_ISR_N | isr;
+        STK_ASSERT(IsIsrTid(isr_tid));
+        return isr_tid;
+    }
+
     return GetContext().m_handler->OnGetTid(HW_GetCallerSP());
 }
 

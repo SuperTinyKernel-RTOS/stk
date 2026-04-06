@@ -33,6 +33,9 @@ void Cpu::Start(uint8_t cpu_id, void (*entry_func)(void))
 // C interface
 extern "C" {
 
-void Cpu_Start(uint8_t cpu_id, void (*entry_func)(void)) { Cpu::Start(cpu_id, entry_func); }
+void Cpu_Start(uint8_t cpu_id, void (*entry_func)(void))
+{
+    Cpu::Start(cpu_id, entry_func);
+}
 
 } // extern "C"

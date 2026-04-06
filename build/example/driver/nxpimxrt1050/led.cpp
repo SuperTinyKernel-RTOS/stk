@@ -21,7 +21,6 @@ void Led::Init(Id led, bool init_state)
     case Led::GREEN: USER_LED_INIT(logic_state); break;
     case Led::BLUE: break; // unavailabe on board
     default:
-        assert(false);
         break;
     }
 }
@@ -34,7 +33,6 @@ void Led::Set(Id led, bool state)
     case Led::GREEN: (state ? USER_LED_ON() : USER_LED_OFF()); break;
     case Led::BLUE: break; // unavailabe on board
     default:
-        assert(false);
         break;
     }
 }

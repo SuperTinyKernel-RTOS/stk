@@ -135,7 +135,7 @@ public:
         \param[in] timeout: Maximum time to wait (ticks).
         \note      Non-recursive.
         \return    True if lock acquired, false if timeout occurred.
-        \warning   ISR-unsafe.
+        \warning   ISR-safe only with \a timeout = \c NO_WAIT, ISR-unsafe otherwise.
     */
     bool TimedReadLock(Timeout timeout);
 
@@ -145,21 +145,21 @@ public:
         \note      Non-recursive.
         \warning   ISR-unsafe.
     */
-    void ReadLock() { (void)TimedReadLock(WAIT_INFINITE); }
+    void ReadLock() { STK_UNUSED(TimedReadLock(WAIT_INFINITE)); }
 
     /*! \brief     Attempt to acquire the lock for shared reading without blocking.
         \details   Checks if a writer is active or waiting. If the resource is available
                    for reading, it increments the reader count and returns immediately.
         \note      Non-recursive.
         \return    True if the read lock was acquired, false if a writer is active or waiting.
-        \warning   ISR-unsafe.
+        \warning   ISR-safe.
     */
     bool TryReadLock() { return TimedReadLock(NO_WAIT); }
 
     /*! \brief     Release the shared reader lock.
         \details   Decrements the reader count. If this was the last active reader,
                    notifies any waiting writers.
-        \warning   ISR-unsafe.
+        \warning   ISR-safe.
     */
     void ReadUnlock();
 
@@ -167,7 +167,7 @@ public:
         \param[in] timeout: Maximum time to wait (ticks).
         \return    True if lock acquired, false if timeout occurred.
         \note      Non-recursive.
-        \warning   ISR-unsafe.
+        \warning   ISR-safe only with \a timeout = \c NO_WAIT, ISR-unsafe otherwise.
     */
     bool TimedLock(Timeout timeout);
 
@@ -175,22 +175,22 @@ public:
         \details   Blocks the calling task until all active readers have released their
                    locks and no other writer is active.
         \note      Non-recursive.
-        \warning   ISR-unsafe.
+        \warning   ISR-safe.
     */
-    void Lock() { (void)TimedLock(WAIT_INFINITE); }
+    void Lock() { STK_UNUSED(TimedLock(WAIT_INFINITE)); }
 
     /*! \brief     Attempt to acquire the lock for exclusive writing without blocking.
         \details   Checks if any readers are active or if another writer is active.
         \note      Non-recursive.
         \return    True if the exclusive lock was acquired, false otherwise.
-        \warning   ISR-unsafe.
+        \warning   ISR-safe.
     */
     bool TryLock() { return TimedLock(NO_WAIT); }
 
     /*! \brief     Release the exclusive writer lock (IMutex interface).
         \details   Releases the lock and prioritizes waking waiting writers. If no
                    writers are waiting, wakes all waiting readers.
-        \warning   ISR-unsafe.
+        \warning   ISR-safe.
     */
     void Unlock();
 
@@ -213,8 +213,6 @@ private:
 
 inline bool RWMutex::TimedReadLock(Timeout timeout)
 {
-    STK_ASSERT(!hw::IsInsideISR()); // API contract: caller must not be in ISR
-
     ScopedCriticalSection cs_;
 
     // wait if there is an active writer or if writers are waiting (Writer Preference)
@@ -238,8 +236,6 @@ inline bool RWMutex::TimedReadLock(Timeout timeout)
 
 inline void RWMutex::ReadUnlock()
 {
-    STK_ASSERT(!hw::IsInsideISR()); // API contract: caller must not be in ISR
-
     ScopedCriticalSection cs_;
 
     STK_ASSERT(m_readers != 0U); // API contract: must have a matching ReadLock()
@@ -248,7 +244,7 @@ inline void RWMutex::ReadUnlock()
 
     // wake a waiting writer when the last reader exits
     if (m_readers == 0U)
-        m_cv_writers.NotifyOne();
+        m_cv_writers.WakeOne();
 }
 
 // ---------------------------------------------------------------------------
@@ -257,10 +253,9 @@ inline void RWMutex::ReadUnlock()
 
 inline bool RWMutex::TimedLock(Timeout timeout)
 {
-    STK_ASSERT(!hw::IsInsideISR());              // API contract: caller must not be in ISR
-    STK_ASSERT(m_writers_waiting < WRITERS_MAX); // API contract: waiting writer count must not exceed maximum
-
     ScopedCriticalSection cs_;
+
+    STK_ASSERT(m_writers_waiting < WRITERS_MAX); // API contract: waiting writer count must not exceed maximum
 
     m_writers_waiting = static_cast<uint16_t>(m_writers_waiting + 1U);
 
@@ -291,19 +286,18 @@ inline bool RWMutex::TimedLock(Timeout timeout)
 
 inline void RWMutex::Unlock()
 {
-    STK_ASSERT(!hw::IsInsideISR()); // API contract: caller must not be in ISR
-    STK_ASSERT(m_writer_active);    // API contract: caller must hold the write lock
-
     ScopedCriticalSection cs_;
+
+    STK_ASSERT(m_writer_active); // API contract: caller must hold the write lock
 
     m_writer_active = false;
 
     // prioritize waking waiting writers to prevent writer starvation;
     // only wake readers if no writers are queued
     if (m_writers_waiting != 0U)
-        m_cv_writers.NotifyOne();
+        m_cv_writers.WakeOne();
     else
-        m_cv_readers.NotifyAll();
+        m_cv_readers.WakeAll();
 }
 
 } // namespace sync

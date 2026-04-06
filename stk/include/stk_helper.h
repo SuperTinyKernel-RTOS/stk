@@ -59,7 +59,12 @@ public:
     /*! \brief Default no-op handler. Override in subclass to log or handle missed deadlines.
         \note  HRT deadline misses are only possible when the kernel is started with KERNEL_HRT.
     */
-    virtual void OnDeadlineMissed(uint32_t duration) { (void)duration; }
+    virtual void OnDeadlineMissed(uint32_t duration) { STK_UNUSED(duration); }
+
+    /*! \brief Default no-op handler. Override to implement join semantics (signal a waiting joiner).
+        \note  Called by the kernel only in KERNEL_DYNAMIC mode.
+    */
+    virtual void OnExit() {}
 
     /*! \brief Default weight of 1. Override in subclass if custom scheduling weight is needed.
         \note  Only relevant when using SwitchStrategySmoothWeightedRoundRobin. Prefer TaskW for
@@ -126,7 +131,12 @@ public:
     /*! \brief Hard Real-Time mode is unsupported for weighted tasks. Triggers an assertion if called.
         \warning Do not use TaskW with KERNEL_HRT. Use Task instead.
     */
-    virtual void OnDeadlineMissed(uint32_t duration) { STK_ASSERT(false); (void)duration; }
+    virtual void OnDeadlineMissed(uint32_t duration) { STK_ASSERT(false); STK_UNUSED(duration); }
+
+    /*! \brief Default no-op handler. Override to implement join semantics (signal a waiting joiner).
+        \note  Called by the kernel only in KERNEL_DYNAMIC mode.
+    */
+    virtual void OnExit() {}
 
     /*! \brief Returns the compile-time weight _Weight.
     */
@@ -295,7 +305,7 @@ static inline int64_t GetTimeNowMs()
     \param[in] ticks: Sleep time (ticks).
     \warning   ISR-unsafe. Calling from an ISR context is not permitted and will trigger an assertion.
 */
-__stk_forceinline void Sleep(uint32_t ticks)
+__stk_forceinline void Sleep(Timeout ticks)
 {
     IKernelService::GetInstance()->Sleep(ticks);
 }
@@ -308,7 +318,7 @@ __stk_forceinline void Sleep(uint32_t ticks)
     \param[in] ms: Sleep time (milliseconds).
     \warning   ISR-unsafe. Calling from an ISR context is not permitted and will trigger an assertion.
 */
-static inline void SleepMs(uint32_t ms)
+static inline void SleepMs(Timeout ms)
 {
     Sleep(static_cast<Timeout>(GetTicksFromMs(ms)));
 }
@@ -339,7 +349,7 @@ __stk_forceinline void Yield()
     \param[in] ticks: Delay time (ticks).
     \warning   ISR-unsafe. Calling from an ISR context is not permitted and will trigger an assertion.
 */
-__stk_forceinline void Delay(uint32_t ticks)
+__stk_forceinline void Delay(Timeout ticks)
 {
     IKernelService::GetInstance()->Delay(ticks);
 }
@@ -350,7 +360,7 @@ __stk_forceinline void Delay(uint32_t ticks)
     \param[in] ms: Delay time (milliseconds).
     \warning   ISR-unsafe. Calling from an ISR context is not permitted and will trigger an assertion.
 */
-static inline void DelayMs(uint32_t ms)
+static inline void DelayMs(Timeout ms)
 {
     Delay(static_cast<Timeout>(GetTicksFromMs(ms)));
 }

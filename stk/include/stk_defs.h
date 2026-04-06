@@ -374,7 +374,7 @@
            Can be overridden by defining STK_STACK_MEMORY_FILLER before including this header or in stk_config.h.
 */
 #ifndef STK_STACK_MEMORY_FILLER
-    #define STK_STACK_MEMORY_FILLER ((Word)(sizeof(Word) <= 4 ? 0xdeadbeef : 0xdeadbeefdeadbeef))
+    #define STK_STACK_MEMORY_FILLER ((stk::Word)(sizeof(stk::Word) <= 4 ? 0xdeadbeef : 0xdeadbeefdeadbeef))
 #endif
 
 /*! \def   STK_STACK_MEMORY_ALIGN
@@ -517,6 +517,11 @@
 #define STK_NONCOPYABLE_CLASS(TYPE)\
     TYPE(const TYPE &) = delete;\
     TYPE &operator=(const TYPE &) = delete;
+
+/*! \def       STK_UNUSED
+    \brief     Explicitly marks a variable as unused to suppress compiler warnings.
+*/
+#define STK_UNUSED(X) static_cast<void>(X)
 
 /*! \namespace stk
     \brief     Namespace of STK package.

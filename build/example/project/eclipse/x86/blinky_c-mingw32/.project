@@ -66,6 +66,11 @@
 			<locationURI>PARENT-4-PROJECT_LOC/blinky_c/example.h</locationURI>
 		</link>
 		<link>
+			<name>src/driver/c_wrapper.cpp</name>
+			<type>1</type>
+			<locationURI>PARENT-4-PROJECT_LOC/driver/c_wrapper.cpp</locationURI>
+		</link>
+		<link>
 			<name>src/driver/led.h</name>
 			<type>1</type>
 			<locationURI>PARENT-4-PROJECT_LOC/driver/led.h</locationURI>

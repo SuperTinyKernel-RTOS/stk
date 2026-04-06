@@ -34,7 +34,6 @@ static uint16_t Led_GetPin(Led::Id led)
     case Led::GREEN: return GPIO_PIN_5;
     case Led::BLUE: return GPIO_PIN_MASK; // unavailable on NUCLEO-F103RB board
     default:
-        assert(false);
         return GPIO_PIN_MASK;
     }
 }

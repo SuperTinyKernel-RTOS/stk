@@ -104,7 +104,7 @@ public:
 
     /*! \brief     Wait until event becomes signaled or the timeout expires.
         \param[in] timeout: Maximum time to wait (ticks). Use \a WAIT_INFINITE for no timeout (wait forever).
-        \warning   ISR-unsafe.
+        \warning   ISR-safe only with \a timeout = \c NO_WAIT, ISR-unsafe otherwise.
         \return    \c true if event was signaled (wait succeeded),
                    \c false if timeout occurred before the event was signaled.
     */
