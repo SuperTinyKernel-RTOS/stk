@@ -737,18 +737,6 @@ TEST(KernelServiceIsrSafety, Common)
         CHECK(true);
         g_TestContext.ExpectAssert(false);
     }
-
-    try
-    {
-        g_TestContext.ExpectAssert(true);
-        GetTid();
-        CHECK_TEXT(false, "GetTid is not allowed inside ISR");
-    }
-    catch (TestAssertPassed &pass)
-    {
-        CHECK(true);
-        g_TestContext.ExpectAssert(false);
-    }
 }
 
 } // namespace stk

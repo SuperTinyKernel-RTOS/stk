@@ -1,0 +1,114 @@
+name: Test - All stk::memory (QEMU, Arm Cortex-M0,M4)
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+env:
+  BUILD_TYPE: Release
+
+jobs:
+  docker-build:
+    runs-on: ubuntu-22.04
+    name: "Build QEMU Docker image"
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v6
+
+    - name: Setup Docker Buildx
+      uses: docker/setup-buildx-action@v2
+
+    - name: Docker build
+      uses: docker/build-push-action@v3
+      with:
+        context: .
+        file: build/test/qemu/Dockerfile.arm
+        tags: stk-qemu-arm:latest
+        load: false
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        outputs: type=docker,dest=/tmp/stk-qemu-arm.tar
+
+    - name: Upload Docker image artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: stk-qemu-arm-image
+        path: /tmp/stk-qemu-arm.tar
+        retention-days: 1
+
+  build:
+    needs: docker-build
+    strategy:
+      fail-fast: false
+      matrix:
+        test:
+          - name: memory::BlockPool
+            cmake_flag: TEST_BLOCKPOOL=ON
+            elf: test-blockpool.elf
+            dir: blockpool
+
+        board:
+          - name: "STM32F0DISCOVERY"
+            cmake_flags: -DVENDOR_STM32=ON -DTARGET_CORTEX_M0=ON -DTARGET_CPU_FAMILY=STM32F051x8
+            cpu: cortex-m0
+            board: STM32F0-Discovery
+
+          - name: "STM32F407DISC1"
+            cmake_flags: -DVENDOR_STM32=ON -DTARGET_CORTEX_M4=ON -DTARGET_CPU_FAMILY=STM32F407xx
+            cpu: cortex-m4
+            board: STM32F4-Discovery
+
+    runs-on: ubuntu-22.04
+
+    name: "${{matrix.test.name}} / ${{matrix.board.name}}"
+
+    steps:
+    - name: Install GCC arm-none-eabi
+      uses: carlosperate/arm-none-eabi-gcc-action@v1
+
+    - name: GCC version
+      run: arm-none-eabi-gcc --version
+
+    - name: Checkout
+      uses: actions/checkout@v3
+
+    - name: Configure CMake
+      run: >
+        cmake -G "Unix Makefiles"
+        -B ${{github.workspace}}/build
+        -DCMAKE_TOOLCHAIN_FILE=build/cmake/toolchain/arm-none-eabi-gcc.cmake
+        ${{matrix.board.cmake_flags}}
+        -DENABLE_LTO=ON
+        -DENABLE_SMALL=ON
+        -DBUILD_LIB=ON
+        -DBUILD_TESTS=ON
+        -DTEST_GENERIC=OFF
+        -D${{matrix.test.cmake_flag}}
+
+    - name: Build
+      run: cmake --build ${{github.workspace}}/build --config ${{env.BUILD_TYPE}} --parallel 4
+
+    - name: Download Docker image artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: stk-qemu-arm-image
+        path: /tmp
+
+    - name: Load Docker image
+      run: docker load --input /tmp/stk-qemu-arm.tar
+
+    - name: Prepare
+      run: chmod +x build/test/qemu/stk-qemu.sh && chmod +x build/test/qemu/test.sh
+
+    - name: Test (${{matrix.test.name}})
+      run: >
+        sh build/test/qemu/test.sh
+        stk-qemu-arm:latest
+        qemu-system-gnuarmeclipse
+        ${{matrix.board.cpu}}
+        ${{matrix.board.board}}
+        ${{github.workspace}}/build/test/${{matrix.test.dir}}
+        ${{matrix.test.elf}}

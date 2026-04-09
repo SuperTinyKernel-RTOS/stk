@@ -532,13 +532,13 @@ namespace stk {
     \note  Arguments are evaluated exactly once, safe for any expression type.
 */
 template <typename T>
-constexpr T Min(T a, T b) noexcept { return (a < b) ? a : b; }
+static constexpr T Min(T a, T b) { return ((a < b) ? a : b); }
 
 /*! \brief Compile-time maximum of two values.
     \note  Arguments are evaluated exactly once, safe for any expression type.
 */
 template <typename T>
-constexpr T Max(T a, T b) noexcept { return (a < b) ? b : a; }
+static constexpr T Max(T a, T b) { return ((a < b) ? b : a); }
 
 /*! \namespace stk::util
     \brief     Internal utility namespace containing data structure helpers (linked lists, etc.)

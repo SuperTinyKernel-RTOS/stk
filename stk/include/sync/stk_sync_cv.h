@@ -66,9 +66,6 @@ namespace sync {
 */
 class ConditionVariable : private ISyncObject, public ITraceable
 {
-    friend class RWMutex;
-    template <typename T, size_t N> friend class Pipe;
-
 public:
     explicit ConditionVariable()
     {}
@@ -102,10 +99,22 @@ public:
     */
     void NotifyOne();
 
+    /*! \brief     Wake one waiting task.
+        \warning   Caller must lock Critical Section or use ScopedCriticalSection prior calling this function.
+        \note      ISR-safe.
+    */
+    void NotifyOne_CS();
+
     /*! \brief     Wake all waiting tasks.
         \note      ISR-safe.
     */
     void NotifyAll();
+
+    /*! \brief     Wake all waiting tasks.
+        \warning   Caller must lock Critical Section or use ScopedCriticalSection prior calling this function.
+        \note      ISR-safe.
+    */
+    void NotifyAll_CS();
 
 private:
     STK_NONCOPYABLE_CLASS(ConditionVariable);
@@ -135,6 +144,15 @@ inline bool ConditionVariable::Wait(IMutex &mutex, Timeout timeout)
 inline void ConditionVariable::NotifyOne()
 {
     ScopedCriticalSection cs_;
+    NotifyOne_CS();
+}
+
+// ---------------------------------------------------------------------------
+// NotifyOne_CS
+// ---------------------------------------------------------------------------
+
+inline void ConditionVariable::NotifyOne_CS()
+{
     WakeOne(); // wakes the first task in the wait list (FIFO order), if any
 }
 
@@ -145,6 +163,15 @@ inline void ConditionVariable::NotifyOne()
 inline void ConditionVariable::NotifyAll()
 {
     ScopedCriticalSection cs_;
+    NotifyAll_CS(); // wakes all tasks in the wait list simultaneously
+}
+
+// ---------------------------------------------------------------------------
+// NotifyAll_CS
+// ---------------------------------------------------------------------------
+
+inline void ConditionVariable::NotifyAll_CS()
+{
     WakeAll(); // wakes all tasks in the wait list simultaneously
 }
 

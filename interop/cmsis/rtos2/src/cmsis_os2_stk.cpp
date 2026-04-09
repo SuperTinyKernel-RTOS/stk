@@ -10,7 +10,7 @@
  *   - Thread management     (osThreadNew / Delete / Yield / Delay / osDelay /
  *                            GetId / GetName / GetState / GetPriority /
  *                            SetPriority / GetStackSize / GetStackSpace /
- *                            GetCount / Terminate / Suspend / Resume)
+ *                            GetCount / Terminate / Suspend / Resume, Join, Detach)
  *   - Thread flags          (osThreadFlagsSet / Clear / Get / Wait)
  *   - Event flags           (osEventFlagsNew / Delete / Set / Clear / Get / Wait)
  *   - Mutex                 (osMutexNew / Delete / Acquire / Release / GetOwner)
@@ -18,12 +18,13 @@
  *   - Timer                 (osTimerNew / Delete / Start / Stop / IsRunning)
  *   - Message Queue         (osMessageQueueNew / Delete / Put / Get /
  *                            GetCapacity / GetMsgSize / GetCount / GetSpace / Reset)
+ *   - Memory Pool           (osMemoryPoolNew / Delete / Alloc / Free /
+ *                            GetCapacity / GetBlockSize / GetCount / GetSpace /
+ *                            GetName)
  *
  * Not supported (return osError / NULL):
- *   - osKernelSuspend / Resume   — no direct STK equivalent
- *   - osThreadJoin / Detach      — STK has no join semantics
- *   - osThreadEnumerate          — no public task list API in STK
- *   - osMemoryPool*              — STK provides no heap pool API
+ *   - osKernelSuspend / Resume   - no direct STK equivalent
+ *   - osThreadEnumerate          - no public task list API in STK
  *
  * Design notes:
  *   - All objects are heap-allocated with operator new/delete.
@@ -43,11 +44,11 @@
  *     stk::sync::ConditionVariable (Pipe<> requires compile-time capacity).
  *
  * Limitations / deviations from the specification:
- *   - osThreadSuspend / osThreadResume — not directly available in STK's
+ *   - osThreadSuspend / osThreadResume - not directly available in STK's
  *     public API; these return osError.
- *   - osMutexGetOwner — returns NULL (STK Mutex does not expose owner tid
+ *   - osMutexGetOwner - returns NULL (STK Mutex does not expose owner tid
  *     through a public accessor).
- *   - osKernelGetSysTimerCount / Freq — returns a tick-based approximation;
+ *   - osKernelGetSysTimerCount / Freq - returns a tick-based approximation;
  *     hardware cycle counter is not accessed here.
  *   - Priority inheritance (osMutexPrioInherit) and robust mutex
  *     (osMutexRobust) attributes are silently ignored; STK Mutex is always
@@ -66,6 +67,7 @@
 #include "sync/stk_sync_semaphore.h"
 #include "sync/stk_sync_eventflags.h"
 #include "time/stk_time_timer.h"
+#include "memory/stk_memory_blockpool.h"
 
 // ---------------------------------------------------------------------------
 // Kernel version / identification
@@ -94,7 +96,7 @@
 #define CMSIS_STK_MIN_STACK_WORDS STK_STACK_SIZE_MIN
 
 // Returns a size of memory in stk::Word elements required for object allocation.
-template <typename T> constexpr size_t StkGetWordCountForType()
+template <typename T> static constexpr size_t StkGetWordCountForType()
 {
     return ((sizeof(T) + sizeof(stk::Word) - 1) / sizeof(stk::Word));
 }
@@ -243,7 +245,7 @@ struct StkThread : public stk::ITask
     volatile JoinState           m_join_state;   // guarded by m_join_mutex between other tasks
     stk::sync::Mutex             m_join_mutex;
     stk::sync::ConditionVariable m_join_cv;      // signaled in OnExit()
-    stk::sync::EventFlags        m_thread_flags; // Per-thread event flags — backed by STK's native 32-bit EventFlags primitive.
+    stk::sync::EventFlags        m_thread_flags; // Per-thread event flags - backed by STK's native 32-bit EventFlags primitive.
     bool                         m_stack_owned;  // true if we allocated the stack ourselves
     bool                         m_suspended;    // true if suspended
     bool                         m_cb_owned;     // true -> heap-allocated control block, delete on Terminate(), false -> caller-supplied cb_mem, call destructor explicitly
@@ -287,7 +289,7 @@ struct StkSemaphore
 // ---------------------------------------------------------------------------
 // Event flags control block
 //
-// Backed directly by stk::sync::EventFlags — STK's native 32-bit multi-flag
+// Backed directly by stk::sync::EventFlags - STK's native 32-bit multi-flag
 // synchronization primitive (Set/Clear/Get/Wait with ANY/ALL/NO_CLEAR options,
 // ISR-safe Set/Clear, absolute-deadline wait loop).
 // ---------------------------------------------------------------------------
@@ -361,7 +363,7 @@ struct StkTimer : public stk::time::TimerHost::Timer
 // Two independent memory regions are managed:
 //
 //   Control block (cb_mem / cb_size in osMessageQueueAttr_t):
-//     Policy identical to all other object types — PlacementNewOrHeap selects
+//     Policy identical to all other object types - PlacementNewOrHeap selects
 //     placement-new into caller memory when cb_mem != nullptr and cb_size is
 //     sufficient, otherwise heap. m_cb_owned tracks whether to free on Delete().
 //
@@ -864,12 +866,12 @@ osStatus_t osThreadDetach(osThreadId_t thread_id)
     switch (t->m_join_state)
     {
     case StkThread::JoinState::Detached:
-        // Already detached — CMSIS spec says this is an error.
+        // Already detached - CMSIS spec says this is an error.
         t->m_join_mutex.Unlock();
         return osError;
 
     case StkThread::JoinState::Joined:
-        // Already joined — cannot detach.
+        // Already joined - cannot detach.
         t->m_join_mutex.Unlock();
         return osError;
 
@@ -922,17 +924,17 @@ osStatus_t osThreadJoin(osThreadId_t thread_id)
         // m_join_cv.Wait() atomically releases m_join_mutex and suspends.
         while (t->m_join_state == StkThread::JoinState::Joined)
         {
-            // WAIT_INFINITE — CMSIS osThreadJoin has no timeout parameter.
+            // WAIT_INFINITE - CMSIS osThreadJoin has no timeout parameter.
             t->m_join_cv.Wait(t->m_join_mutex, stk::WAIT_INFINITE);
         }
 
         // At this point m_join_state == Exited (or Detached if someone
-        // raced osThreadDetach — treat that as an error).
+        // raced osThreadDetach - treat that as an error).
         if (t->m_join_state != StkThread::JoinState::Exited)
             return osError;
     }
 
-    // Free the control block — the kernel has already freed the slot.
+    // Free the control block - the kernel has already freed the slot.
     ObjDestroy(t);
 
     return osOK;
@@ -1394,39 +1396,171 @@ osStatus_t osSemaphoreDelete(osSemaphoreId_t semaphore_id)
 
 // ===========================================================================
 // ==== Memory Pool Management Functions ====
-// (Not natively supported by STK; stubs return error / NULL.)
 // ===========================================================================
 
-osMemoryPoolId_t osMemoryPoolNew(uint32_t, uint32_t, const osMemoryPoolAttr_t *)
+struct StkMemPool
 {
-    return nullptr;
+    stk::memory::BlockMemoryPool m_mpool;
+    bool                         m_cb_owned; // true -> heap-allocated; false -> placement-new in caller memory
+
+    // Construct with caller-supplied pool storage (storage_owned = false).
+    explicit StkMemPool(uint32_t cap, uint32_t raw_block_size,
+                        const char *name, uint8_t *ext_storage)
+        : m_mpool(static_cast<size_t>(cap),
+                  static_cast<size_t>(raw_block_size),
+                  ext_storage,
+                  cap * stk::memory::BlockMemoryPool::AlignBlockSize(raw_block_size),
+                  name),
+          m_cb_owned(true)
+    {}
+
+    // Construct with heap-allocated pool storage (storage_owned = true).
+    explicit StkMemPool(uint32_t cap, uint32_t raw_block_size, const char *name)
+        : m_mpool(static_cast<size_t>(cap),
+                  static_cast<size_t>(raw_block_size),
+                  name),
+          m_cb_owned(true)
+    {}
+
+    // Non-copyable (BlockMemoryPool is already non-copyable via STK_NONCOPYABLE_CLASS).
+    StkMemPool(const StkMemPool &)            = delete;
+    StkMemPool &operator=(const StkMemPool &) = delete;
+};
+
+// ---------------------------------------------------------------------------
+// API implementation
+// ---------------------------------------------------------------------------
+
+osMemoryPoolId_t osMemoryPoolNew(uint32_t block_count, uint32_t block_size,
+                                 const osMemoryPoolAttr_t *attr)
+{
+    // ISR context: forbidden per CMSIS spec.
+    if (IsIrqContext())
+        return nullptr;
+
+    // Zero capacity or zero block size are meaningless.
+    if ((block_count == 0U) || (block_size == 0U))
+        return nullptr;
+
+    const char *name    = (attr ? attr->name    : nullptr);
+    void       *cb_mem  = (attr ? attr->cb_mem  : nullptr);
+    uint32_t    cb_sz   = (attr ? attr->cb_size : 0U);
+    void       *mp_mem  = (attr ? attr->mp_mem  : nullptr);
+    uint32_t    mp_sz   = (attr ? attr->mp_size : 0U);
+
+    // Compute the aligned block size and required storage byte count.
+    const uint32_t aligned_blk       = stk::memory::BlockMemoryPool::AlignBlockSize(block_size);
+    const uint32_t storage_required  = block_count * aligned_blk;
+
+    StkMemPool *pool = nullptr;
+
+    if ((mp_mem != nullptr) && (mp_sz >= storage_required))
+    {
+        // Caller-supplied pool storage - BlockMemoryPool external-storage ctor.
+        pool = PlacementNewOrHeap<StkMemPool>(cb_mem, cb_sz,
+            block_count, block_size, name,
+            static_cast<uint8_t *>(mp_mem));
+    }
+    else
+    {
+        // Heap-allocated pool storage - BlockMemoryPool heap ctor.
+        pool = PlacementNewOrHeap<StkMemPool>(cb_mem, cb_sz,
+            block_count, block_size, name);
+
+        // If the heap ctor failed to allocate storage, clean up and bail.
+        if ((pool != nullptr) && !pool->m_mpool.IsStorageValid())
+        {
+            ObjDestroy(pool);
+            return nullptr;
+        }
+    }
+
+    return static_cast<osMemoryPoolId_t>(pool);
 }
 
-const char *osMemoryPoolGetName(osMemoryPoolId_t)
+const char *osMemoryPoolGetName(osMemoryPoolId_t mp_id)
 {
-    return nullptr;
+    if (mp_id == nullptr)
+        return nullptr;
+
+    return static_cast<StkMemPool *>(mp_id)->m_mpool.GetTraceName();
 }
 
-void *osMemoryPoolAlloc(osMemoryPoolId_t, uint32_t)
+void *osMemoryPoolAlloc(osMemoryPoolId_t mp_id, uint32_t timeout)
 {
-    return nullptr;
+    if (mp_id == nullptr)
+        return nullptr;
+
+    // ISR context is only valid with timeout == 0 (NO_WAIT / TryAlloc).
+    if (IsIrqContext() && (timeout != 0U))
+        return nullptr;
+
+    StkMemPool *pool = static_cast<StkMemPool *>(mp_id);
+
+    // BlockMemoryPool::TimedAlloc handles all three cases in one call:
+    //   timeout == 0            -> TryAlloc path (ISR-safe, non-blocking)
+    //   timeout == osWaitForever -> WAIT_INFINITE (task blocks until a block is freed)
+    //   otherwise               -> timed wait via ConditionVariable (no spin-yield)
+    return pool->m_mpool.TimedAlloc(CmsisTimeoutToStk(timeout));
 }
 
-osStatus_t osMemoryPoolFree(osMemoryPoolId_t, void *)
+osStatus_t osMemoryPoolFree(osMemoryPoolId_t mp_id, void *block)
 {
-    return osError;
+    if ((mp_id == nullptr) || (block == nullptr))
+        return osErrorParameter;
+
+    StkMemPool *pool = static_cast<StkMemPool *>(mp_id);
+
+    // BlockMemoryPool::Free performs bounds + alignment validation, pushes the
+    // block back in O(1), and wakes one task blocked in TimedAlloc (if any).
+    if (!pool->m_mpool.Free(block))
+        return osErrorParameter; // ptr not from this pool
+
+    return osOK;
 }
 
-uint32_t osMemoryPoolGetCapacity(osMemoryPoolId_t)  { return 0U; }
-uint32_t osMemoryPoolGetBlockSize(osMemoryPoolId_t) { return 0U; }
-uint32_t osMemoryPoolGetCount(osMemoryPoolId_t)     { return 0U; }
-uint32_t osMemoryPoolGetSpace(osMemoryPoolId_t)     { return 0U; }
-
-osStatus_t osMemoryPoolDelete(osMemoryPoolId_t)
+uint32_t osMemoryPoolGetCapacity(osMemoryPoolId_t mp_id)
 {
-    return osError;
+    if (mp_id == nullptr)
+        return 0U;
+
+    return static_cast<StkMemPool *>(mp_id)->m_mpool.GetCapacity();
 }
 
+uint32_t osMemoryPoolGetBlockSize(osMemoryPoolId_t mp_id)
+{
+    if (mp_id == nullptr)
+        return 0U;
+
+    // Returns the aligned block size - what the allocator actually reserves per
+    // block (>= the raw size passed to osMemoryPoolNew). Matches BlockMemoryPool::GetBlockSize().
+    return static_cast<uint32_t>(static_cast<StkMemPool *>(mp_id)->m_mpool.GetBlockSize());
+}
+
+uint32_t osMemoryPoolGetCount(osMemoryPoolId_t mp_id)
+{
+    if (mp_id == nullptr)
+        return 0U;
+
+    return static_cast<StkMemPool *>(mp_id)->m_mpool.GetUsedCount();
+}
+
+uint32_t osMemoryPoolGetSpace(osMemoryPoolId_t mp_id)
+{
+    if (mp_id == nullptr)
+        return 0U;
+
+    return static_cast<StkMemPool *>(mp_id)->m_mpool.GetFreeCount();
+}
+
+osStatus_t osMemoryPoolDelete(osMemoryPoolId_t mp_id)
+{
+    if (IsIrqContext() || (mp_id == nullptr))
+        return (IsIrqContext() ? osErrorISR : osErrorParameter);
+
+    ObjDestroy(static_cast<StkMemPool *>(mp_id));
+    return osOK;
+}
 
 // ===========================================================================
 // ==== Message Queue Management Functions ====

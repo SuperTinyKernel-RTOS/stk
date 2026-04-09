@@ -7,22 +7,21 @@
  * License: MIT License, see LICENSE for a full text.
  */
 
-#ifndef STK_TIME_H_
-#define STK_TIME_H_
+#ifndef STK_MEMORY_H_
+#define STK_MEMORY_H_
 
-/*! \file  stk_time.h
-    \brief Collection of time-related primitives (\c stk::time namespace).
+/*! \file  stk_memory.h
+    \brief Collection of memory-related primitives (\c stk::memory namespace).
 */
 
-/*! \namespace stk::time
-    \brief     Time-related primitives.
+/*! \namespace stk::memory
+    \brief     Memory-related primitives.
 */
 namespace stk {
-namespace time {
-} // namespace time
+namespace memory {
+} // namespace memory
 } // namespace stk
 
-#include "stk_time_timer.h"
-#include "stk_time_util.h"
+#include "stk_memory_blockpool.h"
 
-#endif /* STK_TIME_H_ */
+#endif /* STK_MEMORY_H_ */

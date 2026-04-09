@@ -244,7 +244,7 @@ inline void RWMutex::ReadUnlock()
 
     // wake a waiting writer when the last reader exits
     if (m_readers == 0U)
-        m_cv_writers.WakeOne();
+        m_cv_writers.NotifyOne_CS();
 }
 
 // ---------------------------------------------------------------------------
@@ -295,9 +295,9 @@ inline void RWMutex::Unlock()
     // prioritize waking waiting writers to prevent writer starvation;
     // only wake readers if no writers are queued
     if (m_writers_waiting != 0U)
-        m_cv_writers.WakeOne();
+        m_cv_writers.NotifyOne_CS();
     else
-        m_cv_readers.WakeAll();
+        m_cv_readers.NotifyAll_CS();
 }
 
 } // namespace sync
