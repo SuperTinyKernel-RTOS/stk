@@ -117,10 +117,10 @@ public:
         TASK_COUNT = (1 + STK_TIMER_THREADS_COUNT),
 
         //!< stack memory size of the tick task
-        TASK_TICK_MEMORY_SIZE = stk::Max<size_t>(256U, STK_STACK_SIZE_MIN),
+        TASK_TICK_MEMORY_SIZE = Max<size_t>(256U, STK_STACK_SIZE_MIN),
 
         //!< stack memory size of the timer handler task
-        TASK_HANDLER_STACK_SIZE = stk::Max<size_t>(STK_TIMER_HANDLER_STACK_SIZE, STK_STACK_SIZE_MIN)
+        TASK_HANDLER_STACK_SIZE = Max<size_t>(STK_TIMER_HANDLER_STACK_SIZE, STK_STACK_SIZE_MIN)
     };
 
     /*! \class Timer

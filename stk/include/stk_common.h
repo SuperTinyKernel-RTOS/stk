@@ -240,6 +240,23 @@ public:
     /*! \brief Get size of the memory in bytes.
     */
     virtual size_t GetStackSizeBytes() const = 0;
+
+    /*! \brief Get available stack space.
+    */
+    virtual size_t GetStackSpace()
+    {
+        const Word *stack = GetStack();
+        const size_t stack_size = GetStackSize();
+
+        // count leading Words equal to STK_STACK_MEMORY_FILLER (watermark)
+        size_t free_words = 0U;
+        for (size_t i = 0U; (i < stack_size) && (stack[i] == STK_STACK_MEMORY_FILLER); ++i)
+        {
+            ++free_words;
+        }
+
+        return (free_words * sizeof(stk::Word));
+    }
 };
 
 /*! \class IWaitObject

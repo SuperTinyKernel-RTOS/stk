@@ -1078,6 +1078,14 @@ protected:
         FSM_EVENT_MAX         //!< Sentinel: number of valid events (used to size the FSM table).
     };
 
+    /*! \brief Ticks to yield.
+
+         Yield with 2 ticks: 1 will be incremented on the next OnTick call by UpdateTasks
+         and remaining 1 will cause a context switch by UpdateFsmState when strategy detects
+         it as a sleeping test.
+    */
+    static constexpr Timeout YIELD_TICKS = 2;
+
     /*! \brief     Check if FSM state is valid.
     */
     static __stk_forceinline bool IsValidFsmState(EFsmState state)
@@ -1434,10 +1442,7 @@ protected:
 
     void OnTaskSwitch(Word caller_SP)
     {
-        // yield with 2 ticks: 1 will be incremented on the next OnTick call by UpdateTasks
-        // and remaining 1 will cause a context switch by UpdateFsmState when strategy detects
-        // it as a sleeping test
-        OnTaskSleep(caller_SP, 2);
+        OnTaskSleep(caller_SP, YIELD_TICKS);
     }
 
     void OnTaskSleep(Word caller_SP, Timeout ticks)
@@ -1452,7 +1457,8 @@ protected:
             if (IsHrtMode())
                 task->HrtOnWorkCompleted();
 
-            task->ScheduleSleep(ticks);
+            // at least yield
+            task->ScheduleSleep(Max(YIELD_TICKS, ticks));
         }
 
         // note: we do not spin long here, kernel will switch this task out from scheduling on the next tick
@@ -1470,13 +1476,8 @@ protected:
         {
             hw::CriticalSection::ScopedLock cs_;
 
-            Ticks ticks = timestamp - m_service.m_ticks;
-
-            // if provided timestamp expired, just ignore any sleep for this task
-            if (ticks <= 0)
-                return;
-
-            task->ScheduleSleep(ticks);
+            // at least yield
+            task->ScheduleSleep(Max(YIELD_TICKS, static_cast<Timeout>(timestamp - m_service.m_ticks)));
         }
 
         // note: we do not spin long here, kernel will switch this task out from scheduling on the next tick
@@ -1646,7 +1647,7 @@ protected:
             if (IsTicklessMode() && (sleep_ticks > 1) && task->IsBusy())
             {
                 // note: task sleep time is negative
-                Timeout task_sleep = stk::Max<Timeout>(0, -task->m_time_sleep);
+                Timeout task_sleep = Max<Timeout>(0, -task->m_time_sleep);
 
                 if (IsSyncMode())
                 {
@@ -1658,20 +1659,20 @@ protected:
 
                         // we shall account for only valid time (when task is waiting during sync operation)
                         if (task_sleep > 0)
-                            sleep_ticks = stk::Min(sleep_ticks, task_sleep);
+                            sleep_ticks = Min(sleep_ticks, task_sleep);
                     }
                     else
                     {
-                        sleep_ticks = stk::Min(sleep_ticks, task_sleep);
+                        sleep_ticks = Min(sleep_ticks, task_sleep);
                     }
                 }
                 else
                 {
-                    sleep_ticks = stk::Min(sleep_ticks, task_sleep);
+                    sleep_ticks = Min(sleep_ticks, task_sleep);
                 }
 
                 // clamp to [1, STK_TICKLESS_TICKS_MAX] range
-                sleep_ticks = stk::Max<Timeout>(sleep_ticks, 1);
+                sleep_ticks = Max<Timeout>(sleep_ticks, 1);
             }
         }
 

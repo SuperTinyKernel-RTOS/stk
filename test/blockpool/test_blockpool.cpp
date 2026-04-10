@@ -715,9 +715,41 @@ static void ResetTestState()
 } // namespace stk
 
 // ---------------------------------------------------------------------------
-// RunTest helper – mirrors the pattern used in test_mutex.cpp
+// Task-count predicates
 // ---------------------------------------------------------------------------
 
+/*! \fn    NeedsTwoTasks
+    \brief Returns true if the test requires tasks 0 and 1.
+    \note  Single-task tests (TryAllocFree, ExhaustPool, TypedAlloc, FreeNull,
+           AlignBlockSize, StorageMode) use only task 0.
+*/
+static bool NeedsTwoTasks(const char *test_name)
+{
+    return (strcmp(test_name, "BlockingAlloc")      == 0) ||
+           (strcmp(test_name, "TimedAllocTimeout")  == 0) ||
+           (strcmp(test_name, "TimedAllocSuccess")  == 0) ||
+           (strcmp(test_name, "ConcurrentAllocFree")== 0) ||
+           (strcmp(test_name, "Stress")             == 0);
+}
+
+/*! \fn    NeedsAllTasks
+    \brief Returns true if the test requires all 5 tasks (0–4).
+    \note  ConcurrentAllocFree and Stress both verify g_InstancesDone against
+           _STK_POOL_TEST_TASKS_MAX and compute expected results from that count.
+*/
+static bool NeedsAllTasks(const char *test_name)
+{
+    return (strcmp(test_name, "ConcurrentAllocFree") == 0) ||
+           (strcmp(test_name, "Stress")              == 0);
+}
+
+// ---------------------------------------------------------------------------
+// RunTest helper
+// ---------------------------------------------------------------------------
+
+/*! \fn    RunTest
+    \brief Helper function to run a single blockpool test case.
+*/
 template <class TaskType>
 static int32_t RunTest(const char *test_name, int32_t param = 0)
 {
@@ -729,7 +761,6 @@ static int32_t RunTest(const char *test_name, int32_t param = 0)
 
     ResetTestState();
 
-    // Recreate the shared pool fresh for every test (external storage, reused buffer)
     stk::memory::BlockMemoryPool pool(
         _STK_POOL_CAPACITY,
         _STK_POOL_BLOCK_SIZE,
@@ -745,10 +776,16 @@ static int32_t RunTest(const char *test_name, int32_t param = 0)
     TaskType task4(4, param);
 
     g_Kernel.AddTask(&task0);
-    g_Kernel.AddTask(&task1);
-    g_Kernel.AddTask(&task2);
-    g_Kernel.AddTask(&task3);
-    g_Kernel.AddTask(&task4);
+
+    if (NeedsTwoTasks(test_name))
+        g_Kernel.AddTask(&task1);
+
+    if (NeedsAllTasks(test_name))
+    {
+        g_Kernel.AddTask(&task2);
+        g_Kernel.AddTask(&task3);
+        g_Kernel.AddTask(&task4);
+    }
 
     g_Kernel.Start();
 

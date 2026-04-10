@@ -28,11 +28,12 @@
     | **Event**             | \c Set(), \c Pulse(), \c Reset(), \c TryWait()                                                                                                     |
     | **EventFlags**        | \c Set(), \c Clear(), \c Get(), \c TryWait(), \c Wait(NO_WAIT)                                                                                     |
     | **Semaphore**         | \c Signal(), \c TryWait()                                                                                                                          |
-    | **SpinLock**          | \c None                                                                                                                                               |
-    | **Mutex**             | \c None                                                                                                                                               |
-    | **RWMutex**           | \c None                                                                                                                                               |
+    | **SpinLock**          | \c None                                                                                                                                            |
+    | **Mutex**             | \c None                                                                                                                                            |
+    | **RWMutex**           | \c None                                                                                                                                            |
     | **ConditionVariable** | \c NotifyOne(), \c NotifyAll(), \c Wait(NO_WAIT)                                                                                                   |
     | **Pipe**              | \c Write(NO_WAIT), \c WriteBulk(NO_WAIT), \c TryWrite(), \c TryWriteBulk(), \c Read(NO_WAIT), \c ReadBulk(NO_WAIT), \c TryRead(), \c TryReadBulk() |
+    | **MessageQueue**      | \c Put(NO_WAIT), \c Get(NO_WAIT), \c TryPut(), \c TrGet(), \c Reset                                                                                |
 
     NOTE:
     - **SpinLock**, **Mutex**, **RWMutex**: Ownership is tied to a Task ID (\a TId).
@@ -50,12 +51,13 @@ namespace sync {
 
 #include "stk_sync_cs.h"
 #include "stk_sync_cv.h"
-#include "stk_sync_event.h"
-#include "stk_sync_eventflags.h"
 #include "stk_sync_spinlock.h"
 #include "stk_sync_mutex.h"
-#include "stk_sync_semaphore.h"
-#include "stk_sync_pipe.h"
 #include "stk_sync_rwmutex.h"
+#include "stk_sync_semaphore.h"
+#include "stk_sync_event.h"
+#include "stk_sync_eventflags.h"
+#include "stk_sync_pipe.h"
+#include "stk_sync_msgqueue.h"
 
 #endif /* STK_SYNC_H_ */

@@ -40,14 +40,13 @@
  *     so no conversion is required.
  *   - Thread flags and event flags are backed by stk::sync::EventFlags,
  *     STK's native 32-bit multi-flag synchronization primitive.
- *   - Message queues use a custom ring-buffer backed by stk::sync::Mutex and
- *     stk::sync::ConditionVariable (Pipe<> requires compile-time capacity).
+ *   - Message queues are backed by stk::sync::MessageQueue, STK's native
+ *     fixed-capacity, fixed-message-size ring-buffer with integrated blocking
+ *     semantics (Put/Get with configurable timeouts, ISR-safe TryPut/TryGet).
  *
  * Limitations / deviations from the specification:
  *   - osThreadSuspend / osThreadResume - not directly available in STK's
  *     public API; these return osError.
- *   - osMutexGetOwner - returns NULL (STK Mutex does not expose owner tid
- *     through a public accessor).
  *   - osKernelGetSysTimerCount / Freq - returns a tick-based approximation;
  *     hardware cycle counter is not accessed here.
  *   - Priority inheritance (osMutexPrioInherit) and robust mutex
@@ -63,17 +62,15 @@
 #include <stdint.h>
 
 #include "stk.h"
-#include "sync/stk_sync_mutex.h"
-#include "sync/stk_sync_semaphore.h"
-#include "sync/stk_sync_eventflags.h"
-#include "time/stk_time_timer.h"
-#include "memory/stk_memory_blockpool.h"
+#include "sync/stk_sync.h"
+#include "time/stk_time.h"
+#include "memory/stk_memory.h"
 
 // ---------------------------------------------------------------------------
 // Kernel version / identification
 // ---------------------------------------------------------------------------
 
-#define STK_WRAPPER_API_VERSION     20030000UL   // 2.3.0
+#define STK_WRAPPER_API_VERSION     20030000UL // 2.3.0
 #define STK_WRAPPER_KERNEL_VERSION  20030000UL
 #define STK_WRAPPER_KERNEL_ID       "STK RTOS2 Wrapper v1.0"
 
@@ -101,10 +98,12 @@ template <typename T> static constexpr size_t StkGetWordCountForType()
     return ((sizeof(T) + sizeof(stk::Word) - 1) / sizeof(stk::Word));
 }
 
+// ---------------------------------------------------------------------------
 // Priority mapping:
 //   CMSIS range: osPriorityIdle(1) .. osPriorityISR(56)  ->  57 levels
 //   STK FP32 range: 0 .. 31                              ->  32 levels
 // Linear map: stk_prio = (cmsis_prio * 31) / 56
+// ---------------------------------------------------------------------------
 static __stk_forceinline int32_t CmsisPrioToStk(osPriority_t p)
 {
     if (p <= osPriorityIdle)
@@ -114,7 +113,6 @@ static __stk_forceinline int32_t CmsisPrioToStk(osPriority_t p)
 
     return (static_cast<int32_t>(p) * 31) / 56;
 }
-
 static __stk_forceinline osPriority_t StkPrioToCmsis(int32_t p)
 {
     // Inverse: cmsis_prio = (stk_prio * 56) / 31
@@ -167,19 +165,18 @@ static osKernelState_t g_KernelState = osKernelInactive;
 
 // ---------------------------------------------------------------------------
 // Thread control block
+//
+// StkThread wraps a single CMSIS thread.
+//
+//   Stack memory is provided either by the caller (static allocation) or
+//   allocated dynamically from operator new[] (heap allocation).
+//
+//   The CMSIS function pointer + argument are stored here; the STK task's
+//   Run() method simply calls func(argument).
+//
+//   Priority is stored as STK weight (0..31) and returned via GetWeight().
 // ---------------------------------------------------------------------------
 
-/*
- * StkThread wraps a single CMSIS thread.
- *
- * Stack memory is provided either by the caller (static allocation) or
- * allocated dynamically from operator new[] (heap allocation).
- *
- * The CMSIS function pointer + argument are stored here; the STK task's
- * Run() method simply calls func(argument).
- *
- * Priority is stored as STK weight (0..31) and returned via GetWeight().
- */
 struct StkThread : public stk::ITask
 {
     // --- Join support ---
@@ -195,13 +192,12 @@ struct StkThread : public stk::ITask
         : m_func(nullptr), m_argument(nullptr), m_name(nullptr),
           m_stk_priority(CmsisPrioToStk(osPriorityNormal)),
           m_stack(nullptr), m_stack_size(0), m_join_state(JoinState::Detached),
-          m_stack_owned(false), m_suspended(false),
-          m_cb_owned(true)
+          m_stack_owned(false), m_suspended(false), m_cb_owned(true)
     {}
 
     virtual ~StkThread()
     {
-        if (m_stack_owned && m_stack)
+        if (m_stack_owned && (m_stack != nullptr))
         {
             delete[] m_stack;
             m_stack = nullptr;
@@ -243,7 +239,6 @@ struct StkThread : public stk::ITask
     stk::Word                   *m_stack;        // pointer to stack memory (may be owned)
     size_t                       m_stack_size;   // stack size in Words
     volatile JoinState           m_join_state;   // guarded by m_join_mutex between other tasks
-    stk::sync::Mutex             m_join_mutex;
     stk::sync::ConditionVariable m_join_cv;      // signaled in OnExit()
     stk::sync::EventFlags        m_thread_flags; // Per-thread event flags - backed by STK's native 32-bit EventFlags primitive.
     bool                         m_stack_owned;  // true if we allocated the stack ourselves
@@ -257,17 +252,14 @@ struct StkThread : public stk::ITask
 
 struct StkMutex
 {
-    stk::sync::Mutex m_mutex;
-    bool             m_cb_owned; // true -> heap-allocated, false -> placement-new in caller memory
-
-    // The CMSIS name is forwarded to STK's ITraceable interface so it is
-    // visible to SEGGER SystemView and other debug tools when
-    // STK_SYNC_DEBUG_NAMES == 1.  GetTraceName() returns nullptr when the
-    // feature is disabled, which is fine for release builds.
     explicit StkMutex(const char *n = nullptr) : m_mutex(), m_cb_owned(true)
     {
         m_mutex.SetTraceName(n);
     }
+
+    // ---- Members ----
+    stk::sync::Mutex m_mutex;
+    bool             m_cb_owned; // true -> heap-allocated, false -> placement-new in caller memory
 };
 
 // ---------------------------------------------------------------------------
@@ -276,14 +268,15 @@ struct StkMutex
 
 struct StkSemaphore
 {
-    stk::sync::Semaphore m_semaphore;
-    bool                 m_cb_owned; // true -> heap-allocated, false -> placement-new in caller memory
-
     explicit StkSemaphore(uint16_t initial, uint16_t max_count, const char *n = nullptr)
         : m_semaphore(initial, max_count), m_cb_owned(true)
     {
         m_semaphore.SetTraceName(n);
     }
+
+    // ---- Members ----
+    stk::sync::Semaphore m_semaphore;
+    bool                 m_cb_owned; // true -> heap-allocated, false -> placement-new in caller memory
 };
 
 // ---------------------------------------------------------------------------
@@ -296,13 +289,14 @@ struct StkSemaphore
 
 struct StkEventFlags
 {
-    stk::sync::EventFlags m_ef;
-    bool                  m_cb_owned; // true -> heap-allocated, false -> placement-new in caller memory
-
     explicit StkEventFlags(const char *n = nullptr) : m_ef(0U), m_cb_owned(true)
     {
         m_ef.SetTraceName(n);
     }
+
+    // ---- Members ----
+    stk::sync::EventFlags m_ef;
+    bool                  m_cb_owned; // true -> heap-allocated, false -> placement-new in caller memory
 };
 
 // ---------------------------------------------------------------------------
@@ -315,31 +309,8 @@ struct StkEventFlags
 static stk::time::TimerHost *g_TimerHost = nullptr;
 static stk::Word             g_TimerHostBuf[StkGetWordCountForType<stk::time::TimerHost>()];
 
-static bool EnsureTimerHostCreated()
-{
-    if (g_StkKernel != nullptr)
-    {
-        if (g_TimerHost == nullptr)
-        {
-            g_TimerHost = new (g_TimerHostBuf) stk::time::TimerHost();
-            g_TimerHost->Initialize(g_StkKernel, stk::ACCESS_PRIVILEGED);
-        }
-
-        return true;
-    }
-
-    return false;
-}
-
 struct StkTimer : public stk::time::TimerHost::Timer
 {
-    osTimerFunc_t  m_func;
-    void          *m_argument;
-    osTimerType_t  m_type;
-    const char    *m_name;
-    uint32_t       m_period_ticks; // stored period for restart
-    bool           m_cb_owned;     // true -> heap-allocated, false -> placement-new in caller memory
-
     explicit StkTimer(osTimerFunc_t f, osTimerType_t t, void *arg, const char *n)
         : m_func(f), m_argument(arg), m_type(t), m_name(n), m_period_ticks(0U), m_cb_owned(true)
     {}
@@ -350,15 +321,71 @@ struct StkTimer : public stk::time::TimerHost::Timer
     {
         m_func(m_argument);
     }
+
+    static bool EnsureTimerHostCreated()
+    {
+        if (g_StkKernel != nullptr)
+        {
+            if (g_TimerHost == nullptr)
+            {
+                g_TimerHost = new (g_TimerHostBuf) stk::time::TimerHost();
+                g_TimerHost->Initialize(g_StkKernel, stk::ACCESS_PRIVILEGED);
+            }
+
+            return true;
+        }
+
+        return false;
+    }
+
+    // ---- Members ----
+    osTimerFunc_t  m_func;
+    void          *m_argument;
+    osTimerType_t  m_type;
+    const char    *m_name;
+    uint32_t       m_period_ticks; // stored period for restart
+    bool           m_cb_owned;     // true -> heap-allocated, false -> placement-new in caller memory
+};
+
+// ---------------------------------------------------------------------------
+// Memory pool control block
+//
+// Backed directly by stk::memory::BlockMemoryPool.
+// ---------------------------------------------------------------------------
+
+class StkMemPool
+{
+public:
+    // Construct with caller-supplied pool storage (storage_owned = false).
+    explicit StkMemPool(uint32_t cap, uint32_t raw_block_size,
+                        const char *name, uint8_t *ext_storage)
+        : m_mpool(static_cast<size_t>(cap),
+                  static_cast<size_t>(raw_block_size),
+                  ext_storage,
+                  cap * stk::memory::BlockMemoryPool::AlignBlockSize(raw_block_size),
+                  name),
+          m_cb_owned(true)
+    {}
+
+    // Construct with heap-allocated pool storage (storage_owned = true).
+    explicit StkMemPool(uint32_t cap, uint32_t raw_block_size, const char *name)
+        : m_mpool(static_cast<size_t>(cap),
+                  static_cast<size_t>(raw_block_size),
+                  name),
+          m_cb_owned(true)
+    {}
+
+    // ---- Members ----
+    stk::memory::BlockMemoryPool m_mpool;
+    bool                         m_cb_owned; // true -> heap-allocated; false -> placement-new in caller memory
 };
 
 // ---------------------------------------------------------------------------
 // Message queue control block
 //
-// CMSIS message queue stores fixed-size opaque byte messages.
-// Because stk::sync::Pipe<> requires a compile-time capacity, we implement a
-// thin ring-buffer here that wraps two condition variables for blocking
-// semantics, mirroring the design of stk::sync::Pipe.
+// Backed by stk::sync::MessageQueue - STK's native fixed-capacity, fixed-
+// message-size FIFO ring-buffer with integrated blocking semantics (Put/Get
+// with WAIT_INFINITE / NO_WAIT / timed variants, ISR-safe TryPut/TryGet).
 //
 // Two independent memory regions are managed:
 //
@@ -370,58 +397,44 @@ struct StkTimer : public stk::time::TimerHost::Timer
 //   Data buffer (mq_mem / mq_size in osMessageQueueAttr_t):
 //     1. Caller-supplied: attr->mq_mem / attr->mq_size are used as-is when the
 //        region is large enough to hold (msg_count * msg_size) bytes.
-//        buffer_owned = false -> never freed on Delete().
 //     2. Dynamic fallback: heap buffer of (msg_count * msg_size) bytes.
-//        buffer_owned = true  -> freed in the destructor.
+//        Allocated buffer is freed in the destructor.
 // ---------------------------------------------------------------------------
 
 struct StkMessageQueue
 {
-    const char   *m_name;
-    uint32_t      m_msg_size;      // bytes per message
-    uint32_t      m_capacity;      // max message count
-    uint32_t      m_count;         // current message count
-    uint32_t      m_head;          // write index (in messages)
-    uint32_t      m_tail;          // read  index (in messages)
-    uint8_t      *m_buffer;        // flat byte buffer [capacity * msg_size]
-    bool          m_buffer_owned;  // true  -> buffer was heap-allocated, free in dtor
-                                   // false -> buffer is caller-supplied, do NOT free
-    bool          m_cb_owned;      // true  -> control block was heap-allocated (delete on Delete())
-                                   // false -> placement-new in caller memory (call dtor only)
-
-    stk::sync::Mutex             m_mutex;
-    stk::sync::ConditionVariable m_cv_not_empty;
-    stk::sync::ConditionVariable m_cv_not_full;
-
-    // Construct with a caller-supplied data buffer (buffer_owned = false).
-    explicit StkMessageQueue(uint32_t cap, uint32_t msz, const char *n,
-                             uint8_t *ext_buf)
-        : m_name(n), m_msg_size(msz), m_capacity(cap),
-          m_count(0U), m_head(0U), m_tail(0U),
-          m_buffer(ext_buf), m_buffer_owned(false), m_cb_owned(true)
+    // Construct with a caller-supplied data buffer.
+    explicit StkMessageQueue(uint32_t cap, uint32_t msz, const char *name,uint8_t *ext_buf)
+        : m_mq(ext_buf, static_cast<size_t>(cap), static_cast<size_t>(msz)),
+          m_bf_owned(false), m_cb_owned(true)
     {
-        m_mutex.SetTraceName(n);
+        m_mq.SetTraceName(name);
     }
 
-    // Construct with a heap-allocated data buffer (buffer_owned = true).
-    explicit StkMessageQueue(uint32_t cap, uint32_t msz, const char *n)
-        : m_name(n), m_msg_size(msz), m_capacity(cap),
-          m_count(0U), m_head(0U), m_tail(0U),
-          m_buffer(new (std::nothrow) uint8_t[cap * msz]), m_buffer_owned(true),
-          m_cb_owned(true)
+    // Construct with a heap-allocated data buffer.
+    explicit StkMessageQueue(uint32_t cap, uint32_t msz, const char *name)
+        : m_mq(AllocBuffer(cap, msz), static_cast<size_t>(cap), static_cast<size_t>(msz)),
+          m_bf_owned(m_mq.IsStorageValid()), m_cb_owned(true)
     {
-        m_mutex.SetTraceName(n);
+        m_mq.SetTraceName(name);
     }
 
     ~StkMessageQueue()
     {
-        if (m_buffer_owned)
-            delete[] m_buffer;
+        if (m_bf_owned)
+            delete[] m_mq.GetBuffer();
     }
 
-    // Non-copyable
-    StkMessageQueue(const StkMessageQueue &)            = delete;
-    StkMessageQueue &operator=(const StkMessageQueue &) = delete;
+    static uint8_t *AllocBuffer(uint32_t cap, uint32_t msz)
+    {
+        return new (std::nothrow) uint8_t[static_cast<size_t>(cap) * msz];
+    }
+
+    // ---- Members ----
+    stk::sync::MessageQueue m_mq;       // STK native message queue (owns blocking semantics)
+    bool                    m_bf_owned; // true  -> when we heap-allocated the data buffer, false otherwise
+    bool                    m_cb_owned; // true  -> heap-allocated control block (delete on Delete())
+                                        // false -> placement-new in caller memory (call dtor only)
 };
 
 // ---------------------------------------------------------------------------
@@ -433,16 +446,22 @@ struct StkMessageQueue
 // Sets obj->m_cb_owned = false for caller-supplied, true for heap.
 // Returns nullptr if heap fallback is needed but allocation fails.
 template <typename T, typename... Args>
-static T *PlacementNewOrHeap(void *cb_mem, uint32_t cb_size, Args &&...args)
+static T *PlacementNewOrHeap(void *cb_mem, size_t cb_size, Args &&...args)
 {
+    T *obj = nullptr;
+
     if ((cb_mem != nullptr) && (cb_size >= sizeof(T)))
     {
-        T *obj = new (cb_mem) T(static_cast<Args &&>(args)...);
+        obj = new (cb_mem) T(static_cast<Args &&>(args)...);
         obj->m_cb_owned = false;
         return obj;
     }
-    T *obj = new (std::nothrow) T(static_cast<Args &&>(args)...);
-    // m_cb_owned is already true from the constructor default
+    else
+    {
+        obj = new (std::nothrow) T(static_cast<Args &&>(args)...);
+        // m_cb_owned is already true from the constructor default
+    }
+
     return obj;
 }
 
@@ -491,6 +510,7 @@ static __stk_forceinline uint32_t StkFlagsResultToCmsis(uint32_t result)
     return osFlagsErrorUnknown;
 }
 
+
 // ===========================================================================
 // ==== Kernel Management Functions ====
 // ===========================================================================
@@ -523,7 +543,9 @@ osStatus_t osKernelGetInfo(osVersion_t *version, char *id_buf, uint32_t id_size)
         const char *id = STK_WRAPPER_KERNEL_ID;
         size_t copy_len = id_size - 1U;
         size_t id_len   = __builtin_strlen(id);
-        if (copy_len > id_len) copy_len = id_len;
+        if (copy_len > id_len)
+            copy_len = id_len;
+
         memcpy(id_buf, id, copy_len);
         id_buf[copy_len] = '\0';
     }
@@ -643,6 +665,7 @@ uint32_t osKernelGetSysTimerFreq(void)
     return osKernelGetTickFreq();
 }
 
+
 // ===========================================================================
 // ==== Thread Management Functions ====
 // ===========================================================================
@@ -652,9 +675,9 @@ osThreadId_t osThreadNew(osThreadFunc_t func, void *argument, const osThreadAttr
     if (IsIrqContext() || (func == nullptr) || (g_StkKernel == nullptr))
         return nullptr;
 
-    bool     joinable = attr && (attr->attr_bits & osThreadJoinable);
-    void    *cb_mem   = (attr ? attr->cb_mem  : nullptr);
-    uint32_t cb_size  = (attr ? attr->cb_size : 0U);
+    bool     joinable = (attr != nullptr) && (attr->attr_bits & osThreadJoinable);
+    void    *cb_mem   = (attr != nullptr ? attr->cb_mem  : nullptr);
+    uint32_t cb_size  = (attr != nullptr ? attr->cb_size : 0U);
 
     StkThread *t = PlacementNewOrHeap<StkThread>(cb_mem, cb_size);
     if (t == nullptr)
@@ -668,7 +691,7 @@ osThreadId_t osThreadNew(osThreadFunc_t func, void *argument, const osThreadAttr
     osPriority_t cmsis_prio = osPriorityNormal;
     size_t stack_words      = CMSIS_STK_DEFAULT_STACK_WORDS;
 
-    if (attr)
+    if (attr != nullptr)
     {
         t->m_name = attr->name;
 
@@ -763,7 +786,8 @@ uint32_t osThreadGetStackSize(osThreadId_t thread_id)
     if (thread_id == nullptr)
         return 0U;
 
-    return static_cast<uint32_t>(static_cast<StkThread *>(thread_id)->GetStackSizeBytes());
+    StkThread *t = static_cast<StkThread *>(thread_id);
+    return static_cast<uint32_t>(t->GetStackSizeBytes());
 }
 
 uint32_t osThreadGetStackSpace(osThreadId_t thread_id)
@@ -772,20 +796,7 @@ uint32_t osThreadGetStackSpace(osThreadId_t thread_id)
         return 0U;
 
     StkThread *t = static_cast<StkThread *>(thread_id);
-    const stk::Word *stack = t->GetStack();
-    size_t sz = t->GetStackSize();
-
-    // Count leading Words still equal to STK_STACK_MEMORY_FILLER (watermark).
-    size_t free_words = 0U;
-    for (size_t i = 0U; i < sz; ++i)
-    {
-        if (stack[i] == STK_STACK_MEMORY_FILLER)
-            ++free_words;
-        else
-            break;
-    }
-
-    return static_cast<uint32_t>(free_words * sizeof(stk::Word));
+    return static_cast<uint32_t>(t->GetStackSpace());
 }
 
 osStatus_t osThreadSetPriority(osThreadId_t thread_id, osPriority_t priority)
@@ -799,8 +810,6 @@ osStatus_t osThreadSetPriority(osThreadId_t thread_id, osPriority_t priority)
     StkThread *t = static_cast<StkThread *>(thread_id);
     t->m_stk_priority = CmsisPrioToStk(priority);
 
-    // Note: STK fixed-priority strategy reads GetWeight() each scheduling
-    // tick, so updating m_stk_priority takes effect immediately.
     return osOK;
 }
 
@@ -843,10 +852,10 @@ osStatus_t osThreadResume(osThreadId_t thread_id)
 
     StkThread *t = static_cast<StkThread *>(thread_id);
 
-    stk::hw::CriticalSection::ScopedLock cs_;
+    stk::sync::ScopedCriticalSection cs_;
 
     if (!t->m_suspended)
-        return osOK;  // not suspended, nothing to do
+        return osOK; // not suspended, nothing to do
 
     g_StkKernel->ResumeTask(t);
     t->m_suspended = false;
@@ -861,37 +870,31 @@ osStatus_t osThreadDetach(osThreadId_t thread_id)
 
     StkThread *t = static_cast<StkThread *>(thread_id);
 
-    t->m_join_mutex.Lock();
+    stk::sync::ScopedCriticalSection cs_;
 
     switch (t->m_join_state)
     {
     case StkThread::JoinState::Detached:
-        // Already detached - CMSIS spec says this is an error.
-        t->m_join_mutex.Unlock();
+        // already detached - CMSIS spec says this is an error
         return osError;
 
     case StkThread::JoinState::Joined:
-        // Already joined - cannot detach.
-        t->m_join_mutex.Unlock();
+        // already joined - cannot detach
         return osError;
 
     case StkThread::JoinState::Exited:
-        // Thread finished but nobody joined yet.
-        // Transition to Detached and free the control block now,
-        // since no joiner will ever do it.
+        // thread finished but nobody joined yet, transition to Detached
+        // and free the control block now, since no joiner will ever do it
         t->m_join_state = StkThread::JoinState::Detached;
-        t->m_join_mutex.Unlock();
-        ObjDestroy(t);           // safe: task slot already freed by kernel
+        ObjDestroy(t); // safe: task slot already freed by the kernel
         return osOK;
 
     case StkThread::JoinState::Joinable:
-        // Normal case: thread is still running or just hasn't been joined.
+        // normal case: thread is still running or just hasn't been joined
         t->m_join_state = StkThread::JoinState::Detached;
-        t->m_join_mutex.Unlock();
         return osOK;
     }
 
-    t->m_join_mutex.Unlock();
     return osError;
 }
 
@@ -906,33 +909,30 @@ osStatus_t osThreadJoin(osThreadId_t thread_id)
 
     StkThread *t = static_cast<StkThread *>(thread_id);
 
-    // critical section
+    stk::sync::ScopedCriticalSection cs_;
+
+    // Only joinable threads can be joined.
+    if (t->m_join_state == StkThread::JoinState::Detached)
+        return osError;
+
+    // Double-join: second caller always gets an error.
+    if (t->m_join_state == StkThread::JoinState::Joined)
+        return osError;
+
+    t->m_join_state = StkThread::JoinState::Joined;
+
+    // Block until OnExit() fires (transitions state to Exited).
+    // m_join_cv.Wait() atomically releases m_join_mutex and suspends.
+    while (t->m_join_state == StkThread::JoinState::Joined)
     {
-        stk::sync::Mutex::ScopedLock guard(t->m_join_mutex);
-
-        // Only joinable threads can be joined.
-        if (t->m_join_state == StkThread::JoinState::Detached)
-            return osError;
-
-        // Double-join: second caller always gets an error.
-        if (t->m_join_state == StkThread::JoinState::Joined)
-            return osError;
-
-        t->m_join_state = StkThread::JoinState::Joined;
-
-        // Block until OnExit() fires (transitions state to Exited).
-        // m_join_cv.Wait() atomically releases m_join_mutex and suspends.
-        while (t->m_join_state == StkThread::JoinState::Joined)
-        {
-            // WAIT_INFINITE - CMSIS osThreadJoin has no timeout parameter.
-            t->m_join_cv.Wait(t->m_join_mutex, stk::WAIT_INFINITE);
-        }
-
-        // At this point m_join_state == Exited (or Detached if someone
-        // raced osThreadDetach - treat that as an error).
-        if (t->m_join_state != StkThread::JoinState::Exited)
-            return osError;
+        // WAIT_INFINITE - CMSIS osThreadJoin has no timeout parameter.
+        t->m_join_cv.Wait(cs_, stk::WAIT_INFINITE);
     }
+
+    // At this point m_join_state == Exited (or Detached if someone
+    // raced osThreadDetach - treat that as an error).
+    if (t->m_join_state != StkThread::JoinState::Exited)
+        return osError;
 
     // Free the control block - the kernel has already freed the slot.
     ObjDestroy(t);
@@ -946,9 +946,7 @@ __NO_RETURN void osThreadExit(void)
 
     g_StkKernel->ScheduleTaskRemoval(t);
 
-    // In KERNEL_DYNAMIC mode, returning from Run() terminates the task.
-    // Since we cannot return from a C function, spin-yield until the
-    // kernel cleans us up (the task should have already returned from Run).
+    // Wait for removal.
     for (;;)
         stk::Yield();
 }
@@ -992,6 +990,7 @@ uint32_t osThreadEnumerate(osThreadId_t * /*thread_array*/, uint32_t /*array_ite
     return 0U;
 }
 
+
 // ===========================================================================
 // ==== Thread Flags Functions ====
 // ===========================================================================
@@ -1034,7 +1033,7 @@ uint32_t osThreadFlagsWait(uint32_t flags, uint32_t options, uint32_t timeout)
         return osFlagsErrorISR;
 
     osThreadId_t self = osThreadGetId();
-    if (!self)
+    if (self == nullptr)
         return osFlagsErrorUnknown;
 
     StkThread *t = static_cast<StkThread *>(self);
@@ -1059,12 +1058,6 @@ osStatus_t osDelay(uint32_t ticks)
 
     stk::Timeout timeout = CmsisTimeoutToStk(ticks);
 
-    if (timeout == 0U)
-    {
-        stk::Yield();
-        return osOK;
-    }
-
     stk::Sleep(timeout);
     return osOK;
 }
@@ -1076,19 +1069,10 @@ osStatus_t osDelayUntil(uint32_t ticks)
     if (g_StkKernel == nullptr)
         return osError;
 
-    stk::Ticks now   = stk::GetTicks();
-    stk::Ticks until = static_cast<stk::Ticks>(ticks);
-
-    // If the deadline has already passed, just yield.
-    if (until <= now)
-    {
-        stk::Yield();
-        return osOK;
-    }
-
-    stk::SleepUntil(until);
+    stk::SleepUntil(static_cast<stk::Ticks>(ticks));
     return osOK;
 }
+
 
 // ===========================================================================
 // ==== Timer Management Functions ====
@@ -1100,12 +1084,12 @@ osTimerId_t osTimerNew(osTimerFunc_t func, osTimerType_t type, void *argument,
     if (IsIrqContext() || (func == nullptr) || (g_StkKernel == nullptr))
         return nullptr;
 
-    if (!EnsureTimerHostCreated())
+    if (!StkTimer::EnsureTimerHostCreated())
         return nullptr;
 
-    const char *name   = (attr ? attr->name    : nullptr);
-    void       *cb_mem = (attr ? attr->cb_mem  : nullptr);
-    uint32_t    cb_sz  = (attr ? attr->cb_size : 0U);
+    const char *name   = (attr != nullptr ? attr->name    : nullptr);
+    void       *cb_mem = (attr != nullptr ? attr->cb_mem  : nullptr);
+    uint32_t    cb_sz  = (attr != nullptr ? attr->cb_size : 0U);
 
     StkTimer *timer = PlacementNewOrHeap<StkTimer>(cb_mem, cb_sz, func, type, argument, name);
     return static_cast<osTimerId_t>(timer);
@@ -1169,6 +1153,7 @@ osStatus_t osTimerDelete(osTimerId_t timer_id)
     return osOK;
 }
 
+
 // ===========================================================================
 // ==== Event Flags Management Functions ====
 // ===========================================================================
@@ -1178,9 +1163,9 @@ osEventFlagsId_t osEventFlagsNew(const osEventFlagsAttr_t *attr)
     if (IsIrqContext())
         return nullptr;
 
-    const char *name   = (attr ? attr->name    : nullptr);
-    void       *cb_mem = (attr ? attr->cb_mem  : nullptr);
-    uint32_t    cb_sz  = (attr ? attr->cb_size : 0U);
+    const char *name   = (attr != nullptr ? attr->name    : nullptr);
+    void       *cb_mem = (attr != nullptr ? attr->cb_mem  : nullptr);
+    uint32_t    cb_sz  = (attr != nullptr ? attr->cb_size : 0U);
 
     StkEventFlags *ef = PlacementNewOrHeap<StkEventFlags>(cb_mem, cb_sz, name);
     return static_cast<osEventFlagsId_t>(ef);
@@ -1196,7 +1181,7 @@ const char *osEventFlagsGetName(osEventFlagsId_t ef_id)
 
 uint32_t osEventFlagsSet(osEventFlagsId_t ef_id, uint32_t flags)
 {
-    if ((ef_id == nullptr) || ((flags & osFlagsError) != 0))
+    if ((ef_id == nullptr) || ((flags & osFlagsError) != 0U))
         return osFlagsErrorParameter;
 
     uint32_t result = static_cast<StkEventFlags *>(ef_id)->m_ef.Set(flags);
@@ -1205,7 +1190,7 @@ uint32_t osEventFlagsSet(osEventFlagsId_t ef_id, uint32_t flags)
 
 uint32_t osEventFlagsClear(osEventFlagsId_t ef_id, uint32_t flags)
 {
-    if ((ef_id == nullptr) || ((flags & osFlagsError) != 0))
+    if ((ef_id == nullptr) || ((flags & osFlagsError) != 0U))
         return osFlagsErrorParameter;
 
     uint32_t result = static_cast<StkEventFlags *>(ef_id)->m_ef.Clear(flags);
@@ -1223,7 +1208,7 @@ uint32_t osEventFlagsGet(osEventFlagsId_t ef_id)
 uint32_t osEventFlagsWait(osEventFlagsId_t ef_id, uint32_t flags, uint32_t options,
                           uint32_t timeout)
 {
-    if ((ef_id == nullptr) || ((flags & osFlagsError) != 0))
+    if ((ef_id == nullptr) || ((flags & osFlagsError) != 0U))
         return osFlagsErrorParameter;
 
     uint32_t result = static_cast<StkEventFlags *>(ef_id)->m_ef.Wait(flags,
@@ -1241,6 +1226,7 @@ osStatus_t osEventFlagsDelete(osEventFlagsId_t ef_id)
     return osOK;
 }
 
+
 // ===========================================================================
 // ==== Mutex Management Functions ====
 // ===========================================================================
@@ -1252,9 +1238,9 @@ osMutexId_t osMutexNew(const osMutexAttr_t *attr)
 
     // osMutexPrioInherit / osMutexRobust: accepted but silently ignored.
     // osMutexRecursive: STK Mutex is always recursive.
-    const char *name   = (attr ? attr->name    : nullptr);
-    void       *cb_mem = (attr ? attr->cb_mem  : nullptr);
-    uint32_t    cb_sz  = (attr ? attr->cb_size : 0U);
+    const char *name   = (attr != nullptr ? attr->name    : nullptr);
+    void       *cb_mem = (attr != nullptr ? attr->cb_mem  : nullptr);
+    uint32_t    cb_sz  = (attr != nullptr ? attr->cb_size : 0U);
 
     StkMutex *m = PlacementNewOrHeap<StkMutex>(cb_mem, cb_sz, name);
     return static_cast<osMutexId_t>(m);
@@ -1317,6 +1303,7 @@ osStatus_t osMutexDelete(osMutexId_t mutex_id)
     return osOK;
 }
 
+
 // ===========================================================================
 // ==== Semaphore Management Functions ====
 // ===========================================================================
@@ -1330,13 +1317,13 @@ osSemaphoreId_t osSemaphoreNew(uint32_t max_count, uint32_t initial_count,
     if ((max_count == 0U) || (initial_count > max_count))
         return nullptr;
 
-    // STK Semaphore uses uint16_t counters; clamp to 0xFFFE.
-    uint16_t mc = (max_count     > 0xFFFEU) ? static_cast<uint16_t>(0xFFFEU) : static_cast<uint16_t>(max_count);
-    uint16_t ic = (initial_count > 0xFFFEU) ? static_cast<uint16_t>(0xFFFEU) : static_cast<uint16_t>(initial_count);
+    // STK Semaphore uses uint16_t counters, clamp to stk::sync::Semaphore::COUNT_MAX.
+    uint16_t mc = stk::Min(max_count, static_cast<uint32_t>(stk::sync::Semaphore::COUNT_MAX));
+    uint16_t ic = stk::Min(initial_count, static_cast<uint32_t>(stk::sync::Semaphore::COUNT_MAX));
 
-    const char *name   = (attr ? attr->name    : nullptr);
-    void       *cb_mem = (attr ? attr->cb_mem  : nullptr);
-    uint32_t    cb_sz  = (attr ? attr->cb_size : 0U);
+    const char *name   = (attr != nullptr ? attr->name    : nullptr);
+    void       *cb_mem = (attr != nullptr ? attr->cb_mem  : nullptr);
+    uint32_t    cb_sz  = (attr != nullptr ? attr->cb_size : 0U);
 
     StkSemaphore *s = PlacementNewOrHeap<StkSemaphore>(cb_mem, cb_sz, ic, mc, name);
     return static_cast<osSemaphoreId_t>(s);
@@ -1398,39 +1385,6 @@ osStatus_t osSemaphoreDelete(osSemaphoreId_t semaphore_id)
 // ==== Memory Pool Management Functions ====
 // ===========================================================================
 
-struct StkMemPool
-{
-    stk::memory::BlockMemoryPool m_mpool;
-    bool                         m_cb_owned; // true -> heap-allocated; false -> placement-new in caller memory
-
-    // Construct with caller-supplied pool storage (storage_owned = false).
-    explicit StkMemPool(uint32_t cap, uint32_t raw_block_size,
-                        const char *name, uint8_t *ext_storage)
-        : m_mpool(static_cast<size_t>(cap),
-                  static_cast<size_t>(raw_block_size),
-                  ext_storage,
-                  cap * stk::memory::BlockMemoryPool::AlignBlockSize(raw_block_size),
-                  name),
-          m_cb_owned(true)
-    {}
-
-    // Construct with heap-allocated pool storage (storage_owned = true).
-    explicit StkMemPool(uint32_t cap, uint32_t raw_block_size, const char *name)
-        : m_mpool(static_cast<size_t>(cap),
-                  static_cast<size_t>(raw_block_size),
-                  name),
-          m_cb_owned(true)
-    {}
-
-    // Non-copyable (BlockMemoryPool is already non-copyable via STK_NONCOPYABLE_CLASS).
-    StkMemPool(const StkMemPool &)            = delete;
-    StkMemPool &operator=(const StkMemPool &) = delete;
-};
-
-// ---------------------------------------------------------------------------
-// API implementation
-// ---------------------------------------------------------------------------
-
 osMemoryPoolId_t osMemoryPoolNew(uint32_t block_count, uint32_t block_size,
                                  const osMemoryPoolAttr_t *attr)
 {
@@ -1442,15 +1396,15 @@ osMemoryPoolId_t osMemoryPoolNew(uint32_t block_count, uint32_t block_size,
     if ((block_count == 0U) || (block_size == 0U))
         return nullptr;
 
-    const char *name    = (attr ? attr->name    : nullptr);
-    void       *cb_mem  = (attr ? attr->cb_mem  : nullptr);
-    uint32_t    cb_sz   = (attr ? attr->cb_size : 0U);
-    void       *mp_mem  = (attr ? attr->mp_mem  : nullptr);
-    uint32_t    mp_sz   = (attr ? attr->mp_size : 0U);
+    const char *name    = (attr != nullptr ? attr->name    : nullptr);
+    void       *cb_mem  = (attr != nullptr ? attr->cb_mem  : nullptr);
+    uint32_t    cb_sz   = (attr != nullptr ? attr->cb_size : 0U);
+    void       *mp_mem  = (attr != nullptr ? attr->mp_mem  : nullptr);
+    uint32_t    mp_sz   = (attr != nullptr ? attr->mp_size : 0U);
 
     // Compute the aligned block size and required storage byte count.
     const uint32_t aligned_blk       = stk::memory::BlockMemoryPool::AlignBlockSize(block_size);
-    const uint32_t storage_required  = block_count * aligned_blk;
+    const uint32_t storage_required  = (block_count * aligned_blk);
 
     StkMemPool *pool = nullptr;
 
@@ -1458,8 +1412,7 @@ osMemoryPoolId_t osMemoryPoolNew(uint32_t block_count, uint32_t block_size,
     {
         // Caller-supplied pool storage - BlockMemoryPool external-storage ctor.
         pool = PlacementNewOrHeap<StkMemPool>(cb_mem, cb_sz,
-            block_count, block_size, name,
-            static_cast<uint8_t *>(mp_mem));
+            block_count, block_size, name, static_cast<uint8_t *>(mp_mem));
     }
     else
     {
@@ -1495,13 +1448,7 @@ void *osMemoryPoolAlloc(osMemoryPoolId_t mp_id, uint32_t timeout)
     if (IsIrqContext() && (timeout != 0U))
         return nullptr;
 
-    StkMemPool *pool = static_cast<StkMemPool *>(mp_id);
-
-    // BlockMemoryPool::TimedAlloc handles all three cases in one call:
-    //   timeout == 0            -> TryAlloc path (ISR-safe, non-blocking)
-    //   timeout == osWaitForever -> WAIT_INFINITE (task blocks until a block is freed)
-    //   otherwise               -> timed wait via ConditionVariable (no spin-yield)
-    return pool->m_mpool.TimedAlloc(CmsisTimeoutToStk(timeout));
+    return static_cast<StkMemPool *>(mp_id)->m_mpool.TimedAlloc(CmsisTimeoutToStk(timeout));
 }
 
 osStatus_t osMemoryPoolFree(osMemoryPoolId_t mp_id, void *block)
@@ -1509,11 +1456,7 @@ osStatus_t osMemoryPoolFree(osMemoryPoolId_t mp_id, void *block)
     if ((mp_id == nullptr) || (block == nullptr))
         return osErrorParameter;
 
-    StkMemPool *pool = static_cast<StkMemPool *>(mp_id);
-
-    // BlockMemoryPool::Free performs bounds + alignment validation, pushes the
-    // block back in O(1), and wakes one task blocked in TimedAlloc (if any).
-    if (!pool->m_mpool.Free(block))
+    if (!static_cast<StkMemPool *>(mp_id)->m_mpool.Free(block))
         return osErrorParameter; // ptr not from this pool
 
     return osOK;
@@ -1532,8 +1475,6 @@ uint32_t osMemoryPoolGetBlockSize(osMemoryPoolId_t mp_id)
     if (mp_id == nullptr)
         return 0U;
 
-    // Returns the aligned block size - what the allocator actually reserves per
-    // block (>= the raw size passed to osMemoryPoolNew). Matches BlockMemoryPool::GetBlockSize().
     return static_cast<uint32_t>(static_cast<StkMemPool *>(mp_id)->m_mpool.GetBlockSize());
 }
 
@@ -1559,8 +1500,10 @@ osStatus_t osMemoryPoolDelete(osMemoryPoolId_t mp_id)
         return (IsIrqContext() ? osErrorISR : osErrorParameter);
 
     ObjDestroy(static_cast<StkMemPool *>(mp_id));
+
     return osOK;
 }
+
 
 // ===========================================================================
 // ==== Message Queue Management Functions ====
@@ -1572,31 +1515,32 @@ osMessageQueueId_t osMessageQueueNew(uint32_t msg_count, uint32_t msg_size,
     if (IsIrqContext() || (msg_count == 0U) || (msg_size == 0U))
         return nullptr;
 
-    const char *name         = (attr ? attr->name    : nullptr);
-    void       *cb_mem       = (attr ? attr->cb_mem  : nullptr);
-    uint32_t    cb_sz        = (attr ? attr->cb_size : 0U);
-    void       *ext_buf      = (attr ? attr->mq_mem  : nullptr);
-    uint32_t    ext_buf_size = (attr ? attr->mq_size : 0U);
+    if (msg_count > stk::sync::MessageQueue::CAPACITY_MAX)
+        return nullptr;
+
+    const char *name         = (attr != nullptr ? attr->name    : nullptr);
+    void       *cb_mem       = (attr != nullptr ? attr->cb_mem  : nullptr);
+    uint32_t    cb_sz        = (attr != nullptr ? attr->cb_size : 0U);
+    void       *ext_buf      = (attr != nullptr ? attr->mq_mem  : nullptr);
+    uint32_t    ext_buf_size = (attr != nullptr ? attr->mq_size : 0U);
 
     const uint32_t buf_required = msg_count * msg_size;
 
-    StkMessageQueue *mq;
+    StkMessageQueue *mq = nullptr;
 
     if ((ext_buf != nullptr) && (ext_buf_size >= buf_required))
     {
-        // Data buffer: use caller-supplied memory (buffer_owned = false).
-        // Control block: placement-new into cb_mem if provided, else heap.
+        // Data buffer: use caller-supplied memory.
         mq = PlacementNewOrHeap<StkMessageQueue>(cb_mem, cb_sz,
             msg_count, msg_size, name, static_cast<uint8_t *>(ext_buf));
     }
     else
     {
-        // Data buffer: heap-allocated (buffer_owned = true).
-        // Control block: placement-new into cb_mem if provided, else heap.
+        // Data buffer: heap-allocated inside StkMessageQueue constructor.
         mq = PlacementNewOrHeap<StkMessageQueue>(cb_mem, cb_sz,
             msg_count, msg_size, name);
 
-        if ((mq != nullptr) && (mq->m_buffer == nullptr))
+        if ((mq != nullptr) && (mq->m_mq.GetBuffer() == nullptr))
         {
             ObjDestroy(mq);
             return nullptr;
@@ -1611,7 +1555,7 @@ const char *osMessageQueueGetName(osMessageQueueId_t mq_id)
     if (mq_id == nullptr)
         return nullptr;
 
-    return static_cast<StkMessageQueue *>(mq_id)->m_name;
+    return static_cast<StkMessageQueue *>(mq_id)->m_mq.GetTraceName();
 }
 
 osStatus_t osMessageQueuePut(osMessageQueueId_t mq_id, const void *msg_ptr,
@@ -1622,24 +1566,10 @@ osStatus_t osMessageQueuePut(osMessageQueueId_t mq_id, const void *msg_ptr,
     if (IsIrqContext() && (timeout != 0U))
         return osErrorISR;
 
-    StkMessageQueue *mq = static_cast<StkMessageQueue *>(mq_id);
     stk::Timeout stk_timeout = CmsisTimeoutToStk(timeout);
 
-    stk::sync::Mutex::ScopedLock guard(mq->m_mutex);
-
-    while (mq->m_count >= mq->m_capacity)
-    {
-        if (!mq->m_cv_not_full.Wait(mq->m_mutex, stk_timeout))
-            return ((stk_timeout == stk::NO_WAIT) ? osErrorResource : osErrorTimeout);
-    }
-
-    // Copy message into ring buffer.
-    uint8_t *dst = mq->m_buffer + (mq->m_head * mq->m_msg_size);
-    memcpy(dst, msg_ptr, mq->m_msg_size);
-    mq->m_head = (mq->m_head + 1U) % mq->m_capacity;
-    mq->m_count++;
-
-    mq->m_cv_not_empty.NotifyOne();
+    if (!static_cast<StkMessageQueue *>(mq_id)->m_mq.Put(msg_ptr, stk_timeout))
+        return ((stk_timeout == stk::NO_WAIT) ? osErrorResource : osErrorTimeout);
 
     return osOK;
 }
@@ -1652,27 +1582,13 @@ osStatus_t osMessageQueueGet(osMessageQueueId_t mq_id, void *msg_ptr,
     if (IsIrqContext() && (timeout != 0U))
         return osErrorISR;
 
-    StkMessageQueue *mq = static_cast<StkMessageQueue *>(mq_id);
     stk::Timeout stk_timeout = CmsisTimeoutToStk(timeout);
 
-    stk::sync::Mutex::ScopedLock guard(mq->m_mutex);
-
-    while (mq->m_count == 0U)
-    {
-        if (!mq->m_cv_not_empty.Wait(mq->m_mutex, stk_timeout))
-            return ((stk_timeout == stk::NO_WAIT) ? osErrorResource : osErrorTimeout);
-    }
-
-    // Copy message out of ring buffer.
-    const uint8_t *src = mq->m_buffer + (mq->m_tail * mq->m_msg_size);
-    memcpy(msg_ptr, src, mq->m_msg_size);
-    mq->m_tail = (mq->m_tail + 1U) % mq->m_capacity;
-    mq->m_count--;
+    if (!static_cast<StkMessageQueue *>(mq_id)->m_mq.Get(msg_ptr, stk_timeout))
+        return ((stk_timeout == stk::NO_WAIT) ? osErrorResource : osErrorTimeout);
 
     if (msg_prio)
         *msg_prio = 0U; // STK queues have no priority lanes.
-
-    mq->m_cv_not_full.NotifyOne();
 
     return osOK;
 }
@@ -1682,7 +1598,7 @@ uint32_t osMessageQueueGetCapacity(osMessageQueueId_t mq_id)
     if (mq_id == nullptr)
         return 0U;
 
-    return static_cast<StkMessageQueue *>(mq_id)->m_capacity;
+    return static_cast<uint32_t>(static_cast<StkMessageQueue *>(mq_id)->m_mq.GetCapacity());
 }
 
 uint32_t osMessageQueueGetMsgSize(osMessageQueueId_t mq_id)
@@ -1690,7 +1606,7 @@ uint32_t osMessageQueueGetMsgSize(osMessageQueueId_t mq_id)
     if (mq_id == nullptr)
         return 0U;
 
-    return static_cast<StkMessageQueue *>(mq_id)->m_msg_size;
+    return static_cast<uint32_t>(static_cast<StkMessageQueue *>(mq_id)->m_mq.GetMsgSize());
 }
 
 uint32_t osMessageQueueGetCount(osMessageQueueId_t mq_id)
@@ -1698,7 +1614,7 @@ uint32_t osMessageQueueGetCount(osMessageQueueId_t mq_id)
     if (mq_id == nullptr)
         return 0U;
 
-    return static_cast<StkMessageQueue *>(mq_id)->m_count;
+    return static_cast<uint32_t>(static_cast<StkMessageQueue *>(mq_id)->m_mq.GetCount());
 }
 
 uint32_t osMessageQueueGetSpace(osMessageQueueId_t mq_id)
@@ -1706,8 +1622,7 @@ uint32_t osMessageQueueGetSpace(osMessageQueueId_t mq_id)
     if (mq_id == nullptr)
         return 0U;
 
-    StkMessageQueue *mq = static_cast<StkMessageQueue *>(mq_id);
-    return (mq->m_capacity - mq->m_count);
+    return static_cast<uint32_t>(static_cast<StkMessageQueue *>(mq_id)->m_mq.GetSpace());
 }
 
 osStatus_t osMessageQueueReset(osMessageQueueId_t mq_id)
@@ -1715,15 +1630,7 @@ osStatus_t osMessageQueueReset(osMessageQueueId_t mq_id)
     if (IsIrqContext() || (mq_id == nullptr))
         return (IsIrqContext() ? osErrorISR : osErrorParameter);
 
-    StkMessageQueue *mq = static_cast<StkMessageQueue *>(mq_id);
-
-    stk::sync::Mutex::ScopedLock guard(mq->m_mutex);
-
-    mq->m_count = 0U;
-    mq->m_head  = 0U;
-    mq->m_tail  = 0U;
-
-    mq->m_cv_not_full.NotifyAll();
+    static_cast<StkMessageQueue *>(mq_id)->m_mq.Reset();
 
     return osOK;
 }
@@ -1734,5 +1641,6 @@ osStatus_t osMessageQueueDelete(osMessageQueueId_t mq_id)
         return (IsIrqContext() ? osErrorISR : osErrorParameter);
 
     ObjDestroy(static_cast<StkMessageQueue *>(mq_id));
+
     return osOK;
 }

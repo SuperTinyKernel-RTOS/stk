@@ -84,6 +84,11 @@ jobs:
             cmake_flag: TEST_CONDVAR=ON
             elf: test-condvar.elf
             dir: condvar
+            
+          - name: sync::MessageQueue
+            cmake_flag: TEST_MSGQUEUE=ON
+            elf: test-msgqueue.elf
+            dir: msgqueue
 
         board:
           - name: "STM32F0DISCOVERY"

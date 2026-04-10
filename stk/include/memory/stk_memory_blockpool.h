@@ -237,14 +237,14 @@ public:
         \return    \c true if the pool is ready for use.
         \note      ISR-safe.
     */
-    bool IsStorageValid() const;
+    bool IsStorageValid() const { return (m_storage != nullptr); }
 
     /*! \brief     Get the total block capacity of the pool.
         \return    Maximum number of blocks that can be simultaneously allocated.
                    Matches \c osMemoryPoolGetCapacity().
         \note      ISR-safe.
     */
-    size_t GetCapacity() const;
+    size_t GetCapacity() const { return m_capacity; }
 
     /*! \brief     Get the aligned block size used internally by the allocator.
         \details   Equal to \c AlignBlockSize(raw_block_size) passed at construction.
@@ -252,33 +252,33 @@ public:
         \return    Aligned block size in bytes.
         \note      ISR-safe.
     */
-    size_t GetBlockSize() const;
+    size_t GetBlockSize() const { return m_block_size; }
 
     /*! \brief     Get the number of currently allocated (outstanding) blocks.
         \return    Point-in-time snapshot. Matches \c osMemoryPoolGetCount().
         \note      May be stale immediately after return in a multi-task environment.
         \note      ISR-safe on targets where a 16-bit aligned read is a single instruction.
     */
-    size_t GetUsedCount() const;
+    size_t GetUsedCount() const { return m_used_count; }
 
     /*! \brief     Get the number of free (available) blocks.
         \return    Point-in-time snapshot of \c GetCapacity() - \c GetUsedCount().
                    Matches \c osMemoryPoolGetSpace().
         \note      ISR-safe.
     */
-    size_t GetFreeCount() const;
+    size_t GetFreeCount() const { return (m_capacity - m_used_count); }
 
     /*! \brief     Check whether all blocks are currently allocated (pool exhausted).
         \return    \c true if no blocks are available for allocation.
         \note      ISR-safe.
     */
-    bool IsFull() const;
+    bool IsFull() const { return (GetFreeCount() == 0U); }
 
     /*! \brief     Check whether all blocks are free (no outstanding allocations).
         \return    \c true if no blocks are currently allocated.
         \note      ISR-safe.
     */
-    bool IsEmpty() const;
+    bool IsEmpty() const { return (m_used_count == 0U); }
 
 private:
     STK_NONCOPYABLE_CLASS(BlockMemoryPool);
@@ -497,18 +497,6 @@ inline bool BlockMemoryPool::Free(void *ptr)
 
     return true;
 }
-
-// ---------------------------------------------------------------------------
-// Accessors
-// ---------------------------------------------------------------------------
-
-inline bool   BlockMemoryPool::IsStorageValid() const { return (m_storage != nullptr); }
-inline size_t BlockMemoryPool::GetCapacity()    const { return m_capacity; }
-inline size_t BlockMemoryPool::GetBlockSize()   const { return m_block_size; }
-inline size_t BlockMemoryPool::GetUsedCount()   const { return m_used_count; }
-inline size_t BlockMemoryPool::GetFreeCount()   const { return (m_capacity - m_used_count); }
-inline bool   BlockMemoryPool::IsFull()         const { return (GetFreeCount() == 0U); }
-inline bool   BlockMemoryPool::IsEmpty()        const { return (m_used_count == 0U); }
 
 // ---------------------------------------------------------------------------
 // Private helpers

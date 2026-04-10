@@ -22,6 +22,7 @@ option(TEST_SPINLOCK   "build test: sync::SpinLock (platform-dependent)"        
 option(TEST_CONDVAR    "build test: sync::ConditionVariable (platform-dependent)" OFF)
 option(TEST_PIPE       "build test: sync::Pipe (platform-dependent)"              OFF)
 option(TEST_RWMUTEX    "build test: sync::RWMutex (platform-dependent)"           OFF)
+option(TEST_MSGQUEUE   "build test: sync::MessageQueue (platform-dependent)"      OFF)
 option(TEST_TIMERHOST  "build test: time::TimerHost (platform-dependent)"         OFF)
 option(TEST_BLOCKPOOL  "build test: memory::BlockPool (platform-dependent)"       OFF)
 
@@ -75,6 +76,10 @@ endif()
 
 if (TEST_RWMUTEX)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/rwmutex)
+endif()
+
+if (TEST_MSGQUEUE)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/msgqueue)
 endif()
 
 if (TEST_TIMERHOST)
