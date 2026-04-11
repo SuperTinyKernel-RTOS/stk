@@ -24,7 +24,6 @@
  *
  * Not supported (return osError / NULL):
  *   - osKernelSuspend / Resume   - no direct STK equivalent
- *   - osThreadEnumerate          - no public task list API in STK
  *
  * Design notes:
  *   - All objects are heap-allocated with operator new/delete.
@@ -958,7 +957,7 @@ osStatus_t osThreadTerminate(osThreadId_t thread_id)
 
     StkThread *t = static_cast<StkThread *>(thread_id);
 
-    stk::hw::CriticalSection::ScopedLock cs_;
+    stk::sync::ScopedCriticalSection cs_;
 
     // RemoveTask triggers the STATE_REMOVE_PENDING path in the kernel,
     // which will call OnExit() before freeing the slot.
@@ -981,13 +980,19 @@ uint32_t osThreadGetCount(void)
     if (g_StkKernel == nullptr)
         return 0U;
 
+    // avoid race with OnTick
+    stk::sync::ScopedCriticalSection cs_;
+
     return static_cast<uint32_t>(g_StkKernel->GetSwitchStrategy()->GetSize());
 }
 
-uint32_t osThreadEnumerate(osThreadId_t * /*thread_array*/, uint32_t /*array_items*/)
+uint32_t osThreadEnumerate(osThreadId_t *thread_array, uint32_t array_items)
 {
-    // Not supported – STK has no public task enumeration API.
-    return 0U;
+    if (g_StkKernel == nullptr)
+        return 0U;
+
+    // osThreadId_t maps directly to stk::ITask (see StkThread)
+    return g_StkKernel->EnumerateTasks(reinterpret_cast<stk::ITask **>(thread_array), array_items);
 }
 
 

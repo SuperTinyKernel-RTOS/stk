@@ -762,12 +762,9 @@ protected:
     };
 
 public:
-    /*! \brief Constants.
+    /*! \brief Maximum number of concurrently registered tasks. Fixed at compile time. Exceeding this limit in AddTask() triggers a compile-time assert (TASKS_MAX > 0) and a runtime STK_ASSERT.
     */
-    enum EConsts
-    {
-        TASKS_MAX = TSize //!< Maximum number of concurrently registered tasks. Fixed at compile time. Exceeding this limit in AddTask() triggers a compile-time assert (TASKS_MAX > 0) and a runtime STK_ASSERT.
-    };
+    static constexpr uint32_t TASKS_MAX = TSize;
 
     /*! \brief Construct the kernel with all storage zero-initialised and the request flag set to ~0
                (indicating uninitialized state; cleared to REQUEST_NONE by Initialize()).
@@ -998,6 +995,28 @@ public:
             task->Wake();
     }
 
+     /*! \brief     Enumerate tasks.
+        \param[in,out] user_tasks: Pointer to the array for ITask pointers.
+        \param[in] max_size: Max size of the provided array.
+        \return    Number of tasks in the array.
+    */
+    size_t EnumerateTasks(ITask **user_tasks, const size_t max_size)
+    {
+        size_t count = 0U;
+
+        // avoid race with OnTick
+        hw::CriticalSection::ScopedLock cs_;
+
+        for (uint32_t i = 0U; i < Min(max_size, static_cast<size_t>(TASKS_MAX)); ++i)
+        {
+            KernelTask *task = &m_task_storage[i];
+            if (task->IsBusy())
+                user_tasks[count++] = task->GetUserTask();
+        }
+
+        return count;
+    }
+
     /*! \brief     Start the scheduler. This call does not return until all tasks have exited
                    (KERNEL_DYNAMIC mode) or indefinitely (KERNEL_STATIC mode).
         \note      Re-initialises trap stacks on every call so Start() can be called again
@@ -1016,7 +1035,7 @@ public:
         // start tracing
     #if STK_SEGGER_SYSVIEW
         SEGGER_SYSVIEW_Start();
-        for (int32_t i = 0; i < TASKS_MAX; ++i)
+        for (uint32_t i = 0U; i < TASKS_MAX; ++i)
         {
             KernelTask *task = &m_task_storage[i];
             if (task->IsBusy())
@@ -1134,7 +1153,7 @@ protected:
     {
         // look for a free kernel task
         KernelTask *new_task = nullptr;
-        for (uint32_t i = 0; i < TASKS_MAX; ++i)
+        for (uint32_t i = 0U; i < TASKS_MAX; ++i)
         {
             KernelTask *task = &m_task_storage[i];
             if (task->IsBusy())
@@ -1238,7 +1257,7 @@ protected:
     */
     __stk_attr_noinline KernelTask *FindTaskByUserTask(const ITask *user_task)
     {
-        for (uint32_t i = 0; i < TASKS_MAX; ++i)
+        for (uint32_t i = 0U; i < TASKS_MAX; ++i)
         {
             KernelTask *task = &m_task_storage[i];
             if (task->GetUserTask() == user_task)
@@ -1254,7 +1273,7 @@ protected:
     */
     KernelTask *FindTaskByStack(const Stack *stack)
     {
-        for (uint32_t i = 0; i < TASKS_MAX; ++i)
+        for (uint32_t i = 0U; i < TASKS_MAX; ++i)
         {
             KernelTask *task = &m_task_storage[i];
             if (task->GetUserStack() == stack)
@@ -1275,7 +1294,7 @@ protected:
         if (m_task_now->IsMemoryOfSP(SP))
             return m_task_now;
 
-        for (uint32_t i = 0; i < TASKS_MAX; ++i)
+        for (uint32_t i = 0U; i < TASKS_MAX; ++i)
         {
             KernelTask *task = &m_task_storage[i];
 
@@ -1326,7 +1345,7 @@ protected:
         // iterate tasks and generate OnTaskSleep for a strategy for all initially sleeping tasks
         if (TStrategy::SLEEP_EVENT_API)
         {
-            for (uint32_t i = 0; i < TASKS_MAX; ++i)
+            for (uint32_t i = 0U; i < TASKS_MAX; ++i)
             {
                 KernelTask *task = &m_task_storage[i];
 
@@ -1575,7 +1594,7 @@ protected:
     {
         Timeout sleep_ticks = (IsTicklessMode() ? STK_TICKLESS_TICKS_MAX : 1);
 
-        for (uint32_t i = 0; i < TASKS_MAX; ++i)
+        for (uint32_t i = 0U; i < TASKS_MAX; ++i)
         {
             KernelTask *task = &m_task_storage[i];
 
@@ -1717,7 +1736,7 @@ protected:
             {
                 m_request &= ~REQUEST_ADD_TASK;
 
-                for (uint32_t i = 0; i < TASKS_MAX; ++i)
+                for (uint32_t i = 0U; i < TASKS_MAX; ++i)
                 {
                     KernelTask *task = &m_task_storage[i];
 
@@ -2010,7 +2029,7 @@ protected:
     static __stk_forceinline bool IsTicklessMode() { return ((TMode & KERNEL_TICKLESS) != 0U); }
 
     // If hit here: Kernel<N> expects at least 1 task, e.g. N > 0
-    STK_STATIC_ASSERT_N(TASKS_MAX, TASKS_MAX > 0);
+    STK_STATIC_ASSERT_N(TASKS_MAX, TASKS_MAX > 0U);
 
     // If hit here: Kernel mode must be assigned.
     STK_STATIC_ASSERT_N(KERNEL_MODE_MUST_BE_SET, (TMode != 0U));

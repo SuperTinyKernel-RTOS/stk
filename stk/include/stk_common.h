@@ -539,7 +539,8 @@ public:
 
     /*! \brief     Get task trace name set by application.
         \return    Null-terminated name string, or \c NULL if unused.
-        \note      Used for debugging and tracing only (e.g. SEGGER SystemView). The kernel does not interpret this value.
+        \note      Used for debugging and tracing only (e.g. SEGGER SystemView). Kernel does not
+                   interpret this value.
     */
     virtual const char *GetTraceName() const = 0;
 };
@@ -987,6 +988,48 @@ public:
         \param[in] user_task: Pointer to the user task to resume.
     */
     virtual void ResumeTask(ITask *user_task) = 0;
+
+    /*! \brief     Enumerate tasks.
+        \param[in,out] user_tasks: Pointer to the array for ITask pointers.
+        \param[in] max_size: Max size of the provided array.
+        \return    Number of tasks in the array.
+        \warning   ISR-safe.
+    */
+    virtual size_t EnumerateTasks(ITask **user_tasks, size_t max_size) = 0;
+
+    /*! \brief     Enumerate tasks, invoking a callback for each active task.
+        \tparam    TMaxCount: Maximum number of tasks to enumerate.
+                   Should match or exceed the kernel's task capacity.
+                   Determines the size of the internal stack-allocated buffer
+                   (TMaxCount * sizeof(ITask*) bytes on the stack).
+        \tparam    TCallback: Callable type, deduced automatically.
+                   Must satisfy: bool(ITask*)
+        \param[in] callback: Callable invoked for each active task.
+                   Return \c true to continue, \c false to stop early.
+        \return    Number of tasks visited (up to \p TMaxCount).
+        \warning   ISR-safe.
+
+        Example:
+        \code
+        kernel.EnumerateTasks<_STK_KERNEL_TASKS_COUNT>([](ITask *t) {
+            Log(t->GetTraceName());
+            return true; // continue
+        });
+        \endcode
+    */
+    template <size_t TMaxCount, typename TCallback>
+    size_t EnumerateTasks(TCallback &&callback)
+    {
+        ITask *tasks[TMaxCount];
+        size_t count = EnumerateTasks(tasks, TMaxCount);
+        for (size_t i = 0; i < count; ++i)
+        {
+            if (!callback(tasks[i]))
+                break;
+        }
+
+        return count;
+    }
 
     /*! \brief     Start kernel scheduling.
         \note      This function never returns. Must be called after Initialize() and AddTask().
