@@ -235,6 +235,17 @@ public:
         return m_event_handler->OnGetTid(GetCallerSP());
     }
 
+    Timeout Suspend()
+    {
+        m_event_handler->OnSuspend(true);
+        return 1;
+    }
+
+    void Resume(Timeout elapsed_ticks)
+    {
+        m_event_handler->OnSuspend(false);
+    }
+
     IKernelService  *m_service;
     Stack           *m_exit_trap;
     bool             m_fail_InitStack;
@@ -314,6 +325,16 @@ public:
         (void)mutex;
         (void)timeout;
         return nullptr;
+    }
+
+    Timeout Suspend()
+    {
+        return 1;
+    }
+
+    void Resume(Timeout elapsed_ticks)
+    {
+        (void)elapsed_ticks;
     }
 
     bool    m_inc_ticks;

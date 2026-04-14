@@ -93,13 +93,14 @@ enum ESystemTaskId
 };
 
 /*! \enum  ETraceEventId
-    \brief Trace event id for tracing tasks suspension and resume with debugging tools (SEGGER SysView and etc.).
+    \brief Trace event identifiers for tracing task suspension and resume with debugging tools (e.g. SEGGER SystemView).
+    \note  Values are offset by 1000 to avoid collisions with the host tool's built-in system event range (0–999).
 */
 enum ETraceEventId
 {
-    TRACE_EVENT_UNKNOWN = 0,
-    TRACE_EVENT_SWITCH  = 1000 + 1,
-    TRACE_EVENT_SLEEP   = 1000 + 2
+    TRACE_EVENT_UNKNOWN = 0,        //!< Unknown / uninitialized trace event
+    TRACE_EVENT_SWITCH  = 1000 + 1, //!< Task context switch event (task became active)
+    TRACE_EVENT_SLEEP   = 1000 + 2  //!< Task entered sleep / blocked state
 };
 
 /*! \typedef Word
@@ -217,7 +218,7 @@ template <size_t _StackSize> struct StackMemoryDef
 struct Stack
 {
     Word        SP;   //!< Stack Pointer (SP) register (note: must be the first entry in this struct)
-    EAccessMode mode; //!< access mode
+    EAccessMode mode; //!< Hardware access mode of the owning task (see \a EAccessMode).
 #if STK_NEED_TASK_ID
     TId         tid;  //!< task id (see \a STK_SEGGER_SYSVIEW)
 #endif
@@ -241,7 +242,9 @@ public:
     */
     virtual size_t GetStackSizeBytes() const = 0;
 
-    /*! \brief Get available stack space.
+    /*! \brief  Get available stack space.
+        \return Number of free bytes remaining on the stack (computed via the watermark pattern).
+                Returns 0 if the stack has been fully used or the watermark was overwritten.
     */
     virtual size_t GetStackSpace()
     {
@@ -281,8 +284,8 @@ public:
     virtual TId GetTid() const = 0;
 
     /*! \brief     Wake task.
-        \param[in] timeout: Pass \a true if the task is waking due to timeout expiry. 
-                   \a false if waking due to a successful signal.
+        \param[in] timeout: \c true if the task is waking due to timeout expiry;
+                   \c false if waking due to a successful signal.
         \note      The implementation is responsible for removing this wait object from the synchronization
                    object's wait list (via ISyncObject::RemoveWaitObject) as part of the wake sequence.
     */
@@ -607,7 +610,11 @@ public:
     virtual Timeout GetHrtDeadline() const = 0;
 
     /*! \brief     Get HRT task's relative deadline.
-        \return    Relative deadline of the task (ticks).
+        \return    Relative deadline of the task (ticks): the maximum allowed elapsed time from the
+                   start of the current period until the task must complete. Unlike the absolute
+                   deadline (GetHrtDeadline), this value is measured relative to the period start
+                   and does not depend on the current tick counter.
+        \see       GetHrtDeadline, GetHrtPeriodicity
     */
     virtual Timeout GetHrtRelativeDeadline() const = 0;
 
@@ -714,6 +721,11 @@ public:
             \return     Task/thread id of the process (returns always valid TId belonging to a task).
         */
         virtual TId OnGetTid(Word caller_SP) = 0;
+
+        /*! \brief      Called from the Thread process to suspend scheduling.
+            \param[in]  suspended: \c true if scheduling was successfully suspended, \c false otherwise.
+        */
+        virtual void OnSuspend(bool suspended) = 0;
     };
 
     /*! \class IEventOverrider
@@ -821,6 +833,21 @@ public:
         \see       TID_ISR_N, TID_NONE, IsIsrTid
     */
     virtual TId GetTid() const = 0;
+
+    /*! \brief     Suspend scheduling.
+        \return    Number of ticks available for the suspension period, as determined by the
+                   nearest pending wake-up. The caller may use this value to program a hardware
+                   timer for the tickless sleep interval.
+        \note      ISR-safe. Pair with Resume().
+    */
+    virtual Timeout Suspend() = 0;
+
+    /*! \brief     Resume scheduling after a prior Suspend() call.
+        \param[in] elapsed_ticks: Number of ticks that elapsed during the suspended period.
+                   The kernel uses this value to advance internal time counters.
+        \note      ISR-safe.
+    */
+    virtual void Resume(Timeout elapsed_ticks) = 0;
 };
 
 /*! \class ITaskSwitchStrategy
@@ -925,9 +952,10 @@ public:
     */
     enum EState : uint8_t
     {
-        STATE_INACTIVE = 0, //!< not ready, IKernel::Initialize() must be called
-        STATE_READY,        //!< ready to start, IKernel::Start() must be called
-        STATE_RUNNING       //!< initialized and running, IKernel::Start() was called successfully
+        STATE_INACTIVE = 0, //!< Not ready, IKernel::Initialize() must be called
+        STATE_READY,        //!< Ready to start, IKernel::Start() must be called
+        STATE_RUNNING,      //!< Initialized and running, IKernel::Start() was called successfully
+        STATE_SUSPENDED     //!< Scheduling is suspended with IKernelService::Suspend()
     };
 
     /*! \brief     Initialize kernel.
@@ -942,7 +970,7 @@ public:
     virtual void Initialize(uint32_t resolution_us = PERIODICITY_DEFAULT) = 0;
 
     /*! \brief     Add user task.
-        \note      This function is for Soft Real-time modes only, e.g. stk::KERNEL_HRT is not used as parameter.
+        \note      This function is for Soft Real-Time modes only (i.e. \c KERNEL_HRT must not be set in the kernel mode flags).
         \param[in] user_task: Pointer to the user task to add.
     */
     virtual void AddTask(ITask *user_task) = 0;
@@ -1134,6 +1162,24 @@ public:
         \warning   ISR-unsafe.
     */
     virtual IWaitObject *Wait(ISyncObject *sobj, IMutex *mutex, Timeout timeout) = 0;
+
+    /*! \brief     Suspend scheduling.
+        \return    Number of ticks available for the suspension period, as determined by the
+                   nearest pending wake-up. The caller may program a hardware timer with
+                   this value to avoid unnecessary wakeups (tickless idle).
+        \note      ISR-safe. Pair with Resume().
+        \see       IKernel::EState::STATE_SUSPENDED
+    */
+    virtual Timeout Suspend() = 0;
+
+    /*! \brief     Resume scheduling after a prior Suspend() call.
+        \param[in] elapsed_ticks: Number of ticks that elapsed during the suspended period.
+                   The kernel uses this value to advance internal time counters and
+                   wake tasks whose sleep deadlines have expired.
+        \note      ISR-safe.
+        \see       IKernel::EState::STATE_SUSPENDED
+    */
+    virtual void Resume(Timeout elapsed_ticks) = 0;
 };
 
 } // namespace stk

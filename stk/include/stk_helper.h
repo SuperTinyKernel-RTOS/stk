@@ -302,7 +302,7 @@ static inline int64_t GetTimeNowMs()
 /*! \brief     Put calling process into a sleep state.
     \note      Unlike Delay this function does not waste CPU cycles and allows kernel to put CPU into a low-power state.
     \note      Unsupported in HRT mode (see stk::KERNEL_HRT); in HRT mode tasks sleep automatically according to their periodicity and workload.
-    \param[in] ticks: Sleep time (ticks).
+    \param[in] ticks: Sleep time (ticks). 0 does not cause yield, use Yield instead. Negative will cause an assertion.
     \warning   ISR-unsafe. Calling from an ISR context is not permitted and will trigger an assertion.
 */
 __stk_forceinline void Sleep(Timeout ticks)
@@ -315,7 +315,7 @@ __stk_forceinline void Sleep(Timeout ticks)
     \note      Unsupported in HRT mode (see stk::KERNEL_HRT); in HRT mode tasks sleep automatically according to their periodicity and workload.
     \note      Converts ms to ticks and calls IKernelService::SleepTicks() which schedules the calling
                task to sleep and spins until the kernel switches it back in.
-    \param[in] ms: Sleep time (milliseconds).
+    \param[in] ms: Sleep time (milliseconds). 0 does not cause yield, use Yield instead. Negative will cause an assertion.
     \warning   ISR-unsafe. Calling from an ISR context is not permitted and will trigger an assertion.
 */
 static inline void SleepMs(Timeout ms)
@@ -326,7 +326,7 @@ static inline void SleepMs(Timeout ms)
 /*! \brief     Put calling process into a sleep state until the specified timestamp.
     \note      Unlike Delay this function does not waste CPU cycles and allows kernel to put CPU into a low-power state.
     \note      Unsupported in HRT mode (see stk::KERNEL_HRT); in HRT mode tasks sleep automatically according to their periodicity and workload.
-    \param[in] timestamp: Absolute timestamp (ticks).
+    \param[in] timestamp: Absolute timestamp (ticks). 0 does not cause yield, use Yield instead. Negative will cause an assertion.
     \warning   ISR-unsafe. Calling from an ISR context is not permitted and will trigger an assertion.
 */
 __stk_forceinline void SleepUntil(Ticks timestamp)
@@ -346,7 +346,7 @@ __stk_forceinline void Yield()
 /*! \brief     Delay calling process by busy-waiting until the deadline expires.
     \note      Unlike Sleep this function delays code execution by spinning in a loop until deadline expiry.
     \note      Use with care in HRT mode to avoid missed deadline (see stk::KERNEL_HRT, ITask::OnDeadlineMissed).
-    \param[in] ticks: Delay time (ticks).
+    \param[in] ticks: Delay time (ticks). Negative will cause an assertion.
     \warning   ISR-unsafe. Calling from an ISR context is not permitted and will trigger an assertion.
 */
 __stk_forceinline void Delay(Timeout ticks)
@@ -357,7 +357,7 @@ __stk_forceinline void Delay(Timeout ticks)
 /*! \brief     Delay calling process by busy-waiting until the deadline expires.
     \note      Unlike Sleep this function delays code execution by spinning in a loop until deadline expiry.
     \note      Use with care in HRT mode to avoid missed deadline (see stk::KERNEL_HRT, ITask::OnDeadlineMissed).
-    \param[in] ms: Delay time (milliseconds).
+    \param[in] ms: Delay time (milliseconds). Negative will cause an assertion.
     \warning   ISR-unsafe. Calling from an ISR context is not permitted and will trigger an assertion.
 */
 static inline void DelayMs(Timeout ms)

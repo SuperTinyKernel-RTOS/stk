@@ -44,6 +44,8 @@ public:
     void SetEventOverrider(IEventOverrider *overrider);
     Word GetCallerSP() const;
     TId GetTid() const;
+    Timeout Suspend();
+    void Resume(Timeout elapsed_ticks);
 };
 
 /*! \typedef PlatformDefault

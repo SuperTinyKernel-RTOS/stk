@@ -39,6 +39,8 @@ namespace stk
             (void)timeout;
             return nullptr;
         }
+        Timeout Suspend() { return 1; }
+        void Resume(Timeout elapsed_ticks) { (void)elapsed_ticks; }
     }
     s_KernelServiceMock;
 

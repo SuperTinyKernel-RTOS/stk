@@ -22,14 +22,14 @@
            task-switching strategies.
 
     Include this single header in user application code. It transitively pulls in:
-     - stk_helper.h             — Task, TaskW, StackMemoryWrapper; and free-function helpers:
+     - stk_helper.h             - Task, TaskW, StackMemoryWrapper; and free-function helpers:
                                   GetTid, GetTicks, GetTickResolution, GetTicksFromMsec,
                                   GetMsecFromTicks, GetTimeNowMsec, Delay, Sleep, SleepUntil, Yield.
-     - stk_strategy_rrobin.h    — SwitchStrategyRoundRobin.
-     - stk_strategy_swrrobin.h  — SwitchStrategySmoothWeightedRoundRobin.
-     - stk_strategy_monotonic.h — SwitchStrategyMonotonic (SRT rate-monotonic).
-     - stk_strategy_edf.h       — SwitchStrategyEdf (Earliest Deadline First).
-     - stk_strategy_fpriority.h — SwitchStrategyFixedPriority.
+     - stk_strategy_rrobin.h    - SwitchStrategyRoundRobin.
+     - stk_strategy_swrrobin.h  - SwitchStrategySmoothWeightedRoundRobin.
+     - stk_strategy_monotonic.h - SwitchStrategyMonotonic (SRT rate-monotonic).
+     - stk_strategy_edf.h       - SwitchStrategyEdf (Earliest Deadline First).
+     - stk_strategy_fpriority.h - SwitchStrategyFixedPriority.
 */
 
 namespace stk {
@@ -41,14 +41,14 @@ namespace stk {
     allocation - the entire kernel, tasks, and traps live in statically reserved storage.
 
     \tparam TMode:     Bitmask of EKernelMode flags that configures kernel features:
-                        - KERNEL_STATIC   — fixed task list, no add/remove after Start().
-                        - KERNEL_DYNAMIC  — tasks may be added or removed at runtime.
-                        - KERNEL_HRT      — Hard Real-Time mode (must combine with STATIC or DYNAMIC).
-                        - KERNEL_SYNC     — enables synchronization primitives (Mutex, Event, etc.).
-                        - KERNEL_TICKLESS — enables tickless low-power operation. Requires
+                        - KERNEL_STATIC   - fixed task list, no add/remove after Start().
+                        - KERNEL_DYNAMIC  - tasks may be added or removed at runtime.
+                        - KERNEL_HRT      - Hard Real-Time mode (must combine with STATIC or DYNAMIC).
+                        - KERNEL_SYNC     - enables synchronization primitives (Mutex, Event, etc.).
+                        - KERNEL_TICKLESS - enables tickless low-power operation. Requires
                                            STK_TICKLESS_IDLE=1 in stk_config.h. Incompatible with
                                            KERNEL_HRT (tickless suppresses the timer, which destroys
-                                           the precise periodicity HRT depends on — enforced by the
+                                           the precise periodicity HRT depends on - enforced by the
                                            compile-time assertion TICKLESS_HRT_CONFLICT).
                        KERNEL_STATIC and KERNEL_DYNAMIC are mutually exclusive.
     \tparam TSize:     Maximum number of concurrent tasks. Must be > 0.
@@ -63,9 +63,7 @@ namespace stk {
 
     Usage example:
     \code
-    static stk::Kernel<KERNEL_STATIC, 3,
-                       SwitchStrategyRoundRobin,
-                       PlatformDefault> kernel;
+    static stk::Kernel<KERNEL_STATIC, 3, SwitchStrategyRoundRobin, PlatformDefault> kernel;
 
     static MyTask1<256, ACCESS_PRIVILEGED> task1;
     static MyTask2<512, ACCESS_USER>       task2;
@@ -249,6 +247,37 @@ protected:
             return (IsHrtMode() ? (m_hrt[0].deadline - m_hrt[0].duration) : 0);
         }
 
+        Timeout GetSleepTicks(Timeout sleep_ticks)
+        {
+            // note: task sleep time is negative
+            Timeout task_sleep = Max<Timeout>(0, -m_time_sleep);
+
+            if (IsSyncMode())
+            {
+                // likely task is sleeping during sync operation (see Wait)
+                if (m_wait_obj->IsWaiting())
+                {
+                    // note: sync wait time is positive
+                    task_sleep = m_wait_obj->m_time_wait;
+
+                    // we shall account for only valid time (when task is waiting during sync operation)
+                    if (task_sleep > 0)
+                        sleep_ticks = Min(sleep_ticks, task_sleep);
+                }
+                else
+                {
+                    sleep_ticks = Min(sleep_ticks, task_sleep);
+                }
+            }
+            else
+            {
+                sleep_ticks = Min(sleep_ticks, task_sleep);
+            }
+
+            // clamp to [1, STK_TICKLESS_TICKS_MAX] range
+            return Max<Timeout>(1, sleep_ticks);
+        }
+
     protected:
         /*! \brief Destructor.
             \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
@@ -409,9 +438,9 @@ protected:
             Timeout       m_time_wait; //!< Ticks remaining until timeout. Decremented each tick; WAIT_INFINITE means no timeout.
         };
 
-        /*! \brief     Bind this slot to a user task: set access mode, task ID, and initialise the stack.
-            \param[in] platform: Platform driver used to initialise the stack frame.
-            \param[in] user_task: User task to bind. Asserts that the stack is successfully initialised.
+        /*! \brief     Bind this slot to a user task: set access mode, task ID, and initialize the stack.
+            \param[in] platform: Platform driver used to initialize the stack frame.
+            \param[in] user_task: User task to bind. Asserts that the stack is successfully initialized.
         */
         void Bind(TPlatform *platform, ITask *user_task)
         {
@@ -642,6 +671,7 @@ protected:
         __stk_attr_noinline void Delay(Timeout ticks)
         {
             STK_ASSERT(!hw::IsInsideISR());
+            STK_ASSERT(ticks >= 0);
 
             Ticks now = GetTicks();
             const Ticks deadline = now + ticks;
@@ -655,12 +685,13 @@ protected:
 
         /*! \brief     Yield the CPU for \a ticks, allowing the scheduler to run other tasks.
             \param[in] ticks: Sleep time in ticks.
-            \warning   ISR-unsafe. Asserts (never returns) in KERNEL_HRT mode — HRT tasks sleep
+            \warning   ISR-unsafe. Asserts (never returns) in KERNEL_HRT mode - HRT tasks sleep
                        automatically according to their periodicity, not via explicit Sleep() calls.
         */
         __stk_attr_noinline void Sleep(Timeout ticks)
         {
             STK_ASSERT(!hw::IsInsideISR());
+            STK_ASSERT(ticks >= 0);
 
             if (!IsHrtMode())
             {
@@ -675,12 +706,13 @@ protected:
 
         /*! \brief     Yield the CPU till \a timestamp, allowing the scheduler to run other tasks.
             \param[in] timestamp: Absolute time, a deadline for a sleep period.
-            \warning   ISR-unsafe. Asserts (never returns) in KERNEL_HRT mode — HRT tasks sleep
+            \warning   ISR-unsafe. Asserts (never returns) in KERNEL_HRT mode - HRT tasks sleep
                        automatically according to their periodicity, not via explicit SleepUntil() calls.
         */
         __stk_attr_noinline void SleepUntil(Ticks timestamp)
         {
             STK_ASSERT(!hw::IsInsideISR());
+            STK_ASSERT(timestamp >= 0);
 
             if (!IsHrtMode())
             {
@@ -725,9 +757,34 @@ protected:
             }
         }
 
+        Timeout Suspend()
+        {
+            if (IsTicklessMode())
+            {
+                return m_platform->Suspend();
+            }
+            else
+            {
+                STK_ASSERT(false);
+                return 0;
+            }
+        }
+
+        void Resume(Timeout elapsed_ticks)
+        {
+            if (IsTicklessMode())
+            {
+                return m_platform->Resume(elapsed_ticks);
+            }
+            else
+            {
+                STK_ASSERT(false);
+            }
+        }
+
     private:
-        /*! \brief Construct an uninitialised service instance (m_platform = null, m_ticks = 0).
-            \note  Fully initialised by Initialize(). Private; constructed only as a member of Kernel.
+        /*! \brief Construct an uninitialized service instance (m_platform = null, m_ticks = 0).
+            \note  Fully initialized by Initialize(). Private; constructed only as a member of Kernel.
         */
         explicit KernelService() : m_platform(nullptr), m_ticks(0)
         {}
@@ -766,7 +823,7 @@ public:
     */
     static constexpr uint32_t TASKS_MAX = TSize;
 
-    /*! \brief Construct the kernel with all storage zero-initialised and the request flag set to ~0
+    /*! \brief Construct the kernel with all storage zero-initialized and the request flag set to ~0
                (indicating uninitialized state; cleared to REQUEST_NONE by Initialize()).
         \note  In debug builds also verifies that TPlatform derives from IPlatform and TStrategy
                from ITaskSwitchStrategy.
@@ -829,7 +886,7 @@ public:
     /*! \brief     Register task for a soft real-time (SRT) scheduling.
         \param[in] user_task: User task to add. Must not already be registered. Must not be \c nullptr.
         \note      Before Start(): allocates a free KernelTask slot and adds it to the strategy immediately.
-        \note      After Start() (KERNEL_DYNAMIC only): serialises the request via RequestAddTask() —
+        \note      After Start() (KERNEL_DYNAMIC only): serialises the request via RequestAddTask() -
                    the calling task yields and the kernel processes the request on the next tick.
         \warning   Asserts if called in KERNEL_HRT mode (use the HRT overload instead),
                    if called after Start() without KERNEL_DYNAMIC, or if TASKS_MAX is exceeded.
@@ -1019,7 +1076,7 @@ public:
 
     /*! \brief     Start the scheduler. This call does not return until all tasks have exited
                    (KERNEL_DYNAMIC mode) or indefinitely (KERNEL_STATIC mode).
-        \note      Re-initialises trap stacks on every call so Start() can be called again
+        \note      Re-initializes trap stacks on every call so Start() can be called again
                    after a previous scheduling session ended.
         \note      If STK_SEGGER_SYSVIEW is enabled, starts tracing and registers all pre-added tasks.
         \warning   At least one task must have been added via AddTask() before calling Start().
@@ -1476,8 +1533,8 @@ protected:
             if (IsHrtMode())
                 task->HrtOnWorkCompleted();
 
-            // at least yield
-            task->ScheduleSleep(Max(YIELD_TICKS, ticks));
+            if (ticks > 0)
+                task->ScheduleSleep(ticks);
         }
 
         // note: we do not spin long here, kernel will switch this task out from scheduling on the next tick
@@ -1495,8 +1552,10 @@ protected:
         {
             hw::CriticalSection::ScopedLock cs_;
 
-            // at least yield
-            task->ScheduleSleep(Max(YIELD_TICKS, static_cast<Timeout>(timestamp - m_service.m_ticks)));
+            Timeout ticks = Max(static_cast<Timeout>(0), static_cast<Timeout>(timestamp - m_service.m_ticks));
+
+            if (ticks > 0)
+                task->ScheduleSleep(ticks);
         }
 
         // note: we do not spin long here, kernel will switch this task out from scheduling on the next tick
@@ -1566,6 +1625,14 @@ protected:
         STK_ASSERT(task != nullptr);
 
         return task->GetTid();
+    }
+
+    void OnSuspend(bool suspended)
+    {
+        if (suspended)
+            m_state = ((m_state == STATE_RUNNING) ? STATE_SUSPENDED : m_state);
+        else
+            m_state = ((m_state == STATE_SUSPENDED) ? STATE_RUNNING : m_state);
     }
 
     /*! \brief     Update tasks (sleep, requests).
@@ -1665,33 +1732,7 @@ protected:
             // get the number ticks the driver has to keep CPU in Idle
             if (IsTicklessMode() && (sleep_ticks > 1) && task->IsBusy())
             {
-                // note: task sleep time is negative
-                Timeout task_sleep = Max<Timeout>(0, -task->m_time_sleep);
-
-                if (IsSyncMode())
-                {
-                    // likely task is sleeping during sync operation (see Wait)
-                    if (task->m_wait_obj->IsWaiting())
-                    {
-                        // note: sync wait time is positive
-                        task_sleep = task->m_wait_obj->m_time_wait;
-
-                        // we shall account for only valid time (when task is waiting during sync operation)
-                        if (task_sleep > 0)
-                            sleep_ticks = Min(sleep_ticks, task_sleep);
-                    }
-                    else
-                    {
-                        sleep_ticks = Min(sleep_ticks, task_sleep);
-                    }
-                }
-                else
-                {
-                    sleep_ticks = Min(sleep_ticks, task_sleep);
-                }
-
-                // clamp to [1, STK_TICKLESS_TICKS_MAX] range
-                sleep_ticks = Max<Timeout>(sleep_ticks, 1);
+                sleep_ticks = task->GetSleepTicks(sleep_ticks);
             }
         }
 
@@ -1711,7 +1752,7 @@ protected:
             ISyncObject::ListEntryType *next = itr->GetNext();
 
             // MISRA 5-2-3 deviation: GetNext/GetFirst returns ISyncObject*, all objects in
-            // m_sync_list are ISyncObject instances - downcast is guaranteed safe.
+            // m_sync_list are ISyncObject instances - downcast is guaranteed safe
             if (!static_cast<ISyncObject *>(itr)->Tick(elapsed_ticks))
                 m_sync_list->Unlink(itr);
 

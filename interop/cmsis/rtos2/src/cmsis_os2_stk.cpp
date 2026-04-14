@@ -22,9 +22,6 @@
  *                            GetCapacity / GetBlockSize / GetCount / GetSpace /
  *                            GetName)
  *
- * Not supported (return osError / NULL):
- *   - osKernelSuspend / Resume   - no direct STK equivalent
- *
  * Design notes:
  *   - All objects are heap-allocated with operator new/delete.
  *     For a fully static deployment, replace with a static object-pool allocator.
@@ -44,8 +41,6 @@
  *     semantics (Put/Get with configurable timeouts, ISR-safe TryPut/TryGet).
  *
  * Limitations / deviations from the specification:
- *   - osThreadSuspend / osThreadResume - not directly available in STK's
- *     public API; these return osError.
  *   - osKernelGetSysTimerCount / Freq - returns a tick-based approximation;
  *     hardware cycle counter is not accessed here.
  *   - Priority inheritance (osMutexPrioInherit) and robust mutex
@@ -155,12 +150,14 @@ static __stk_forceinline bool IsIrqContext()
 // ---------------------------------------------------------------------------
 // Global kernel type alias
 // ---------------------------------------------------------------------------
-using StkKernel = stk::Kernel<stk::KERNEL_DYNAMIC | stk::KERNEL_SYNC,
-    CMSIS_STK_MAX_THREADS, stk::SwitchStrategyFP32, stk::PlatformDefault>;
+using StkKernel = stk::Kernel<stk::KERNEL_DYNAMIC | stk::KERNEL_SYNC
+#if STK_TICKLESS_IDLE
+    | stk::KERNEL_TICKLESS
+#endif
+    , CMSIS_STK_MAX_THREADS, stk::SwitchStrategyFP32, stk::PlatformDefault>;
 
-static StkKernel      *g_StkKernel = nullptr;
-static stk::Word       g_KernelBuf[StkGetWordCountForType<StkKernel>()];
-static osKernelState_t g_KernelState = osKernelInactive;
+static StkKernel g_StkKernel;
+static uint32_t  g_StkKernelLocked = 0;
 
 // ---------------------------------------------------------------------------
 // Thread control block
@@ -323,18 +320,13 @@ struct StkTimer : public stk::time::TimerHost::Timer
 
     static bool EnsureTimerHostCreated()
     {
-        if (g_StkKernel != nullptr)
+        if (g_TimerHost == nullptr)
         {
-            if (g_TimerHost == nullptr)
-            {
-                g_TimerHost = new (g_TimerHostBuf) stk::time::TimerHost();
-                g_TimerHost->Initialize(g_StkKernel, stk::ACCESS_PRIVILEGED);
-            }
-
-            return true;
+            g_TimerHost = new (g_TimerHostBuf) stk::time::TimerHost();
+            g_TimerHost->Initialize(&g_StkKernel, stk::ACCESS_PRIVILEGED);
         }
 
-        return false;
+        return true;
     }
 
     // ---- Members ----
@@ -519,13 +511,10 @@ osStatus_t osKernelInitialize(void)
     if (IsIrqContext())
         return osErrorISR;
 
-    if (g_KernelState != osKernelInactive)
+    if (osKernelGetState() != osKernelInactive)
         return osError;
 
-    g_StkKernel = new (g_KernelBuf) StkKernel();
-    g_StkKernel->Initialize(); // default 1 ms tick resolution
-
-    g_KernelState = osKernelReady;
+    g_StkKernel.Initialize(); // default 1 ms tick resolution
     return osOK;
 }
 
@@ -554,16 +543,16 @@ osStatus_t osKernelGetInfo(osVersion_t *version, char *id_buf, uint32_t id_size)
 
 osKernelState_t osKernelGetState(void)
 {
-    if (g_StkKernel == nullptr)
-        return osKernelInactive;
+    if (g_StkKernelLocked != 0U)
+        return osKernelLocked;
 
-    switch (g_StkKernel->GetState())
+    switch (g_StkKernel.GetState())
     {
-        case stk::IKernel::STATE_INACTIVE: return (g_KernelState == osKernelReady)
-                                                  ? osKernelReady : osKernelInactive;
-        case stk::IKernel::STATE_READY:    return osKernelReady;
-        case stk::IKernel::STATE_RUNNING:  return osKernelRunning;
-        default:                           return osKernelError;
+    case stk::IKernel::STATE_INACTIVE:  return osKernelInactive;
+    case stk::IKernel::STATE_READY:     return osKernelReady;
+    case stk::IKernel::STATE_RUNNING:   return osKernelRunning;
+    case stk::IKernel::STATE_SUSPENDED: return osKernelSuspended;
+    default:                            return osKernelError;
     }
 }
 
@@ -572,27 +561,22 @@ osStatus_t osKernelStart(void)
     if (IsIrqContext())
         return osErrorISR;
 
-    if (g_KernelState != osKernelReady)
+    if (osKernelGetState() != osKernelReady)
         return osError;
-
-    g_KernelState = osKernelRunning;
 
     // Start() does not return for KERNEL_STATIC;
     // for KERNEL_DYNAMIC it returns when all tasks exit.
-    g_StkKernel->Start();
+    g_StkKernel.Start();
     return osOK;
 }
 
 int32_t osKernelLock(void)
 {
-    // STK does not expose a scheduler-suspend API; use critical section.
-    // Return 0 (was unlocked) as a conservative answer.
     if (IsIrqContext())
         return static_cast<int32_t>(osErrorISR);
-    if (g_StkKernel == nullptr)
-        return static_cast<int32_t>(osError);
 
     stk::hw::CriticalSection::Enter();
+    ++g_StkKernelLocked;
     return 0;
 }
 
@@ -600,9 +584,10 @@ int32_t osKernelUnlock(void)
 {
     if (IsIrqContext())
         return static_cast<int32_t>(osErrorISR);
-    if (g_StkKernel == nullptr)
-        return static_cast<int32_t>(osError);
+    if (g_StkKernelLocked == 0U)
+        return osErrorResource;
 
+    --g_StkKernelLocked;
     stk::hw::CriticalSection::Exit();
     return 0;
 }
@@ -611,31 +596,51 @@ int32_t osKernelRestoreLock(int32_t lock)
 {
     if (IsIrqContext())
         return static_cast<int32_t>(osErrorISR);
-    if (g_StkKernel == nullptr)
-        return static_cast<int32_t>(osError);
 
     if (lock == 1)
+    {
         stk::hw::CriticalSection::Enter();
+        ++g_StkKernelLocked;
+    }
     else
+    {
+        if (g_StkKernelLocked == 0U)
+            return osErrorResource;
+
+        --g_StkKernelLocked;
         stk::hw::CriticalSection::Exit();
+    }
 
     return lock;
 }
 
 uint32_t osKernelSuspend(void)
 {
-    // Not supported in STK.
+#if STK_TICKLESS_IDLE
+    if (osKernelGetState() == osKernelInactive)
+        return 0U;
+
+    return stk::IKernelService::GetInstance()->Suspend();
+#else
+    // Not supported in non-tickless kernel.
     return 0U;
+#endif
 }
 
-void osKernelResume(uint32_t /*sleep_ticks*/)
+void osKernelResume(uint32_t sleep_ticks)
 {
-    // Not supported in STK.
+#if STK_TICKLESS_IDLE
+    if (osKernelGetState() != osKernelInactive)
+        return stk::IKernelService::GetInstance()->Resume(sleep_ticks);
+#else
+    // Not supported in non-tickless kernel.
+    STK_UNUSED(sleep_ticks);
+#endif
 }
 
 uint32_t osKernelGetTickCount(void)
 {
-    if (g_StkKernel == nullptr)
+    if (osKernelGetState() == osKernelInactive)
         return 0U;
 
     return static_cast<uint32_t>(stk::GetTicks());
@@ -643,7 +648,7 @@ uint32_t osKernelGetTickCount(void)
 
 uint32_t osKernelGetTickFreq(void)
 {
-    if (g_StkKernel == nullptr)
+    if (osKernelGetState() == osKernelInactive)
         return 1000U; // default 1 kHz
 
     int32_t res_us = stk::GetTickResolution(); // us per tick
@@ -671,7 +676,7 @@ uint32_t osKernelGetSysTimerFreq(void)
 
 osThreadId_t osThreadNew(osThreadFunc_t func, void *argument, const osThreadAttr_t *attr)
 {
-    if (IsIrqContext() || (func == nullptr) || (g_StkKernel == nullptr))
+    if (IsIrqContext() || (func == nullptr) || (osKernelGetState() == osKernelInactive))
         return nullptr;
 
     bool     joinable = (attr != nullptr) && (attr->attr_bits & osThreadJoinable);
@@ -738,7 +743,7 @@ osThreadId_t osThreadNew(osThreadFunc_t func, void *argument, const osThreadAttr
 
     t->m_stk_priority = CmsisPrioToStk(cmsis_prio);
 
-    g_StkKernel->AddTask(t);
+    g_StkKernel.AddTask(t);
 
     return static_cast<osThreadId_t>(t);
 }
@@ -753,7 +758,7 @@ const char *osThreadGetName(osThreadId_t thread_id)
 
 osThreadId_t osThreadGetId(void)
 {
-    if ((g_StkKernel == nullptr) || IsIrqContext())
+    if ((osKernelGetState() == osKernelInactive) || IsIrqContext())
         return nullptr;
 
     // STK's GetTid() returns the ITask pointer cast to Word.
@@ -825,7 +830,7 @@ osStatus_t osThreadYield(void)
 {
     if (IsIrqContext())
         return osErrorISR;
-    if (g_StkKernel == nullptr)
+    if (osKernelGetState() == osKernelInactive)
         return osError;
 
     stk::Yield();
@@ -834,19 +839,19 @@ osStatus_t osThreadYield(void)
 
 osStatus_t osThreadSuspend(osThreadId_t thread_id)
 {
-    if (IsIrqContext() || (thread_id == nullptr) || (g_StkKernel == nullptr))
+    if (IsIrqContext() || (thread_id == nullptr) || (osKernelGetState() == osKernelInactive))
         return IsIrqContext() ? osErrorISR : osErrorParameter;
 
     StkThread *t = static_cast<StkThread *>(thread_id);
 
-    g_StkKernel->SuspendTask(t, t->m_suspended);
+    g_StkKernel.SuspendTask(t, t->m_suspended);
 
     return osOK;
 }
 
 osStatus_t osThreadResume(osThreadId_t thread_id)
 {
-    if (IsIrqContext() || (thread_id == nullptr) || (g_StkKernel == nullptr))
+    if (IsIrqContext() || (thread_id == nullptr) || (osKernelGetState() == osKernelInactive))
         return IsIrqContext() ? osErrorISR : osErrorParameter;
 
     StkThread *t = static_cast<StkThread *>(thread_id);
@@ -856,7 +861,7 @@ osStatus_t osThreadResume(osThreadId_t thread_id)
     if (!t->m_suspended)
         return osOK; // not suspended, nothing to do
 
-    g_StkKernel->ResumeTask(t);
+    g_StkKernel.ResumeTask(t);
     t->m_suspended = false;
 
     return osOK;
@@ -943,7 +948,7 @@ __NO_RETURN void osThreadExit(void)
 {
     StkThread *t = static_cast<StkThread *>(osThreadGetId());
 
-    g_StkKernel->ScheduleTaskRemoval(t);
+    g_StkKernel.ScheduleTaskRemoval(t);
 
     // Wait for removal.
     for (;;)
@@ -952,7 +957,7 @@ __NO_RETURN void osThreadExit(void)
 
 osStatus_t osThreadTerminate(osThreadId_t thread_id)
 {
-    if ((thread_id == nullptr) || (g_StkKernel == nullptr))
+    if ((thread_id == nullptr) || (osKernelGetState() == osKernelInactive))
         return osErrorParameter;
 
     StkThread *t = static_cast<StkThread *>(thread_id);
@@ -961,7 +966,7 @@ osStatus_t osThreadTerminate(osThreadId_t thread_id)
 
     // RemoveTask triggers the STATE_REMOVE_PENDING path in the kernel,
     // which will call OnExit() before freeing the slot.
-    g_StkKernel->ScheduleTaskRemoval(t);
+    g_StkKernel.ScheduleTaskRemoval(t);
 
     // For detached threads, free immediately (no joiner expected).
     // For joinable threads, OnExit() will wake the joiner; the joiner
@@ -977,22 +982,22 @@ osStatus_t osThreadTerminate(osThreadId_t thread_id)
 
 uint32_t osThreadGetCount(void)
 {
-    if (g_StkKernel == nullptr)
+    if (osKernelGetState() == osKernelInactive)
         return 0U;
 
     // avoid race with OnTick
     stk::sync::ScopedCriticalSection cs_;
 
-    return static_cast<uint32_t>(g_StkKernel->GetSwitchStrategy()->GetSize());
+    return static_cast<uint32_t>(g_StkKernel.GetSwitchStrategy()->GetSize());
 }
 
 uint32_t osThreadEnumerate(osThreadId_t *thread_array, uint32_t array_items)
 {
-    if (g_StkKernel == nullptr)
+    if (osKernelGetState() == osKernelInactive)
         return 0U;
 
     // osThreadId_t maps directly to stk::ITask (see StkThread)
-    return g_StkKernel->EnumerateTasks(reinterpret_cast<stk::ITask **>(thread_array), array_items);
+    return g_StkKernel.EnumerateTasks(reinterpret_cast<stk::ITask **>(thread_array), array_items);
 }
 
 
@@ -1058,7 +1063,7 @@ osStatus_t osDelay(uint32_t ticks)
 {
     if (IsIrqContext())
         return osErrorISR;
-    if (g_StkKernel == nullptr)
+    if (osKernelGetState() == osKernelInactive)
         return osError;
 
     stk::Timeout timeout = CmsisTimeoutToStk(ticks);
@@ -1071,7 +1076,7 @@ osStatus_t osDelayUntil(uint32_t ticks)
 {
     if (IsIrqContext())
         return osErrorISR;
-    if (g_StkKernel == nullptr)
+    if (osKernelGetState() == osKernelInactive)
         return osError;
 
     stk::SleepUntil(static_cast<stk::Ticks>(ticks));
@@ -1086,7 +1091,7 @@ osStatus_t osDelayUntil(uint32_t ticks)
 osTimerId_t osTimerNew(osTimerFunc_t func, osTimerType_t type, void *argument,
                        const osTimerAttr_t *attr)
 {
-    if (IsIrqContext() || (func == nullptr) || (g_StkKernel == nullptr))
+    if (IsIrqContext() || (func == nullptr) || (osKernelGetState() == osKernelInactive))
         return nullptr;
 
     if (!StkTimer::EnsureTimerHostCreated())
