@@ -151,6 +151,16 @@ public:
         return m_resolution;
     }
 
+    Cycles GetSysTimerCount() const
+    {
+        return 0;
+    }
+
+    uint32_t GetSysTimerFrequency() const
+    {
+        return 0;
+    }
+
     void SwitchToNext()
     {
         m_event_handler->OnTaskSwitch(GetCallerSP());
@@ -294,9 +304,19 @@ public:
         return m_ticks;
     }
 
-    int32_t GetTickResolution() const
+    uint32_t GetTickResolution() const
     {
         return m_resolution;
+    }
+
+    Cycles GetSysTimerCount() const
+    {
+        return 0;
+    }
+
+    uint32_t GetSysTimerFrequency() const
+    {
+        return 0;
     }
 
     void Delay(Timeout ticks)

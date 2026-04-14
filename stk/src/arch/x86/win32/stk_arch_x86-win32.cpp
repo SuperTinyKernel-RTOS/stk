@@ -172,6 +172,9 @@ static struct Context : public PlatformContext
         m_stop_signal  = false;
         m_csu_nesting  = 0;
         m_timer_tid    = 0;
+    #if STK_TICKLESS_IDLE
+        m_sleep_ticks  = 0;
+    #endif
 
         if ((m_tls = TlsAlloc()) == TLS_OUT_OF_INDEXES)
         {
@@ -220,7 +223,7 @@ static struct Context : public PlatformContext
     struct TaskContext
     {
         TaskContext() : m_task(nullptr), m_stack(nullptr), m_thread(nullptr), m_thread_id(0)
-        { }
+        {}
 
         void Initialize(ITask *task, Stack *stack)
         {
@@ -246,10 +249,10 @@ static struct Context : public PlatformContext
             return 0;
         }
 
-        ITask *m_task;      //!< user task
-        Stack *m_stack;     //!< user tasks's stack
-        HANDLE m_thread;    //!< task's thread handle
-        DWORD  m_thread_id; //!< task's thread id
+        ITask  *m_task;       //!< user task
+        Stack  *m_stack;      //!< user tasks's stack
+        HANDLE  m_thread;     //!< task's thread handle
+        DWORD   m_thread_id;  //!< task's thread id
     };
 
     bool InitStack(EStackType stack_type, Stack *stack, IStackMemory *stack_memory, ITask *user_task);
@@ -321,6 +324,9 @@ static struct Context : public PlatformContext
     std::list<TaskContext *>       m_tasks;         //!< list of task internal contexts
     std::vector<HANDLE>            m_task_threads;  //!< task threads
     DWORD                          m_timer_tid;     //!< timer thread id
+#if STK_TICKLESS_IDLE
+    Timeout                        m_sleep_ticks;   //!< sleep ticks of the current session
+#endif
     STK_X86_WIN32_CRITICAL_SECTION m_cs;            //!< critical session
     uint8_t                        m_csu_nesting;   //!< depth of user critical session nesting
     bool                           m_started;       //!< started state's flag
@@ -344,11 +350,16 @@ void STK_PANIC_HANDLER_DEFAULT(EKernelPanicId id)
     }
 }
 
+static __stk_forceinline DWORD TicksToMs(uint32_t ticks)
+{
+    return (ticks * GetContext().m_tick_resolution) / 1000U;
+}
+
 static DWORD WINAPI TimerThread(LPVOID param)
 {
     (void)param;
 
-    DWORD wait_ms = (1U * GetContext().m_tick_resolution) / 1000U;
+    DWORD wait_ms = TicksToMs(1U);
     GetContext().m_timer_tid = GetCurrentThreadId();
 
     while (WaitForSingleObject(GetContext().m_timer_thread, wait_ms) == WAIT_TIMEOUT)
@@ -357,6 +368,10 @@ static DWORD WINAPI TimerThread(LPVOID param)
             break;
 
         GetContext().ProcessTick();
+
+    #if STK_TICKLESS_IDLE
+        wait_ms = TicksToMs(GetContext().m_sleep_ticks);
+    #endif
     }
 
     return 0;
@@ -384,6 +399,10 @@ void Context::StartActiveTask()
 void Context::CreateTimerThreadAndJoin()
 {
     m_started = true;
+
+#if STK_TICKLESS_IDLE
+    m_sleep_ticks = 1;
+#endif
 
     m_handler->OnStart(m_stack_active);
 
@@ -467,8 +486,22 @@ void Context::ProcessTick()
 {
     Win32ScopedCriticalSection __cs(m_cs);
 
-    if (m_handler->OnTick(m_stack_idle, m_stack_active))
+#if STK_TICKLESS_IDLE
+    Timeout ticks = m_sleep_ticks;
+#endif
+
+    if (m_handler->OnTick(m_stack_idle, m_stack_active
+    #if STK_TICKLESS_IDLE
+            , ticks
+    #endif
+    ))
+    {
         GetContext().SwitchContext();
+    }
+
+#if STK_TICKLESS_IDLE
+    m_sleep_ticks = ticks;
+#endif
 }
 
 void Context::SwitchContext()
@@ -604,6 +637,17 @@ void PlatformX86Win32::Stop()
     GetContext().Stop();
 }
 
+Timeout PlatformX86Win32::Suspend()
+{
+    STK_ASSERT(false); // unsupported
+    return 0;
+}
+
+void PlatformX86Win32::Resume(Timeout elapsed_ticks)
+{
+    STK_ASSERT(false); // unsupported
+}
+
 bool PlatformX86Win32::InitStack(EStackType stack_type, Stack *stack, IStackMemory *stack_memory, ITask *user_task)
 {
     return GetContext().InitStack(stack_type, stack, stack_memory, user_task);
@@ -612,6 +656,16 @@ bool PlatformX86Win32::InitStack(EStackType stack_type, Stack *stack, IStackMemo
 uint32_t PlatformX86Win32::GetTickResolution() const
 {
     return GetContext().m_tick_resolution;
+}
+
+Cycles PlatformX86Win32::GetSysTimerCount() const
+{
+    return HiResClockQPC::GetInstance()->GetCycles();
+}
+
+uint32_t PlatformX86Win32::GetSysTimerFrequency() const
+{
+    return HiResClockQPC::GetInstance()->GetFrequency();
 }
 
 void PlatformX86Win32::SwitchToNext()

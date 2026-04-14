@@ -651,7 +651,7 @@ protected:
 
         uint32_t GetTickResolution() const  { return m_platform->GetTickResolution(); }
 
-        uint64_t GetSysTimerCount() const { return m_platform->GetSysTimerCount(); }
+        Cycles GetSysTimerCount() const { return m_platform->GetSysTimerCount(); }
 
         uint32_t GetSysTimerFrequency() const { return m_platform->GetSysTimerFrequency(); }
 

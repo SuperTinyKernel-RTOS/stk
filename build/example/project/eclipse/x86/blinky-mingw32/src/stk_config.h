@@ -12,4 +12,7 @@
 
 #define _STK_ARCH_X86_WIN32
 
+// Tickless mode is the most power-efficient as CPU is put into a low-power when tasks have no work.
+#define STK_TICKLESS_IDLE 1
+
 #endif /* STK_CONFIG_H_ */

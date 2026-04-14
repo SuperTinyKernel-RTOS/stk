@@ -76,6 +76,11 @@
 			<locationURI>virtual:/virtual</locationURI>
 		</link>
 		<link>
+			<name>deps/stk/include/memory</name>
+			<type>2</type>
+			<locationURI>virtual:/virtual</locationURI>
+		</link>
+		<link>
 			<name>deps/stk/include/stk.h</name>
 			<type>1</type>
 			<locationURI>PARENT-6-PROJECT_LOC/stk/include/stk.h</locationURI>
@@ -113,12 +118,12 @@
 		<link>
 			<name>deps/stk/include/sync</name>
 			<type>2</type>
-			<locationURI>PARENT-6-PROJECT_LOC/stk/include/sync</locationURI>
+			<locationURI>virtual:/virtual</locationURI>
 		</link>
 		<link>
 			<name>deps/stk/include/time</name>
 			<type>2</type>
-			<locationURI>PARENT-6-PROJECT_LOC/stk/include/time</locationURI>
+			<locationURI>virtual:/virtual</locationURI>
 		</link>
 		<link>
 			<name>deps/stk/src/arch</name>
@@ -136,6 +141,11 @@
 			<locationURI>virtual:/virtual</locationURI>
 		</link>
 		<link>
+			<name>deps/stk/include/arch/risc-v</name>
+			<type>2</type>
+			<locationURI>virtual:/virtual</locationURI>
+		</link>
+		<link>
 			<name>deps/stk/include/arch/stk_arch_common.h</name>
 			<type>1</type>
 			<locationURI>PARENT-6-PROJECT_LOC/stk/include/arch/stk_arch_common.h</locationURI>
@@ -144,6 +154,21 @@
 			<name>deps/stk/include/arch/x86</name>
 			<type>2</type>
 			<locationURI>virtual:/virtual</locationURI>
+		</link>
+		<link>
+			<name>deps/stk/include/memory/stk_memory.h</name>
+			<type>1</type>
+			<locationURI>PARENT-6-PROJECT_LOC/stk/include/memory/stk_memory.h</locationURI>
+		</link>
+		<link>
+			<name>deps/stk/include/memory/stk_memory_blockpool.h</name>
+			<type>1</type>
+			<locationURI>PARENT-6-PROJECT_LOC/stk/include/memory/stk_memory_blockpool.h</locationURI>
+		</link>
+		<link>
+			<name>deps/stk/include/strategy/README.md</name>
+			<type>1</type>
+			<locationURI>PARENT-6-PROJECT_LOC/stk/include/strategy/README.md</locationURI>
 		</link>
 		<link>
 			<name>deps/stk/include/strategy/stk_strategy_edf.h</name>
@@ -171,7 +196,92 @@
 			<locationURI>PARENT-6-PROJECT_LOC/stk/include/strategy/stk_strategy_swrrobin.h</locationURI>
 		</link>
 		<link>
+			<name>deps/stk/include/sync/README.md</name>
+			<type>1</type>
+			<locationURI>PARENT-6-PROJECT_LOC/stk/include/sync/README.md</locationURI>
+		</link>
+		<link>
+			<name>deps/stk/include/sync/stk_sync.h</name>
+			<type>1</type>
+			<locationURI>PARENT-6-PROJECT_LOC/stk/include/sync/stk_sync.h</locationURI>
+		</link>
+		<link>
+			<name>deps/stk/include/sync/stk_sync_cs.h</name>
+			<type>1</type>
+			<locationURI>PARENT-6-PROJECT_LOC/stk/include/sync/stk_sync_cs.h</locationURI>
+		</link>
+		<link>
+			<name>deps/stk/include/sync/stk_sync_cv.h</name>
+			<type>1</type>
+			<locationURI>PARENT-6-PROJECT_LOC/stk/include/sync/stk_sync_cv.h</locationURI>
+		</link>
+		<link>
+			<name>deps/stk/include/sync/stk_sync_event.h</name>
+			<type>1</type>
+			<locationURI>PARENT-6-PROJECT_LOC/stk/include/sync/stk_sync_event.h</locationURI>
+		</link>
+		<link>
+			<name>deps/stk/include/sync/stk_sync_eventflags.h</name>
+			<type>1</type>
+			<locationURI>PARENT-6-PROJECT_LOC/stk/include/sync/stk_sync_eventflags.h</locationURI>
+		</link>
+		<link>
+			<name>deps/stk/include/sync/stk_sync_msgqueue.h</name>
+			<type>1</type>
+			<locationURI>PARENT-6-PROJECT_LOC/stk/include/sync/stk_sync_msgqueue.h</locationURI>
+		</link>
+		<link>
+			<name>deps/stk/include/sync/stk_sync_mutex.h</name>
+			<type>1</type>
+			<locationURI>PARENT-6-PROJECT_LOC/stk/include/sync/stk_sync_mutex.h</locationURI>
+		</link>
+		<link>
+			<name>deps/stk/include/sync/stk_sync_pipe.h</name>
+			<type>1</type>
+			<locationURI>PARENT-6-PROJECT_LOC/stk/include/sync/stk_sync_pipe.h</locationURI>
+		</link>
+		<link>
+			<name>deps/stk/include/sync/stk_sync_rwmutex.h</name>
+			<type>1</type>
+			<locationURI>PARENT-6-PROJECT_LOC/stk/include/sync/stk_sync_rwmutex.h</locationURI>
+		</link>
+		<link>
+			<name>deps/stk/include/sync/stk_sync_semaphore.h</name>
+			<type>1</type>
+			<locationURI>PARENT-6-PROJECT_LOC/stk/include/sync/stk_sync_semaphore.h</locationURI>
+		</link>
+		<link>
+			<name>deps/stk/include/sync/stk_sync_spinlock.h</name>
+			<type>1</type>
+			<locationURI>PARENT-6-PROJECT_LOC/stk/include/sync/stk_sync_spinlock.h</locationURI>
+		</link>
+		<link>
+			<name>deps/stk/include/time/README.md</name>
+			<type>1</type>
+			<locationURI>PARENT-6-PROJECT_LOC/stk/include/time/README.md</locationURI>
+		</link>
+		<link>
+			<name>deps/stk/include/time/stk_time.h</name>
+			<type>1</type>
+			<locationURI>PARENT-6-PROJECT_LOC/stk/include/time/stk_time.h</locationURI>
+		</link>
+		<link>
+			<name>deps/stk/include/time/stk_time_timer.h</name>
+			<type>1</type>
+			<locationURI>PARENT-6-PROJECT_LOC/stk/include/time/stk_time_timer.h</locationURI>
+		</link>
+		<link>
+			<name>deps/stk/include/time/stk_time_util.h</name>
+			<type>1</type>
+			<locationURI>PARENT-6-PROJECT_LOC/stk/include/time/stk_time_util.h</locationURI>
+		</link>
+		<link>
 			<name>deps/stk/src/arch/arm</name>
+			<type>2</type>
+			<locationURI>virtual:/virtual</locationURI>
+		</link>
+		<link>
+			<name>deps/stk/src/arch/risc-v</name>
 			<type>2</type>
 			<locationURI>virtual:/virtual</locationURI>
 		</link>
@@ -186,6 +296,16 @@
 			<locationURI>virtual:/virtual</locationURI>
 		</link>
 		<link>
+			<name>deps/stk/include/arch/risc-v/README.md</name>
+			<type>1</type>
+			<locationURI>PARENT-6-PROJECT_LOC/stk/include/arch/risc-v/README.md</locationURI>
+		</link>
+		<link>
+			<name>deps/stk/include/arch/risc-v/stk_arch_risc-v.h</name>
+			<type>1</type>
+			<locationURI>PARENT-6-PROJECT_LOC/stk/include/arch/risc-v/stk_arch_risc-v.h</locationURI>
+		</link>
+		<link>
 			<name>deps/stk/include/arch/x86/win32</name>
 			<type>2</type>
 			<locationURI>virtual:/virtual</locationURI>
@@ -196,9 +316,19 @@
 			<locationURI>virtual:/virtual</locationURI>
 		</link>
 		<link>
+			<name>deps/stk/src/arch/risc-v/stk_arch_risc-v.cpp</name>
+			<type>1</type>
+			<locationURI>PARENT-6-PROJECT_LOC/stk/src/arch/risc-v/stk_arch_risc-v.cpp</locationURI>
+		</link>
+		<link>
 			<name>deps/stk/src/arch/x86/win32</name>
 			<type>2</type>
 			<locationURI>virtual:/virtual</locationURI>
+		</link>
+		<link>
+			<name>deps/stk/include/arch/arm/cortex-m/README.md</name>
+			<type>1</type>
+			<locationURI>PARENT-6-PROJECT_LOC/stk/include/arch/arm/cortex-m/README.md</locationURI>
 		</link>
 		<link>
 			<name>deps/stk/include/arch/arm/cortex-m/stk_arch_arm-cortex-m.h</name>
@@ -206,9 +336,19 @@
 			<locationURI>PARENT-6-PROJECT_LOC/stk/include/arch/arm/cortex-m/stk_arch_arm-cortex-m.h</locationURI>
 		</link>
 		<link>
+			<name>deps/stk/include/arch/x86/win32/README.md</name>
+			<type>1</type>
+			<locationURI>PARENT-6-PROJECT_LOC/stk/include/arch/x86/win32/README.md</locationURI>
+		</link>
+		<link>
 			<name>deps/stk/include/arch/x86/win32/stk_arch_x86-win32.h</name>
 			<type>1</type>
 			<locationURI>PARENT-6-PROJECT_LOC/stk/include/arch/x86/win32/stk_arch_x86-win32.h</locationURI>
+		</link>
+		<link>
+			<name>deps/stk/src/arch/arm/cortex-m/stk_arch_arm-cortex-m (5).cpp</name>
+			<type>1</type>
+			<locationURI>PARENT-6-PROJECT_LOC/stk/src/arch/arm/cortex-m/stk_arch_arm-cortex-m%20(5).cpp</locationURI>
 		</link>
 		<link>
 			<name>deps/stk/src/arch/arm/cortex-m/stk_arch_arm-cortex-m.cpp</name>

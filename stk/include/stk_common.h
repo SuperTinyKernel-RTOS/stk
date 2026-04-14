@@ -785,7 +785,7 @@ public:
         \note      ISR-safe.
         \return    64-bit count value.
     */
-    virtual uint64_t GetSysTimerCount() const = 0;
+    virtual Cycles GetSysTimerCount() const = 0;
 
     /*! \brief     Get system timer frequency.
         \note      ISR-safe.
@@ -1133,7 +1133,7 @@ public:
         \note      ISR-safe.
         \return    64-bit count value.
     */
-    virtual uint64_t GetSysTimerCount() const = 0;
+    virtual Cycles GetSysTimerCount() const = 0;
 
     /*! \brief     Get system timer frequency.
         \note      ISR-safe.

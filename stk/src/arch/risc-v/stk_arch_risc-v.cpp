@@ -1951,9 +1951,9 @@ uint32_t PlatformRiscV::GetTickResolution() const
     return GetContext().m_tick_resolution;
 }
 
-uint64_t PlatformRiscV::GetSysTimerCount() const
+Cycles PlatformRiscV::GetSysTimerCount() const
 {
-    return HW_GetMtime();
+    return static_cast<Cycles>(HW_GetMtime());
 }
 
 uint32_t PlatformRiscV::GetSysTimerFrequency() const

@@ -1752,9 +1752,9 @@ uint32_t PlatformArmCortexM::GetTickResolution() const
     return GetContext().m_tick_resolution;
 }
 
-uint64_t PlatformArmCortexM::GetSysTimerCount() const
+Cycles PlatformArmCortexM::GetSysTimerCount() const
 {
-    return HW_SysTickValue();
+    return static_cast<Cycles>(HW_SysTickValue());
 }
 
 uint32_t PlatformArmCortexM::GetSysTimerFrequency() const
