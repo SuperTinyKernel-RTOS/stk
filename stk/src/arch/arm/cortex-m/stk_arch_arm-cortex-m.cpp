@@ -713,6 +713,14 @@ static __stk_forceinline void HW_SysTickDisable()
     SysTick->CTRL &= ~SysTick_CTRL_ENABLE_Msk;
 }
 
+/*! \brief  Get SysTick current value.
+    \return Value of SysTick->VAL register.
+*/
+static __stk_forceinline uint32_t HW_SysTickValue()
+{
+    return SysTick->VAL;
+}
+
 /*! \brief  Get SysTick value after it was disabled.
     \return Value of SysTick->VAL register.
 */
@@ -722,7 +730,7 @@ static __stk_forceinline uint32_t HW_SysTickValueAfterDisable()
     __DSB();
 
     // check for a QEMU case and discard elapsed result
-    uint32_t VAL = SysTick->VAL;
+    uint32_t VAL = HW_SysTickValue();
     if (VAL == 0)
         VAL = SysTick->LOAD;
 
@@ -732,7 +740,7 @@ static __stk_forceinline uint32_t HW_SysTickValueAfterDisable()
 /*! \brief     Get number of elapsed ticks of the current period of SysTick timer peripheral.
     \param[in] VAL: a value of SysTick->VAL register.
 */
-static __stk_forceinline uint32_t HW_SysTickGetElapsed(uint32_t VAL)
+static __stk_forceinline uint32_t HW_SysTickElapsed(uint32_t VAL)
 {
     return SysTick->LOAD - VAL;
 }
@@ -1051,8 +1059,8 @@ public:
         // On M0, combine the coarse OS ticks with the fine-grained SysTick counter
         Cycles cycles = ConvertTimeUsToClockCycles(HW_CoreClockFrequency(), stk::GetTicks() * GetContext().m_tick_resolution);
 
-        uint32_t val  = SysTick->VAL;  // down-counter (cycles remaining in current tick)
-        uint32_t load = SysTick->LOAD; // current reload value
+        uint32_t val  = HW_SysTickValue(); // down-counter (cycles remaining in current tick)
+        uint32_t load = SysTick->LOAD;     // current reload value
 
         // total elapsed cycles
         return cycles + static_cast<Cycles>(load - val);
@@ -1115,7 +1123,7 @@ void Context::ReloadTickPeriod(Timeout ticks_requested)
 
     // get already elapsed CPU cycles since SysTick ISR invocation up to SysTick timer stop (see above)
     // to account for them for a new period value
-    const uint32_t elapsed_till_stop = HW_SysTickGetElapsed(HW_SysTickValueAfterDisable());
+    const uint32_t elapsed_till_stop = HW_SysTickElapsed(HW_SysTickValueAfterDisable());
 
     // OnTick() should not consume more than next period
     STK_ASSERT(static_cast<Timeout>(elapsed_till_stop / reload) <= static_cast<Timeout>(ticks_requested));
@@ -1397,7 +1405,7 @@ Timeout Context::Suspend()
 
     // get already elapsed CPU cycles since SysTick ISR invocation up to SysTick timer stop (see above)
     // to account for them for a new period value
-    const uint32_t elapsed = HW_SysTickGetElapsed(HW_SysTickValueAfterDisable());
+    const uint32_t elapsed = HW_SysTickElapsed(HW_SysTickValueAfterDisable());
 
     // stop SysTick timer
     HW_SysTickStop();
@@ -1742,6 +1750,16 @@ void PlatformArmCortexM::Stop()
 uint32_t PlatformArmCortexM::GetTickResolution() const
 {
     return GetContext().m_tick_resolution;
+}
+
+uint64_t PlatformArmCortexM::GetSysTimerCount() const
+{
+    return HW_SysTickValue();
+}
+
+uint32_t PlatformArmCortexM::GetSysTimerFrequency() const
+{
+    return HW_CoreClockFrequency();
 }
 
 void PlatformArmCortexM::SwitchToNext()

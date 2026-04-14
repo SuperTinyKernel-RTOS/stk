@@ -1951,6 +1951,16 @@ uint32_t PlatformRiscV::GetTickResolution() const
     return GetContext().m_tick_resolution;
 }
 
+uint64_t PlatformRiscV::GetSysTimerCount() const
+{
+    return HW_GetMtime();
+}
+
+uint32_t PlatformRiscV::GetSysTimerFrequency() const
+{
+    return HW_MtimeClockFrequency();
+}
+
 void PlatformRiscV::SwitchToNext()
 {
     GetContext().m_handler->OnTaskSwitch(HW_GetCallerSP());

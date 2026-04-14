@@ -299,6 +299,24 @@ static inline int64_t GetTimeNowMs()
         return (service->GetTicks() * resolution) / 1000;
 }
 
+/*! \brief     Get system timer count value.
+    \note      ISR-safe.
+    \return    64-bit count value.
+*/
+__stk_forceinline uint64_t GetSysTimerCount()
+{
+    return IKernelService::GetInstance()->GetSysTimerCount();
+}
+
+/*! \brief     Get system timer frequency.
+    \note      ISR-safe.
+    \return    Frequency (Hz).
+*/
+__stk_forceinline uint32_t GetSysTimerFrequency()
+{
+    return IKernelService::GetInstance()->GetSysTimerFrequency();
+}
+
 /*! \brief     Put calling process into a sleep state.
     \note      Unlike Delay this function does not waste CPU cycles and allows kernel to put CPU into a low-power state.
     \note      Unsupported in HRT mode (see stk::KERNEL_HRT); in HRT mode tasks sleep automatically according to their periodicity and workload.

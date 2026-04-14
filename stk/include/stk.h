@@ -645,29 +645,16 @@ protected:
         friend class Kernel;
 
     public:
-        /*! \brief  Get the TId of the calling task.
-            \return TId via platform->GetTid(), which resolves by stack pointer.
-            \warning ISR-safe.
-        */
         TId GetTid() const { return m_platform->GetTid(); }
 
-        /*! \brief  Get the current tick count since kernel start.
-            \return Atomically-read 64-bit tick counter (via hw::ReadVolatile64).
-            \note   ISR-safe.
-        */
         Ticks GetTicks() const { return hw::ReadVolatile64(&m_ticks); }
 
-        /*! \brief  Get the tick resolution.
-            \return Microseconds per tick, as configured by Initialize(resolution_us).
-            \note   ISR-safe.
-        */
-        int32_t GetTickResolution() const  { return m_platform->GetTickResolution(); }
+        uint32_t GetTickResolution() const  { return m_platform->GetTickResolution(); }
 
-        /*! \brief     Busy-wait until \a ticks have elapsed.
-            \param[in] ticks: Delay time in ticks.
-            \note      Spins calling __stk_relax_cpu() in a loop. Does not yield the CPU.
-            \warning   ISR-unsafe. In HRT mode, long busy-waits will cause deadline misses.
-        */
+        uint64_t GetSysTimerCount() const { return m_platform->GetSysTimerCount(); }
+
+        uint32_t GetSysTimerFrequency() const { return m_platform->GetSysTimerFrequency(); }
+
         __stk_attr_noinline void Delay(Timeout ticks)
         {
             STK_ASSERT(!hw::IsInsideISR());
@@ -683,11 +670,6 @@ protected:
             }
         }
 
-        /*! \brief     Yield the CPU for \a ticks, allowing the scheduler to run other tasks.
-            \param[in] ticks: Sleep time in ticks.
-            \warning   ISR-unsafe. Asserts (never returns) in KERNEL_HRT mode - HRT tasks sleep
-                       automatically according to their periodicity, not via explicit Sleep() calls.
-        */
         __stk_attr_noinline void Sleep(Timeout ticks)
         {
             STK_ASSERT(!hw::IsInsideISR());
@@ -704,11 +686,6 @@ protected:
             }
         }
 
-        /*! \brief     Yield the CPU till \a timestamp, allowing the scheduler to run other tasks.
-            \param[in] timestamp: Absolute time, a deadline for a sleep period.
-            \warning   ISR-unsafe. Asserts (never returns) in KERNEL_HRT mode - HRT tasks sleep
-                       automatically according to their periodicity, not via explicit SleepUntil() calls.
-        */
         __stk_attr_noinline void SleepUntil(Ticks timestamp)
         {
             STK_ASSERT(!hw::IsInsideISR());
@@ -725,11 +702,6 @@ protected:
             }
         }
 
-        /*! \brief Yield the CPU to the next runnable task.
-            \note  Internally calls OnTaskSleep with a 2-tick sleep so the scheduler selects
-                   another task on the very next tick. The calling task is rescheduled promptly.
-            \warning ISR-unsafe.
-        */
         void SwitchToNext()
         {
             STK_ASSERT(!hw::IsInsideISR());
@@ -737,13 +709,6 @@ protected:
             m_platform->SwitchToNext();
         }
 
-        /*! \brief     Block the calling task until a synchronization object signals or the timeout expires.
-            \param[in] sobj: Sync object to wait on. Must belong to this kernel's m_sync_list or be unregistered.
-            \param[in] mutex: Mutex currently held by the caller. Unlocked before waiting, re-locked on return.
-            \param[in] ticks: Maximum ticks to wait, or WAIT_INFINITE.
-            \return    Pointer to the WaitObject on wakeup (check IsTimeout() to distinguish signal vs. timeout).
-            \note      KERNEL_SYNC mode only. Asserts (returns NULL) if KERNEL_SYNC is not set.
-        */
         IWaitObject *Wait(ISyncObject *sobj, IMutex *mutex, Timeout ticks)
         {
             if (IsSyncMode())

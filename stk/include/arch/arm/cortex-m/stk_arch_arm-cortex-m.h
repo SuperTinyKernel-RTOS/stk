@@ -35,6 +35,8 @@ public:
     void Stop();
     bool InitStack(EStackType stack_type, Stack *stack, IStackMemory *stack_memory, ITask *user_task);
     uint32_t GetTickResolution() const;
+    uint64_t GetSysTimerCount() const;
+    uint32_t GetSysTimerFrequency() const;
     void SwitchToNext();
     void Sleep(Timeout ticks);
     void SleepUntil(Ticks timestamp);

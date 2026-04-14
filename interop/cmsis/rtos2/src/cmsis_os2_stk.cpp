@@ -660,13 +660,17 @@ uint32_t osKernelGetTickFreq(void)
 
 uint32_t osKernelGetSysTimerCount(void)
 {
-    // Return tick count as a sys-timer approximation (no hardware cycle counter).
-    return osKernelGetTickCount();
+    return static_cast<uint32_t>(stk::GetSysTimerCount());
+}
+
+uint64_t osKernelGetSysTimerCount64(void)
+{
+    return stk::GetSysTimerCount();
 }
 
 uint32_t osKernelGetSysTimerFreq(void)
 {
-    return osKernelGetTickFreq();
+    return stk::GetSysTimerFrequency();
 }
 
 

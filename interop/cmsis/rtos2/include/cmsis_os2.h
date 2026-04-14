@@ -413,6 +413,10 @@ uint32_t osKernelGetTickFreq (void);
 /// Get the RTOS kernel system timer count.
 /// \return RTOS kernel current system timer count as 32-bit value.
 uint32_t osKernelGetSysTimerCount (void);
+
+/// Get the RTOS kernel system timer count.
+/// \return RTOS kernel current system timer count as 64-bit value.
+uint64_t osKernelGetSysTimerCount64(void);
  
 /// Get the RTOS kernel system timer frequency.
 /// \return frequency of the system timer in hertz, i.e. timer ticks per second.

@@ -98,9 +98,9 @@ enum ESystemTaskId
 */
 enum ETraceEventId
 {
-    TRACE_EVENT_UNKNOWN = 0,        //!< Unknown / uninitialized trace event
-    TRACE_EVENT_SWITCH  = 1000 + 1, //!< Task context switch event (task became active)
-    TRACE_EVENT_SLEEP   = 1000 + 2  //!< Task entered sleep / blocked state
+    TRACE_EVENT_UNKNOWN = 0,        //!< Unknown / uninitialized trace event.
+    TRACE_EVENT_SWITCH  = 1000 + 1, //!< Task context switch event (task became active).
+    TRACE_EVENT_SLEEP   = 1000 + 2  //!< Task entered sleep / blocked state.
 };
 
 /*! \typedef Word
@@ -781,6 +781,18 @@ public:
     */
     virtual uint32_t GetTickResolution() const = 0;
 
+    /*! \brief     Get system timer count value.
+        \note      ISR-safe.
+        \return    64-bit count value.
+    */
+    virtual uint64_t GetSysTimerCount() const = 0;
+
+    /*! \brief     Get system timer frequency.
+        \note      ISR-safe.
+        \return    Frequency (Hz).
+    */
+    virtual uint32_t GetSysTimerFrequency() const = 0;
+
     /*! \brief     Switch to a next task.
     */
     virtual void SwitchToNext() = 0;
@@ -952,10 +964,10 @@ public:
     */
     enum EState : uint8_t
     {
-        STATE_INACTIVE = 0, //!< Not ready, IKernel::Initialize() must be called
-        STATE_READY,        //!< Ready to start, IKernel::Start() must be called
-        STATE_RUNNING,      //!< Initialized and running, IKernel::Start() was called successfully
-        STATE_SUSPENDED     //!< Scheduling is suspended with IKernelService::Suspend()
+        STATE_INACTIVE = 0, //!< Not ready, IKernel::Initialize() must be called.
+        STATE_READY,        //!< Ready to start, IKernel::Start() must be called.
+        STATE_RUNNING,      //!< Initialized and running, IKernel::Start() was called successfully.
+        STATE_SUSPENDED     //!< Scheduling is suspended with IKernelService::Suspend().
     };
 
     /*! \brief     Initialize kernel.
@@ -1115,7 +1127,19 @@ public:
         \note      ISR-safe.
         \return    Microseconds in one tick.
     */
-    virtual int32_t GetTickResolution() const = 0;
+    virtual uint32_t GetTickResolution() const = 0;
+
+    /*! \brief     Get system timer count value.
+        \note      ISR-safe.
+        \return    64-bit count value.
+    */
+    virtual uint64_t GetSysTimerCount() const = 0;
+
+    /*! \brief     Get system timer frequency.
+        \note      ISR-safe.
+        \return    Frequency (Hz).
+    */
+    virtual uint32_t GetSysTimerFrequency() const = 0;
 
     /*! \brief     Delay calling process.
         \note      Unlike Sleep this function delays code execution by spinning in a loop until deadline expiry.
