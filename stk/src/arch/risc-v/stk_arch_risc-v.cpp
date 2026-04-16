@@ -397,6 +397,15 @@ static __stk_forceinline void HW_StopMTimer()
     clear_csr(mie, MIP_MTIP);
 }
 
+/*! \brief Clear pending switch by SV exception.
+*/
+static __stk_forceinline void HW_ClearPendingSwitch()
+{
+#ifdef _STK_RISCV_USE_PENDSV
+    clear_csr(mie, MIP_MSIP);
+#endif
+}
+
 /*! \brief  Get CPU core clock frequency.
     \return Frequency in Hz.
 */
@@ -1005,24 +1014,15 @@ static struct Context : public PlatformContext
         return ticks;
     }
 
-    __stk_forceinline void OnSwitchContext()
+    uint64_t GetTimeNow(uint64_t &error)
     {
-        // capture mtime at ISR entry as the absolute base for the next period;
-        // this eliminates drift from time spent inside OnTick regardless of how
-        // long the scheduler takes to run
-        const uint64_t mtime_now = HW_GetMtime();
-        const uint64_t error = (mtime_now - m_last_mtime) - GetSleepTicksPrev();
-        __stk_compiler_barrier(); // avoid compiler reordering, we count ticks from this point
+        uint64_t mtime_now = HW_GetMtime();
+        error = (mtime_now - m_last_mtime) - GetSleepTicksPrev();
+        return mtime_now;
+    }
 
-        // make sure timer is enabled by the Kernel::Start(), disable its start anywhere else
-        STK_ASSERT(m_started);
-        STK_ASSERT(m_handler != NULL);
-
-        // process tick - scheduler may update m_stack_active and m_sleep_ticks
-        OnTick();
-
-        // rearm timer: use the ISR-entry mtime snapshot as the absolute base so
-        // any CPU cycles consumed by OnTick do not accumulate as period drift
+    void RearmTimer(const uint64_t mtime_now, const uint64_t error)
+    {
     #if STK_TICKLESS_IDLE
         // guard against overflow (theoretical at normal tick periods and CPU frequencies)
         STK_ASSERT((static_cast<uint64_t>(m_sleep_ticks) * static_cast<uint64_t>(m_tick_period)) <= (UINT64_MAX - mtime_now));
@@ -1034,9 +1034,49 @@ static struct Context : public PlatformContext
         m_last_mtime = mtime_now;
     }
 
+    __stk_forceinline void OnSwitchContext()
+    {
+        // capture mtime at ISR entry as the absolute base for the next period;
+        // this eliminates drift from time spent inside OnTick regardless of how
+        // long the scheduler takes to run
+        uint64_t error = 0;
+        uint64_t mtime_now = GetTimeNow(error);
+        __stk_compiler_barrier(); // avoid compiler reordering, we count ticks from this point
+
+        // make sure timer is enabled by the Kernel::Start(), disable its start anywhere else
+        STK_ASSERT(m_started);
+        STK_ASSERT(m_handler != NULL);
+
+        // process tick - scheduler may update m_stack_active and m_sleep_ticks
+        OnTick();
+
+        // rearm timer: use the ISR-entry mtime snapshot as the absolute base so
+        // any CPU cycles consumed by OnTick do not accumulate as period drift
+        RearmTimer(mtime_now, error);
+    }
+
+    void StartTickTimer(Timeout elapsed_ticks)
+    {
+    #if STK_TICKLESS_IDLE
+        // reset sleep ticks if kernel was restarted
+        m_sleep_ticks = elapsed_ticks;
+    #endif
+
+        // start timer with default periodicity
+        m_last_mtime = HW_GetMtime();
+        HW_SetMtimecmp(m_last_mtime + m_tick_period);
+
+        // enable timer interrupt
+        set_csr(mie, MIP_MTIP);
+    }
+
     void Start();
     void OnStart();
     void OnStop();
+#if STK_TICKLESS_IDLE
+    Timeout Suspend();
+    void Resume(Timeout elapsed_ticks);
+#endif
 
     typedef IPlatform::IEventOverrider                               eovrd_t;
     typedef PlatformRiscV::ISpecificEventHandler                     sehndl_t;
@@ -1348,6 +1388,22 @@ static __stk_forceinline void HW_LoadMainSP()
     : "memory" /* protect against compiler reordering */ );
 }
 
+/*! \brief  Get active machine exception/interrupt cause code.
+    \note   Reads the \c mcause CSR directly. Valid only when called from a trap
+            handler context (i.e. when \c HW_IsHandlerMode() returns \c true).
+            In thread context \c mcause retains its last trap value and must not
+            be used for ISR detection - use \c HW_IsHandlerMode() for that.
+    \return Raw \c mcause value:
+              bit[31]    = 1 for asynchronous interrupt, 0 for synchronous exception.
+              bits[30:0] = cause code, unique per interrupt/exception source.
+*/
+static __stk_forceinline Word HW_GetCurrentException()
+{
+    Word mcause;
+    __asm volatile("csrr %0, mcause" : "=r"(mcause));
+    return mcause;
+}
+
 static __stk_forceinline bool HW_IsHandlerMode()
 {
     Word current_sp = HW_GetCallerSP();
@@ -1612,19 +1668,6 @@ void Context::OnStart()
     // notify kernel
     m_handler->OnStart(m_stack_active);
 
-#if STK_TICKLESS_IDLE
-    // reset sleep ticks if kernel was restarted
-    m_sleep_ticks = 1;
-#endif
-
-    // start timer with default periodicity
-    m_last_mtime = HW_GetMtime();
-    HW_SetMtimecmp(m_last_mtime + m_tick_period);
-
-    // change state before enabling interrupt
-    m_started  = true;
-    m_starting = false;
-
     // initialize ISR asm pointer cache
     s_StkRiscvStackIsr[hart]    = &m_stack_isr; // set once here, the ISR stack never moves
     s_StkRiscvStackActive[hart] = m_stack_active;
@@ -1632,21 +1675,22 @@ void Context::OnStart()
     s_StkRiscvStackIdle[hart]   = m_stack_idle;
 #endif
 
-    // enable timer interrupt
-    set_csr(mie, MIP_MTIP
-    #ifdef _STK_RISCV_USE_PENDSV
-        | MIP_MSIP
-    #endif
-    );
+    // start with initially 1 elapsed tick (after timer expires)
+    StartTickTimer(1);
+
+    // change state before enabling interrupts
+    m_started  = true;
+    m_starting = false;
+
+    // enable SV exception
+#ifdef _STK_RISCV_USE_PENDSV
+    set_csr(mie, MIP_MSIP);
+#endif
 }
 
 STK_RISCV_ISR void STK_SVC_HANDLER()
 {
-    Word cause;
-    __asm volatile("csrr %0, mcause"
-    : "=r"(cause)
-    : /* input : none */
-    : /* clobbers: none */);
+    Word cause = HW_GetCurrentException();
 
     /*if (cause & (1UL << (__riscv_xlen - 1)))
     {
@@ -1774,6 +1818,53 @@ void Context::Start()
     HW_StartScheduler();
 }
 
+#if STK_TICKLESS_IDLE
+Timeout Context::Suspend()
+{
+    const uint32_t resolution = static_cast<uint32_t>(ConvertTimeUsToClockCycles(HW_CoreClockFrequency(), m_tick_resolution));
+    STK_ASSERT(resolution != 0);
+
+    HW_DisableInterrupts();
+
+    // stop tick timer
+    HW_StopMTimer();
+
+    // clear pending PendSV exception
+    HW_ClearPendingSwitch();
+
+    // get already elapsed CPU cycles since SysTick ISR invocation up to SysTick timer stop (see above)
+    // to account for them for a new period value
+    const uint32_t elapsed = HW_GetMtime() - m_last_mtime;
+
+    // get already elapsed ticks since the OnTick and a call to Suspend(), we shall account for this
+    // period and return only the remainder
+    Timeout elapsed_ticks = static_cast<Timeout>(elapsed / resolution);
+    Timeout sleep_ticks = Max(m_sleep_ticks - elapsed_ticks, static_cast<Timeout>(0));
+
+    // notify core
+    m_handler->OnSuspend(true);
+
+    HW_EnableInterrupts();
+
+    return sleep_ticks;
+}
+#endif
+
+#if STK_TICKLESS_IDLE
+void Context::Resume(Timeout elapsed_ticks)
+{
+    HW_DisableInterrupts();
+
+    // notify core
+    m_handler->OnSuspend(false);
+
+    // start with initially elapsed ticks (OnTick will fire with elapsed_ticks + 1)
+    StartTickTimer(elapsed_ticks + 1);
+
+    HW_EnableInterrupts();
+}
+#endif
+
 void PlatformRiscV::Start()
 {
     GetContext().Start();
@@ -1836,9 +1927,7 @@ void Context::OnStop()
     HW_StopMTimer();
 
     // clear pending SV exception
-#ifdef _STK_RISCV_USE_PENDSV
-    clear_csr(mie, MIP_MSIP);
-#endif
+    HW_ClearPendingSwitch();
 
     m_started = false;
     m_exiting = true;
@@ -1860,6 +1949,16 @@ void PlatformRiscV::Stop()
 uint32_t PlatformRiscV::GetTickResolution() const
 {
     return GetContext().m_tick_resolution;
+}
+
+Cycles PlatformRiscV::GetSysTimerCount() const
+{
+    return static_cast<Cycles>(HW_GetMtime());
+}
+
+uint32_t PlatformRiscV::GetSysTimerFrequency() const
+{
+    return HW_MtimeClockFrequency();
 }
 
 void PlatformRiscV::SwitchToNext()
@@ -1884,7 +1983,44 @@ IWaitObject *PlatformRiscV::Wait(ISyncObject *sync_obj, IMutex *mutex, Timeout t
 
 TId PlatformRiscV::GetTid() const
 {
+    if (HW_IsHandlerMode())
+    {
+        // to avoid the collision with TID_ISR_N mask, extract and fit into available space:
+
+        const Word exc = HW_GetCurrentException();
+
+        Word num = (exc & 0x7FFU);
+
+    #if (__riscv_xlen > 32)
+        Word interrupt_bit = ((exc & (1ULL << (__riscv_xlen - 1))) ? 0x800U : 0);
+    #else
+        Word interrupt_bit = ((exc & (1U << (__riscv_xlen - 1))) ? 0x800U : 0);
+    #endif
+
+        TId isr_tid = TID_ISR_N | num | interrupt_bit;
+        STK_ASSERT(IsIsrTid(isr_tid));
+        return isr_tid;
+    }
+
     return GetContext().m_handler->OnGetTid(HW_GetCallerSP());
+}
+
+Timeout PlatformRiscV::Suspend()
+{
+#if STK_TICKLESS_IDLE
+    return GetContext().Suspend();
+#else
+    return 0;
+#endif
+}
+
+void PlatformRiscV::Resume(Timeout elapsed_ticks)
+{
+#if STK_TICKLESS_IDLE
+    GetContext().Resume(elapsed_ticks);
+#else
+    STK_UNUSED(elapsed_ticks);
+#endif
 }
 
 void PlatformRiscV::ProcessHardFault()

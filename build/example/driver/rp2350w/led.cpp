@@ -53,7 +53,6 @@ static uint16_t Led_GetPin(Led::Id led)
     case Led::BLUE:
         return NO_LED;
     default:
-        assert(false);
         return NO_LED;
     }
 }
@@ -80,11 +79,3 @@ void Led::Set(Id led, bool state)
     cyw43_arch_gpio_put(pin, state);
 #endif
 }
-
-// C interface
-extern "C" {
-
-void Led_Init(LedId led, bool init_state) { Led::Init(led, init_state); }
-void Led_Set(LedId led, bool state) { Led::Set(led, state); }
-
-} // extern "C"

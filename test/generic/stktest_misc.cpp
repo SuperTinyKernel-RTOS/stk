@@ -86,8 +86,35 @@ TEST(UserTask, GetStackSizeBytes)
     TaskMock<ACCESS_USER> task;
     TaskMockW<1, ACCESS_USER> taskw;
 
-    CHECK_EQUAL(TaskMock<ACCESS_USER>::STACK_SIZE * sizeof(size_t), task.GetStackSizeBytes());
-    CHECK_EQUAL(TaskMock<ACCESS_USER>::STACK_SIZE * sizeof(size_t), taskw.GetStackSizeBytes());
+    CHECK_EQUAL(TaskMock<ACCESS_USER>::STACK_SIZE * sizeof(Word), task.GetStackSizeBytes());
+    CHECK_EQUAL(TaskMock<ACCESS_USER>::STACK_SIZE * sizeof(Word), taskw.GetStackSizeBytes());
+}
+
+TEST(UserTask, GetStackSpace)
+{
+    Kernel<KERNEL_STATIC, 1, SwitchStrategyRR, PlatformTestMock> kernel;
+    TaskMock<ACCESS_USER> task;
+
+    // not initialized with STK_STACK_MEMORY_FILLER
+    CHECK_EQUAL(0, task.GetStackSpace());
+
+    kernel.Initialize();
+    kernel.AddTask(&task);
+    kernel.Start();
+
+    size_t space = task.GetStackSpace();
+
+    // initialized with STK_STACK_MEMORY_FILLER, all free
+    CHECK_EQUAL(TaskMock<ACCESS_USER>::STACK_SIZE, space);
+
+    // write something to bottom
+    task.GetStack()[task.GetStackSize() - 1] = 0x12345678;
+    task.GetStack()[task.GetStackSize() - 2] = 0x12345678;
+
+    space = task.GetStackSpace();
+
+    // consumed 1 Word
+    CHECK_EQUAL(TaskMock<ACCESS_USER>::STACK_SIZE - 2, space);
 }
 
 TEST(UserTask, GetWeight)
@@ -107,8 +134,8 @@ TEST(UserTask, GetIdAndName)
     TaskMock<ACCESS_USER> task;
     TaskMockW<1, ACCESS_USER> taskw;
 
-    CHECK_EQUAL((size_t)&task, task.GetId());
-    CHECK_EQUAL((size_t)&taskw, taskw.GetId());
+    CHECK_EQUAL((Word)&task, task.GetId());
+    CHECK_EQUAL((Word)&taskw, taskw.GetId());
 
     // expect NULL name by default
     CHECK_EQUAL((const char *)NULL, task.GetTraceName());
@@ -145,7 +172,7 @@ TEST(StackMemoryWrapper, GetStack)
     StackMemoryWrapper<STACK_SIZE_MIN> wrapper(&memory);
 
     CHECK_TRUE(NULL != wrapper.GetStack());
-    CHECK_EQUAL((size_t *)&memory, wrapper.GetStack());
+    CHECK_EQUAL((Word *)&memory, wrapper.GetStack());
 }
 
 TEST(StackMemoryWrapper, GetStackSize)
@@ -154,7 +181,7 @@ TEST(StackMemoryWrapper, GetStackSize)
     StackMemoryWrapper<STACK_SIZE_MIN> wrapper(&memory);
 
     CHECK_EQUAL(STACK_SIZE_MIN, wrapper.GetStackSize());
-    CHECK_EQUAL(sizeof(memory) / sizeof(size_t), wrapper.GetStackSize());
+    CHECK_EQUAL(sizeof(memory) / sizeof(Word), wrapper.GetStackSize());
 }
 
 TEST(StackMemoryWrapper, GetStackSizeBytes)
@@ -162,7 +189,7 @@ TEST(StackMemoryWrapper, GetStackSizeBytes)
     StackMemoryWrapper<STACK_SIZE_MIN>::MemoryType memory;
     StackMemoryWrapper<STACK_SIZE_MIN> wrapper(&memory);
 
-    CHECK_EQUAL(STACK_SIZE_MIN * sizeof(size_t), wrapper.GetStackSizeBytes());
+    CHECK_EQUAL(STACK_SIZE_MIN * sizeof(Word), wrapper.GetStackSizeBytes());
     CHECK_EQUAL(sizeof(memory), wrapper.GetStackSizeBytes());
 }
 

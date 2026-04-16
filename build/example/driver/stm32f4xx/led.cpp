@@ -35,7 +35,6 @@ static int32_t Led_GetPin(Led::Id led)
     case Led::GREEN: return GPIO_PIN_12;
     case Led::BLUE: return GPIO_PIN_15;
     default:
-        assert(false);
         return GPIO_PIN_MASK;
     }
 }

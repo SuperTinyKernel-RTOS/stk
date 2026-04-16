@@ -34,7 +34,6 @@ void Led::Set(Id led, bool state)
     case Led::GREEN: (state ? LED_GREEN_ON() : LED_GREEN_OFF()); break;
     case Led::BLUE: (state ? LED_BLUE_ON() : LED_BLUE_OFF()); break;
     default:
-        assert(false);
         break;
     }
 }

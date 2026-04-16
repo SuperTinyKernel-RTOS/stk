@@ -72,7 +72,7 @@ public:
     /*! \brief     Acquire lock.
         \param[in] timeout: Maximum time to wait (ticks).
         \note      Maximum number of recursive locks must not exceed 0xFFFEU.
-        \warning   ISR-unsafe.
+        \warning   ISR-safe only with \a timeout = \c NO_WAIT, ISR-unsafe otherwise.
         \return    True if lock acquired, false if timeout occurred.
     */
     bool TimedLock(Timeout timeout);
@@ -80,23 +80,28 @@ public:
     /*! \brief     Acquire lock.
         \warning   ISR-unsafe.
     */
-    void Lock() { (void)TimedLock(WAIT_INFINITE); }
+    void Lock() { STK_UNUSED(TimedLock(WAIT_INFINITE)); }
 
     /*! \brief     Acquire the lock.
-        \warning   ISR-unsafe.
+        \warning   ISR-safe.
         \return    True if lock acquired, false if lock is already acquired by another task.
     */
     bool TryLock() { return TimedLock(NO_WAIT); }
 
     /*! \brief     Release lock.
-        \warning   ISR-unsafe.
+        \warning   ISR-safe.
     */
     void Unlock();
+
+    /*! \brief     Get owner of the mutex.
+        \warning   ISR-safe.
+    */
+    TId GetOwner() const { return m_owner_tid; }
 
 private:
     STK_NONCOPYABLE_CLASS(Mutex);
 
-    static const uint16_t RECURSION_MAX = 0xFFFEu; //!< maximum nesting depth
+    static const uint16_t RECURSION_MAX = 0xFFFEU; //!< maximum nesting depth
 
     TId      m_owner_tid;       //!< thread id of the current owner
     uint16_t m_recursion_count; //!< recursion depth
@@ -108,8 +113,6 @@ private:
 
 inline bool Mutex::TimedLock(Timeout timeout)
 {
-    STK_ASSERT(!hw::IsInsideISR()); // API contract: caller must not be in ISR
-
     IKernelService *svc = IKernelService::GetInstance();
     TId current_tid = svc->GetTid();
 
@@ -142,6 +145,8 @@ inline bool Mutex::TimedLock(Timeout timeout)
     if (timeout == NO_WAIT)
         return false;
 
+    STK_ASSERT(!hw::IsInsideISR()); // API contract: caller must not be in ISR for a blocking call
+
     // mutex owned by another thread (slow path/blocking)
     if (svc->Wait(this, &cs_, timeout)->IsTimeout())
         return false;
@@ -160,11 +165,10 @@ inline bool Mutex::TimedLock(Timeout timeout)
 
 inline void Mutex::Unlock()
 {
-    STK_ASSERT(!hw::IsInsideISR());      // API contract: caller must not be in ISR
+    ScopedCriticalSection cs_;
+
     STK_ASSERT(m_owner_tid == GetTid()); // API contract: caller must own the lock
     STK_ASSERT(m_recursion_count != 0U); // API contract: must have matching Lock()
-
-    ScopedCriticalSection cs_;
 
     m_recursion_count = static_cast<uint16_t>(m_recursion_count - 1U);
 

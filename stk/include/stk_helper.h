@@ -59,7 +59,12 @@ public:
     /*! \brief Default no-op handler. Override in subclass to log or handle missed deadlines.
         \note  HRT deadline misses are only possible when the kernel is started with KERNEL_HRT.
     */
-    virtual void OnDeadlineMissed(uint32_t duration) { (void)duration; }
+    virtual void OnDeadlineMissed(uint32_t duration) { STK_UNUSED(duration); }
+
+    /*! \brief Default no-op handler. Override to implement join semantics (signal a waiting joiner).
+        \note  Called by the kernel only in KERNEL_DYNAMIC mode.
+    */
+    virtual void OnExit() {}
 
     /*! \brief Default weight of 1. Override in subclass if custom scheduling weight is needed.
         \note  Only relevant when using SwitchStrategySmoothWeightedRoundRobin. Prefer TaskW for
@@ -126,7 +131,12 @@ public:
     /*! \brief Hard Real-Time mode is unsupported for weighted tasks. Triggers an assertion if called.
         \warning Do not use TaskW with KERNEL_HRT. Use Task instead.
     */
-    virtual void OnDeadlineMissed(uint32_t duration) { STK_ASSERT(false); (void)duration; }
+    virtual void OnDeadlineMissed(uint32_t duration) { STK_ASSERT(false); STK_UNUSED(duration); }
+
+    /*! \brief Default no-op handler. Override to implement join semantics (signal a waiting joiner).
+        \note  Called by the kernel only in KERNEL_DYNAMIC mode.
+    */
+    virtual void OnExit() {}
 
     /*! \brief Returns the compile-time weight _Weight.
     */
@@ -289,13 +299,31 @@ static inline int64_t GetTimeNowMs()
         return (service->GetTicks() * resolution) / 1000;
 }
 
+/*! \brief     Get system timer count value.
+    \note      ISR-safe.
+    \return    64-bit count value.
+*/
+__stk_forceinline Cycles GetSysTimerCount()
+{
+    return IKernelService::GetInstance()->GetSysTimerCount();
+}
+
+/*! \brief     Get system timer frequency.
+    \note      ISR-safe.
+    \return    Frequency (Hz).
+*/
+__stk_forceinline uint32_t GetSysTimerFrequency()
+{
+    return IKernelService::GetInstance()->GetSysTimerFrequency();
+}
+
 /*! \brief     Put calling process into a sleep state.
     \note      Unlike Delay this function does not waste CPU cycles and allows kernel to put CPU into a low-power state.
     \note      Unsupported in HRT mode (see stk::KERNEL_HRT); in HRT mode tasks sleep automatically according to their periodicity and workload.
-    \param[in] ticks: Sleep time (ticks).
+    \param[in] ticks: Sleep time (ticks). 0 does not cause yield, use Yield instead. Negative will cause an assertion.
     \warning   ISR-unsafe. Calling from an ISR context is not permitted and will trigger an assertion.
 */
-__stk_forceinline void Sleep(uint32_t ticks)
+__stk_forceinline void Sleep(Timeout ticks)
 {
     IKernelService::GetInstance()->Sleep(ticks);
 }
@@ -305,10 +333,10 @@ __stk_forceinline void Sleep(uint32_t ticks)
     \note      Unsupported in HRT mode (see stk::KERNEL_HRT); in HRT mode tasks sleep automatically according to their periodicity and workload.
     \note      Converts ms to ticks and calls IKernelService::SleepTicks() which schedules the calling
                task to sleep and spins until the kernel switches it back in.
-    \param[in] ms: Sleep time (milliseconds).
+    \param[in] ms: Sleep time (milliseconds). 0 does not cause yield, use Yield instead. Negative will cause an assertion.
     \warning   ISR-unsafe. Calling from an ISR context is not permitted and will trigger an assertion.
 */
-static inline void SleepMs(uint32_t ms)
+static inline void SleepMs(Timeout ms)
 {
     Sleep(static_cast<Timeout>(GetTicksFromMs(ms)));
 }
@@ -316,7 +344,7 @@ static inline void SleepMs(uint32_t ms)
 /*! \brief     Put calling process into a sleep state until the specified timestamp.
     \note      Unlike Delay this function does not waste CPU cycles and allows kernel to put CPU into a low-power state.
     \note      Unsupported in HRT mode (see stk::KERNEL_HRT); in HRT mode tasks sleep automatically according to their periodicity and workload.
-    \param[in] timestamp: Absolute timestamp (ticks).
+    \param[in] timestamp: Absolute timestamp (ticks). 0 does not cause yield, use Yield instead. Negative will cause an assertion.
     \warning   ISR-unsafe. Calling from an ISR context is not permitted and will trigger an assertion.
 */
 __stk_forceinline void SleepUntil(Ticks timestamp)
@@ -336,10 +364,10 @@ __stk_forceinline void Yield()
 /*! \brief     Delay calling process by busy-waiting until the deadline expires.
     \note      Unlike Sleep this function delays code execution by spinning in a loop until deadline expiry.
     \note      Use with care in HRT mode to avoid missed deadline (see stk::KERNEL_HRT, ITask::OnDeadlineMissed).
-    \param[in] ticks: Delay time (ticks).
+    \param[in] ticks: Delay time (ticks). Negative will cause an assertion.
     \warning   ISR-unsafe. Calling from an ISR context is not permitted and will trigger an assertion.
 */
-__stk_forceinline void Delay(uint32_t ticks)
+__stk_forceinline void Delay(Timeout ticks)
 {
     IKernelService::GetInstance()->Delay(ticks);
 }
@@ -347,10 +375,10 @@ __stk_forceinline void Delay(uint32_t ticks)
 /*! \brief     Delay calling process by busy-waiting until the deadline expires.
     \note      Unlike Sleep this function delays code execution by spinning in a loop until deadline expiry.
     \note      Use with care in HRT mode to avoid missed deadline (see stk::KERNEL_HRT, ITask::OnDeadlineMissed).
-    \param[in] ms: Delay time (milliseconds).
+    \param[in] ms: Delay time (milliseconds). Negative will cause an assertion.
     \warning   ISR-unsafe. Calling from an ISR context is not permitted and will trigger an assertion.
 */
-static inline void DelayMs(uint32_t ms)
+static inline void DelayMs(Timeout ms)
 {
     Delay(static_cast<Timeout>(GetTicksFromMs(ms)));
 }

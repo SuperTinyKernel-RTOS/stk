@@ -266,9 +266,10 @@ void stk_kernel_start(stk_kernel_t *k);
     \see       stk_kernel_get_state()
 */
 typedef enum _EKernelState {
-    STK_KERNEL_STATE_INACTIVE = 0, //!< not ready, stk_kernel_init() must be called
-    STK_KERNEL_STATE_READY    = 1, //!< ready to start, stk_kernel_start() must be called
-    STK_KERNEL_STATE_RUNNING  = 2  //!< initialized and running, stk_kernel_start() was called successfully
+    STK_KERNEL_STATE_INACTIVE  = 0, //!< not ready, stk_kernel_init() must be called
+    STK_KERNEL_STATE_READY     = 1, //!< ready to start, stk_kernel_start() must be called
+    STK_KERNEL_STATE_RUNNING   = 2, //!< initialized and running, stk_kernel_start() was called successfully
+    STK_KERNEL_STATE_SUSPENDED = 3  //!< scheduling suspended via stk_kernel_service_suspend() (tickless idle)
 } EKernelState;
 
 /*! \brief     Get state of the scheduler.
@@ -283,6 +284,49 @@ EKernelState stk_kernel_get_state(const stk_kernel_t *k);
     \note      Only meaningful for HRT RM/DM kernels.
 */
 bool stk_kernel_is_schedulable(const stk_kernel_t *k);
+
+/*! \brief     Check whether the scheduler is currently running (first task switch has occurred).
+    \param[in] k: Kernel handle.
+    \return    True if stk_kernel_start() has been called and the first context switch has occurred,
+               False before stk_kernel_start() or after all tasks have exited.
+*/
+bool stk_kernel_is_started(const stk_kernel_t *k);
+
+/*! \brief     Schedule removal of a running task from the kernel on the next tick.
+    \param[in] k: Kernel handle.
+    \param[in] task: Task to remove. Must be currently scheduled.
+    \note      KERNEL_DYNAMIC only. The task is removed on the next scheduling tick and its
+               OnExit() callback is invoked automatically.
+    \note      To remove a task before stk_kernel_start(), use stk_kernel_remove_task() instead.
+    \see       stk_kernel_remove_task
+*/
+void stk_kernel_schedule_task_removal(stk_kernel_t *k, stk_task_t *task);
+
+/*! \brief     Suspend a task (prevent it from being scheduled).
+    \param[in]  k: Kernel handle.
+    \param[in]  task: Task to suspend.
+    \param[out] suspended: Set to true if the task was successfully suspended (was awake),
+                false if the task was already sleeping (e.g. blocked on a mutex or timed Sleep).
+    \note      Do not hold a critical section when suspending the calling task — this will deadlock.
+    \note      If the task suspends itself, the call blocks until the kernel switches it out.
+*/
+void stk_kernel_suspend_task(stk_kernel_t *k, stk_task_t *task, bool *suspended);
+
+/*! \brief     Resume a previously suspended task.
+    \param[in] k: Kernel handle.
+    \param[in] task: Task to resume. Must have been suspended with stk_kernel_suspend_task().
+*/
+void stk_kernel_resume_task(stk_kernel_t *k, stk_task_t *task);
+
+/*! \brief     Enumerate all currently active tasks.
+    \param[in]  k: Kernel handle.
+    \param[out] tasks: Caller-allocated array of opaque task pointers.  Each element is a
+                stk_task_t* that can be passed to other stk_task_* / stk_kernel_* functions.
+    \param[in]  max_count: Capacity of the \a tasks array (number of elements).
+    \return     Number of active tasks written into \a tasks (0 .. max_count).
+    \note       ISR-safe.
+*/
+size_t stk_kernel_enumerate_tasks(stk_kernel_t *k, stk_task_t **tasks, size_t max_count);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Task creation
@@ -384,6 +428,62 @@ static inline int64_t stk_ticks_from_ms_r(int64_t msec, int32_t resolution)
     \return    Time in milliseconds.
 */
 int64_t stk_time_now_ms(void);
+
+/*! \brief     Convert ticks to milliseconds using an explicit tick resolution.
+    \param[in] ticks: Tick count to convert.
+    \param[in] resolution: Microseconds per tick (see stk_tick_resolution()).
+    \return    Equivalent time in milliseconds.
+    \note      ISR-safe (arithmetic only).
+*/
+static inline int64_t stk_ms_from_ticks_r(int64_t ticks, int32_t resolution)
+{
+    return (ticks * resolution) / 1000;
+}
+
+/*! \brief     Convert ticks to milliseconds using the current kernel tick resolution.
+    \param[in] ticks: Tick count to convert.
+    \return    Equivalent time in milliseconds.
+    \note      Requires the kernel to be initialized before calling.
+*/
+static inline int64_t stk_ms_from_ticks(int64_t ticks)
+{
+    return stk_ms_from_ticks_r(ticks, stk_tick_resolution());
+}
+
+/*! \brief     Get raw system timer counter value.
+    \return    64-bit hardware counter value. Useful for sub-tick timing measurements.
+    \note      ISR-safe.
+*/
+uint64_t stk_sys_timer_count(void);
+
+/*! \brief     Get system timer frequency in Hz.
+    \return    Timer frequency (Hz). Divide stk_sys_timer_count() differences by this value
+               to obtain elapsed time in seconds.
+    \note      ISR-safe.
+*/
+uint32_t stk_sys_timer_frequency(void);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// High-Resolution Clock  (hw::HiResClock)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/*! \brief     Get raw CPU cycle counter.
+    \return    64-bit cycle count. Resolution is one clock cycle.
+    \note      ISR-safe. Use stk_hires_frequency() to convert to real time.
+*/
+uint64_t stk_hires_cycles(void);
+
+/*! \brief     Get CPU clock frequency in Hz.
+    \return    Clock frequency in Hz.
+    \note      ISR-safe.
+*/
+uint32_t stk_hires_frequency(void);
+
+/*! \brief     Get elapsed time in microseconds from the high-resolution clock.
+    \return    Microseconds since an arbitrary but fixed epoch (typically reset).
+    \note      ISR-safe. Equivalent to stk_hires_cycles() * 1000000 / stk_hires_frequency().
+*/
+int64_t stk_hires_time_us(void);
 
 /*! \brief     Busy-wait delay (other tasks continue to run).
     \param[in] ticks: Ticks to delay.

@@ -47,6 +47,8 @@ public:
     void Stop();
     bool InitStack(EStackType stack_type, Stack *stack, IStackMemory *stack_memory, ITask *user_task);
     uint32_t GetTickResolution() const;
+    Cycles GetSysTimerCount() const;
+    uint32_t GetSysTimerFrequency() const;
     void SwitchToNext();
     void Sleep(Timeout ticks);
     void SleepUntil(Ticks timestamp);
@@ -56,6 +58,8 @@ public:
     void SetEventOverrider(IEventOverrider *overrider);
     Word GetCallerSP() const;
     TId GetTid() const;
+    Timeout Suspend();
+    void Resume(Timeout elapsed_ticks);
 
     void SetSpecificEventHandler(ISpecificEventHandler *handler);
 };

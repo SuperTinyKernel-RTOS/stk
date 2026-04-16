@@ -31,29 +31,31 @@ It is an [open-source project](https://github.com/SuperTinyKernel-RTOS), navigat
 
 ## Key Features
 
-| Feature                               | Description                                                                                                                                                                                                                           |
-|---------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Soft real-time                        | No strict time slots, mixed cooperative (by tasks) and preemptive (by kernel) scheduling                                                                                                                                              |
-| Hard real-time (`KERNEL_HRT`)         | Guaranteed execution window, deadline monitoring by the kernel                                                                                                                                                                        |
-| Static task model (`KERNEL_STATIC`)   | Tasks created once at startup                                                                                                                                                                                                         |
-| Dynamic task model (`KERNEL_DYNAMIC`) | Tasks can be created and exit at runtime                                                                                                                                                                                              |
-| Rich scheduling capabilities          | All major scheduling strategies are supported: priority-less (Round-Robin), fixed-priority, weighted (SWRR), earliest-deadline-first (EDF), and mixed-criticality adaptive (MCAS/MCAS4)                                               |
-| Mixed-criticality                     | Supports MCAS (2-level) and MCAS4 (4-level) adaptive strategies featuring SWRR-based group scheduling, automatic cascade escalation/recovery, and elastic CPU share adaptation driven by per-group EWMA execution-pressure estimation |
-| Tick or Tickless modes                | Supports fixed-interval periodic interrupts (Tick) for simplicity, or dynamic timer-based wakeups (Tickless, `KERNEL_TICKLESS`) to maximize CPU sleep duration and power efficiency                                                   |
-| Extensible via C++ interfaces         | Kernel functionality can be extended by implementing available C++ interfaces                                                                                                                                                         |
-| Multi-core support (AMP)              | One STK instance per physical core for optimal, lock-free performance                                                                                                                                                                 |
-| Memory Protection Unit (MPU) support  | Supports privileged `ACCESS_PRIVILEGED` and non-privileged tasks `ACCESS_USER`                                                                                                                                                        |
-| Low-power aware                       | MCU enters sleep when no task is runnable (sleeping)                                                                                                                                                                                  |
-| Synchronization API                   | Rich set of primitives in `stk::sync`: `Mutex`, `RWMutex`, `Semaphore`, `Event`, `EventFlags`, `ConditionVariable`, `Pipe`, `SpinLock`, `ScopedCriticalSection` — plus low-level `hw::CriticalSection` and `hw::SpinLock`             |
-| Thread-Local Storage (TLS)            | Per-task TLS via a dedicated CPU register (`r9` on ARM Cortex-M, `tp/x4` on RISC-V). `GetTls()` / `SetTls()` are inline zero-overhead helpers                                                                                         |
-| Tiny footprint                        | Minimal code unrelated to scheduling                                                                                                                                                                                                  |
-| Safety-critical systems ready         | No dynamic heap memory allocation (satisfies `MISRA C++:2008 Rule 18-4-1`)                                                                                                                                                            |
-| C++ and C API                         | Can be used easily in C++ and C projects                                                                                                                                                                                              |
-| Easy porting                          | Requires very small to none BSP surface                                                                                                                                                                                               |
-| Traceable                             | Scheduling is fully traceable with a SEGGER SystemView                                                                                                                                                                                |
-| Development mode (x86)                | Run the same threaded application on Windows                                                                                                                                                                                          |
-| 100% test coverage                    | Every source-code line of scheduler logic is covered by unit tests                                                                                                                                                                    |
-| QEMU test coverage                    | All repository commits are automatically covered by unit tests executed on QEMU for Cortex-M and RISC-V                                                                                                                               |
+| Feature                               | Description                                                                                                                                                                                                                  |
+|---------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Soft real-time                        | No strict time slots, mixed cooperative (by tasks) and preemptive (by kernel) scheduling                                                                                                                                     |
+| Hard real-time (`KERNEL_HRT`)         | Guaranteed execution window, deadline monitoring by the kernel                                                                                                                                                               |
+| Static task model (`KERNEL_STATIC`)   | Tasks created once at startup                                                                                                                                                                                                |
+| Dynamic task model (`KERNEL_DYNAMIC`) | Tasks can be created and exit at runtime                                                                                                                                                                                     |
+| Rich scheduling capabilities          | All major scheduling strategies are supported: priority-less (Round-Robin), fixed-priority, weighted (SWRR), earliest-deadline-first (EDF), and mixed-criticality adaptive (MCAS/MCAS4)                                      |
+| Mixed-criticality                     | MCAS (2-level) and MCAS4 (4-level) adaptive strategies featuring SWRR-based group scheduling, automatic cascade escalation/recovery, and elastic CPU share adaptation driven by per-group EWMA execution-pressure estimation |
+| Tick or Tickless modes                | Fixed-interval periodic interrupts (Tick) for simplicity, or dynamic timer-based wakeups (Tickless, `KERNEL_TICKLESS`) to maximize CPU sleep duration and power efficiency                                                   |
+| Extensible via C++ interfaces         | Kernel functionality can be extended by implementing available C++ interfaces                                                                                                                                                |
+| Multi-core support (AMP)              | One STK instance per physical core for optimal, lock-free performance                                                                                                                                                        |
+| Memory Protection Unit (MPU) support  | Privileged `ACCESS_PRIVILEGED` and non-privileged tasks `ACCESS_USER`                                                                                                                                                        |
+| Low-power aware                       | MCU enters sleep when no task is runnable (sleeping)                                                                                                                                                                         |
+| Synchronization API                   | Rich set of primitives in `stk::sync` namespace                                                                                                                                                                              |
+| Memory API                            | Deterministic, fragmentation-free allocator in `stk::memory` namespace                                                                                                                                                       |
+| Thread-Local Storage (TLS)            | Per-task TLS via a dedicated CPU register via inline zero-overhead helpers                                                                                                                                                   |
+| Tiny footprint                        | Minimal code unrelated to scheduling                                                                                                                                                                                         |
+| Safety-critical systems ready         | No dynamic heap memory allocation                                                                                                                                                                                            |
+| C++ and C API                         | Can be used easily in C++ and C projects                                                                                                                                                                                     |
+| CMSIS-RTOS2 compatible                | Full CMSIS-RTOS2 wrapper (`cmsis_os2_stk.cpp`) maps the standard ARM CMSIS-RTOS2 C API onto STK, enabling drop-in compatibility with STM32CubeMX, MCUXpresso, and other CMSIS-aware middleware                               |
+| Easy porting                          | Requires very small to none BSP surface                                                                                                                                                                                      |
+| Traceable                             | Scheduling is fully traceable with a SEGGER SystemView                                                                                                                                                                       |
+| Development mode (x86)                | Run the same threaded application on Windows                                                                                                                                                                                 |
+| 100% test coverage                    | Every source-code line of scheduler logic is covered by unit tests                                                                                                                                                           |
+| QEMU test coverage                    | All repository commits are automatically covered by unit tests executed on QEMU for Cortex-M and RISC-V                                                                                                                      |
 
 ---
 
@@ -89,7 +91,6 @@ AddTask(ITask *user_task, Timeout periodicity_tc, Timeout deadline_tc, Timeout s
 
 * `KERNEL_STATIC`: tasks are created once at startup, kernel never returns to `main()`.
 * `KERNEL_DYNAMIC`: tasks may exit, kernel returns to `main()` when all tasks exit.
-
 
 ### Tick / Tickless Context Switching
 
@@ -252,7 +253,15 @@ There is a dual-core example for Raspberry Pico 2 W board with RSP2350 MCU in `b
 
 ## Dedicated C interface
 
-For a seamless integration with C projects STK provides a dedicated, fully-featured C interface. See [interop/c](https://github.com/SuperTinyKernel-RTOS/stk/tree/main/interop/c) for more details and example.
+For a seamless integration with C projects STK provides a dedicated, fully-featured STK C interface. See [interop/c](https://github.com/SuperTinyKernel-RTOS/stk/tree/main/interop/c) for more details and example.
+
+---
+
+## CMSIS-RTOS2 Wrapper (`interop/cmsis/rtos2`)
+
+STK provides a complete **CMSIS-RTOS2** compatibility layer (`cmsis_os2_stk.cpp`) that maps standard ARM [CMSIS-RTOS2 C API](https://arm-software.github.io/CMSIS_6/latest/RTOS2/group__CMSIS__RTOS.html) (`cmsis_os2.h` **v2.3.0**) onto the STK C++ kernel. This allows you to use STK as a drop-in RTOS backend in any project that targets the CMSIS-RTOS2 interface, including code generated by STM32CubeMX, MCUXpresso, or any other CMSIS-aware IDE or middleware stack. See [interop/cmsis/rtos2](https://github.com/SuperTinyKernel-RTOS/stk/tree/main/interop/cmsis/rtos2) for more details and example.
+
+CMSIS-RTOS2 API works as documented in the CMSIS-RTOS2 specification.
 
 ---
 
@@ -272,10 +281,31 @@ STK provides a feature-rich synchronization API which is located in [stk/sync](h
 | `sync::RWMutex`              | Reader-Writer Lock for shared (read) and exclusive (write) access. Implements a Writer Preference policy to prevent writer starvation. Provides RAII guards `ScopedTimedLock` and `ScopedTimedReadMutex`.                                                                             |
 | `sync::SpinLock`             | High-performance recursive spinlock for very short critical sections where context-switch overhead is unacceptable. Busy-waits until the lock is free; ISR-unsafe (use `hw::CriticalSection` from ISR context).                                                                       |
 | `sync::Semaphore`            | Counting semaphore for resource throttling and signaling. Features a Direct Handover policy: `Signal()` passes the token directly to the first waiting task without touching the internal counter.                                                                                    |
-| `sync::Pipe`                 | Thread-safe FIFO ring buffer for inter-task data passing. Supports blocking and non-blocking single-element and bulk (`WriteBulk` / `ReadBulk`) I/O with zero dynamic memory allocation.                                                                                              |
+| `sync::Pipe`                 | Thread-safe typed FIFO ring buffer for inter-task data passing. Parameterised on element type `T` and capacity `N`. Supports blocking and non-blocking single-element and bulk (`WriteBulk` / `ReadBulk`) I/O with zero dynamic memory allocation.                                    |
+| `sync::MessageQueue`         | Fixed-capacity, fixed-message-size FIFO queue backed by a caller-supplied byte buffer. Parameterised on a byte count rather than a type, making it suitable for C-ABI structs or heterogeneous payloads.                                                                              |
 | Custom                       | Extensible: any class inheriting from `ISyncObject` can implement custom synchronization logic integrated with the kernel scheduler.                                                                                                                                                  |
 
 > **Note:** Synchronization can be enabled in the kernel selectively by adding `KERNEL_SYNC` flag. If application does not need `sync` primitives and `KERNEL_SYNC` is not set to the kernel then synchronization-related implementation is stripped by the compiler saving FLASH and RAM.
+
+---
+
+## Memory API (`stk/stk_memory.h`)
+
+STK provides a deterministic, fragmentation-free memory allocation module located in [stk/memory](https://github.com/SuperTinyKernel-RTOS/stk/tree/main/stk/include/memory) under the `stk::memory` namespace. It is designed for embedded systems where dynamic heap allocation is undesirable or prohibited by coding standards (e.g. MISRA C++ Rule 18-4-1).
+
+### `memory::BlockMemoryPool`
+
+A fixed-size block allocator for scenarios where the same block size is repeatedly allocated and released, such as: packet buffers, sensor records, or message payloads.
+
+Internally the pool maintains an intrusive singly-linked free-list inside the storage array itself. No separate metadata array is required, alloc and free are therefore O(1) with a minimal critical section.
+
+**Key properties:**
+
+- **Zero fragmentation**: fixed block size eliminates heap fragmentation over any run duration.
+- **O(1) alloc and free**: constant-time operation with minimal critical section.
+- **Typed wrappers**: `AllocT<T>()` / `TryAllocT<T>()` eliminate manual casts and assert type–size compatibility at allocation time.
+- **Debug diagnostics**: double-free detection (O(n) free-list walk), bounds checking, and alignment validation in debug builds; all checks compile away in release.
+- **Non-copyable, non-movable**: safe for use as a global or static object.
 
 ---
 

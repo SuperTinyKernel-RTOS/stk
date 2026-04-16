@@ -93,13 +93,14 @@ enum ESystemTaskId
 };
 
 /*! \enum  ETraceEventId
-    \brief Trace event id for tracing tasks suspension and resume with debugging tools (SEGGER SysView and etc.).
+    \brief Trace event identifiers for tracing task suspension and resume with debugging tools (e.g. SEGGER SystemView).
+    \note  Values are offset by 1000 to avoid collisions with the host tool's built-in system event range (0–999).
 */
 enum ETraceEventId
 {
-    TRACE_EVENT_UNKNOWN = 0,
-    TRACE_EVENT_SWITCH  = 1000 + 1,
-    TRACE_EVENT_SLEEP   = 1000 + 2
+    TRACE_EVENT_UNKNOWN = 0,        //!< Unknown / uninitialized trace event.
+    TRACE_EVENT_SWITCH  = 1000 + 1, //!< Task context switch event (task became active).
+    TRACE_EVENT_SLEEP   = 1000 + 2  //!< Task entered sleep / blocked state.
 };
 
 /*! \typedef Word
@@ -116,33 +117,10 @@ typedef uintptr_t Word;
 */
 typedef Word TId;
 
-/*! \var     TID_ISR
-    \brief   Reserved task/thread id representing an ISR context.
-    \note    Returned by GetTid() when called from an interrupt service routine.
-*/
-const TId TID_ISR = static_cast<TId>(~0);
-
-/*! \var     TID_NONE
-    \brief   Reserved task/thread id representing zero/none thread id.
-*/
-const TId TID_NONE = static_cast<TId>(0);
-
 /*! \typedef Timeout
     \brief   Timeout time (ticks).
 */
 typedef int32_t Timeout;
-
-/*! \var     WAIT_INFINITE
-    \brief   Timeout value: block indefinitely until the synchronization object is signaled.
-    \note    Pass as the \a timeout argument to IKernelService::Wait().
-*/
-const Timeout WAIT_INFINITE = INT32_MAX;
-
-/*! \var     NO_WAIT
-    \brief   Timeout value: return immediately if the synchronization object is not yet signaled (non-blocking poll).
-    \note    Pass as the \a timeout argument to IKernelService::Wait().
-*/
-const Timeout NO_WAIT = 0;
 
 /*! \typedef Ticks
     \brief   Ticks value.
@@ -153,6 +131,66 @@ typedef int64_t Ticks;
     \brief   Cycles value.
 */
 typedef uint64_t Cycles;
+
+/*! \var     TID_ISR_N
+    \brief   Bitmask sentinel for ISR-context task identifiers.
+
+    The upper 20 bits of the TId space are reserved for ISR contexts.
+    When GetTid() is called from an interrupt service routine, it returns
+    \c TID_ISR_N | exception_number, where exception_number is the raw
+    value:
+
+    \code
+    //  bits[31:12] = 0xFFFFF (this sentinel mask)
+    //  bits[11:0]  = exception number
+    \endcode
+
+    This encoding guarantees uniqueness per exception, so two ISRs at
+    different priority levels or with different exception numbers are never
+    treated as the same owner by synchronization primitives.
+
+    Task TIds are word-aligned pointers. On all supported Cortex-M and RISC-V targets
+    they fall in the range \c 0x00000000..0xEFFFFFFF, so no overlap with
+    the \c 0xFFFFF000..0xFFFFFFFF sentinel range is possible.
+
+    \note  Use \c IsIsrTid() to test for this sentinel rather than comparing
+           against this constant directly.
+    \see   IsIsrTid()
+*/
+static constexpr TId TID_ISR_N = static_cast<TId>(0xFFFFF000U);
+
+/*! \var     TID_NONE
+    \brief   Reserved task/thread id representing zero/none thread id.
+*/
+static constexpr TId TID_NONE = static_cast<TId>(0U);
+
+/*! \var     WAIT_INFINITE
+    \brief   Timeout value: block indefinitely until the synchronization object is signaled.
+    \note    Pass as the \a timeout argument to IKernelService::Wait().
+*/
+static constexpr Timeout WAIT_INFINITE = INT32_MAX;
+
+/*! \var     NO_WAIT
+    \brief   Timeout value: return immediately if the synchronization object is not yet signaled (non-blocking poll).
+    \note    Pass as the \a timeout argument to IKernelService::Wait().
+*/
+static constexpr Timeout NO_WAIT = 0;
+
+/*! \brief     Test whether a task identifier represents an ISR context.
+
+    Returns \c true if \a tid was produced by GetTid() called from an
+    interrupt service routine, i.e. its upper 20 bits match \c TID_ISR_N.
+    Use this predicate instead of comparing against \c TID_ISR_N directly.
+
+    \param[in] tid: Task identifier to test.
+    \return    \c true if \a tid encodes an ISR context, \c false otherwise.
+    \note      ISR-safe (bitmask arithmetic only, no kernel calls).
+    \see       TID_ISR_N
+*/
+static inline bool IsIsrTid(TId tid)
+{
+    return ((tid & TID_ISR_N) == TID_ISR_N);
+}
 
 /*! \class StackMemoryDef
     \brief Stack memory type definition.
@@ -180,7 +218,7 @@ template <size_t _StackSize> struct StackMemoryDef
 struct Stack
 {
     Word        SP;   //!< Stack Pointer (SP) register (note: must be the first entry in this struct)
-    EAccessMode mode; //!< access mode
+    EAccessMode mode; //!< Hardware access mode of the owning task (see \a EAccessMode).
 #if STK_NEED_TASK_ID
     TId         tid;  //!< task id (see \a STK_SEGGER_SYSVIEW)
 #endif
@@ -192,17 +230,37 @@ struct Stack
 class IStackMemory
 {
 public:
-    /*! \brief Get pointer to the stack memory.
+    /*! \brief   Get pointer to the stack memory.
     */
     virtual Word *GetStack() const = 0;
 
-    /*! \brief Get number of elements of the stack memory array.
+    /*! \brief   Get number of elements of the stack memory array.
     */
     virtual size_t GetStackSize() const = 0;
 
-    /*! \brief Get size of the memory in bytes.
+    /*! \brief   Get size of the memory in bytes.
     */
     virtual size_t GetStackSizeBytes() const = 0;
+
+    /*! \brief   Get available stack space.
+        \return  Number of elements of the stack memory array remaining on the stack (computed via the
+                 watermark pattern).
+                 Returns 0 if the stack has been fully used or the watermark \a STK_STACK_MEMORY_FILLER
+                 was overwritten.
+        \warning Stack type: Bottom to Top (index[0]).
+    */
+    virtual size_t GetStackSpace()
+    {
+        const Word *stack = GetStack();
+        const size_t stack_size = GetStackSize();
+
+        // count leading Words equal to STK_STACK_MEMORY_FILLER (watermark)
+        size_t space = 0U;
+        for ( ; (space < stack_size) && (stack[space] == STK_STACK_MEMORY_FILLER); ++space)
+        {}
+
+        return space;
+    }
 };
 
 /*! \class IWaitObject
@@ -227,8 +285,8 @@ public:
     virtual TId GetTid() const = 0;
 
     /*! \brief     Wake task.
-        \param[in] timeout: Pass \a true if the task is waking due to timeout expiry. 
-                   \a false if waking due to a successful signal.
+        \param[in] timeout: \c true if the task is waking due to timeout expiry;
+                   \c false if waking due to a successful signal.
         \note      The implementation is responsible for removing this wait object from the synchronization
                    object's wait list (via ISyncObject::RemoveWaitObject) as part of the wake sequence.
     */
@@ -268,7 +326,7 @@ public:
     #if STK_SYNC_DEBUG_NAMES
         m_trace_name = name;
     #else
-        (void)name;
+        STK_UNUSED(name);
     #endif
     }
 
@@ -461,6 +519,16 @@ public:
     */
     virtual void OnDeadlineMissed(uint32_t duration) = 0;
 
+    /*! \brief     Called by the kernel before removal from the scheduling (see stk::KERNEL_DYNAMIC).
+        \note      The task's stack is no longer in use but the ITask object itself is still valid.
+        \note      The default no-op implementation is sufficient for detached tasks.
+                   Override to implement join semantics (signal a waiting joiner).
+        \note      Called in kernel/tick context - keep it short. ISR-safe primitives
+                   only (e.g. stk::sync::Semaphore::Signal(), stk::sync::EventFlags::Set()).
+        \note      KERNEL_DYNAMIC only. Never called in KERNEL_STATIC mode.
+    */
+    virtual void OnExit() = 0;
+
     /*! \brief     Get static base weight of the task.
         \return    Static weight value of the task (must be non-zero, positive 24-bit number).
         \see       SwitchStrategySmoothWeightedRoundRobin, IKernelTask::GetWeight
@@ -475,7 +543,8 @@ public:
 
     /*! \brief     Get task trace name set by application.
         \return    Null-terminated name string, or \c NULL if unused.
-        \note      Used for debugging and tracing only (e.g. SEGGER SystemView). The kernel does not interpret this value.
+        \note      Used for debugging and tracing only (e.g. SEGGER SystemView). Kernel does not
+                   interpret this value.
     */
     virtual const char *GetTraceName() const = 0;
 };
@@ -542,7 +611,11 @@ public:
     virtual Timeout GetHrtDeadline() const = 0;
 
     /*! \brief     Get HRT task's relative deadline.
-        \return    Relative deadline of the task (ticks).
+        \return    Relative deadline of the task (ticks): the maximum allowed elapsed time from the
+                   start of the current period until the task must complete. Unlike the absolute
+                   deadline (GetHrtDeadline), this value is measured relative to the period start
+                   and does not depend on the current tick counter.
+        \see       GetHrtDeadline, GetHrtPeriodicity
     */
     virtual Timeout GetHrtRelativeDeadline() const = 0;
 
@@ -646,9 +719,14 @@ public:
 
         /*! \brief      Called from the Thread process when for getting task/thread id of the process.
             \param[in]  caller_SP: Value of Stack Pointer (SP) register (for locating the calling process inside the kernel).
-            \return     Task/thread id of the process.
+            \return     Task/thread id of the process (returns always valid TId belonging to a task).
         */
         virtual TId OnGetTid(Word caller_SP) = 0;
+
+        /*! \brief      Called from the Thread process to suspend scheduling.
+            \param[in]  suspended: \c true if scheduling was successfully suspended, \c false otherwise.
+        */
+        virtual void OnSuspend(bool suspended) = 0;
     };
 
     /*! \class IEventOverrider
@@ -704,6 +782,18 @@ public:
     */
     virtual uint32_t GetTickResolution() const = 0;
 
+    /*! \brief     Get system timer count value.
+        \note      ISR-safe.
+        \return    64-bit count value.
+    */
+    virtual Cycles GetSysTimerCount() const = 0;
+
+    /*! \brief     Get system timer frequency.
+        \note      ISR-safe.
+        \return    Frequency (Hz).
+    */
+    virtual uint32_t GetSysTimerFrequency() const = 0;
+
     /*! \brief     Switch to a next task.
     */
     virtual void SwitchToNext() = 0;
@@ -752,8 +842,25 @@ public:
 
     /*! \brief     Get thread Id.
         \return    Thread Id.
+        \warning   ISR-safe.
+        \see       TID_ISR_N, TID_NONE, IsIsrTid
     */
     virtual TId GetTid() const = 0;
+
+    /*! \brief     Suspend scheduling.
+        \return    Number of ticks available for the suspension period, as determined by the
+                   nearest pending wake-up. The caller may use this value to program a hardware
+                   timer for the tickless sleep interval.
+        \note      ISR-safe. Pair with Resume().
+    */
+    virtual Timeout Suspend() = 0;
+
+    /*! \brief     Resume scheduling after a prior Suspend() call.
+        \param[in] elapsed_ticks: Number of ticks that elapsed during the suspended period.
+                   The kernel uses this value to advance internal time counters.
+        \note      ISR-safe.
+    */
+    virtual void Resume(Timeout elapsed_ticks) = 0;
 };
 
 /*! \class ITaskSwitchStrategy
@@ -858,9 +965,10 @@ public:
     */
     enum EState : uint8_t
     {
-        STATE_INACTIVE = 0, //!< not ready, IKernel::Initialize() must be called
-        STATE_READY,        //!< ready to start, IKernel::Start() must be called
-        STATE_RUNNING       //!< initialized and running, IKernel::Start() was called successfully
+        STATE_INACTIVE = 0, //!< Not ready, IKernel::Initialize() must be called.
+        STATE_READY,        //!< Ready to start, IKernel::Start() must be called.
+        STATE_RUNNING,      //!< Initialized and running, IKernel::Start() was called successfully.
+        STATE_SUSPENDED     //!< Scheduling is suspended with IKernelService::Suspend().
     };
 
     /*! \brief     Initialize kernel.
@@ -875,7 +983,7 @@ public:
     virtual void Initialize(uint32_t resolution_us = PERIODICITY_DEFAULT) = 0;
 
     /*! \brief     Add user task.
-        \note      This function is for Soft Real-time modes only, e.g. stk::KERNEL_HRT is not used as parameter.
+        \note      This function is for Soft Real-Time modes only (i.e. \c KERNEL_HRT must not be set in the kernel mode flags).
         \param[in] user_task: Pointer to the user task to add.
     */
     virtual void AddTask(ITask *user_task) = 0;
@@ -889,10 +997,83 @@ public:
     */
     virtual void AddTask(ITask *user_task, Timeout periodicity_tc, Timeout deadline_tc, Timeout start_delay_tc) = 0;
 
-    /*! \brief     Remove user task.
-        \param[in] user_task: Pointer to the user task to remove.
+    /*! \brief     Remove a previously added task from the kernel before Start().
+        \param[in] user_task: User task to remove. Must not be \c nullptr.
+        \note      Only valid before Start() (i.e. while the kernel is not running).
+                   To remove tasks after Start() the task should return from its Run function
+                   (in KERNEL_DYNAMIC mode the slot is freed automatically on the next tick).
+        \warning   Must only be called when kernel is not running, otherwise call ScheduleTaskRemoval.
+        \warning   KERNEL_DYNAMIC mode only. Asserts if called in KERNEL_STATIC or KERNEL_HRT mode,
+                   or if called after Start().
+        \see       ScheduleTaskRemoval
     */
     virtual void RemoveTask(ITask *user_task) = 0;
+
+    /*! \brief     Schedule task removal from scheduling (exit).
+        \param[in] user_task: User task to remove. Must not be \c nullptr.
+        \warning   KERNEL_DYNAMIC mode only. Asserts if called in KERNEL_STATIC or KERNEL_HRT mode,
+                   or if called after Start(). Use RemoveTask to remove task if kernel is not running.
+        \see       RemoveTask
+    */
+    virtual void ScheduleTaskRemoval(ITask *user_task) = 0;
+
+    /*! \brief      Suspend task.
+        \param[in]  user_task: Pointer to the user task to suspend.
+        \param[out] suspended: Set to true if task is suspended.
+        \note       hw::CriticalSection must not be active otherwise a deadlock will
+                    happen if task is suspending self.
+    */
+    virtual void SuspendTask(ITask *user_task, bool &suspended) = 0;
+
+    /*! \brief     Resume task.
+        \param[in] user_task: Pointer to the user task to resume.
+    */
+    virtual void ResumeTask(ITask *user_task) = 0;
+
+    /*! \brief     Enumerate tasks.
+        \param[in,out] user_tasks: Pointer to the array for ITask pointers.
+        \param[in] max_size: Max size of the provided array.
+        \return    Number of tasks in the array.
+        \warning   ISR-safe.
+    */
+    virtual size_t EnumerateTasks(ITask **user_tasks, size_t max_size) = 0;
+
+    /*! \brief     Enumerate tasks, invoking a callback for each active task.
+        \tparam    TMaxCount: Maximum number of tasks to enumerate.
+                   Should match or exceed the kernel's task capacity.
+                   Determines the size of the internal stack-allocated buffer
+                   (TMaxCount * sizeof(ITask*) bytes on the stack).
+        \tparam    TCallback: Callable type, deduced automatically.
+                   Must satisfy: bool(ITask*)
+        \param[in] callback: Callable invoked for each active task.
+                   Return \c true to continue, \c false to stop early.
+        \return    Number of tasks visited (up to \p TMaxCount).
+        \warning   ISR-safe.
+
+        Example:
+        \code
+        kernel.EnumerateTasks<_STK_KERNEL_TASKS_COUNT>([](ITask *t) {
+            Log(t->GetTraceName());
+            return true; // continue
+        });
+        \endcode
+    */
+    template <size_t TMaxCount, typename TCallback>
+    size_t EnumerateTasksT(TCallback &&callback)
+    {
+        STK_STATIC_ASSERT(TMaxCount > 0);
+
+        ITask *tasks[TMaxCount] = {};
+        size_t i = 0, count = EnumerateTasks(tasks, TMaxCount);
+
+        while (i < count)
+        {
+            if (!callback(tasks[i++]))
+                break;
+        }
+
+        return i;
+    }
 
     /*! \brief     Start kernel scheduling.
         \note      This function never returns. Must be called after Initialize() and AddTask().
@@ -934,7 +1115,8 @@ public:
 
     /*! \brief     Get thread Id of the currently running task.
         \return    Thread Id.
-        \warning   ISR-unsafe. Calling from an ISR context is not permitted and will trigger an assertion.
+        \warning   ISR-safe.
+        \see       TID_ISR_N, TID_NONE, IsIsrTid
     */
     virtual TId GetTid() const = 0;
 
@@ -949,7 +1131,19 @@ public:
         \note      ISR-safe.
         \return    Microseconds in one tick.
     */
-    virtual int32_t GetTickResolution() const = 0;
+    virtual uint32_t GetTickResolution() const = 0;
+
+    /*! \brief     Get system timer count value.
+        \note      ISR-safe.
+        \return    64-bit count value.
+    */
+    virtual Cycles GetSysTimerCount() const = 0;
+
+    /*! \brief     Get system timer frequency.
+        \note      ISR-safe.
+        \return    Frequency (Hz).
+    */
+    virtual uint32_t GetSysTimerFrequency() const = 0;
 
     /*! \brief     Delay calling process.
         \note      Unlike Sleep this function delays code execution by spinning in a loop until deadline expiry.
@@ -996,6 +1190,24 @@ public:
         \warning   ISR-unsafe.
     */
     virtual IWaitObject *Wait(ISyncObject *sobj, IMutex *mutex, Timeout timeout) = 0;
+
+    /*! \brief     Suspend scheduling.
+        \return    Number of ticks available for the suspension period, as determined by the
+                   nearest pending wake-up. The caller may program a hardware timer with
+                   this value to avoid unnecessary wakeups (tickless idle).
+        \note      ISR-safe. Pair with Resume().
+        \see       IKernel::EState::STATE_SUSPENDED
+    */
+    virtual Timeout Suspend() = 0;
+
+    /*! \brief     Resume scheduling after a prior Suspend() call.
+        \param[in] elapsed_ticks: Number of ticks that elapsed during the suspended period.
+                   The kernel uses this value to advance internal time counters and
+                   wake tasks whose sleep deadlines have expired.
+        \note      ISR-safe.
+        \see       IKernel::EState::STATE_SUSPENDED
+    */
+    virtual void Resume(Timeout elapsed_ticks) = 0;
 };
 
 } // namespace stk

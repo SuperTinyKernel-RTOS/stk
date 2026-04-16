@@ -737,18 +737,27 @@ TEST(KernelServiceIsrSafety, Common)
         CHECK(true);
         g_TestContext.ExpectAssert(false);
     }
+}
 
-    try
-    {
-        g_TestContext.ExpectAssert(true);
-        GetTid();
-        CHECK_TEXT(false, "GetTid is not allowed inside ISR");
-    }
-    catch (TestAssertPassed &pass)
-    {
-        CHECK(true);
-        g_TestContext.ExpectAssert(false);
-    }
+TEST(KernelService, SysTimer)
+{
+    Kernel<KERNEL_STATIC, 1, SwitchStrategyRR, PlatformTestMock> kernel;
+    TaskMock<ACCESS_USER> task;
+
+    PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
+
+    platform->m_systimer_count = 99;
+    platform->m_systimer_freq  = 1000;
+
+    kernel.Initialize();
+    kernel.AddTask(&task);
+    kernel.Start();
+
+    uint32_t freq = stk::GetSysTimerFrequency();
+    uint64_t count = stk::GetSysTimerCount();
+
+    CHECK_EQUAL(1000, freq);
+    CHECK_EQUAL(99, count);
 }
 
 } // namespace stk

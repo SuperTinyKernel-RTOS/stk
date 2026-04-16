@@ -603,11 +603,18 @@ void RestoreJmp(JmpFrame &/*f*/, int32_t /*val*/)
 
 // -----------------------------------------------------------------------------
 
+/*! \brief  Get current exception (not 0 if inside ISR).
+*/
+static __stk_forceinline Word HW_GetCurrentException()
+{
+    return __get_IPSR();
+}
+
 /*! \brief  Check if caller is in Handler Mode (IPSR != 0), i.e. inside ISR.
 */
 static __stk_forceinline bool HW_IsHandlerMode()
 {
-    return (__get_IPSR() != 0U);
+    return (HW_GetCurrentException() != 0U);
 }
 
 /*! \brief  Check if caller is in Privileged Thread Mode (nPRIV == 0).
@@ -667,6 +674,13 @@ static __stk_forceinline uint32_t HW_CoreClockFrequency()
     return SystemCoreClock;
 }
 
+/*! \brief Clear pending switch by PendSV exception.
+*/
+static __stk_forceinline void HW_ClearPendingSwitch()
+{
+    SCB->ICSR = SCB_ICSR_PENDSVCLR_Msk;
+}
+
 /*! \brief Start SysTick timer peripheral.
 */
 static __stk_forceinline void HW_SysTickStart(uint32_t period_ticks)
@@ -699,6 +713,14 @@ static __stk_forceinline void HW_SysTickDisable()
     SysTick->CTRL &= ~SysTick_CTRL_ENABLE_Msk;
 }
 
+/*! \brief  Get SysTick current value.
+    \return Value of SysTick->VAL register.
+*/
+static __stk_forceinline uint32_t HW_SysTickValue()
+{
+    return SysTick->VAL;
+}
+
 /*! \brief  Get SysTick value after it was disabled.
     \return Value of SysTick->VAL register.
 */
@@ -708,7 +730,7 @@ static __stk_forceinline uint32_t HW_SysTickValueAfterDisable()
     __DSB();
 
     // check for a QEMU case and discard elapsed result
-    uint32_t VAL = SysTick->VAL;
+    uint32_t VAL = HW_SysTickValue();
     if (VAL == 0)
         VAL = SysTick->LOAD;
 
@@ -718,7 +740,7 @@ static __stk_forceinline uint32_t HW_SysTickValueAfterDisable()
 /*! \brief     Get number of elapsed ticks of the current period of SysTick timer peripheral.
     \param[in] VAL: a value of SysTick->VAL register.
 */
-static __stk_forceinline uint32_t HW_SysTickGetElapsed(uint32_t VAL)
+static __stk_forceinline uint32_t HW_SysTickElapsed(uint32_t VAL)
 {
     return SysTick->LOAD - VAL;
 }
@@ -939,11 +961,24 @@ static struct Context : public PlatformContext
         }
     }
 
+    void StartTickTimer(Timeout elapsed_ticks)
+    {
+    #if STK_TICKLESS_IDLE
+        // reset sleep ticks if kernel was restarted
+        m_sleep_ticks = elapsed_ticks;
+    #endif
+
+        // start SysTick timer (it is yet can't fire an interrupt due to HW_DisableInterrupts)
+        HW_SysTickStart(m_tick_resolution);
+    }
+
     void Start();
     void OnStart();
     void OnStop();
 #if STK_TICKLESS_IDLE
     void ReloadTickPeriod(Timeout ticks_requested);
+    Timeout Suspend();
+    void Resume(Timeout elapsed_ticks);
 #endif
 
     typedef IPlatform::IEventOverrider eovrd_t;
@@ -951,7 +986,7 @@ static struct Context : public PlatformContext
     JmpFrame      m_exit_buf;    //!< saved context of the exit point
     eovrd_t      *m_overrider;   //!< platform events overrider
 #if STK_TICKLESS_IDLE
-    Timeout       m_sleep_ticks; //!< sleep ticks of a current session
+    Timeout       m_sleep_ticks; //!< sleep ticks of the current session
     uint32_t      m_sleep_error; //!< sleep error which is accounted in the next sleep
 #endif
     Word          m_csu;         //!< user critical session
@@ -1024,8 +1059,8 @@ public:
         // On M0, combine the coarse OS ticks with the fine-grained SysTick counter
         Cycles cycles = ConvertTimeUsToClockCycles(HW_CoreClockFrequency(), stk::GetTicks() * GetContext().m_tick_resolution);
 
-        uint32_t val  = SysTick->VAL;  // down-counter (cycles remaining in current tick)
-        uint32_t load = SysTick->LOAD; // current reload value
+        uint32_t val  = HW_SysTickValue(); // down-counter (cycles remaining in current tick)
+        uint32_t load = SysTick->LOAD;     // current reload value
 
         // total elapsed cycles
         return cycles + static_cast<Cycles>(load - val);
@@ -1071,7 +1106,7 @@ void PlatformArmCortexM::ProcessTick()
 #if STK_TICKLESS_IDLE
 void Context::ReloadTickPeriod(Timeout ticks_requested)
 {
-    uint32_t reload = static_cast<uint32_t>(ConvertTimeUsToClockCycles(HW_CoreClockFrequency(), m_tick_resolution));
+    const uint32_t reload = static_cast<uint32_t>(ConvertTimeUsToClockCycles(HW_CoreClockFrequency(), m_tick_resolution));
 
     // guard against uint32_t overflow in the reload calculation
     STK_ASSERT(static_cast<uint64_t>(ticks_requested) * reload <= UINT32_MAX);
@@ -1088,7 +1123,7 @@ void Context::ReloadTickPeriod(Timeout ticks_requested)
 
     // get already elapsed CPU cycles since SysTick ISR invocation up to SysTick timer stop (see above)
     // to account for them for a new period value
-    const uint32_t elapsed_till_stop = HW_SysTickGetElapsed(HW_SysTickValueAfterDisable());
+    const uint32_t elapsed_till_stop = HW_SysTickElapsed(HW_SysTickValueAfterDisable());
 
     // OnTick() should not consume more than next period
     STK_ASSERT(static_cast<Timeout>(elapsed_till_stop / reload) <= static_cast<Timeout>(ticks_requested));
@@ -1338,16 +1373,11 @@ void Context::OnStart()
     // clear FPU usage status if FPU was used before kernel start
     HW_ClearFpuState();
 
-    // notify kernel
+    // get the first active stack from the kernel
     m_handler->OnStart(m_stack_active);
 
-#if STK_TICKLESS_IDLE
-    // reset sleep ticks if kernel was restarted
-    m_sleep_ticks = 1;
-#endif
-
-    // start SysTick timer (it is yet can't fire an interrupt due to HW_DisableInterrupts)
-    HW_SysTickStart(m_tick_resolution);
+    // start with initially 1 elapsed tick (after timer expires)
+    StartTickTimer(1);
 
     // set priority
     // note: after SysTick_Config because it may change SysTick priority, PendSV and SysTick peripherals
@@ -1361,6 +1391,56 @@ void Context::OnStart()
 
     m_started = true;
 }
+
+#if STK_TICKLESS_IDLE
+Timeout Context::Suspend()
+{
+    const uint32_t resolution = static_cast<uint32_t>(ConvertTimeUsToClockCycles(HW_CoreClockFrequency(), m_tick_resolution));
+    STK_ASSERT(resolution != 0);
+
+    HW_DisableInterrupts();
+
+    // pause SysTick in order to read elapsed value
+    HW_SysTickDisable();
+
+    // get already elapsed CPU cycles since SysTick ISR invocation up to SysTick timer stop (see above)
+    // to account for them for a new period value
+    const uint32_t elapsed = HW_SysTickElapsed(HW_SysTickValueAfterDisable());
+
+    // stop SysTick timer
+    HW_SysTickStop();
+
+    // clear pending PendSV exception
+    HW_ClearPendingSwitch();
+
+    // notify core
+    m_handler->OnSuspend(true);
+
+    // get already elapsed ticks since the OnTick and a call to Suspend(), we shall account for this
+    // period and return only the remainder
+    Timeout elapsed_ticks = static_cast<Timeout>(elapsed / resolution);
+    Timeout sleep_ticks = Max(m_sleep_ticks - elapsed_ticks, static_cast<Timeout>(0));
+
+    HW_EnableInterrupts();
+
+    return sleep_ticks;
+}
+#endif
+
+#if STK_TICKLESS_IDLE
+void Context::Resume(Timeout elapsed_ticks)
+{
+    HW_DisableInterrupts();
+
+    // notify core
+    m_handler->OnSuspend(false);
+
+    // start with initially elapsed ticks (OnTick will fire with elapsed_ticks + 1)
+    StartTickTimer(elapsed_ticks + 1);
+
+    HW_EnableInterrupts();
+}
+#endif
 
 // __stk_attr_used required for Link-Time Optimization (-flto)
 extern "C" __stk_attr_used void SVC_Handler_Main(Word *svc_args)
@@ -1648,7 +1728,7 @@ void Context::OnStop()
     HW_SysTickStop();
 
     // clear pending PendSV exception
-    SCB->ICSR = SCB_ICSR_PENDSVCLR_Msk;
+    HW_ClearPendingSwitch();
 
     m_started = false;
     m_exiting = true;
@@ -1670,6 +1750,16 @@ void PlatformArmCortexM::Stop()
 uint32_t PlatformArmCortexM::GetTickResolution() const
 {
     return GetContext().m_tick_resolution;
+}
+
+Cycles PlatformArmCortexM::GetSysTimerCount() const
+{
+    return static_cast<Cycles>(HW_SysTickValue());
+}
+
+uint32_t PlatformArmCortexM::GetSysTimerFrequency() const
+{
+    return HW_CoreClockFrequency();
 }
 
 void PlatformArmCortexM::SwitchToNext()
@@ -1694,6 +1784,16 @@ IWaitObject *PlatformArmCortexM::Wait(ISyncObject *sync_obj, IMutex *mutex, Time
 
 TId PlatformArmCortexM::GetTid() const
 {
+    Word isr = HW_GetCurrentException();
+
+    // return special TId which denotes ISR
+    if (isr != 0U)
+    {
+        TId isr_tid = TID_ISR_N | isr;
+        STK_ASSERT(IsIsrTid(isr_tid));
+        return isr_tid;
+    }
+
     return GetContext().m_handler->OnGetTid(HW_GetCallerSP());
 }
 
@@ -1714,6 +1814,24 @@ void PlatformArmCortexM::SetEventOverrider(IEventOverrider *overrider)
 Word PlatformArmCortexM::GetCallerSP() const
 {
     return HW_GetCallerSP();
+}
+
+Timeout PlatformArmCortexM::Suspend()
+{
+#if STK_TICKLESS_IDLE
+    return GetContext().Suspend();
+#else
+    return 0;
+#endif
+}
+
+void PlatformArmCortexM::Resume(Timeout elapsed_ticks)
+{
+#if STK_TICKLESS_IDLE
+    GetContext().Resume(elapsed_ticks);
+#else
+    STK_UNUSED(elapsed_ticks);
+#endif
 }
 
 IKernelService *IKernelService::GetInstance()

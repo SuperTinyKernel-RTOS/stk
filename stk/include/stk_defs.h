@@ -374,7 +374,7 @@
            Can be overridden by defining STK_STACK_MEMORY_FILLER before including this header or in stk_config.h.
 */
 #ifndef STK_STACK_MEMORY_FILLER
-    #define STK_STACK_MEMORY_FILLER ((Word)(sizeof(Word) <= 4 ? 0xdeadbeef : 0xdeadbeefdeadbeef))
+    #define STK_STACK_MEMORY_FILLER ((stk::Word)((sizeof(stk::Word) <= 4U) ? 0xdeadbeef : 0xdeadbeefdeadbeef))
 #endif
 
 /*! \def   STK_STACK_MEMORY_ALIGN
@@ -382,11 +382,11 @@
 */
 #ifndef STK_STACK_MEMORY_ALIGN
     #if defined(__riscv)
-        #define STK_STACK_MEMORY_ALIGN 16
+        #define STK_STACK_MEMORY_ALIGN 16U
     #elif defined(__i386__) || defined(__x86_64__) || defined(_M_IX86) || defined(_M_X64)
-        #define STK_STACK_MEMORY_ALIGN 8
+        #define STK_STACK_MEMORY_ALIGN 8U
     #else // ARM, others
-        #define STK_STACK_MEMORY_ALIGN 4
+        #define STK_STACK_MEMORY_ALIGN 4U
     #endif
 #endif
 
@@ -401,7 +401,7 @@
            Can be overridden in stk_config.h based on Worst-Case Stack Usage (WCSU) analysis.
 */
 #ifndef STK_CRITICAL_SECTION_NESTINGS_MAX
-    #define STK_CRITICAL_SECTION_NESTINGS_MAX 16
+    #define STK_CRITICAL_SECTION_NESTINGS_MAX 16U
 #endif
 
 /*! \def   STK_ARCH_CPU_COUNT
@@ -411,7 +411,7 @@
            targets. Can be defined in the architecture header or stk_config.h.
 */
 #ifndef STK_ARCH_CPU_COUNT
-    #define STK_ARCH_CPU_COUNT 1
+    #define STK_ARCH_CPU_COUNT 1U
 #endif
 
 /*! \def   STK_STACK_SIZE_MIN
@@ -434,24 +434,24 @@
         #if defined(__riscv_32e) && (__riscv_32e == 1)
             // RISC-V RV32E (Embedded): Small 16-register file
             #if !defined(__riscv_flen) || (__riscv_flen == 0)
-                #define STK_STACK_SIZE_MIN 32
+                #define STK_STACK_SIZE_MIN 32U
             #else
                 // FPU present: Requires additional space for 32 FP registers
-                #define STK_STACK_SIZE_MIN (32 + (__riscv_flen * 2))
+                #define STK_STACK_SIZE_MIN (32U + (__riscv_flen * 2))
             #endif
         #else
             // Standard RISC-V (RV32I/RV64I): Large 32-register file
             // Higher minimum to prevent memory corruption on platforms like RP2350
             #if !defined(__riscv_flen) || (__riscv_flen == 0)
-                #define STK_STACK_SIZE_MIN 256
+                #define STK_STACK_SIZE_MIN 256U
             #else
                 // Standard RISC-V with FPU: Maximum frame allocation
-                #define STK_STACK_SIZE_MIN (512 + (__riscv_flen * 2))
+                #define STK_STACK_SIZE_MIN (512U + (__riscv_flen * 2))
             #endif
         #endif
     #else
         // ARM Cortex-M and other architectures
-        #define STK_STACK_SIZE_MIN 32
+        #define STK_STACK_SIZE_MIN 32U
     #endif
 #endif
 
@@ -518,6 +518,11 @@
     TYPE(const TYPE &) = delete;\
     TYPE &operator=(const TYPE &) = delete;
 
+/*! \def       STK_UNUSED
+    \brief     Explicitly marks a variable as unused to suppress compiler warnings.
+*/
+#define STK_UNUSED(X) static_cast<void>(X)
+
 /*! \namespace stk
     \brief     Namespace of STK package.
  */
@@ -527,13 +532,13 @@ namespace stk {
     \note  Arguments are evaluated exactly once, safe for any expression type.
 */
 template <typename T>
-constexpr T Min(T a, T b) noexcept { return (a < b) ? a : b; }
+static constexpr T Min(T a, T b) { return ((a < b) ? a : b); }
 
 /*! \brief Compile-time maximum of two values.
     \note  Arguments are evaluated exactly once, safe for any expression type.
 */
 template <typename T>
-constexpr T Max(T a, T b) noexcept { return (a < b) ? b : a; }
+static constexpr T Max(T a, T b) { return ((a > b) ? a : b); }
 
 /*! \namespace stk::util
     \brief     Internal utility namespace containing data structure helpers (linked lists, etc.)

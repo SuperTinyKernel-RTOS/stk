@@ -27,7 +27,9 @@ namespace stk
         static IKernelService *GetInstance() { return NULL; }
         TId GetTid() const { return 0; }
         Ticks GetTicks() const { return ticks; }
-        int32_t GetTickResolution() const { return resolution; }
+        uint32_t GetTickResolution() const { return resolution; }
+        Cycles GetSysTimerCount() const { return 0; }
+        uint32_t GetSysTimerFrequency() const { return 0; }
         void Delay(Timeout ticks) { (void)ticks; }
         void Sleep(Timeout ticks) { (void)ticks; }
         void SleepUntil(Ticks timestamp) { (void)timestamp; }
@@ -39,6 +41,8 @@ namespace stk
             (void)timeout;
             return nullptr;
         }
+        Timeout Suspend() { return 1; }
+        void Resume(Timeout elapsed_ticks) { (void)elapsed_ticks; }
     }
     s_KernelServiceMock;
 

@@ -12,29 +12,34 @@
 #include <stk_config.h>
 #include <stk.h>
 #include <sync/stk_sync.h>
-#include "stk_c.h"
+#include <stk_c.h>
+
+using namespace stk;
 
 #define STK_C_TASKS_MAX (STK_C_KERNEL_MAX_TASKS)
 
 inline void *operator new(std::size_t, void *ptr) noexcept { return ptr; }
 inline void operator delete(void *, void *) noexcept { /* nothing for placement delete */ }
 
-using namespace stk;
+static void FreeTask(const stk_task_t *task);
+
+// Forward decl.
+struct stk_task_t;
 
 class TaskWrapper : public ITask
 {
 public:
     // ITask
-    EAccessMode GetAccessMode() const { return m_mode; }
-    void OnDeadlineMissed(uint32_t duration) { (void)duration; }
-    int32_t GetWeight() const { return m_weight; }
-    stk_tid_t GetId() const  { return m_tid; }
-    const char *GetTraceName() const  { return m_tname; }
+    EAccessMode GetAccessMode() const override { return m_mode; }
+    void OnDeadlineMissed(uint32_t duration) override { (void)duration; }
+    int32_t GetWeight() const override { return m_weight; }
+    stk_tid_t GetId() const override { return m_tid; }
+    const char *GetTraceName() const override { return m_tname; }
 
     // IStackMemory
-    stk_word_t *GetStack() const { return m_stack; }
-    size_t GetStackSize() const { return m_stack_size; }
-    size_t GetStackSizeBytes() const { return m_stack_size * sizeof(stk_word_t); }
+    stk_word_t *GetStack() const override { return m_stack; }
+    size_t GetStackSize() const override { return m_stack_size; }
+    size_t GetStackSizeBytes() const override { return m_stack_size * sizeof(stk_word_t); }
 
     void Initialize(stk_task_entry_t func,
                     void       *user_data,
@@ -55,11 +60,15 @@ public:
     void SetName(const char *tname) { m_tname = tname; }
 
 private:
-    void Run() { m_func(m_user_data); }
+    void Run() override { m_func(m_user_data); }
+    void OnExit() override { FreeTask(ToStkTask()); }
+
+    //! Warning: stk_task_t::handle must be the first in stk_task_t struct.
+    stk_task_t *ToStkTask() { return reinterpret_cast<stk_task_t *>(this); }
 
     stk_task_entry_t m_func;
     void            *m_user_data;
-    stk_word_t       *m_stack;
+    stk_word_t      *m_stack;
     size_t           m_stack_size;
     EAccessMode      m_mode;
     int32_t          m_weight;
@@ -72,18 +81,15 @@ struct stk_task_t
     TaskWrapper handle;
 };
 
-struct TaskSlot
+static struct TaskSlot
 {
     TaskSlot() : busy(false), task()
     {}
 
     bool       busy;
     stk_task_t task;
-};
-
-// Static vars
-static volatile bool s_TaskPoolLock = false;
-static TaskSlot s_Tasks[STK_C_TASKS_MAX];
+}
+s_Tasks[STK_C_TASKS_MAX];
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -115,7 +121,7 @@ static stk_task_t *AllocateTask(stk_task_entry_t entry,
     return task;
 }
 
-static void FreeTask(const stk_task_t *task)
+void FreeTask(const stk_task_t *task)
 {
     sync::ScopedCriticalSection __cs;
 
@@ -238,6 +244,60 @@ void stk_kernel_remove_task(stk_kernel_t *k, stk_task_t *task)
     reinterpret_cast<stk::IKernel *>(k)->RemoveTask(&task->handle);
 }
 
+bool stk_kernel_is_started(const stk_kernel_t *k)
+{
+    STK_ASSERT(k != nullptr);
+
+    // IKernel::IsStarted() is non-virtual (defined only on the concrete Kernel<>
+    // template). Use GetState() via the virtual IKernel interface instead: the
+    // kernel is "started" whenever it has advanced past STATE_READY (i.e. it is
+    // STATE_RUNNING or STATE_SUSPENDED).
+    const stk::IKernel::EState st = reinterpret_cast<const stk::IKernel *>(k)->GetState();
+    return (st == stk::IKernel::STATE_RUNNING || st == stk::IKernel::STATE_SUSPENDED);
+}
+
+void stk_kernel_schedule_task_removal(stk_kernel_t *k, stk_task_t *task)
+{
+    STK_ASSERT(k != nullptr);
+    STK_ASSERT(task != nullptr);
+
+    reinterpret_cast<stk::IKernel *>(k)->ScheduleTaskRemoval(&task->handle);
+}
+
+void stk_kernel_suspend_task(stk_kernel_t *k, stk_task_t *task, bool *suspended)
+{
+    STK_ASSERT(k != nullptr);
+    STK_ASSERT(task != nullptr);
+    STK_ASSERT(suspended != nullptr);
+
+    reinterpret_cast<stk::IKernel *>(k)->SuspendTask(&task->handle, *suspended);
+}
+
+void stk_kernel_resume_task(stk_kernel_t *k, stk_task_t *task)
+{
+    STK_ASSERT(k != nullptr);
+    STK_ASSERT(task != nullptr);
+
+    reinterpret_cast<stk::IKernel *>(k)->ResumeTask(&task->handle);
+}
+
+size_t stk_kernel_enumerate_tasks(stk_kernel_t *k, stk_task_t **tasks, size_t max_count)
+{
+    STK_ASSERT(k != nullptr);
+    STK_ASSERT(tasks != nullptr);
+
+    // Collect ITask* pointers from the kernel, then map each back to stk_task_t*.
+    // TaskWrapper is the first member of stk_task_t, so ITask* == stk_task_t*.
+    stk::ITask *itasks[STK_C_TASKS_MAX];
+    size_t n = reinterpret_cast<stk::IKernel *>(k)->EnumerateTasks(
+        itasks, (max_count < STK_C_TASKS_MAX ? max_count : STK_C_TASKS_MAX));
+
+    for (size_t i = 0; i < n; ++i)
+        tasks[i] = reinterpret_cast<stk_task_t *>(itasks[i]);
+
+    return n;
+}
+
 void stk_kernel_add_task_hrt(stk_kernel_t *k,
                              stk_task_t *task,
                              int32_t periodicity_ticks,
@@ -325,6 +385,11 @@ int64_t   stk_ticks(void)             { return stk::GetTicks(); }
 int32_t   stk_tick_resolution(void)   { return stk::GetTickResolution(); }
 int64_t   stk_time_now_ms(void)       { return stk::GetTimeNowMs(); }
 int64_t   stk_ticks_from_ms(int64_t msec) { return stk_ticks_from_ms_r(msec, stk::GetTickResolution()); }
+uint64_t  stk_sys_timer_count(void)   { return stk::GetSysTimerCount(); }
+uint32_t  stk_sys_timer_frequency(void) { return stk::GetSysTimerFrequency(); }
+uint64_t  stk_hires_cycles(void)      { return stk::hw::HiResClock::GetCycles(); }
+uint32_t  stk_hires_frequency(void)   { return stk::hw::HiResClock::GetFrequency(); }
+int64_t   stk_hires_time_us(void)     { return stk::hw::HiResClock::GetTimeUs(); }
 void      stk_delay(uint32_t ticks)   { stk::Delay(ticks); }
 void      stk_sleep(uint32_t ticks)   { stk::Sleep(ticks); }
 void      stk_delay_ms(uint32_t ms)   { stk::DelayMs(ms); }

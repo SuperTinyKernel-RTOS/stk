@@ -92,10 +92,13 @@ public:
         m_fail_InitStack    = false;
         m_resolution        = 0;
         m_context_switch_nr = 0;
-        m_ticks_count           = 0;
+        m_ticks_count       = 0;
         m_stack_idle        = NULL;
         m_stack_active      = NULL;
         m_overrider         = NULL;
+        m_systimer_count    = 0;
+        m_systimer_freq     = 0;
+        m_sleep_ticks       = 0;
     }
 
     virtual ~PlatformTestMock()
@@ -149,6 +152,16 @@ public:
     uint32_t GetTickResolution() const
     {
         return m_resolution;
+    }
+
+    Cycles GetSysTimerCount() const
+    {
+        return m_systimer_count;
+    }
+
+    uint32_t GetSysTimerFrequency() const
+    {
+        return m_systimer_freq;
     }
 
     void SwitchToNext()
@@ -235,6 +248,17 @@ public:
         return m_event_handler->OnGetTid(GetCallerSP());
     }
 
+    Timeout Suspend()
+    {
+        m_event_handler->OnSuspend(true);
+        return m_sleep_ticks;
+    }
+
+    void Resume(Timeout elapsed_ticks)
+    {
+        m_event_handler->OnSuspend(false);
+    }
+
     IKernelService  *m_service;
     Stack           *m_exit_trap;
     bool             m_fail_InitStack;
@@ -248,6 +272,9 @@ public:
     Stack           *m_stack_idle;
     Stack           *m_stack_active;
     StackInfo        m_stack_info[STACK_EXIT_TRAP + 1];
+    uint64_t         m_systimer_count;
+    uint32_t         m_systimer_freq;
+    uint32_t         m_sleep_ticks;
 
 protected:
     IEventHandler *m_event_handler;
@@ -266,9 +293,11 @@ public:
         m_ticks          = 0;
         m_resolution     = 0;
         m_tid            = 0;
+        m_systimer_count = 0;
+        m_systimer_freq  = 0;
     }
     virtual ~KernelServiceMock()
-    { }
+    {}
 
     size_t GetTid() const
     {
@@ -283,9 +312,19 @@ public:
         return m_ticks;
     }
 
-    int32_t GetTickResolution() const
+    uint32_t GetTickResolution() const
     {
         return m_resolution;
+    }
+
+    Cycles GetSysTimerCount() const
+    {
+        return m_systimer_count;
+    }
+
+    uint32_t GetSysTimerFrequency() const
+    {
+        return m_systimer_freq;
     }
 
     void Delay(Timeout ticks)
@@ -316,11 +355,23 @@ public:
         return nullptr;
     }
 
-    bool    m_inc_ticks;
-    bool    m_switch_to_next;
-    int64_t m_ticks;
-    int32_t m_resolution;
-    size_t  m_tid;
+    Timeout Suspend()
+    {
+        return 1;
+    }
+
+    void Resume(Timeout elapsed_ticks)
+    {
+        (void)elapsed_ticks;
+    }
+
+    bool     m_inc_ticks;
+    bool     m_switch_to_next;
+    int64_t  m_ticks;
+    int32_t  m_resolution;
+    size_t   m_tid;
+    uint64_t m_systimer_count;
+    uint32_t m_systimer_freq;
 };
 
 /*! \class TaskMock

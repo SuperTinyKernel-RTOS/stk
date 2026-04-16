@@ -55,10 +55,14 @@ namespace sync {
 class Semaphore : public ITraceable, private ISyncObject
 {
 public:
+    /*! \brief     Max count supported.
+    */
+    static const size_t COUNT_MAX = 0xFFFEU;
+
     /*! \brief     Constructor.
         \param[in] initial_count: Starting value of the semaphore.
     */
-    explicit Semaphore(uint16_t initial_count = 0U, uint16_t max_count = 0xFFFEU)
+    explicit Semaphore(uint16_t initial_count = 0U, uint16_t max_count = COUNT_MAX)
         : m_count(initial_count), m_count_max(max_count)
     {
         STK_ASSERT(initial_count < max_count); // API contract: initial count must not exceed maximum
@@ -77,7 +81,7 @@ public:
 
     /*! \brief     Wait for a signal (decrement counter).
         \param[in] timeout: Maximum time to wait (ticks).
-        \warning   ISR-unsafe.
+        \warning   ISR-safe only with \a timeout = \c NO_WAIT, ISR-unsafe otherwise.
         \return    True if acquired, false if timeout occurred.
     */
     bool Wait(Timeout timeout = WAIT_INFINITE);

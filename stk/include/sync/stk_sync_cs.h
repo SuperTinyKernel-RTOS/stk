@@ -50,7 +50,7 @@ namespace sync {
            code which can be accessed by ISR or another CPU core.
     \see   IMutex, hw::CriticalSection
 */
-class ScopedCriticalSection : private IMutex
+class ScopedCriticalSection : public IMutex
 {
     friend class Event;
     friend class EventFlags;

@@ -88,7 +88,7 @@ public:
         m_count += 1U;
 
         // notify consumer that data is available
-        m_cv_empty.NotifyOne();
+        m_cv_empty.NotifyOne_CS();
 
         return true;
     }
@@ -175,7 +175,7 @@ public:
             }
 
             // notify consumers that data is ready
-            m_cv_empty.NotifyAll();
+            m_cv_empty.NotifyAll_CS();
         }
 
         return written;
@@ -219,7 +219,7 @@ public:
         m_count -= 1U;
 
         // notify producer that space is available
-        m_cv_full.NotifyOne();
+        m_cv_full.NotifyOne_CS();
 
         return true;
     }
@@ -308,7 +308,7 @@ public:
             }
 
             // notify producers that space is now available
-            m_cv_full.NotifyAll();
+            m_cv_full.NotifyAll_CS();
         }
 
         return read_count;
