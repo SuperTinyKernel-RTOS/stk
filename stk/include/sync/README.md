@@ -59,7 +59,15 @@ A thread-safe FIFO communication channel for inter-task data passing, internally
 - **Blocking semantics**: `Write()` blocks if the pipe is full; `Read()` blocks if the pipe is empty, until the timeout expires.
 - **Low-Power Aware**: Waiting tasks are suspended by the kernel.
 
-### 8. Event Flags (`sync::EventFlags`)
+### 8. Message Queue (`sync::MessageQueue` / `sync::MessageQueueT<N, MSG>`)
+A fixed-capacity, fixed-message-size FIFO queue for inter-task communication over opaque byte messages.
+- **Buffer flexibility**: `MessageQueue` operates over an externally supplied buffer; `MessageQueueT<N, MSG>` owns its storage internally with compile-time capacity and message size.
+- **C-ABI friendly**: Message payload is always transferred via `memcpy`, so the message type does not need to be a C++ assignable type.
+- **Blocking semantics**: `Put()` blocks if the queue is full; `Get()` blocks if the queue is empty, until the timeout expires.
+- **Reset support**: `Reset()` discards all messages and wakes blocked producers.
+- **Low-Power Aware**: Waiting tasks are suspended by the kernel.
+
+### 9. Event Flags (`sync::EventFlags`)
 A 32-bit multi-flag synchronization primitive for coordinating multiple independent events within a single object.
 - **OR semantics** (`OPT_WAIT_ANY`): Unblocks when any one of the requested flag bits is set (default).
 - **AND semantics** (`OPT_WAIT_ALL`): Unblocks only when all requested flag bits are simultaneously set.
@@ -67,7 +75,7 @@ A 32-bit multi-flag synchronization primitive for coordinating multiple independ
 - **Selective clear**: By default matched bits are atomically cleared on a successful `Wait()`; pass `OPT_NO_CLEAR` to suppress this, allowing multiple concurrent waiters to each satisfy on the same `Set()`.
 - **Low-Power Aware**: Waiting tasks are suspended by the kernel.
 
-### 9. Reader-Writer Mutex (`sync::RWMutex`)
+### 10. Reader-Writer Mutex (`sync::RWMutex`)
 A synchronization primitive that allows multiple concurrent readers or one exclusive writer.
 - **Writer Preference Policy**: Prevents writer starvation by blocking new readers when writers are waiting.
 - **Shared Access**: Multiple tasks can acquire `ReadLock()` simultaneously for read-only operations.
@@ -87,6 +95,7 @@ The following operations are ISR-safe:
 * **sync::Semaphore**: `Signal()`, `TryWait()`
 * **sync::ConditionVariable**: `NotifyOne()`, `NotifyAll()`, `Wait(NO_WAIT)`
 * **sync::Pipe**: `Write(NO_WAIT)`, `WriteBulk(NO_WAIT)`, `TryWrite()`, `TryWriteBulk()`, `Read(NO_WAIT)`, `ReadBulk(NO_WAIT)`, `TryRead()`, `TryReadBulk()`
+* **sync::MessageQueue**: `Put(NO_WAIT)`, `TryPut()`, `Get(NO_WAIT)`, `TryGet()`
 
 ---
 

@@ -41,8 +41,6 @@
  *     semantics (Put/Get with configurable timeouts, ISR-safe TryPut/TryGet).
  *
  * Limitations / deviations from the specification:
- *   - osKernelGetSysTimerCount / Freq - returns a tick-based approximation;
- *     hardware cycle counter is not accessed here.
  *   - Priority inheritance (osMutexPrioInherit) and robust mutex
  *     (osMutexRobust) attributes are silently ignored; STK Mutex is always
  *     recursive (osMutexRecursive is therefore always effective).

@@ -135,7 +135,7 @@ public:
                    messages into the now-empty queue.
         \warning   Messages that were in the queue are silently discarded.
                    Ensure no consumers depend on them before calling Reset().
-        \warning   ISR-unsafe.
+        \warning   ISR-safe.
     */
     void Reset();
 
@@ -286,8 +286,6 @@ inline bool MessageQueue::Get(void *msg_ptr, Timeout timeout)
 
 inline void MessageQueue::Reset()
 {
-    STK_ASSERT(!hw::IsInsideISR()); // API contract: caller must not be in ISR
-
     ScopedCriticalSection cs_;
 
     m_count = 0U;

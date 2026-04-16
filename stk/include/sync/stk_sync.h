@@ -33,7 +33,7 @@
     | **RWMutex**           | \c None                                                                                                                                            |
     | **ConditionVariable** | \c NotifyOne(), \c NotifyAll(), \c Wait(NO_WAIT)                                                                                                   |
     | **Pipe**              | \c Write(NO_WAIT), \c WriteBulk(NO_WAIT), \c TryWrite(), \c TryWriteBulk(), \c Read(NO_WAIT), \c ReadBulk(NO_WAIT), \c TryRead(), \c TryReadBulk() |
-    | **MessageQueue**      | \c Put(NO_WAIT), \c Get(NO_WAIT), \c TryPut(), \c TrGet(), \c Reset                                                                                |
+    | **MessageQueue**      | \c Put(NO_WAIT), \c TryPut(), \c Get(NO_WAIT), \c TryGet(), \c Reset()                                                                             |
 
     NOTE:
     - **SpinLock**, **Mutex**, **RWMutex**: Ownership is tied to a Task ID (\a TId).
