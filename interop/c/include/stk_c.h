@@ -122,11 +122,11 @@ typedef void (*stk_task_entry_t)(void *arg);
 /* Available kernel type definitions:
 
    Kernel mode flags (may be OR-combined, subject to the constraints listed below):
-     KERNEL_STATIC   — fixed task list; tasks must never return from their entry function.
-     KERNEL_DYNAMIC  — tasks may be added/removed at runtime and may return when done.
-     KERNEL_HRT      — Hard Real-Time mode; must be combined with KERNEL_STATIC or KERNEL_DYNAMIC.
-     KERNEL_SYNC     — enables synchronization primitives (Mutex, Event, Semaphore, etc.).
-     KERNEL_TICKLESS — tickless low-power idle; suppresses the SysTick when all tasks sleep.
+     KERNEL_STATIC   - fixed task list; tasks must never return from their entry function.
+     KERNEL_DYNAMIC  - tasks may be added/removed at runtime and may return when done.
+     KERNEL_HRT      - Hard Real-Time mode; must be combined with KERNEL_STATIC or KERNEL_DYNAMIC.
+     KERNEL_SYNC     - enables synchronization primitives (Mutex, Event, Semaphore, etc.).
+     KERNEL_TICKLESS - tickless low-power idle; suppresses the SysTick when all tasks sleep.
                        Requires STK_TICKLESS_IDLE=1 in stk_config.h.
                        INCOMPATIBLE with KERNEL_HRT (HRT requires a continuous tick).
 
@@ -202,7 +202,7 @@ Kernel<KERNEL_DYNAMIC | KERNEL_TICKLESS | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, S
     #define STK_C_KERNEL_TYPE_CPU_6 Kernel<KERNEL_STATIC, STK_C_KERNEL_MAX_TASKS, SwitchStrategyRR, PlatformDefault>
     #define STK_C_KERNEL_TYPE_CPU_7 Kernel<KERNEL_STATIC, STK_C_KERNEL_MAX_TASKS, SwitchStrategyRR, PlatformDefault>
 
-    // Tickless example — CPU enters low-power state when all tasks are sleeping:
+    // Tickless example - CPU enters low-power state when all tasks are sleeping:
     #define STK_C_KERNEL_TYPE_CPU_0 Kernel<KERNEL_STATIC | KERNEL_TICKLESS, STK_C_KERNEL_MAX_TASKS, SwitchStrategyRR, PlatformDefault>
     \endcode
  */
@@ -307,7 +307,7 @@ void stk_kernel_schedule_task_removal(stk_kernel_t *k, stk_task_t *task);
     \param[in]  task: Task to suspend.
     \param[out] suspended: Set to true if the task was successfully suspended (was awake),
                 false if the task was already sleeping (e.g. blocked on a mutex or timed Sleep).
-    \note      Do not hold a critical section when suspending the calling task — this will deadlock.
+    \note      Do not hold a critical section when suspending the calling task - this will deadlock.
     \note      If the task suspends itself, the call blocks until the kernel switches it out.
 */
 void stk_kernel_suspend_task(stk_kernel_t *k, stk_task_t *task, bool *suspended);
@@ -600,12 +600,12 @@ void stk_tls_set(void *ptr);
 
 // ───── Critical Section ──────────────────────────────────────────────────────
 
-/*! \brief     Enter critical section — disable context switches on current core.
+/*! \brief     Enter critical section - disable context switches on current core.
     \note      Supports nesting (number of enter calls must match number of exit calls).
 */
 void stk_critical_section_enter(void);
 
-/*! \brief     Leave critical section — re-enable context switches.
+/*! \brief     Leave critical section - re-enable context switches.
     \note      Must be called once for each previous stk_critical_section_enter().
 */
 void stk_critical_section_exit(void);

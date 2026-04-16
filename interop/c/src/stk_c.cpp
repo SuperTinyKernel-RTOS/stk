@@ -12,14 +12,17 @@
 #include <stk_config.h>
 #include <stk.h>
 #include <sync/stk_sync.h>
-#include <stk_c.h>
+
+#include "stk_c.h"
 
 using namespace stk;
 
 #define STK_C_TASKS_MAX (STK_C_KERNEL_MAX_TASKS)
 
+#ifndef _NEW
 inline void *operator new(std::size_t, void *ptr) noexcept { return ptr; }
 inline void operator delete(void *, void *) noexcept { /* nothing for placement delete */ }
+#endif
 
 static void FreeTask(const stk_task_t *task);
 
@@ -148,10 +151,10 @@ extern "C" {
 #define STK_KERNEL_CASE(X) \
     case X: \
     { \
-        static_assert(sizeof(STK_C_KERNEL_TYPE_CPU_##X) % sizeof(stk_word_t) == 0, \
-                      "Kernel memory size must be multiple of stk_word_t"); \
+        static_assert(sizeof(STK_C_KERNEL_TYPE_CPU_##X) % sizeof(Word) == 0, \
+                      "Kernel memory size must be multiple of Word"); \
         alignas(alignof(STK_C_KERNEL_TYPE_CPU_##X)) /* instead of __stk_c_stack_attr */ \
-        static stk_word_t kernel_##X##_mem[sizeof(STK_C_KERNEL_TYPE_CPU_##X) / sizeof(stk_word_t)]; \
+        static Word kernel_##X##_mem[sizeof(STK_C_KERNEL_TYPE_CPU_##X) / sizeof(Word)]; \
         IKernel *kernel = new (kernel_##X##_mem) STK_C_KERNEL_TYPE_CPU_##X(); \
         return reinterpret_cast<stk_kernel_t *>(kernel); \
     }
