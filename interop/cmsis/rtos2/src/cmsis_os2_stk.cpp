@@ -804,7 +804,7 @@ uint32_t osThreadGetStackSpace(osThreadId_t thread_id)
         return 0U;
 
     StkThread *t = static_cast<StkThread *>(thread_id);
-    return static_cast<uint32_t>(t->GetStackSpace());
+    return static_cast<uint32_t>(t->GetStackSpace() * sizeof(stk::Word));
 }
 
 osStatus_t osThreadSetPriority(osThreadId_t thread_id, osPriority_t priority)

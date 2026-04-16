@@ -153,7 +153,7 @@ TEST(Kernel, AddTaskInitStack)
     kernel.AddTask(&task);
 
     CHECK_EQUAL(&task, platform->m_stack_info[STACK_USER_TASK].task);
-    CHECK_EQUAL((size_t)task.GetStack(), platform->m_stack_info[STACK_USER_TASK].stack->SP);
+    CHECK_EQUAL((Word)task.GetStack(), platform->m_stack_info[STACK_USER_TASK].stack->SP);
 }
 
 TEST(Kernel, AddTaskFailMaxOut)
@@ -462,7 +462,7 @@ TEST(Kernel, Start)
     CHECK_TRUE(platform->m_started);
     CHECK_TRUE(g_KernelService != NULL);
     CHECK_TRUE(platform->m_stack_active != NULL);
-    CHECK_EQUAL((size_t)task.GetStack(), platform->m_stack_active->SP);
+    CHECK_EQUAL((Word)task.GetStack(), platform->m_stack_active->SP);
     CHECK_EQUAL(periodicity, platform->GetTickResolution());
 }
 
@@ -500,10 +500,10 @@ TEST(Kernel, ContextSwitchOnSysTickISR)
         CHECK_TRUE(active != NULL);
 
         // 1-st task is switched from Active and becomes Idle
-        CHECK_EQUAL(idle->SP, (size_t)task1.GetStack());
+        CHECK_EQUAL(idle->SP, (Word)task1.GetStack());
 
         // 2-nd task becomes Active
-        CHECK_EQUAL(active->SP, (size_t)task2.GetStack());
+        CHECK_EQUAL(active->SP, (Word)task2.GetStack());
 
         // context switch requested
         CHECK_EQUAL(1, platform->m_context_switch_nr);
@@ -517,10 +517,10 @@ TEST(Kernel, ContextSwitchOnSysTickISR)
         CHECK_TRUE(active != NULL);
 
         // 2-st task is switched from Active and becomes Idle
-        CHECK_EQUAL(idle->SP, (size_t)task2.GetStack());
+        CHECK_EQUAL(idle->SP, (Word)task2.GetStack());
 
         // 1-nd task becomes Active
-        CHECK_EQUAL(active->SP, (size_t)task1.GetStack());
+        CHECK_EQUAL(active->SP, (Word)task1.GetStack());
 
         // context switch requested
         CHECK_EQUAL(2, platform->m_context_switch_nr);
@@ -624,7 +624,6 @@ static void TestTaskExit()
 
     // last task is removed
     platform->ProcessTick();
-
     platform->ProcessTick();
 
     // no Idle tasks left
@@ -707,6 +706,63 @@ TEST(Kernel, OnTaskExitUnsupported)
     CHECK_EQUAL(KERNEL_PANIC_BAD_MODE, test::g_PanicValue);
 }
 
+TEST(Kernel, OnTaskExitScheduleDynamicOnly)
+{
+    Kernel<KERNEL_STATIC, 1, SwitchStrategyRR, PlatformTestMock> kernel;
+    TaskMock<ACCESS_PRIVILEGED> task1;
+
+    kernel.Initialize();
+    kernel.AddTask(&task1);
+    kernel.Start();
+
+    try
+    {
+        g_TestContext.ExpectAssert(true);
+        kernel.ScheduleTaskRemoval(&task1);
+        CHECK(false); // dynamic only
+    }
+    catch (TestAssertPassed &pass)
+    {
+        CHECK(true);
+        g_TestContext.ExpectAssert(false);
+    }
+}
+
+TEST(Kernel, OnTaskExitSchedule)
+{
+    Kernel<KERNEL_DYNAMIC, 2, SwitchStrategyRR, PlatformTestMock> kernel;
+    TaskMock<ACCESS_PRIVILEGED> task1, task2;
+    PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
+    Stack *&active = platform->m_stack_active;
+
+    kernel.Initialize();
+    kernel.AddTask(&task1);
+    kernel.AddTask(&task2);
+    kernel.Start();
+
+    // task1 is active after Start
+    CHECK_EQUAL(active->SP, (Word)task1.GetStack());
+
+    kernel.ScheduleTaskRemoval(&task1);
+
+    // ScheduleTaskRemoval does not change anything, just schedules removal on the next tick
+    CHECK_EQUAL(active->SP, (Word)task1.GetStack());
+
+    // task2 will become active now but kernel could not remove task1 because it was current one,
+    // it will be removed on a next tick
+    platform->ProcessTick();
+
+    // task2 became the active
+    CHECK_EQUAL(2, kernel.GetSwitchStrategy()->GetSize());
+    CHECK_EQUAL(active->SP, (Word)task2.GetStack());
+
+    platform->ProcessTick();
+
+    // task1 was removed by the tick, task2 is the only active
+    CHECK_EQUAL(1, kernel.GetSwitchStrategy()->GetSize());
+    CHECK_EQUAL(active->SP, (Word)task2.GetStack());
+}
+
 TEST(Kernel, OnTaskNotFoundBySP)
 {
     Kernel<KERNEL_STATIC, 1, SwitchStrategyRR, PlatformTestMock> kernel;
@@ -723,7 +779,7 @@ TEST(Kernel, OnTaskNotFoundBySP)
     {
         g_TestContext.ExpectAssert(true);
         platform->EventTaskSwitch(0xdeadbeef);
-        CHECK_TEXT(false, "non existent task must not succeed");
+        CHECK(false); // non existent task must not succeed
     }
     catch (TestAssertPassed &pass)
     {
@@ -759,13 +815,105 @@ TEST(Kernel, OnTaskSkipFreedTask)
         // by this FindTaskBySP() is invoked and will loop thorugh the exited task1's
         // slot
         platform->EventTaskSwitch(0xdeadbeef);
-        CHECK_TEXT(false, "exited task must be successfully skipped by FindTaskBySP()");
+        CHECK(false); // exited task must be successfully skipped by FindTaskBySP()
     }
     catch (TestAssertPassed &pass)
     {
         CHECK(true);
         g_TestContext.ExpectAssert(false);
     }
+}
+
+static struct TaskSuspendContext
+{
+    TaskSuspendContext()
+    {
+        Clear();
+    }
+
+    IPlatform *platform;
+    IKernel   *kernel;
+    ITask     *task1;
+    ITask     *task2;
+    uint32_t   count;
+
+    void Clear()
+    {
+        platform = nullptr;
+        kernel   = nullptr;
+        task1    = nullptr;
+        task2    = nullptr;
+        count    = 0;
+    }
+
+    void Process()
+    {
+        platform->ProcessTick();
+
+        if (count > 2)
+        {
+            // on first attempt we resume self, then calling Resume for a non-suspended task is noop
+            kernel->ResumeTask(task1);
+        }
+
+        ++count;
+    }
+}
+g_TaskSuspendContext;
+
+static void TaskSuspendRelaxCpu()
+{
+    g_TaskSuspendContext.Process();
+}
+
+TEST(Kernel, TaskSuspend)
+{
+    Kernel<KERNEL_STATIC, 2, SwitchStrategyRR, PlatformTestMock> kernel;
+    TaskMock<ACCESS_USER> task1, task2;
+    PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
+    Stack *&idle = platform->m_stack_idle, *&active = platform->m_stack_active;
+    bool suspended = false;
+
+    g_TaskSuspendContext.Clear();
+    g_TaskSuspendContext.platform = platform;
+    g_TaskSuspendContext.kernel   = &kernel;
+    g_TaskSuspendContext.task1    = &task1;
+    g_TaskSuspendContext.task2    = &task2;
+    g_RelaxCpuHandler = TaskSuspendRelaxCpu;
+
+    kernel.Initialize();
+    kernel.AddTask(&task1);
+    kernel.AddTask(&task2);
+    kernel.Start();
+
+    // task1 is active after Start
+    CHECK_EQUAL(active->SP, (Word)task1.GetStack());
+
+    // task1 is calling SuspendTask to suspend self
+    kernel.SuspendTask(&task1, suspended);
+    CHECK_TRUE(suspended);
+
+    // task1 became active after we resumed it TaskSuspendContext::Process
+    CHECK_EQUAL(active->SP, (Word)task1.GetStack());
+
+    // task1 is calling SuspendTask for task2
+    kernel.SuspendTask(&task2, suspended);
+    CHECK_TRUE(suspended);
+
+    // task2 is suspended
+    platform->ProcessTick();
+    CHECK_EQUAL(idle->SP, (Word)task2.GetStack());
+
+    // task2 is suspended
+    platform->ProcessTick();
+    CHECK_EQUAL(idle->SP, (Word)task2.GetStack());
+
+    // task1 is calling ResumeTask for task2
+    kernel.ResumeTask(&task2);
+
+    // task2 becomes active
+    platform->ProcessTick();
+    CHECK_EQUAL(active->SP, (Word)task2.GetStack());
 }
 
 TEST(Kernel, Hrt)
@@ -780,10 +928,10 @@ TEST(Kernel, Hrt)
     kernel.Start();
 
     platform->ProcessTick();
-    CHECK_EQUAL(platform->m_stack_active->SP, (size_t)task2.GetStack());
+    CHECK_EQUAL(platform->m_stack_active->SP, (Word)task2.GetStack());
 
     platform->ProcessTick();
-    CHECK_EQUAL(platform->m_stack_active->SP, (size_t)task1.GetStack());
+    CHECK_EQUAL(platform->m_stack_active->SP, (Word)task1.GetStack());
 }
 
 TEST(Kernel, HrtAddNonHrt)
@@ -797,7 +945,7 @@ TEST(Kernel, HrtAddNonHrt)
     {
         g_TestContext.ExpectAssert(true);
         kernel.AddTask(&task);
-        CHECK_TEXT(false, "non-HRT AddTask not supported in HRT mode");
+        CHECK(false); // non-HRT AddTask not supported in HRT mode"
     }
     catch (TestAssertPassed &pass)
     {
@@ -817,7 +965,7 @@ TEST(Kernel, HrtAddNotAllowedForNonHrtMode)
     {
         g_TestContext.ExpectAssert(true);
         kernel.AddTask(&task, 1, 1, 0);
-        CHECK_TEXT(false, "HRT-related AddTask not supported in non-HRT mode");
+        CHECK(false); // HRT-related AddTask not supported in non-HRT mode
     }
     catch (TestAssertPassed &pass)
     {
@@ -839,7 +987,7 @@ TEST(Kernel, HrtSleepNotAllowed)
     {
         g_TestContext.ExpectAssert(true);
         Sleep(1);
-        CHECK_TEXT(false, "IKernelService::Sleep not allowed in HRT mode");
+        CHECK(false); // IKernelService::Sleep not allowed in HRT mode
     }
     catch (TestAssertPassed &pass)
     {
@@ -851,7 +999,7 @@ TEST(Kernel, HrtSleepNotAllowed)
     {
         g_TestContext.ExpectAssert(true);
         SleepUntil(GetTicks() + 1);
-        CHECK_TEXT(false, "IKernelService::SleepUntil not allowed in HRT mode");
+        CHECK(false); // IKernelService::SleepUntil not allowed in HRT mode
     }
     catch (TestAssertPassed &pass)
     {
@@ -971,12 +1119,12 @@ TEST(Kernel, HrtSkipSleepingNextRM)
     g_HrtTaskDeadlineMissedRelaxCpuContext.platform = platform;
     g_RelaxCpuHandler = HrtTaskDeadlineMissedRelaxCpu;
 
-    CHECK_EQUAL(platform->m_stack_active->SP, (size_t)task2.GetStack());
+    CHECK_EQUAL(platform->m_stack_active->SP, (Word)task2.GetStack());
     platform->ProcessTick();
-    CHECK_EQUAL(platform->m_stack_active->SP, (size_t)task2.GetStack());
+    CHECK_EQUAL(platform->m_stack_active->SP, (Word)task2.GetStack());
     platform->ProcessTick();
     Yield();
-    CHECK_EQUAL(platform->m_stack_active->SP, (size_t)task1.GetStack());
+    CHECK_EQUAL(platform->m_stack_active->SP, (Word)task1.GetStack());
 
     CHECK_FALSE(platform->m_hard_fault);
     CHECK_EQUAL(0, task1.m_deadline_missed);
@@ -997,7 +1145,7 @@ static void TestHrtTaskExitDuringSleepState()
     kernel.Start();
 
     // task1 is the first
-    CHECK_EQUAL((size_t)task1.GetStack(), platform->m_stack_active->SP);
+    CHECK_EQUAL((Word)task1.GetStack(), platform->m_stack_active->SP);
 
     // task returns (exiting) without calling SwitchToNext
     platform->EventTaskExit(platform->m_stack_active);
@@ -1009,7 +1157,7 @@ static void TestHrtTaskExitDuringSleepState()
     platform->ProcessTick(); // task2 is still sleeping
     platform->ProcessTick(); // switched to task2
 
-    CHECK_EQUAL((size_t)task2.GetStack(), platform->m_stack_active->SP);
+    CHECK_EQUAL((Word)task2.GetStack(), platform->m_stack_active->SP);
 
     CHECK_EQUAL(1, strategy->GetSize());
 }
@@ -1051,7 +1199,7 @@ TEST(Kernel, HrtSleepingAwakeningStateChange)
 
     // after a tick task become active and Kernel enters into a AWAKENING state
     CHECK_EQUAL(platform->m_stack_idle, platform->m_stack_info[STACK_SLEEP_TRAP].stack);
-    CHECK_EQUAL(platform->m_stack_active->SP, (size_t)task.GetStack());
+    CHECK_EQUAL(platform->m_stack_active->SP, (Word)task.GetStack());
 }
 
 TEST(Kernel, HrtOnlyAPI)
@@ -1395,6 +1543,106 @@ TEST(Kernel, SyncWaitTicklessDuration)
     CHECK_TRUE(wo->IsTimeout());
     CHECK_EQUAL(3, g_SyncWaitRelaxCpuContext.counter);
     CHECK_EQUAL(true, mutex.m_locked);
+}
+
+TEST(Kernel, EnumTasks)
+{
+    Kernel<KERNEL_STATIC, 2, SwitchStrategyRR, PlatformTestMock> kernel;
+    TaskMock<ACCESS_USER> task1, task2;
+
+    kernel.Initialize();
+    kernel.AddTask(&task1);
+    kernel.AddTask(&task2);
+    kernel.Start();
+
+    ITask *tasks[2] = {};
+    uint32_t i = 0;
+
+    size_t count = kernel.EnumerateTasksT<2>([&](ITask *t) {
+        CHECK_COMPARE(i, <, 2);
+        tasks[i++] = t;
+        return true; // continue
+    });
+
+    // must enumerate all
+    CHECK_EQUAL(2, count);
+
+    // check ordering
+    CHECK_EQUAL(tasks[0], &task1);
+    CHECK_EQUAL(tasks[1], &task2);
+
+    // expect break of enumeration
+    count = kernel.EnumerateTasksT<2>([&](ITask */*t*/) {
+        return false; // break on first entry
+    });
+    CHECK_EQUAL(1, count);
+
+    // expect only 1 iteration
+    count = kernel.EnumerateTasksT<1>([&](ITask */*t*/) {
+        return true;
+    });
+    CHECK_EQUAL(1, count);
+}
+
+TEST(Kernel, SuspendResumeTicklessOnly)
+{
+    Kernel<KERNEL_STATIC, 1, SwitchStrategyRR, PlatformTestMock> kernel;
+    TaskMock<ACCESS_PRIVILEGED> task1;
+
+    kernel.Initialize();
+    kernel.AddTask(&task1);
+    kernel.Start();
+
+    try
+    {
+        g_TestContext.ExpectAssert(true);
+        stk::IKernelService::GetInstance()->Suspend();
+        CHECK_TEXT(false, "tickless only");
+    }
+    catch (TestAssertPassed &pass)
+    {
+        CHECK(true);
+        g_TestContext.ExpectAssert(false);
+    }
+
+    // shall return 0 in release build
+    g_TestContext.ExpectAssert(true);
+    g_TestContext.RethrowAssertException(false);
+    CHECK_EQUAL(0, stk::IKernelService::GetInstance()->Suspend());
+    g_TestContext.ExpectAssert(false);
+    g_TestContext.RethrowAssertException(true);
+
+    try
+    {
+        g_TestContext.ExpectAssert(true);
+        stk::IKernelService::GetInstance()->Resume(0);
+        CHECK_TEXT(false, "tickless only");
+    }
+    catch (TestAssertPassed &pass)
+    {
+        CHECK(true);
+        g_TestContext.ExpectAssert(false);
+    }
+}
+
+TEST(Kernel, SuspendResume)
+{
+    Kernel<KERNEL_STATIC | KERNEL_TICKLESS, 1, SwitchStrategyRR, PlatformTestMock> kernel;
+    PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
+    TaskMock<ACCESS_PRIVILEGED> task1;
+
+    kernel.Initialize();
+    kernel.AddTask(&task1);
+    kernel.Start();
+
+    platform->m_sleep_ticks = 9;
+
+    Timeout ticks = stk::IKernelService::GetInstance()->Suspend();
+    CHECK_EQUAL(9, ticks);
+
+    CHECK_EQUAL(IKernel::STATE_SUSPENDED, kernel.GetState());
+
+    stk::IKernelService::GetInstance()->Resume(ticks);
 }
 
 } // namespace stk

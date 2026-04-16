@@ -303,7 +303,7 @@ static inline int64_t GetTimeNowMs()
     \note      ISR-safe.
     \return    64-bit count value.
 */
-__stk_forceinline uint64_t GetSysTimerCount()
+__stk_forceinline Cycles GetSysTimerCount()
 {
     return IKernelService::GetInstance()->GetSysTimerCount();
 }

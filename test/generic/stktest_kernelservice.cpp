@@ -739,5 +739,26 @@ TEST(KernelServiceIsrSafety, Common)
     }
 }
 
+TEST(KernelService, SysTimer)
+{
+    Kernel<KERNEL_STATIC, 1, SwitchStrategyRR, PlatformTestMock> kernel;
+    TaskMock<ACCESS_USER> task;
+
+    PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
+
+    platform->m_systimer_count = 99;
+    platform->m_systimer_freq  = 1000;
+
+    kernel.Initialize();
+    kernel.AddTask(&task);
+    kernel.Start();
+
+    uint32_t freq = stk::GetSysTimerFrequency();
+    uint64_t count = stk::GetSysTimerCount();
+
+    CHECK_EQUAL(1000, freq);
+    CHECK_EQUAL(99, count);
+}
+
 } // namespace stk
 } // namespace test

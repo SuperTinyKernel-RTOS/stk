@@ -230,21 +230,24 @@ struct Stack
 class IStackMemory
 {
 public:
-    /*! \brief Get pointer to the stack memory.
+    /*! \brief   Get pointer to the stack memory.
     */
     virtual Word *GetStack() const = 0;
 
-    /*! \brief Get number of elements of the stack memory array.
+    /*! \brief   Get number of elements of the stack memory array.
     */
     virtual size_t GetStackSize() const = 0;
 
-    /*! \brief Get size of the memory in bytes.
+    /*! \brief   Get size of the memory in bytes.
     */
     virtual size_t GetStackSizeBytes() const = 0;
 
-    /*! \brief  Get available stack space.
-        \return Number of free bytes remaining on the stack (computed via the watermark pattern).
-                Returns 0 if the stack has been fully used or the watermark was overwritten.
+    /*! \brief   Get available stack space.
+        \return  Number of elements of the stack memory array remaining on the stack (computed via the
+                 watermark pattern).
+                 Returns 0 if the stack has been fully used or the watermark \a STK_STACK_MEMORY_FILLER
+                 was overwritten.
+        \warning Stack type: Bottom to Top (index[0]).
     */
     virtual size_t GetStackSpace()
     {
@@ -252,13 +255,11 @@ public:
         const size_t stack_size = GetStackSize();
 
         // count leading Words equal to STK_STACK_MEMORY_FILLER (watermark)
-        size_t free_words = 0U;
-        for (size_t i = 0U; (i < stack_size) && (stack[i] == STK_STACK_MEMORY_FILLER); ++i)
-        {
-            ++free_words;
-        }
+        size_t space = 0U;
+        for ( ; (space < stack_size) && (stack[space] == STK_STACK_MEMORY_FILLER); ++space)
+        {}
 
-        return (free_words * sizeof(stk::Word));
+        return space;
     }
 };
 
@@ -1058,17 +1059,20 @@ public:
         \endcode
     */
     template <size_t TMaxCount, typename TCallback>
-    size_t EnumerateTasks(TCallback &&callback)
+    size_t EnumerateTasksT(TCallback &&callback)
     {
-        ITask *tasks[TMaxCount];
-        size_t count = EnumerateTasks(tasks, TMaxCount);
-        for (size_t i = 0; i < count; ++i)
+        STK_STATIC_ASSERT(TMaxCount > 0);
+
+        ITask *tasks[TMaxCount] = {};
+        size_t i = 0, count = EnumerateTasks(tasks, TMaxCount);
+
+        while (i < count)
         {
-            if (!callback(tasks[i]))
+            if (!callback(tasks[i++]))
                 break;
         }
 
-        return count;
+        return i;
     }
 
     /*! \brief     Start kernel scheduling.
