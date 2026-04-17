@@ -83,6 +83,14 @@
  
 #include <stdint.h>
 #include <stddef.h>
+
+/*! \file     cmsis_os2.h
+    \brief    CMSIS RTOS2 interface for SuperTinyKernel (STK).
+
+    \defgroup cmsis_rtos2 STK CMSIS RTOS2 API
+    \brief    CMSIS RTOS2 interface for C++ API of SuperTinyKernel (STK).
+    @{
+*/
  
 #ifdef  __cplusplus
 extern "C"
@@ -882,5 +890,7 @@ void osFaultResume (void);
 #ifdef  __cplusplus
 }
 #endif
+
+/** @} */
  
 #endif  // CMSIS_OS2_H_

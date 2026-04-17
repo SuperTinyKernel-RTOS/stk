@@ -176,6 +176,11 @@
 			<locationURI>PARENT-6-PROJECT_LOC/interop/c/include/stk_c.h</locationURI>
 		</link>
 		<link>
+			<name>deps/interop/c/include/stk_c_memory.h</name>
+			<type>1</type>
+			<locationURI>PARENT-6-PROJECT_LOC/interop/c/include/stk_c_memory.h</locationURI>
+		</link>
+		<link>
 			<name>deps/interop/c/include/stk_c_time.h</name>
 			<type>1</type>
 			<locationURI>PARENT-6-PROJECT_LOC/interop/c/include/stk_c_time.h</locationURI>
@@ -184,6 +189,11 @@
 			<name>deps/interop/c/src/stk_c.cpp</name>
 			<type>1</type>
 			<locationURI>PARENT-6-PROJECT_LOC/interop/c/src/stk_c.cpp</locationURI>
+		</link>
+		<link>
+			<name>deps/interop/c/src/stk_c_memory.cpp</name>
+			<type>1</type>
+			<locationURI>PARENT-6-PROJECT_LOC/interop/c/src/stk_c_memory.cpp</locationURI>
 		</link>
 		<link>
 			<name>deps/interop/c/src/stk_c_sync.cpp</name>

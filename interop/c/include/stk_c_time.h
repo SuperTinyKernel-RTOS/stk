@@ -12,8 +12,8 @@
 
 #include "stk_c.h"
 
-/*! \file   stk_c_time.h
-    \brief  C language binding for stk::time::TimerHost and stk::time::TimerHost::Timer.
+/*! \file     stk_c_time.h
+    \brief    C language binding for stk::time::TimerHost and stk::time::TimerHost::Timer.
 
     One \a stk_timerhost_t instance is pre-allocated per CPU core (up to
     \a STK_C_CPU_COUNT cores).  Obtain a handle for a given core with
@@ -65,8 +65,8 @@ typedef struct stk_timerhost_t stk_timerhost_t;
 typedef struct stk_timer_t stk_timer_t;
 
 /*! \brief  Timer expiration callback invoked from within the TimerHost handler task.
-    \param[in] host:      TimerHost that fired the timer.
-    \param[in] timer:     The timer that expired.
+    \param[in] host: TimerHost that fired the timer.
+    \param[in] timer: The timer that expired.
     \param[in] user_data: Opaque pointer supplied at timer creation time.
     \warning  Must not call blocking kernel services (e.g. stk_mutex_lock with a
               non-zero timeout) unless the handler task stack is large enough.
@@ -76,7 +76,7 @@ typedef void (*stk_timer_callback_t)(stk_timerhost_t *host,
                                      void            *user_data);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TimerHost — per-core host management
+// TimerHost - per-core host management
 // ─────────────────────────────────────────────────────────────────────────────
 
 /*! \brief     Obtain the pre-allocated TimerHost for the given CPU core.
@@ -87,10 +87,10 @@ typedef void (*stk_timer_callback_t)(stk_timerhost_t *host,
 stk_timerhost_t *stk_timerhost_get(uint8_t core_nr);
 
 /*! \brief     Initialize the TimerHost and register its internal tasks with the kernel.
-    \param[in] host:       TimerHost handle obtained via \a stk_timerhost_get().
-    \param[in] kernel:     Kernel instance the timer tasks will be added to.
+    \param[in] host: TimerHost handle obtained via \a stk_timerhost_get().
+    \param[in] kernel: Kernel instance the timer tasks will be added to.
     \param[in] privileged: If \c true the internal handler tasks run in privileged mode,
-                           otherwise they run in user mode.
+               otherwise they run in user mode.
     \note      Must be called before \a stk_kernel_start() and before any
                \a stk_timer_* operations on this host.
 */
@@ -128,7 +128,7 @@ int64_t stk_timerhost_get_time_now(const stk_timerhost_t *host);
 // ─────────────────────────────────────────────────────────────────────────────
 
 /*! \brief     Allocate a timer from the static pool.
-    \param[in] callback:  Function to call when the timer expires (must not be NULL).
+    \param[in] callback: Function to call when the timer expires (must not be NULL).
     \param[in] user_data: Opaque pointer forwarded to \a callback on expiration.
     \return    Timer handle, or NULL if the pool is exhausted (\a STK_C_TIMER_MAX reached).
     \note      The returned handle is valid until \a stk_timer_destroy() is called.
@@ -148,9 +148,9 @@ void stk_timer_destroy(stk_timer_t *timer);
 // ─────────────────────────────────────────────────────────────────────────────
 
 /*! \brief     Start a timer.
-    \param[in] host:   TimerHost that will manage this timer.
-    \param[in] timer:  Timer handle.  Must not already be active.
-    \param[in] delay:  Initial delay in ticks before the first expiration.
+    \param[in] host: TimerHost that will manage this timer.
+    \param[in] timer: Timer handle.  Must not already be active.
+    \param[in] delay: Initial delay in ticks before the first expiration.
     \param[in] period: Reload period in ticks.  Pass 0 for a one-shot timer.
     \return    \c true on success, \c false if the timer is already active or
                the command queue is full.
@@ -161,7 +161,7 @@ bool stk_timer_start(stk_timerhost_t *host,
                      uint32_t         period);
 
 /*! \brief     Stop a running timer.
-    \param[in] host:  TimerHost managing the timer.
+    \param[in] host: TimerHost managing the timer.
     \param[in] timer: Timer handle.  Must be currently active.
     \return    \c true on success, \c false if the timer is not active or
                the command queue is full.
@@ -169,7 +169,7 @@ bool stk_timer_start(stk_timerhost_t *host,
 bool stk_timer_stop(stk_timerhost_t *host, stk_timer_t *timer);
 
 /*! \brief     Reset a periodic timer's deadline (re-arm from now).
-    \param[in] host:  TimerHost managing the timer.
+    \param[in] host: TimerHost managing the timer.
     \param[in] timer: Timer handle.  Must be active and periodic (period != 0).
     \return    \c true on success, \c false if preconditions are not met or
                the command queue is full.
@@ -181,9 +181,9 @@ bool stk_timer_reset(stk_timerhost_t *host, stk_timer_t *timer);
                operation is atomic with respect to the tick task: the timer cannot
                fire between the implicit stop and re-start.  Consumes only one
                command queue slot.
-    \param[in] host:   TimerHost managing the timer.
-    \param[in] timer:  Timer handle (active or inactive).
-    \param[in] delay:  Initial delay in ticks before the first expiration.
+    \param[in] host: TimerHost managing the timer.
+    \param[in] timer: Timer handle (active or inactive).
+    \param[in] delay: Initial delay in ticks before the first expiration.
     \param[in] period: Reload period in ticks (0 = one-shot).
     \return    \c true on success, \c false if the command queue is full.
 */
@@ -200,9 +200,9 @@ bool stk_timer_restart(stk_timerhost_t *host,
                \endcode
                into a single atomic operation, eliminating the TOCTOU race.
                If the timer is active but one-shot, no action is taken.
-    \param[in] host:   TimerHost managing the timer.
-    \param[in] timer:  Timer handle (active or inactive).
-    \param[in] delay:  Initial delay in ticks (used only when starting).
+    \param[in] host: TimerHost managing the timer.
+    \param[in] timer: Timer handle (active or inactive).
+    \param[in] delay: Initial delay in ticks (used only when starting).
     \param[in] period: Reload period in ticks (used only when starting, 0 = one-shot).
     \return    \c true on success, \c false if the command queue is full.
 */
@@ -214,8 +214,8 @@ bool stk_timer_start_or_reset(stk_timerhost_t *host,
 /*! \brief     Change the period of a running periodic timer without affecting the current deadline.
     \details   The new period takes effect on the next reload after the current deadline fires.
                To apply immediately, follow with \a stk_timer_reset().
-    \param[in] host:   TimerHost managing the timer.
-    \param[in] timer:  Timer handle.  Must be active and periodic.
+    \param[in] host: TimerHost managing the timer.
+    \param[in] timer: Timer handle.  Must be active and periodic.
     \param[in] period: New reload period in ticks.  Must be non-zero.
     \return    \c true on success, \c false if preconditions are not met or
                the command queue is full.
@@ -231,7 +231,7 @@ bool stk_timer_set_period(stk_timerhost_t *host,
 /*! \brief     Check whether a timer is currently active (started and not yet expired/stopped).
     \param[in] timer: Timer handle.
     \return    \c true if the timer is active.
-    \note      Advisory — may change immediately after the call.
+    \note      Advisory - may change immediately after the call.
 */
 bool stk_timer_is_active(const stk_timer_t *timer);
 
@@ -256,13 +256,13 @@ int64_t stk_timer_get_timestamp(const stk_timer_t *timer);
 /*! \brief     Get remaining ticks until next expiration.
     \param[in] timer: Timer handle.
     \return    Remaining ticks, or 0 if already expired or not active.
-    \note      Computed from the last value written by the host's tick task —
+    \note      Computed from the last value written by the host's tick task -
                may be up to one tick-task wake cycle stale.
 */
 uint32_t stk_timer_get_remaining_time(const stk_timer_t *timer);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PeriodicTrigger — lightweight in-place periodic polling helper
+// PeriodicTrigger - lightweight in-place periodic polling helper
 // ─────────────────────────────────────────────────────────────────────────────
 
 /*! \defgroup c_api_periodic_trigger STK C PeriodicTrigger API
@@ -282,7 +282,7 @@ uint32_t stk_timer_get_remaining_time(const stk_timer_t *timer);
     @{
 */
 
-/*! \brief  A memory size (multiples of size_t) required for PeriodicTrigger instance.
+/*! \brief  A memory size (multiples of stk_word_t) required for PeriodicTrigger instance.
 */
 #define STK_PERIODIC_TRIGGER_IMPL_SIZE 16
 
@@ -290,7 +290,7 @@ uint32_t stk_timer_get_remaining_time(const stk_timer_t *timer);
     \note   Declare as \c static or on the stack (not on the heap).
 */
 typedef struct stk_periodic_trigger_mem_t {
-    size_t data[STK_PERIODIC_TRIGGER_IMPL_SIZE];
+    stk_word_t data[STK_PERIODIC_TRIGGER_IMPL_SIZE];
 } stk_periodic_trigger_mem_t;
 
 /*! \brief  Opaque handle to a \a stk::time::PeriodicTrigger instance.

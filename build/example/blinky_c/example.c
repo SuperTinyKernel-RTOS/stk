@@ -9,6 +9,8 @@
 
 #include <stk_config.h>
 #include <stk_c.h>
+#include <stk_c_time.h>
+#include <stk_c_memory.h>
 #include "example.h"
 
 #define STACK_SIZE 256

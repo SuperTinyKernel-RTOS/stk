@@ -23,9 +23,12 @@
 #undef STK_TIMER_HANDLER_STACK_SIZE
 #define STK_TIMER_HANDLER_STACK_SIZE (STK_C_TIMER_HANDLER_STACK_SIZE)
 #include <time/stk_time_timer.h>
+#include <time/stk_time_util.h>
 
+#ifndef _NEW
 inline void *operator new(std::size_t, void *ptr) noexcept { return ptr; }
 inline void operator delete(void *, void *) noexcept { /* nothing for placement delete */ }
+#endif
 
 using namespace stk;
 using namespace stk::time;
@@ -330,10 +333,11 @@ uint32_t stk_timer_get_remaining_time(const stk_timer_t *timer)
 // PeriodicTrigger
 // ─────────────────────────────────────────────────────────────────────────────
 
-#include <time/stk_time_util.h>
-
 struct stk_periodic_trigger_t
 {
+    stk_periodic_trigger_t(uint32_t period, bool start) : handle(period, start)
+    {}
+
     time::PeriodicTrigger handle;
 };
 
@@ -347,7 +351,7 @@ stk_periodic_trigger_t *stk_periodic_trigger_create(stk_periodic_trigger_mem_t *
     if (memory == nullptr || memory_size < sizeof(stk_periodic_trigger_t))
         return nullptr;
 
-    return new (memory->data) stk_periodic_trigger_t{ time::PeriodicTrigger(static_cast<Ticks>(period), started) };
+    return new (memory->data) stk_periodic_trigger_t(static_cast<Ticks>(period), started);
 }
 
 void stk_periodic_trigger_destroy(stk_periodic_trigger_t *trig)

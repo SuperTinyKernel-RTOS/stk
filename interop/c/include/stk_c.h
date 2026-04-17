@@ -15,8 +15,8 @@
 #include <stdbool.h>
 #include <assert.h>
 
-/*! \file   stk_c.h
-    \brief  C language binding/interface for SuperTinyKernel (STK).
+/*! \file     stk_c.h
+    \brief    C language binding/interface for SuperTinyKernel (STK).
 
     This header provides a pure C API to create, configure and run STK kernel
     from C code.
@@ -122,11 +122,11 @@ typedef void (*stk_task_entry_t)(void *arg);
 /* Available kernel type definitions:
 
    Kernel mode flags (may be OR-combined, subject to the constraints listed below):
-     KERNEL_STATIC   — fixed task list; tasks must never return from their entry function.
-     KERNEL_DYNAMIC  — tasks may be added/removed at runtime and may return when done.
-     KERNEL_HRT      — Hard Real-Time mode; must be combined with KERNEL_STATIC or KERNEL_DYNAMIC.
-     KERNEL_SYNC     — enables synchronization primitives (Mutex, Event, Semaphore, etc.).
-     KERNEL_TICKLESS — tickless low-power idle; suppresses the SysTick when all tasks sleep.
+     KERNEL_STATIC   - fixed task list; tasks must never return from their entry function.
+     KERNEL_DYNAMIC  - tasks may be added/removed at runtime and may return when done.
+     KERNEL_HRT      - Hard Real-Time mode; must be combined with KERNEL_STATIC or KERNEL_DYNAMIC.
+     KERNEL_SYNC     - enables synchronization primitives (Mutex, Event, Semaphore, etc.).
+     KERNEL_TICKLESS - tickless low-power idle; suppresses the SysTick when all tasks sleep.
                        Requires STK_TICKLESS_IDLE=1 in stk_config.h.
                        INCOMPATIBLE with KERNEL_HRT (HRT requires a continuous tick).
 
@@ -202,7 +202,7 @@ Kernel<KERNEL_DYNAMIC | KERNEL_TICKLESS | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, S
     #define STK_C_KERNEL_TYPE_CPU_6 Kernel<KERNEL_STATIC, STK_C_KERNEL_MAX_TASKS, SwitchStrategyRR, PlatformDefault>
     #define STK_C_KERNEL_TYPE_CPU_7 Kernel<KERNEL_STATIC, STK_C_KERNEL_MAX_TASKS, SwitchStrategyRR, PlatformDefault>
 
-    // Tickless example — CPU enters low-power state when all tasks are sleeping:
+    // Tickless example - CPU enters low-power state when all tasks are sleeping:
     #define STK_C_KERNEL_TYPE_CPU_0 Kernel<KERNEL_STATIC | KERNEL_TICKLESS, STK_C_KERNEL_MAX_TASKS, SwitchStrategyRR, PlatformDefault>
     \endcode
  */
@@ -307,7 +307,7 @@ void stk_kernel_schedule_task_removal(stk_kernel_t *k, stk_task_t *task);
     \param[in]  task: Task to suspend.
     \param[out] suspended: Set to true if the task was successfully suspended (was awake),
                 false if the task was already sleeping (e.g. blocked on a mutex or timed Sleep).
-    \note      Do not hold a critical section when suspending the calling task — this will deadlock.
+    \note      Do not hold a critical section when suspending the calling task - this will deadlock.
     \note      If the task suspends itself, the call blocks until the kernel switches it out.
 */
 void stk_kernel_suspend_task(stk_kernel_t *k, stk_task_t *task, bool *suspended);
@@ -600,12 +600,12 @@ void stk_tls_set(void *ptr);
 
 // ───── Critical Section ──────────────────────────────────────────────────────
 
-/*! \brief     Enter critical section — disable context switches on current core.
+/*! \brief     Enter critical section - disable context switches on current core.
     \note      Supports nesting (number of enter calls must match number of exit calls).
 */
 void stk_critical_section_enter(void);
 
-/*! \brief     Leave critical section — re-enable context switches.
+/*! \brief     Leave critical section - re-enable context switches.
     \note      Must be called once for each previous stk_critical_section_enter().
 */
 void stk_critical_section_exit(void);
@@ -1029,6 +1029,174 @@ size_t stk_pipe_read_bulk(stk_pipe_t *pipe, stk_word_t *dst, size_t count, int32
     \return    Current element count.
 */
 size_t stk_pipe_get_size(stk_pipe_t *pipe);
+
+// ───── MessageQueue ──────────────────────────────────────────────────────────
+
+/*! \brief     A memory size (multiples of stk_word_t) required for a MessageQueue instance.
+    \details   Covers the fixed-overhead fields of stk::sync::MessageQueue:
+               six size_t members (buffer ptr, capacity, msg_size, count, head, tail)
+               plus two ConditionVariable objects (cv_not_empty, cv_not_full) and
+               optional debug-name word.
+    \note      The backing data buffer is allocated separately by the caller and
+               passed to stk_msgq_create() via the \a buf / \a buf_size parameters.
+*/
+#define STK_MSGQ_IMPL_SIZE (6 + (2 * STK_CV_IMPL_SIZE) + (STK_SYNC_DEBUG_NAMES ? 1 : 0))
+
+/*! \brief     Opaque memory container for a MessageQueue instance.
+*/
+typedef struct stk_msgq_mem_t {
+    stk_word_t data[STK_MSGQ_IMPL_SIZE] __stk_c_stack_attr;
+} stk_msgq_mem_t;
+
+/*! \brief     Opaque handle to a MessageQueue instance.
+*/
+typedef struct stk_msgq_t stk_msgq_t;
+
+/*! \def       STK_MSGQ_BUF_SIZE(capacity, msg_size)
+    \brief     Compute the required data-buffer size (in bytes) for a MessageQueue.
+    \param[in] capacity: Maximum number of messages.
+    \param[in] msg_size: Size of each message in bytes.
+    \note      Use this macro when declaring the \c uint8_t buffer passed to
+               stk_msgq_create():
+    \code
+    #define MY_QUEUE_CAP     8
+    #define MY_MSG_SIZE      sizeof(MyMsg_t)
+
+    static uint8_t        s_msgq_buf[STK_MSGQ_BUF_SIZE(MY_QUEUE_CAP, MY_MSG_SIZE)];
+    static stk_msgq_mem_t s_msgq_mem;
+    stk_msgq_t *g_queue = stk_msgq_create(&s_msgq_mem, sizeof(s_msgq_mem),
+                                           s_msgq_buf,  sizeof(s_msgq_buf),
+                                           MY_QUEUE_CAP, MY_MSG_SIZE);
+    \endcode
+*/
+#define STK_MSGQ_BUF_SIZE(capacity, msg_size) ((capacity) * (msg_size))
+
+/*! \brief     Create a MessageQueue (using provided memory).
+    \details   Constructs a stk::sync::MessageQueue in-place inside \a memory.
+               The queue will hold up to \a capacity messages, each \a msg_size bytes
+               wide.  The backing storage for messages must be supplied by the caller
+               via \a buf / \a buf_size.
+
+    \param[in] memory: Pointer to static memory container for the queue object.
+               Must be at least sizeof(stk_msgq_mem_t) bytes.
+    \param[in] memory_size: Size of \a memory in bytes (must be >= sizeof(stk_msgq_mem_t)).
+    \param[in] buf: Pointer to the message data buffer.
+               Must be at least \a capacity * \a msg_size bytes.
+    \param[in] buf_size: Size of \a buf in bytes (used only for the safety assertion; must equal
+               \a capacity * \a msg_size).
+    \param[in] capacity: Maximum number of messages [1, 65534].
+    \param[in] msg_size: Size of each individual message in bytes (>= 1).
+    \return    MessageQueue handle, or NULL if any size assertion fails.
+
+    \note      Convenience macro STK_MSGQ_BUF_SIZE(capacity, msg_size) computes
+               the required \a buf_size.
+    \note      Only available when kernel is compiled with \a KERNEL_SYNC mode enabled.
+*/
+stk_msgq_t *stk_msgq_create(stk_msgq_mem_t *memory,
+                             uint32_t        memory_size,
+                             uint8_t        *buf,
+                             uint32_t        buf_size,
+                             size_t          capacity,
+                             size_t          msg_size);
+
+/*! \brief     Destroy a MessageQueue.
+    \param[in] mq: MessageQueue handle.
+    \note      Any tasks still blocked on Put/Get at destruction time are considered
+               a logic error; an assertion is triggered in debug builds.
+*/
+void stk_msgq_destroy(stk_msgq_t *mq);
+
+/*! \brief     Put a message into the queue.
+    \details   Copies \a msg_size bytes from \a msg into the next available slot.
+               Blocks if the queue is full until space becomes available or the
+               timeout expires.
+    \param[in] mq: MessageQueue handle.
+    \param[in] msg: Pointer to the message payload (must be >= msg_size bytes).
+    \param[in] timeout: Max time to wait (ticks). Use \c STK_WAIT_INFINITE to block
+               indefinitely, \c STK_NO_WAIT for a non-blocking attempt.
+    \return    True if the message was enqueued, False on timeout.
+    \warning   ISR-safe only with \a timeout = \c STK_NO_WAIT.
+*/
+bool stk_msgq_put(stk_msgq_t *mq, const void *msg, int32_t timeout);
+
+/*! \brief     Attempt to put a message into the queue without blocking.
+    \param[in] mq: MessageQueue handle.
+    \param[in] msg: Pointer to the message payload.
+    \return    True if enqueued, False if the queue was full.
+    \warning   ISR-safe.
+*/
+bool stk_msgq_tryput(stk_msgq_t *mq, const void *msg);
+
+/*! \brief      Get a message from the queue.
+    \details    Copies the oldest message into \a msg. Blocks if the queue is
+                empty until a message arrives or the timeout expires.
+    \param[in]  mq: MessageQueue handle.
+    \param[out] msg: Destination buffer (must be >= msg_size bytes).
+    \param[in]  timeout: Max time to wait (ticks). Use \c STK_WAIT_INFINITE to block
+                indefinitely, \c STK_NO_WAIT for a non-blocking attempt.
+    \return     True if a message was retrieved, False on timeout.
+    \warning    ISR-safe only with \a timeout = \c STK_NO_WAIT.
+*/
+bool stk_msgq_get(stk_msgq_t *mq, void *msg, int32_t timeout);
+
+/*! \brief      Attempt to get a message from the queue without blocking.
+    \param[in]  mq: MessageQueue handle.
+    \param[out] msg: Destination buffer.
+    \return     True if a message was retrieved, False if the queue was empty.
+    \warning    ISR-safe.
+*/
+bool stk_msgq_tryget(stk_msgq_t *mq, void *msg);
+
+/*! \brief     Discard all messages and reset the queue to the empty state.
+    \details   Tasks blocked in Put() are woken so they can re-enqueue into the
+               now-empty queue.
+    \param[in] mq: MessageQueue handle.
+    \warning   Messages that were in the queue are silently discarded.
+    \warning   ISR-safe.
+*/
+void stk_msgq_reset(stk_msgq_t *mq);
+
+/*! \brief     Get the maximum number of messages the queue can hold.
+    \param[in] mq: MessageQueue handle.
+    \return    Construction-time capacity.
+    \note      ISR-safe.
+*/
+size_t stk_msgq_get_capacity(const stk_msgq_t *mq);
+
+/*! \brief     Get the size of each message in bytes.
+    \param[in] mq: MessageQueue handle.
+    \return    Construction-time message size.
+    \note      ISR-safe.
+*/
+size_t stk_msgq_get_msg_size(const stk_msgq_t *mq);
+
+/*! \brief     Get the current number of messages waiting in the queue.
+    \param[in] mq: MessageQueue handle.
+    \return    Point-in-time snapshot of the message count.
+    \note      ISR-safe on targets where a size_t-aligned read is atomic.
+*/
+size_t stk_msgq_get_count(const stk_msgq_t *mq);
+
+/*! \brief     Get the number of free slots currently available.
+    \param[in] mq: MessageQueue handle.
+    \return    Point-in-time snapshot of the free-slot count.
+    \note      ISR-safe.
+*/
+size_t stk_msgq_get_space(const stk_msgq_t *mq);
+
+/*! \brief     Check whether the queue is currently empty.
+    \param[in] mq: MessageQueue handle.
+    \return    True if the queue contains no messages.
+    \note      ISR-safe.
+*/
+bool stk_msgq_is_empty(const stk_msgq_t *mq);
+
+/*! \brief     Check whether the queue is currently full.
+    \param[in] mq: MessageQueue handle.
+    \return    True if the queue contains \a capacity messages.
+    \note      ISR-safe.
+*/
+bool stk_msgq_is_full(const stk_msgq_t *mq);
 
 // ───── RWMutex (Reader-Writer Lock) ──────────────────────────────────────────
 
