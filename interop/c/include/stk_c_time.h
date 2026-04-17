@@ -12,8 +12,8 @@
 
 #include "stk_c.h"
 
-/*! \file   stk_c_time.h
-    \brief  C language binding for stk::time::TimerHost and stk::time::TimerHost::Timer.
+/*! \file     stk_c_time.h
+    \brief    C language binding for stk::time::TimerHost and stk::time::TimerHost::Timer.
 
     One \a stk_timerhost_t instance is pre-allocated per CPU core (up to
     \a STK_C_CPU_COUNT cores).  Obtain a handle for a given core with
@@ -282,7 +282,7 @@ uint32_t stk_timer_get_remaining_time(const stk_timer_t *timer);
     @{
 */
 
-/*! \brief  A memory size (multiples of size_t) required for PeriodicTrigger instance.
+/*! \brief  A memory size (multiples of stk_word_t) required for PeriodicTrigger instance.
 */
 #define STK_PERIODIC_TRIGGER_IMPL_SIZE 16
 
@@ -290,7 +290,7 @@ uint32_t stk_timer_get_remaining_time(const stk_timer_t *timer);
     \note   Declare as \c static or on the stack (not on the heap).
 */
 typedef struct stk_periodic_trigger_mem_t {
-    size_t data[STK_PERIODIC_TRIGGER_IMPL_SIZE];
+    stk_word_t data[STK_PERIODIC_TRIGGER_IMPL_SIZE];
 } stk_periodic_trigger_mem_t;
 
 /*! \brief  Opaque handle to a \a stk::time::PeriodicTrigger instance.

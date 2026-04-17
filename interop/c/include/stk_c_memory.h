@@ -12,8 +12,8 @@
 
 #include "stk_c.h"
 
-/*! \file   stk_c_memory.h
-    \brief  C language binding for stk::memory::BlockMemoryPool.
+/*! \file     stk_c_memory.h
+    \brief    C language binding for stk::memory::BlockMemoryPool.
 
     \c stk_blockpool_t instances are allocated from a static pool of
     \c STK_C_BLOCKPOOL_MAX slots.  Obtain a handle with \c stk_blockpool_create()

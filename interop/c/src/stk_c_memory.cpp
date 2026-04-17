@@ -32,8 +32,6 @@ using namespace stk::memory;
 
 struct stk_blockpool_t
 {
-    BlockMemoryPool handle;
-
     // Constructor forwarded to the external-storage BlockMemoryPool ctor.
     stk_blockpool_t(size_t capacity, size_t raw_block_size,
                     uint8_t *storage, size_t storage_size, const char *name)
@@ -44,6 +42,8 @@ struct stk_blockpool_t
     stk_blockpool_t(size_t capacity, size_t raw_block_size, const char *name)
         : handle(capacity, raw_block_size, name)
     {}
+
+    BlockMemoryPool handle;
 };
 
 // ---------------------------------------------------------------------------
@@ -55,14 +55,14 @@ static struct BlockPoolSlot
     BlockPoolSlot() : busy(false)
     {}
 
-    // Raw storage for placement-new; keeps the slot trivially constructible
-    // while letting BlockMemoryPool's own ctor/dtor run normally.
-    static_assert(sizeof(stk_blockpool_t) % sizeof(Word) == 0, "stk_blockpool_t memory size must be multiple of Word");
-    alignas(alignof(stk_blockpool_t)) Word storage[sizeof(stk_blockpool_t) / sizeof(Word)];
-    bool busy;
-
     stk_blockpool_t       *pool()       { return reinterpret_cast<stk_blockpool_t *>(storage); }
     const stk_blockpool_t *pool() const { return reinterpret_cast<const stk_blockpool_t *>(storage); }
+
+    // Raw storage for placement-new, keeps the slot trivially constructible
+    // while letting BlockMemoryPool's own ctor/dtor run normally.
+    STK_STATIC_ASSERT_DESC(sizeof(stk_blockpool_t) % sizeof(Word) == 0, "stk_blockpool_t memory size must be multiple of Word");
+    Word storage[sizeof(stk_blockpool_t) / sizeof(Word)];
+    bool busy;
 }
 s_BlockPools[STK_C_BLOCKPOOL_MAX];
 
