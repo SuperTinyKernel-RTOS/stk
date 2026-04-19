@@ -2,8 +2,6 @@
 
 **Path:** `includes/stk/strategy/`
 
-This folder contains all task-switching strategy implementations for  [SuperTinyKernel™ RTOS](https://github.com/SuperTinyKernel-RTOS) — a lightweight, high-performance, deterministic C++ RTOS for embedded systems.
-
 Each strategy is a standalone header-only class that implements the `ITaskSwitchStrategy` interface. The kernel is templated on the strategy type, so you select a scheduling policy at compile time with zero runtime overhead.
 
 ---

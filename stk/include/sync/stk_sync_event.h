@@ -134,7 +134,7 @@ public:
 private:
     STK_NONCOPYABLE_CLASS(Event);
 
-    void RemoveWaitObject(IWaitObject *wobj);
+    void RemoveWaitObject(IWaitObject *wobj) override;
 
     bool m_manual_reset; //!< \c true = manual-reset event, \c false = auto-reset
     bool m_signaled;     //!< current signaled state of the event

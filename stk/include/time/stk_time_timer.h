@@ -139,40 +139,71 @@ public:
         friend class TimerHost;
 
     public:
-        Timer() : m_deadline(0), m_timestamp(0), m_period(0), m_active(false), m_pending(false)
+        /*! \brief     Default constructor.
+        */
+        explicit Timer() : m_deadline(0), m_timestamp(0), m_period(0), m_active(false), m_pending(false)
         {}
 
-        /*! \brief Destructor.
-            \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
+        /*! \brief     Destructor.
+            \note      MISRA deviation: [STK-DEV-005] Rule 10-3-2.
         */
         ~Timer()
         {}
 
+        /*! \brief     Callback invoked by the handler task when this timer expires.
+            \param[in] host: Pointer to the TimerHost that fired this timer.
+            \note      Executes in the context of a TimerHost handler task.
+                       Implementations must be safe to call from that task's context and
+                       should complete quickly, long-running work should be delegated
+                       (e.g. via an event or queue) to avoid blocking other expired timers.
+        */
         virtual void OnExpired(TimerHost *host) = 0;
 
-        bool IsActive() const      { return m_active; }
-        Ticks GetDeadline() const  { return m_deadline; }
+        /*! \brief     Check whether the timer is currently active.
+            \return    True if the timer has been started and not yet stopped or expired (one-shot).
+            \note      The value is advisory, it is written by the tick task and read without
+                       synchronization, so it may be transiently stale on multi-core targets.
+        */
+        bool IsActive() const { return m_active; }
+
+        /*! \brief     Get the absolute time in ticks at which the timer will expire.
+            \return    Absolute expiration deadline in ticks.
+            \note      Meaningful only when IsActive() returns true.
+        */
+        Ticks GetDeadline() const { return m_deadline; }
+
+        /*! \brief     Get the tick count at which the timer last expired.
+            \return    Absolute tick count recorded by the tick task at expiration time,
+                       or 0 if the timer has never fired.
+        */
         Ticks GetTimestamp() const { return m_timestamp; }
+
+        /*! \brief     Get the reload period of the timer.
+            \return    Period in ticks, or 0 for a one-shot timer.
+        */
         uint32_t GetPeriod() const { return m_period; }
 
-        /*! \brief  Get remaining ticks until the timer next expires.
-            \return Ticks remaining, or 0 if already expired / not active.
-            \note   The value is advisory: it is computed from m_now (the last value written
-                    by the tick task) and may be up to one tick task wake cycle stale.
-                    If the deadline has already passed but not yet been processed, 0 is returned.
+        /*! \brief     Get remaining ticks until the timer next expires.
+            \return    Ticks remaining, or 0 if already expired / not active.
+            \note      The value is advisory: it is computed from m_now (the last value written
+                       by the tick task) and may be up to one tick task wake cycle stale.
+                       If the deadline has already passed but not yet been processed, 0 is returned.
         */
-        uint32_t GetRemainingTime() const;
+        uint32_t GetRemainingTicks() const;
 
     private:
         STK_NONCOPYABLE_CLASS(Timer);
 
         Ticks         m_deadline;  //!< absolute expiration time (ticks)
-        Ticks         m_timestamp; //!< time at which timer expired (ticks), updated by TimerHost
+        Ticks         m_timestamp; //!< absolute time at which timer expired (ticks), updated by TimerHost
         uint32_t      m_period;    //!< reload period in ticks (0 = one-shot)
         volatile bool m_active;    //!< true if active
         volatile bool m_pending;   //!< true if pending to be handled
     };
 
+    /*! \brief Default constructor. Zero-initializes all internal state.
+        \note  Call Initialize() before using any other member function.
+    */
     explicit TimerHost()
         : m_task_tick_memory(), m_task_handler_memory(), m_task_tick(), m_task_process(), m_active(), m_now(0)
     {}
@@ -279,11 +310,19 @@ private:
     typedef void (*TimerFuncType) (TimerHost *host);
 
     /*! \class TimerWorkerTask
-        \brief The actual task that executes timer callback.
+        \brief Internal kernel task used by TimerHost for both the tick task and handler tasks.
+
+        Wraps a free function pointer (\a TimerFuncType) so that the same ITask-derived
+        class can serve either role (tick or handler) with different stack buffers, access
+        modes, and entry points supplied at Initialize() time.
+
+        \note  This class is an implementation detail of TimerHost and is not part of the
+               public API. Do not instantiate or inherit from it directly.
     */
     class TimerWorkerTask : public ITask
     {
     public:
+        /*! \brief Default constructor. All members are zero/null-initialized. */
         explicit TimerWorkerTask()
             : m_func(nullptr), m_host(nullptr), m_stack(nullptr), m_stack_size(0), m_mode(ACCESS_USER), m_weight(0)
         {}
@@ -301,6 +340,14 @@ private:
         size_t GetStackSize()       const override { return m_stack_size; }
         size_t GetStackSizeBytes()  const override { return m_stack_size * sizeof(Word); }
 
+        /*! \brief     Bind this task to a host, stack buffer, access mode, and entry function.
+            \param[in] host: TimerHost instance this task belongs to.
+            \param[in] stack: Pointer to the pre-allocated stack memory.
+            \param[in] stack_size: Stack size in words.
+            \param[in] mode: Kernel access mode (user or privileged).
+            \param[in] func: Entry function called in the task's context.
+            \note  Must be called before the task is added to the kernel.
+        */
         void Initialize(TimerHost *host, Word *stack, size_t stack_size, EAccessMode mode, TimerFuncType func)
         {
             m_host       = host;
@@ -311,21 +358,36 @@ private:
             m_weight     = 1;
         }
 
+        /*! \brief     Override the scheduling weight assigned by Initialize().
+            \param[in] weight: New scheduling weight value.
+        */
         void SetWeight(int32_t weight) { m_weight = weight; }
 
     private:
+        /*! \brief Timer task entry point. */
         void Run() override { m_func(m_host); }
 
-        TimerFuncType m_func;
-        TimerHost    *m_host;
-        Word         *m_stack;
-        size_t        m_stack_size;
-        EAccessMode   m_mode;
-        int32_t       m_weight;
+        TimerFuncType m_func;       //!< entry function (tick loop or handler loop)
+        TimerHost    *m_host;       //!< owning TimerHost instance
+        Word         *m_stack;      //!< pointer to stack buffer
+        size_t        m_stack_size; //!< stack size in words
+        EAccessMode   m_mode;       //!< kernel access mode
+        int32_t       m_weight;     //!< scheduling weight
     };
 
+    /*! \struct TimerCommand
+        \brief  POD command record passed from the public API methods to the tick task via the command queue.
+
+        Each command encodes a single operation together with the timer pointer, a call-site
+        timestamp, and optional delay/period arguments. Commands are produced by the public
+        API (Start, Stop, Reset, …) and consumed exclusively by the tick task inside
+        ProcessCommands().
+    */
     struct TimerCommand
     {
+        /*! \enum  EId
+            \brief Identifies the operation to perform on the target timer.
+        */
         enum EId : uint8_t
         {
             CMD_SHUTDOWN = 0,   //!< shutdown timer host
@@ -344,14 +406,50 @@ private:
         uint32_t period;    //!< reload period ticks (CMD_START / CMD_RESTART / CMD_START_OR_RESET / CMD_SET_PERIOD)
     };
 
+    /*! \brief  Tick task body: drives the timer list and dispatches expired timers.
+        \note   Runs exclusively in the tick task context. Loops until CMD_SHUTDOWN is received.
+    */
     void UpdateTime();
+
+    /*! \brief  Handler task body: dequeues expired timers and invokes their OnExpired() callbacks.
+        \note   Runs in each handler task context. Loops until a nullptr sentinel is dequeued.
+    */
     void ProcessTimers();
+
+    /*! \brief     Drain the command queue and execute each pending command.
+        \param[in] next_sleep: Maximum ticks to block waiting for the first command when the
+                               active list is non-empty. Overridden to WAIT_INFINITE when empty.
+        \return    True to continue the tick loop; false when CMD_SHUTDOWN is processed.
+        \note      Called exclusively from the tick task (UpdateTime()).
+    */
     bool ProcessCommands(Timeout next_sleep);
+
+    /*! \brief     Enqueue a command for the tick task.
+        \param[in] cmd: Fully initialized TimerCommand to push.
+        \return    True on success, false if the command queue is full.
+        \note      May be called from any task context. On queue-full the assertion fires in
+                   debug builds; in release the caller receives false and may retry or escalate.
+    */
     bool PushCommand(TimerCommand cmd);
 
+    /*! \typedef TaskTickMemory
+        \brief   Stack memory type for the single tick task.
+    */
     typedef StackMemoryDef<TASK_TICK_MEMORY_SIZE>::Type   TaskTickMemory;
+
+    /*! \typedef TimerHostMemory
+        \brief   Stack memory type for each handler task.
+    */
     typedef StackMemoryDef<TASK_HANDLER_STACK_SIZE>::Type TimerHostMemory;
+
+    /*! \typedef ReadyQueue
+        \brief   Lock-free pipe used to transfer expired timer pointers from the tick task to handler tasks.
+    */
     typedef sync::Pipe<Timer *, STK_TIMER_COUNT_MAX>      ReadyQueue;
+
+    /*! \typedef CommandQueue
+        \brief   Lock-free pipe used to send TimerCommand records from API callers to the tick task.
+    */
     typedef sync::Pipe<TimerCommand, STK_TIMER_COUNT_MAX> CommandQueue;
 
     TaskTickMemory                m_task_tick_memory;                             //!< tick task memory
@@ -365,10 +463,10 @@ private:
 };
 
 // ---------------------------------------------------------------------------
-// Timer::GetTimeRemaining
+// Timer::GetRemainingTicks
 // ---------------------------------------------------------------------------
 
-inline uint32_t TimerHost::Timer::GetRemainingTime() const
+inline uint32_t TimerHost::Timer::GetRemainingTicks() const
 {
     if (!m_active)
         return 0;

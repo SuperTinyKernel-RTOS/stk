@@ -259,7 +259,7 @@ int64_t stk_timer_get_timestamp(const stk_timer_t *timer);
     \note      Computed from the last value written by the host's tick task -
                may be up to one tick-task wake cycle stale.
 */
-uint32_t stk_timer_get_remaining_time(const stk_timer_t *timer);
+uint32_t stk_timer_get_remaining_ticks(const stk_timer_t *timer);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PeriodicTrigger - lightweight in-place periodic polling helper

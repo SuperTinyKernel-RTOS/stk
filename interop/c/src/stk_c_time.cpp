@@ -322,11 +322,11 @@ int64_t stk_timer_get_timestamp(const stk_timer_t *timer)
     return (int64_t)timer->handle.GetTimestamp();
 }
 
-uint32_t stk_timer_get_remaining_time(const stk_timer_t *timer)
+uint32_t stk_timer_get_remaining_ticks(const stk_timer_t *timer)
 {
     STK_ASSERT(timer != nullptr);
 
-    return timer->handle.GetRemainingTime();
+    return timer->handle.GetRemainingTicks();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
