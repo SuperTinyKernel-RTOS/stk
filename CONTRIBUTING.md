@@ -1,4 +1,4 @@
-## Contributions to SuperTinyKernel™ (STK)
+## Contributions to SuperTinyKernel™ RTOS
 
 STK aims to remain freely usable and free from copyright or licensing constraints. Because the core kernel must remain unencumbered, we maintain a structured approach to external contributions.
 
@@ -22,7 +22,7 @@ Proposals related to **CI, GitHub Actions, or build tooling** that do not modify
 Before submitting any PR, please ensure there is an associated Issue or that you have received prior approval. Unsolicited PRs for the core source code will be closed without a review.
 
 * **Public:** Open an Issue on GitHub.
-* **Private:** Email us at [stk@neutroncode.com](mailto:stk@neutroncode.com).
+* **Private:** Email us at [contact@supertinykernel.org](mailto:contact@supertinykernel.org).
 
 ### 5. Contributor License Agreement (CLA)
 
@@ -34,4 +34,4 @@ By submitting a Pull Request (PR) for any part of the STK repository (including 
 
 ---
 
-**SuperTinyKernel (STK) Team**
+**SuperTinyKernel RTOS Team**

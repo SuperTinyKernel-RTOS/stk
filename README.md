@@ -779,4 +779,4 @@ While **SuperTinyKernel™ RTOS** is provided under the permissive MIT license, 
 * **Long-Term Maintenance Contracts:** Versioned updates, patch management, and minor feature requests for commercial products.
 * **Training & Knowledge Transfer:** Remote workshops, RTOS best practices, and team training for engineers working with STK.
 
-**For inquiries, contact:** [stk@neutroncode.com](mailto:stk@neutroncode.com)
+**For inquiries, contact:** [contact@supertinykernel.org](mailto:contact@supertinykernel.org)

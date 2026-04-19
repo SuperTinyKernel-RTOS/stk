@@ -109,7 +109,7 @@ Two classic static-priority real-time algorithms in a single templated class:
 
 The following strategies are **not included** in the open-source repository. They are available to commercial licensees only.
 
-For licensing enquiries contact: **[stk@neutroncode.com](mailto:stk@neutroncode.com)**
+For licensing enquiries contact: **[contact@supertinykernel.org](mailto:contact@supertinykernel.org)**
 
 ---
 
@@ -161,4 +161,4 @@ Is CPU time equal for all tasks?
 
 Free strategies are distributed under the **MIT License** — see `LICENSE` at the repository root.
 
-Commercial strategies (`stk_strategy_mcas2.h`, `stk_strategy_mcas4.h`) are subject to a separate commercial license agreement. Contact [stk@neutroncode.com](mailto:stk@neutroncode.com).
+Commercial strategies (`stk_strategy_mcas2.h`, `stk_strategy_mcas4.h`) are subject to a separate commercial license agreement. Contact [contact@supertinykernel.org](mailto:contact@supertinykernel.org).
