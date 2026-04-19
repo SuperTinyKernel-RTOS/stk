@@ -966,6 +966,8 @@ static struct Context : public PlatformContext
     #if STK_TICKLESS_IDLE
         // reset sleep ticks if kernel was restarted
         m_sleep_ticks = elapsed_ticks;
+    #else
+        STK_UNUSED(elapsed_ticks);
     #endif
 
         // start SysTick timer (it is yet can't fire an interrupt due to HW_DisableInterrupts)
