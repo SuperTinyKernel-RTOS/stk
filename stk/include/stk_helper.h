@@ -70,11 +70,7 @@ public:
         \note  Only relevant when using SwitchStrategySmoothWeightedRoundRobin. Prefer TaskW for
                compile-time weight assignment.
     */
-    virtual int32_t GetWeight() const { return 1; }
-
-    /*! \brief Get object's own address as its Id. Unique per task instance, requires no manual assignment.
-    */
-    virtual TId GetId() const { return hw::PtrToWord(this); }
+    virtual Weight GetWeight() const { return DEFAULT_WEIGHT; }
 
     /*! \brief Override in subclass to supply a name for SEGGER SystemView tracing. Returns NULL by default.
     */
@@ -117,7 +113,7 @@ private:
 
     See Task for full usage example and implementation guidance.
 */
-template <int32_t _Weight, size_t _StackSize, EAccessMode _AccessMode>
+template <Weight _Weight, size_t _StackSize, EAccessMode _AccessMode>
 class TaskW : public ITask
 {
 public:
@@ -140,11 +136,7 @@ public:
 
     /*! \brief Returns the compile-time weight _Weight.
     */
-    virtual int32_t GetWeight() const { return _Weight; }
-
-    /*! \brief Get object's own address as its Id. Unique per task instance, requires no manual assignment.
-    */
-    virtual TId GetId() const { return hw::PtrToWord(this); }
+    virtual Weight GetWeight() const { return _Weight; }
 
     /*! \brief Override in subclass to supply a name for SEGGER SystemView tracing. Returns NULL by default.
     */
@@ -219,6 +211,62 @@ public:
 private:
     MemoryType *m_stack; //!< Pointer to the externally-owned stack memory array.
 };
+
+//! Implementation of ISyncObject::Tick, see \a ISyncObject. Placed here as it depends on hw namespace.
+inline bool ISyncObject::Tick(Timeout elapsed_ticks)
+{
+    // note: ScopedCriticalSection usage
+    //
+    // Single-core: no critical section needed - Tick() runs inside the
+    // SysTick ISR which already executes with interrupts disabled, making
+    // re-entrancy impossible on the local core.
+    //
+    // Multi-core: critical section is required because the tick handler on
+    // each core may call Tick() concurrently for the same Semaphore instance,
+    // and ISyncObject::Tick() is not re-entrant.
+#if (STK_ARCH_CPU_COUNT > 1)
+    hw::CriticalSection::ScopedLock cs_;
+#endif
+
+    IWaitObject *itr = static_cast<IWaitObject *>(m_wait_list.GetFirst());
+
+    while (itr != nullptr)
+    {
+        IWaitObject *next = static_cast<IWaitObject *>(itr->GetNext());
+
+        if (!itr->Tick(elapsed_ticks))
+            itr->Wake(true);
+
+        itr = next;
+    }
+
+    return !m_wait_list.IsEmpty();
+}
+
+//! Implementation of ISyncObject::Tick, see \a ISyncObject. Placed here as it depends on \a GetUserTaskFromTid.
+inline Weight ISyncObject::FindWeightHigherThan(Weight comp) const
+{
+    Weight result = NO_WEIGHT;
+
+    for (const IWaitObject *itr = static_cast<IWaitObject *>(m_wait_list.GetFirst()); (itr != nullptr);
+            itr = static_cast<IWaitObject *>(itr->GetNext()))
+    {
+        Weight w = GetUserTaskFromTid(itr->GetTid())->GetWeight();
+        if (w > comp)
+        {
+            result = w;
+            break;
+        }
+    }
+
+    return result;
+}
+
+//! Implementation of ITask::GetId, see \a ITask. Placed here as it depends on \a GetTidFromUserTask.
+inline TId ITask::GetId() const
+{
+    return GetTidFromUserTask(this);
+}
 
 /*! \brief     Get task/thread Id of the calling task.
     \return    Id of the calling task/thread.

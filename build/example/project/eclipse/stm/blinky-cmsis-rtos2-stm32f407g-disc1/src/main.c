@@ -92,7 +92,7 @@ void phaseB (void */*argument*/) {
     osThreadFlagsWait(0x0001, osFlagsWaitAny, osWaitForever);    /* wait for an event flag 0x0001 */
     Switch_On(1);
     g_phases.phaseB = 1;
-    signal_func(tid_phaseC);                /* call common signal function   */
+    signal_func(tid_phaseC);                                     /* call common signal function   */
     g_phases.phaseB = 0;
     Switch_Off(1);
   }
@@ -106,7 +106,7 @@ void phaseC (void */*argument*/) {
     osThreadFlagsWait(0x0001, osFlagsWaitAny, osWaitForever);    /* wait for an event flag 0x0001 */
     Switch_On(2);
     g_phases.phaseC = 1;
-    signal_func(tid_phaseD);                /* call common signal function   */
+    signal_func(tid_phaseD);                                     /* call common signal function   */
     g_phases.phaseC = 0;
     Switch_Off(2);
   }
@@ -120,7 +120,7 @@ void phaseD (void */*argument*/) {
     osThreadFlagsWait(0x0001, osFlagsWaitAny, osWaitForever);    /* wait for an event flag 0x0001 */
     Switch_On(3);
     g_phases.phaseD = 1;
-    signal_func(tid_phaseA);                /* call common signal function   */
+    signal_func(tid_phaseA);                                     /* call common signal function   */
     g_phases.phaseD = 0;
     Switch_Off(3);
   }
@@ -132,7 +132,7 @@ void phaseD (void */*argument*/) {
 void clock (void */*argument*/) {
   for (;;) {
     osThreadFlagsWait(0x0100, osFlagsWaitAny, osWaitForever);    /* wait for an event flag 0x0100 */
-    osDelay(80);                            /* delay  80ms                   */
+    osDelay(80);                                                 /* delay  80ms                   */
   }
 }
 

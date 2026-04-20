@@ -145,7 +145,7 @@ protected:
             \note  In KERNEL_SYNC mode the embedded WaitObject back-pointer is wired to this
                    KernelTask at construction so the wait object can wake its owning task.
         */
-        explicit KernelTask() : m_user(nullptr), m_stack(), m_state(STATE_NONE), m_time_sleep(0),
+        explicit KernelTask() : m_user(nullptr), m_stack(), m_state(STATE_NONE), m_time_sleep(NO_WAIT),
             m_srt(), m_hrt(), m_rt_weight()
         {
             // bind to wait object
@@ -176,7 +176,7 @@ protected:
         /*! \brief  Get task identifier.
             \return TId derived from the bound ITask pointer address (unique per task instance).
         */
-        TId GetTid() const { return hw::PtrToWord(m_user); }
+        TId GetTid() const { return GetTidFromUserTask(m_user); }
 
         /*! \brief  Wake this task on the next scheduling tick.
             \note   Sets m_time_sleep to -1 (one tick remaining) so the task exits sleep state
@@ -193,7 +193,7 @@ protected:
         /*! \brief     Update the run-time scheduling weight (weighted strategies only).
             \param[in] weight: New current weight. Ignored unless TStrategy::WEIGHT_API is true.
         */
-        void SetCurrentWeight(int32_t weight)
+        void SetCurrentWeight(Weight weight)
         {
             if (TStrategy::WEIGHT_API)
                 m_rt_weight[0] = weight;
@@ -202,14 +202,23 @@ protected:
         /*! \brief  Get static scheduling weight from the user task.
             \return ITask::GetWeight() if WEIGHT_API is true; 1 otherwise.
         */
-        int32_t GetWeight() const { return (TStrategy::WEIGHT_API ? m_user->GetWeight() : 1); }
+        Weight GetWeight() const
+        {
+            if (TStrategy::PRIORITY_INHERITANCE_API)
+            {
+                if (m_rt_weight[0] != NO_WEIGHT)
+                    return m_rt_weight[0];
+            }
+
+            return (TStrategy::WEIGHT_API ? m_user->GetWeight() : DEFAULT_WEIGHT);
+        }
 
         /*! \brief  Get current (run-time) scheduling weight.
             \return m_rt_weight[0] if WEIGHT_API is true; 1 otherwise.
             \note   The run-time weight is decremented each tick by the weighted strategy and
                     reset to GetWeight() when exhausted.
         */
-        int32_t GetCurrentWeight() const { return (TStrategy::WEIGHT_API ? m_rt_weight[0] : 1); }
+        Weight GetCurrentWeight() const { return (TStrategy::WEIGHT_API ? m_rt_weight[0] : DEFAULT_WEIGHT); }
 
         /*! \brief  Get HRT scheduling periodicity.
             \return Period in ticks between successive activations of this task.
@@ -250,7 +259,7 @@ protected:
         Timeout GetSleepTicks(Timeout sleep_ticks)
         {
             // note: task sleep time is negative
-            Timeout task_sleep = Max<Timeout>(0, -m_time_sleep);
+            Timeout task_sleep = Max<Timeout>(NO_WAIT, -m_time_sleep);
 
             if (IsSyncMode())
             {
@@ -261,7 +270,7 @@ protected:
                     task_sleep = m_wait_obj->m_time_wait;
 
                     // we shall account for only valid time (when task is waiting during sync operation)
-                    if (task_sleep > 0)
+                    if (task_sleep > NO_WAIT)
                         sleep_ticks = Min(sleep_ticks, task_sleep);
                 }
                 else
@@ -605,7 +614,7 @@ protected:
             // set state first as kernel checks it when task IsSleeping
             if (TStrategy::SLEEP_EVENT_API)
             {
-                if (m_time_sleep >= 0)
+                if (!IsSleeping())
                     m_state |= STATE_SLEEP_PENDING;
             }
 
@@ -629,7 +638,7 @@ protected:
         volatile Timeout  m_time_sleep; //!< Sleep countdown: negative while sleeping (absolute value = ticks remaining), zero when awake.
         SrtInfo           m_srt[STK_ALLOCATE_COUNT(TMode, KERNEL_HRT, 0, 1)];       //!< SRT metadata. Zero-size (no memory) in KERNEL_HRT mode.
         HrtInfo           m_hrt[STK_ALLOCATE_COUNT(TMode, KERNEL_HRT, 1, 0)];       //!< HRT metadata. Zero-size (no memory) in non-HRT mode.
-        int32_t           m_rt_weight[STK_ALLOCATE_COUNT(TStrategy::WEIGHT_API, 1, 1, 0)]; //!< Run-time weight for weighted-round-robin scheduling. Zero-size for unweighted strategies.
+        Weight            m_rt_weight[STK_ALLOCATE_COUNT(TStrategy::WEIGHT_API, 1, 1, 0)]; //!< Run-time weight for weighted-round-robin scheduling. Zero-size for unweighted strategies.
         WaitObject        m_wait_obj[STK_ALLOCATE_COUNT(TMode, KERNEL_SYNC, 1, 0)]; //!< Embedded wait object for synchronization. Zero-size (no memory) if KERNEL_SYNC is not set.
     };
 
@@ -747,11 +756,23 @@ protected:
             }
         }
 
+        void InheritWeight(TId tid, Weight weight)
+        {
+            if (TStrategy::PRIORITY_INHERITANCE_API)
+                m_kernel->OnInheritWeight(tid, weight);
+        }
+
+        void RestoreWeight(TId tid, ISyncObject *sobj)
+        {
+            if (TStrategy::PRIORITY_INHERITANCE_API)
+                m_kernel->OnRestoreWeight(tid, sobj);
+        }
+
     private:
         /*! \brief Construct an uninitialized service instance (m_platform = null, m_ticks = 0).
             \note  Fully initialized by Initialize(). Private; constructed only as a member of Kernel.
         */
-        explicit KernelService() : m_platform(nullptr), m_ticks(0)
+        explicit KernelService() : m_kernel(nullptr), m_platform(nullptr), m_ticks(0)
         {}
 
         /*! \brief Destructor.
@@ -763,11 +784,13 @@ protected:
         /*! \brief     Initialize instance.
             \note      When call completes Singleton<IKernelService *> will start referencing this
                        instance (see g_KernelService).
+            \param[in] kernel: Kernel instance.
             \param[in] platform: IPlatform instance.
         */
-        void Initialize(IPlatform *platform)
+        void Initialize(Kernel *kernel, TPlatform *platform)
         {
-            m_platform = static_cast<TPlatform *>(platform);
+            m_kernel   = kernel;
+            m_platform = platform;
         }
 
         /*! \brief     Increment counter by value.
@@ -779,6 +802,7 @@ protected:
             hw::WriteVolatile64(&m_ticks, m_ticks + advance);
         }
 
+        Kernel        *m_kernel;   //!< Pointer to the Kernel.
         TPlatform     *m_platform; //!< Typed platform driver pointer, set at Initialize().
         volatile Ticks m_ticks;    //!< Global tick counter. Written via hw::WriteVolatile64() by IncrementTick() (ISR context); read via hw::ReadVolatile64() by GetTicks() (task context) for a lock-free consistent 64-bit read on 32-bit CPUs.
     };
@@ -840,7 +864,7 @@ public:
         m_fsm_state = FSM_STATE_NONE;
         m_request   = REQUEST_NONE;
 
-        m_service.Initialize(&m_platform);
+        m_service.Initialize(this, &m_platform);
 
         m_platform.Initialize(this, &m_service, resolution_us, (IsDynamicMode() ? &m_exit_trap[0].stack : nullptr));
 
@@ -1600,6 +1624,42 @@ protected:
             m_state = ((m_state == STATE_SUSPENDED) ? STATE_RUNNING : m_state);
     }
 
+    void OnInheritWeight(TId tid, Weight weight)
+    {
+        STK_ASSERT(tid != TID_NONE);
+        STK_ASSERT(TStrategy::WEIGHT_API && TStrategy::PRIORITY_INHERITANCE_API);
+
+        if (weight != NO_WEIGHT)
+        {
+            KernelTask *task = FindTaskByUserTask(GetUserTaskFromTid(tid));
+            STK_ASSERT(task != nullptr);
+
+            Weight prev_weight = task->GetWeight();
+
+            if (prev_weight < weight)
+            {
+                task->SetCurrentWeight(weight);
+                m_strategy.OnTaskWeightChange(task, prev_weight);
+            }
+        }
+    }
+
+    void OnRestoreWeight(TId tid, ISyncObject *sobj)
+    {
+        STK_ASSERT(tid != TID_NONE);
+        STK_ASSERT(TStrategy::WEIGHT_API && TStrategy::PRIORITY_INHERITANCE_API);
+
+        KernelTask *task = FindTaskByUserTask(GetUserTaskFromTid(tid));
+        STK_ASSERT(task != nullptr);
+
+        Weight prev_weight = task->GetWeight();
+
+        // restore to original or boost from wait objects
+        task->SetCurrentWeight(sobj != nullptr ? sobj->FindWeightHigherThan(task->GetWeight()) : NO_WEIGHT);
+
+        m_strategy.OnTaskWeightChange(task, prev_weight);
+    }
+
     /*! \brief     Update tasks (sleep, requests).
     */
     Timeout UpdateTasks(const Timeout elapsed_ticks)
@@ -1666,7 +1726,7 @@ protected:
                 if (TStrategy::SLEEP_EVENT_API)
                 {
                     // notify strategy that task woke up
-                    if (task->m_time_sleep >= 0)
+                    if (!task->IsSleeping())
                         m_strategy.OnTaskWake(task);
                 }
             }
@@ -2048,10 +2108,14 @@ protected:
     STK_STATIC_ASSERT_N(KERNEL_MODE_HRT_ALONE, (((TMode & KERNEL_HRT) == 0U) ||
         ((((TMode & KERNEL_HRT) != 0U)) && (((TMode & KERNEL_STATIC) != 0U) || ((TMode & KERNEL_DYNAMIC) != 0U)))));
 
-    // if hit here: KERNEL_TICKLESS is incompatible with KERNEL_HRT. Tickless suppresses the timer,
+    // If hit here: KERNEL_TICKLESS is incompatible with KERNEL_HRT. Tickless suppresses the timer,
     // which destroys the precise periodicity HRT depends on.
     STK_STATIC_ASSERT_N(TICKLESS_HRT_CONFLICT,
         (((TMode & KERNEL_TICKLESS) == 0U) || ((TMode & KERNEL_HRT) == 0U)));
+
+    // If hit here: Strategy which supports Priority Inheritance API must also support Weight API.
+    STK_STATIC_ASSERT_N(KERNEL_MODE_MUST_BE_SET, (TStrategy::PRIORITY_INHERITANCE_API && TStrategy::WEIGHT_API) ||
+        !TStrategy::PRIORITY_INHERITANCE_API);
 
     /*! \typedef TaskStorageType
         \brief   KernelTask array type used as a storage for the KernelTask instances.

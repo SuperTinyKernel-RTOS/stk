@@ -97,10 +97,9 @@ public:
     void AddTask(IKernelTask *task)
     {
         STK_ASSERT(task != nullptr);
-
         STK_ASSERT((task->GetWeight() > 0) && (task->GetWeight() <= 0x7FFFFF)); // must not be negative, max 24-bit number
 
-        task->SetCurrentWeight(0);
+        task->SetCurrentWeight(NO_WEIGHT);
 
         AddActive(task);
     }
@@ -116,7 +115,7 @@ public:
     void RemoveTask(IKernelTask *task)
     {
         STK_ASSERT(task != nullptr);
-        STK_ASSERT(task->GetHead() == &m_tasks || task->GetHead() == &m_sleep);
+        STK_ASSERT((task->GetHead() == &m_tasks) || (task->GetHead() == &m_sleep));
 
         if (task->GetHead() == &m_tasks)
             RemoveActive(task);

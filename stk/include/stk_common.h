@@ -22,6 +22,7 @@ namespace stk {
 // Forward declarations:
 class IKernelService;
 class IKernelTask;
+class ITask;
 
 /*! \enum    EAccessMode
     \brief   Hardware access mode by the user task.
@@ -132,6 +133,11 @@ typedef int64_t Ticks;
 */
 typedef uint64_t Cycles;
 
+/*! \typedef Weight
+    \brief   Weight value (aka priority).
+*/
+typedef int32_t Weight;
+
 /*! \var     TID_ISR_N
     \brief   Bitmask sentinel for ISR-context task identifiers.
 
@@ -176,6 +182,16 @@ static constexpr Timeout WAIT_INFINITE = INT32_MAX;
 */
 static constexpr Timeout NO_WAIT = 0;
 
+/*! \var     NO_WEIGHT
+    \brief   Weight value: weight is not set.
+*/
+static constexpr Weight NO_WEIGHT = static_cast<Weight>(-1);
+
+/*! \var     DEFAULT_WEIGHT
+    \brief   Weight value: default weight of value (1) (see \c SwitchStrategySmoothWeightedRoundRobin).
+*/
+static constexpr Weight DEFAULT_WEIGHT = static_cast<Weight>(1);
+
 /*! \brief     Test whether a task identifier represents an ISR context.
 
     Returns \c true if \a tid was produced by GetTid() called from an
@@ -187,10 +203,8 @@ static constexpr Timeout NO_WAIT = 0;
     \note      ISR-safe (bitmask arithmetic only, no kernel calls).
     \see       TID_ISR_N
 */
-static inline bool IsIsrTid(TId tid)
-{
-    return ((tid & TID_ISR_N) == TID_ISR_N);
-}
+static inline bool IsIsrTid(TId tid) { return ((tid & TID_ISR_N) == TID_ISR_N); }
+
 
 /*! \class StackMemoryDef
     \brief Stack memory type definition.
@@ -353,6 +367,8 @@ protected:
 */
 class ISyncObject : public util::DListEntry<ISyncObject, false>
 {
+    friend class IKernel;
+
 public:
     /*! \brief Destructor.
         \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
@@ -372,6 +388,7 @@ public:
 
     /*! \brief     Called by kernel when a new task starts waiting on this event.
         \param[in] wobj: Wait object representing blocked task.
+        \note      Must be called inside the critical section (see \a hw::CriticalSection, \a sync::ScopedCrticalSection).
     */
     virtual void AddWaitObject(IWaitObject *wobj)
     {
@@ -381,6 +398,7 @@ public:
 
     /*! \brief     Called by kernel when a waiting task is being removed (timeout expired, wait aborted, task terminated etc.).
         \param[in] wobj: Wait object to remove from the wait list.
+        \note      Must be called inside the critical section (see \a hw::CriticalSection, \a sync::ScopedCrticalSection).
     */
     virtual void RemoveWaitObject(IWaitObject *wobj)
     {
@@ -398,8 +416,16 @@ public:
         \note      When this method returns \c false, the kernel unlinks this object from its active
                    sync list. It will be re-linked automatically when the next waiter is added via
                    AddWaitObject().
+        \note      Does not need to be called inside critical section.
     */
     virtual bool Tick(Timeout elapsed_ticks);
+
+    /*! \brief     Find higher weight within linked wait objects.
+        \param[in] comp: Weight to compare with.
+        \return    Higher weight value than \a comp, or \a NO_WEIGHT if there is no object with a higher weight.
+        \note      Must be called inside the critical section (see \a hw::CriticalSection, \a sync::ScopedCrticalSection).
+    */
+    Weight FindWeightHigherThan(Weight comp) const;
 
 protected:
     /*! \brief     Constructor.
@@ -409,8 +435,10 @@ protected:
     {}
 
     /*! \brief     Wake the first task in the wait list (FIFO order).
-        \note      The woken task is notified with timeout=false, indicating a successful signal (not a timeout expiry).
+        \note      The woken task is notified with timeout=false, indicating a successful signal
+                   (not a timeout expiry).
         \note      Does nothing if no tasks are currently waiting.
+        \note      Must be called inside the critical section (see \a hw::CriticalSection, \a sync::ScopedCrticalSection).
     */
     void WakeOne()
     {
@@ -419,8 +447,10 @@ protected:
     }
 
     /*! \brief     Wake all tasks currently in the wait list.
-        \note      Each woken task is notified with timeout=false, indicating a successful signal (not a timeout expiry).
+        \note      Each woken task is notified with timeout=false, indicating a successful signal
+                   (not a timeout expiry).
         \note      Does nothing if no tasks are currently waiting.
+        \note      Must be called inside the critical section (see \a hw::CriticalSection, \a sync::ScopedCrticalSection).
     */
     void WakeAll()
     {
@@ -495,7 +525,7 @@ public:
                    Implement this method with the task's main logic.
         \warning   If \c Kernel is configured as \c KERNEL_STATIC, the body must contain an infinite loop.
         \code
-        void Run()
+        void Run( override)
         {
             while (true)
             {
@@ -533,13 +563,12 @@ public:
         \return    Static weight value of the task (must be non-zero, positive 24-bit number).
         \see       SwitchStrategySmoothWeightedRoundRobin, IKernelTask::GetWeight
     */
-    virtual int32_t GetWeight() const = 0;
-
-    /*! \brief     Get task Id set by application.
+    virtual Weight GetWeight() const = 0;
+    /*! \brief     Get task Id set by application.
         \return    Application-defined task identifier. Return 0 if unused.
         \note      Used for debugging and tracing only. The kernel does not interpret this value.
     */
-    virtual TId GetId() const = 0;
+    TId GetId() const;
 
     /*! \brief     Get task trace name set by application.
         \return    Null-terminated name string, or \c NULL if unused.
@@ -584,21 +613,21 @@ public:
         \see       SwitchStrategySmoothWeightedRoundRobin, ITask::GetWeight
         \note      Weight API
     */
-    virtual int32_t GetWeight() const = 0;
+    virtual Weight GetWeight() const = 0;
 
     /*! \brief     Set the current dynamic weight value used by the scheduling strategy.
         \param[in] weight: New current dynamic weight value.
         \see       SwitchStrategySmoothWeightedRoundRobin
         \note      Weight API
     */
-    virtual void SetCurrentWeight(int32_t weight) = 0;
+    virtual void SetCurrentWeight(Weight weight) = 0;
 
     /*! \brief     Get the current dynamic weight value of this task.
         \return    Current dynamic weight value.
         \see       SwitchStrategySmoothWeightedRoundRobin
         \note      Weight API
     */
-    virtual int32_t GetCurrentWeight() const = 0;
+    virtual Weight GetCurrentWeight() const = 0;
 
     /*! \brief     Get HRT task execution periodicity.
         \return    Periodicity of the task (ticks).
@@ -879,9 +908,10 @@ public:
     \code
     enum EConfig
     {
-        WEIGHT_API          = 0, // (1) if strategy needs Weight API of the kernel task, (0) otherwise (see \a IKernelTask and Weight API functions)
-        SLEEP_EVENT_API     = 0, // (1) if strategy needs Sleep API events generated by the kernel, (0) otherwise (see \a ITaskSwitchStrategy::OnTaskSleep, \a ITaskSwitchStrategy::OnTaskWake)
-        DEADLINE_MISSED_API = 0  // (1) if strategy implements OnTaskDeadlineMissed() and can absorb HRT deadline overruns, (0) otherwise (see \a ITaskSwitchStrategy::OnTaskDeadlineMissed)
+        WEIGHT_API               = 0, // (1) if strategy needs Weight API of the kernel task, (0) otherwise (see \a IKernelTask and Weight API functions)
+        SLEEP_EVENT_API          = 0, // (1) if strategy needs Sleep API events generated by the kernel, (0) otherwise (see \a ITaskSwitchStrategy::OnTaskSleep, \a ITaskSwitchStrategy::OnTaskWake)
+        DEADLINE_MISSED_API      = 0  // (1) if strategy implements OnTaskDeadlineMissed() and can absorb HRT deadline overruns, (0) otherwise (see \a ITaskSwitchStrategy::OnTaskDeadlineMissed)
+        PRIORITY_INHERITANCE_API = 0  // (1) if strategy expects OnTaskWeightChange() events to support priority inheritance requests
     };
     \endcode
 */
@@ -951,10 +981,23 @@ public:
                    correct default for strategies that do not implement overrun recovery.
     */
     virtual bool OnTaskDeadlineMissed(IKernelTask *task) = 0;
+
+    /*! \brief     Notification that a runnable task's scheduling weight has changed.
+        \param[in] task: The task whose weight was just updated via SetWeight().
+        \note      Called only for tasks that are currently in the runnable set
+                   (not sleeping). The strategy must relink the task to reflect
+                   its new weight. For strategies with WEIGHT_API = 0 this is a
+                   no-op. For SwitchStrategyFixedPriority it moves the task from
+                   its old priority-level list to the new one and updates
+                   m_ready_bitmap.
+        \note      Called from within a ScopedCriticalSection.
+    */
+    virtual void OnTaskWeightChange(IKernelTask *task, Weight old_weight) = 0;
 };
 
 /*! \class IKernel
-    \brief Interface for the implementation of the kernel of the scheduler. It supports Soft and Hard Real-Time modes.
+    \brief Interface for the implementation of the kernel of the scheduler. It supports Soft
+           and Hard Real-Time modes.
     \note  Mediator design pattern.
 */
 class IKernel
@@ -977,13 +1020,15 @@ public:
         \note      Must be called before AddTask() and Start().
         \note      If running on an STM32 device with HAL driver or on QEMU, do not change the default
                    resolution (PERIODICITY_DEFAULT). STM32's HAL expects 1 millisecond resolution and
-                   QEMU does not have enough resolution on Windows to operate correctly at sub-millisecond resolution.
+                   QEMU does not have enough resolution on Windows to operate correctly at sub-millisecond
+                   resolution.
         \note      Kernel must be in \a STATE_INACTIVE state.
     */
     virtual void Initialize(uint32_t resolution_us = PERIODICITY_DEFAULT) = 0;
 
     /*! \brief     Add user task.
-        \note      This function is for Soft Real-Time modes only (i.e. \c KERNEL_HRT must not be set in the kernel mode flags).
+        \note      This function is for Soft Real-Time modes only (i.e. \c KERNEL_HRT must not be set in
+                   the kernel mode flags).
         \param[in] user_task: Pointer to the user task to add.
     */
     virtual void AddTask(ITask *user_task) = 0;
@@ -1208,6 +1253,21 @@ public:
         \see       IKernel::EState::STATE_SUSPENDED
     */
     virtual void Resume(Timeout elapsed_ticks) = 0;
+
+    /*! \brief     Inherit weight for the task.
+        \param[in] tid: Task id.
+        \param[in] weight: New weight, shall be higher than task's current weight (see \a ITask::GetWeight).
+        \note      ISR-safe.
+    */
+    virtual void InheritWeight(TId tid, Weight weight) = 0;
+
+    /*! \brief     Restore weight of the task to the original value.
+        \param[in] tid: Task id.
+        \param[in] sobj: Optional, if provided than weight will be restored to the highest weight of the
+                   task in the wait list, otherwise to the original value.
+        \note      ISR-safe.
+    */
+    virtual void RestoreWeight(TId tid, ISyncObject *sobj = nullptr) = 0;
 };
 
 } // namespace stk

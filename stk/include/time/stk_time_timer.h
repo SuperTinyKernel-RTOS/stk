@@ -332,7 +332,6 @@ private:
         void OnDeadlineMissed(uint32_t)   override {}
         void OnExit()                     override {}
         int32_t GetWeight()         const override { return m_weight; }
-        TId GetId()                 const override { return hw::PtrToWord(this); }
         const char *GetTraceName()  const override { return nullptr; }
 
         // IStackMemory
