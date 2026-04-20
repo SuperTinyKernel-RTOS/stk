@@ -24,6 +24,12 @@ inline void operator delete(void *, void *) noexcept { /* nothing for placement 
 using namespace stk;
 using namespace stk::memory;
 
+// Returns a size of memory in stk::Word elements required for object allocation.
+template <typename T> static constexpr size_t StkGetWordCountForType()
+{
+    return ((sizeof(T) + sizeof(stk::Word) - 1) / sizeof(stk::Word));
+}
+
 // ---------------------------------------------------------------------------
 // stk_blockpool_t — wraps a BlockMemoryPool instance
 //
@@ -60,8 +66,7 @@ static struct BlockPoolSlot
 
     // Raw storage for placement-new, keeps the slot trivially constructible
     // while letting BlockMemoryPool's own ctor/dtor run normally.
-    STK_STATIC_ASSERT_DESC(sizeof(stk_blockpool_t) % sizeof(Word) == 0, "stk_blockpool_t memory size must be multiple of Word");
-    Word storage[sizeof(stk_blockpool_t) / sizeof(Word)];
+    Word storage[StkGetWordCountForType<stk_blockpool_t>()];
     bool busy;
 }
 s_BlockPools[STK_C_BLOCKPOOL_MAX];
