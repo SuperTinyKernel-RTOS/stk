@@ -246,20 +246,17 @@ inline bool ISyncObject::Tick(Timeout elapsed_ticks)
 //! Implementation of ISyncObject::Tick, see \a ISyncObject. Placed here as it depends on \a GetUserTaskFromTid.
 inline Weight ISyncObject::FindWeightHigherThan(Weight comp) const
 {
-    Weight result = NO_WEIGHT;
+    Weight max_weight = NO_WEIGHT;
 
     for (const IWaitObject *itr = static_cast<IWaitObject *>(m_wait_list.GetFirst()); (itr != nullptr);
             itr = static_cast<IWaitObject *>(itr->GetNext()))
     {
         Weight w = GetUserTaskFromTid(itr->GetTid())->GetWeight();
-        if (w > comp)
-        {
-            result = w;
-            break;
-        }
+        if (w > max_weight)
+            max_weight = w;
     }
 
-    return result;
+    return ((max_weight > comp) ? max_weight : NO_WEIGHT);
 }
 
 //! Implementation of ITask::GetId, see \a ITask. Placed here as it depends on \a GetTidFromUserTask.
