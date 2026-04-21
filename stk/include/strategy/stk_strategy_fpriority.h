@@ -55,7 +55,7 @@ namespace stk {
     \see   SwitchStrategyFP32, ITaskSwitchStrategy, ITask::GetWeight
 */
 template <uint8_t MAX_PRIORITIES>
-class SwitchStrategyFixedPriority : public ITaskSwitchStrategy
+class SwitchStrategyFixedPriority final : public ITaskSwitchStrategy
 {
 public:
     /*! \enum  EConfig
@@ -226,7 +226,7 @@ public:
                    the round-robin rotation at that level. Its preemption guarantee is provided
                    solely by its fixed priority relative to other runnable levels.
     */
-    void OnTaskWake(IKernelTask *task)
+    void OnTaskWake(IKernelTask *task) override
     {
         STK_ASSERT(task != nullptr);
         STK_ASSERT(!task->IsSleeping());
@@ -234,16 +234,6 @@ public:
 
         m_sleep.Unlink(task);
         AddActive(task);
-    }
-
-    /*! \brief     Not supported, asserts unconditionally.
-        \note      This strategy uses DEADLINE_MISSED_API = 0. See OnTaskDeadlineMissed() for rationale.
-    */
-    bool OnTaskDeadlineMissed(IKernelTask */*task*/) override
-    {
-        // Budget Overrun API unsupported
-        STK_ASSERT(false);
-        return false;
     }
 
     /*! \brief     Move a runnable task to a new priority level after its weight changed.
@@ -257,10 +247,10 @@ public:
     */
     void OnTaskWeightChange(IKernelTask *task, Weight old_weight) override
     {
-        const Priority new_prio = GetTaskPriority(task);
         const Priority old_prio = GetTaskPriorityFromWeight(old_weight);
 
-        STK_ASSERT(new_prio < MAX_PRIORITIES);
+        STK_ASSERT(GetTaskPriority(task) < MAX_PRIORITIES);
+        STK_ASSERT(old_prio < MAX_PRIORITIES);
 
         if (task->GetHead() != &m_sleep)
         {

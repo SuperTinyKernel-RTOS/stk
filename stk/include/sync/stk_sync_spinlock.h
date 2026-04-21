@@ -50,7 +50,7 @@ namespace sync {
     \warning ISR-unsafe, for guarding code accessible by ISR use hw::CriticalSection instead.
     \see     IMutex, Mutex, ScopedCriticalSection, Yield
 */
-class SpinLock : public IMutex
+class SpinLock final : public IMutex
 {
 public:
     /*! \brief    Construct a SpinLock in the unlocked state.

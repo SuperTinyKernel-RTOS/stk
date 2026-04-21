@@ -51,30 +51,10 @@ class Task : public ITask
 public:
     enum { STACK_SIZE = _StackSize }; //!< Stack size in elements of Word, mirrors the _StackSize template parameter.
 
-    Word *GetStack() const { return const_cast<Word *>(m_stack); }
-    size_t GetStackSize() const { return _StackSize; }
-    size_t GetStackSizeBytes() const { return _StackSize * sizeof(Word); }
-    EAccessMode GetAccessMode() const { return _AccessMode; }
-
-    /*! \brief Default no-op handler. Override in subclass to log or handle missed deadlines.
-        \note  HRT deadline misses are only possible when the kernel is started with KERNEL_HRT.
-    */
-    virtual void OnDeadlineMissed(uint32_t duration) { STK_UNUSED(duration); }
-
-    /*! \brief Default no-op handler. Override to implement join semantics (signal a waiting joiner).
-        \note  Called by the kernel only in KERNEL_DYNAMIC mode.
-    */
-    virtual void OnExit() {}
-
-    /*! \brief Default weight of 1. Override in subclass if custom scheduling weight is needed.
-        \note  Only relevant when using SwitchStrategySmoothWeightedRoundRobin. Prefer TaskW for
-               compile-time weight assignment.
-    */
-    virtual Weight GetWeight() const { return DEFAULT_WEIGHT; }
-
-    /*! \brief Override in subclass to supply a name for SEGGER SystemView tracing. Returns NULL by default.
-    */
-    virtual const char *GetTraceName() const { return nullptr; }
+    Word *GetStack() const override { return const_cast<Word *>(m_stack); }
+    size_t GetStackSize() const override { return _StackSize; }
+    size_t GetStackSizeBytes() const override { return _StackSize * sizeof(Word); }
+    EAccessMode GetAccessMode() const override { return _AccessMode; }
 
 protected:
     STK_NONCOPYABLE_CLASS(Task);
@@ -119,28 +99,11 @@ class TaskW : public ITask
 public:
     enum { STACK_SIZE = _StackSize }; //!< Stack size in elements of Word, mirrors the _StackSize template parameter.
 
-    Word *GetStack() const { return const_cast<Word *>(m_stack); }
-    size_t GetStackSize() const { return _StackSize; }
-    size_t GetStackSizeBytes() const { return _StackSize * sizeof(Word); }
-    EAccessMode GetAccessMode() const { return _AccessMode; }
-
-    /*! \brief Hard Real-Time mode is unsupported for weighted tasks. Triggers an assertion if called.
-        \warning Do not use TaskW with KERNEL_HRT. Use Task instead.
-    */
-    virtual void OnDeadlineMissed(uint32_t duration) { STK_ASSERT(false); STK_UNUSED(duration); }
-
-    /*! \brief Default no-op handler. Override to implement join semantics (signal a waiting joiner).
-        \note  Called by the kernel only in KERNEL_DYNAMIC mode.
-    */
-    virtual void OnExit() {}
-
-    /*! \brief Returns the compile-time weight _Weight.
-    */
-    virtual Weight GetWeight() const { return _Weight; }
-
-    /*! \brief Override in subclass to supply a name for SEGGER SystemView tracing. Returns NULL by default.
-    */
-    virtual const char *GetTraceName() const { return nullptr; }
+    Word *GetStack() const override { return const_cast<Word *>(m_stack); }
+    size_t GetStackSize() const override { return _StackSize; }
+    size_t GetStackSizeBytes() const override { return _StackSize * sizeof(Word); }
+    EAccessMode GetAccessMode() const override { return _AccessMode; }
+    Weight GetWeight() const override { return _Weight; }
 
 protected:
     STK_NONCOPYABLE_CLASS(TaskW);
@@ -198,15 +161,15 @@ public:
 
     /*! \brief Get pointer to the first element of the wrapped stack array.
     */
-    Word *GetStack() const { return (*m_stack); }
+    Word *GetStack() const override { return (*m_stack); }
 
     /*! \brief Get number of elements in the wrapped stack array.
     */
-    size_t GetStackSize() const { return _StackSize; }
+    size_t GetStackSize() const override { return _StackSize; }
 
     /*! \brief Get size of the wrapped stack array in bytes.
     */
-    size_t GetStackSizeBytes() const { return _StackSize * sizeof(Word); }
+    size_t GetStackSizeBytes() const override { return (_StackSize * sizeof(Word)); }
 
 private:
     MemoryType *m_stack; //!< Pointer to the externally-owned stack memory array.
@@ -337,11 +300,9 @@ static inline int64_t GetTimeNowMs()
 {
     IKernelService *service = IKernelService::GetInstance();
     int32_t resolution = service->GetTickResolution();
+    Ticks ticks = service->GetTicks();
 
-    if (resolution == 1000) // fast path: tick == 1 ms, no conversion needed
-        return service->GetTicks();
-    else
-        return (service->GetTicks() * resolution) / 1000;
+    return ((resolution == 1000) ? ticks : ((ticks * resolution) / 1000));
 }
 
 /*! \brief     Get system timer count value.

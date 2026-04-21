@@ -107,7 +107,7 @@ public:
         g_KernelService = NULL;
     }
 
-    void Initialize(IEventHandler *event_handler, IKernelService *service, uint32_t resolution_us, Stack *exit_trap)
+    void Initialize(IEventHandler *event_handler, IKernelService *service, uint32_t resolution_us, Stack *exit_trap) override
     {
         m_event_handler = event_handler;
         m_service       = service;
@@ -118,21 +118,21 @@ public:
         g_KernelService = service;
     }
 
-    void Start()
+    void Start() override
     {
         m_started = true;
 
         EventStart();
     }
 
-    void Stop()
+    void Stop() override
     {
     	m_started = false;
 
     	m_event_handler->OnStop();
     }
 
-    bool InitStack(EStackType type, Stack *stack, IStackMemory *stack_memory, ITask *user_task)
+    bool InitStack(EStackType type, Stack *stack, IStackMemory *stack_memory, ITask *user_task) override
     {
         if (m_fail_InitStack)
             return false;
@@ -149,33 +149,33 @@ public:
         return true;
     }
 
-    uint32_t GetTickResolution() const
+    uint32_t GetTickResolution() const override
     {
         return m_resolution;
     }
 
-    Cycles GetSysTimerCount() const
+    Cycles GetSysTimerCount() const override
     {
         return m_systimer_count;
     }
 
-    uint32_t GetSysTimerFrequency() const
+    uint32_t GetSysTimerFrequency() const override
     {
         return m_systimer_freq;
     }
 
-    void SwitchToNext()
+    void SwitchToNext() override
     {
         m_event_handler->OnTaskSwitch(GetCallerSP());
         ++m_switch_to_next_nr;
     }
 
-    void Sleep(Timeout ticks)
+    void Sleep(Timeout ticks) override
     {
         m_event_handler->OnTaskSleep(GetCallerSP(), ticks);
     }
 
-    void SleepUntil(Ticks timestamp)
+    void SleepUntil(Ticks timestamp) override
     {
         m_event_handler->OnTaskSleepUntil(GetCallerSP(), timestamp);
     }
@@ -185,12 +185,12 @@ public:
         return m_event_handler->OnTaskWait(GetCallerSP(), sobj, mutex, timeout);
     }
 
-    void ProcessHardFault()
+    void ProcessHardFault() override
     {
         m_hard_fault = true;
     }
 
-    void ProcessTick()
+    void ProcessTick() override
     {
         Timeout ticks = 1;
 
@@ -206,7 +206,7 @@ public:
         m_ticks_count += ticks;
     }
 
-    void SetEventOverrider(IEventOverrider *overrider)
+    void SetEventOverrider(IEventOverrider *overrider) override
     {
         m_overrider = overrider;
     }
@@ -238,23 +238,23 @@ public:
         return m_event_handler->OnTaskWait(caller_SP, sync_obj, mutex, timeout);
     }
 
-    size_t GetCallerSP() const
+    size_t GetCallerSP() const override
     {
         return m_stack_active->SP;
     }
 
-    virtual TId GetTid() const
+    virtual TId GetTid() const override
     {
         return m_event_handler->OnGetTid(GetCallerSP());
     }
 
-    Timeout Suspend()
+    Timeout Suspend() override
     {
         m_event_handler->OnSuspend(true);
         return m_sleep_ticks;
     }
 
-    void Resume(Timeout elapsed_ticks)
+    void Resume(Timeout elapsed_ticks) override
     {
         m_event_handler->OnSuspend(false);
     }
@@ -299,12 +299,12 @@ public:
     virtual ~KernelServiceMock()
     {}
 
-    size_t GetTid() const
+    size_t GetTid() const override
     {
         return m_tid;
     }
 
-    int64_t GetTicks() const
+    int64_t GetTicks() const override
     {
         if (m_inc_ticks)
             const_cast<int64_t &>(m_ticks) = m_ticks + 1;
@@ -312,42 +312,42 @@ public:
         return m_ticks;
     }
 
-    uint32_t GetTickResolution() const
+    uint32_t GetTickResolution() const override
     {
         return m_resolution;
     }
 
-    Cycles GetSysTimerCount() const
+    Cycles GetSysTimerCount() const override
     {
         return m_systimer_count;
     }
 
-    uint32_t GetSysTimerFrequency() const
+    uint32_t GetSysTimerFrequency() const override
     {
         return m_systimer_freq;
     }
 
-    void Delay(Timeout ticks)
+    void Delay(Timeout ticks) override
     {
         (void)ticks;
     }
 
-    void Sleep(Timeout ticks)
+    void Sleep(Timeout ticks) override
     {
         (void)ticks;
     }
 
-    void SleepUntil(Ticks timestamp)
+    void SleepUntil(Ticks timestamp) override
     {
         (void)timestamp;
     }
 
-    void SwitchToNext()
+    void SwitchToNext() override
     {
         m_switch_to_next = true;
     }
 
-    IWaitObject *Wait(ISyncObject *sobj, IMutex *mutex, Timeout timeout)
+    IWaitObject *Wait(ISyncObject *sobj, IMutex *mutex, Timeout timeout) override
     {
         (void)sobj;
         (void)mutex;
@@ -355,14 +355,26 @@ public:
         return nullptr;
     }
 
-    Timeout Suspend()
+    Timeout Suspend() override
     {
         return 1;
     }
 
-    void Resume(Timeout elapsed_ticks)
+    void Resume(Timeout elapsed_ticks) override
     {
         (void)elapsed_ticks;
+    }
+
+    void InheritWeight(TId tid, Weight weight) override
+    {
+        (void)tid;
+        (void)weight;
+    }
+
+    void RestoreWeight(TId tid, ISyncObject *sobj) override
+    {
+        (void)tid;
+        (void)sobj;
     }
 
     bool     m_inc_ticks;
@@ -388,9 +400,9 @@ public:
     uint32_t m_deadline_missed; //!< duration of workload if deadline is missed in HRT mode
 
 private:
-    void Run() {}
+    void Run() override {}
 
-    void OnDeadlineMissed(uint32_t duration)
+    void OnDeadlineMissed(uint32_t duration) override
     {
         // call base (to achieve full coverage)
         Task<STACK_SIZE_MIN, _AccessMode>::OnDeadlineMissed(duration);
@@ -407,7 +419,7 @@ template <int32_t _Weight, EAccessMode _AccessMode>
 class TaskMockW : public TaskW<_Weight, STACK_SIZE_MIN, _AccessMode>
 {
 private:
-    void Run() {}
+    void Run() override {}
 };
 
 struct MutexMock : public IMutex
@@ -418,7 +430,7 @@ struct MutexMock : public IMutex
     uint32_t m_nesting;
     bool     m_locked;
 
-    void Lock()
+    void Lock() override
     {
         if (m_nesting == 0)
             m_locked = true;
@@ -426,7 +438,7 @@ struct MutexMock : public IMutex
         ++m_nesting;
     }
 
-    void Unlock()
+    void Unlock() override
     {
         STK_ASSERT(m_nesting != 0);
 

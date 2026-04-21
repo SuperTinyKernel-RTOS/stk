@@ -38,7 +38,7 @@ namespace stk {
            OnTaskSleep() and OnTaskWake() when a task's sleep state changes.
     \see   SwitchStrategyRR, ITaskSwitchStrategy
 */
-class SwitchStrategyRoundRobin : public ITaskSwitchStrategy
+class SwitchStrategyRoundRobin final : public ITaskSwitchStrategy
 {
 public:
     /*! \enum  EConfig
@@ -46,9 +46,10 @@ public:
     */
     enum EConfig
     {
-        WEIGHT_API          = 0, //!< This strategy does not use per-task weights; all tasks are treated equally.
-        SLEEP_EVENT_API     = 1, //!< This strategy requires OnTaskSleep() / OnTaskWake() events to maintain the active/sleep list split.
-        DEADLINE_MISSED_API = 0  //!< This strategy does not use OnTaskDeadlineMissed() events.
+        WEIGHT_API               = 0, //!< This strategy does not use per-task weights; all tasks are treated equally.
+        SLEEP_EVENT_API          = 1, //!< This strategy requires OnTaskSleep() / OnTaskWake() events to maintain the active/sleep list split.
+        DEADLINE_MISSED_API      = 0, //!< This strategy does not use OnTaskDeadlineMissed() events.
+        PRIORITY_INHERITANCE_API = 0  //!< This strategy does not require Priority Inheritance and OnTaskPriorityChange() events.
     };
 
     /*! \brief Construct an empty strategy with no tasks and a null cursor.
@@ -69,7 +70,7 @@ public:
                    it is advanced to the new tail so that GetNext() will return the new task on its
                    next iteration rather than skipping it.
     */
-    void AddTask(IKernelTask *task)
+    void AddTask(IKernelTask *task) override
     {
         STK_ASSERT(task != nullptr);
         STK_ASSERT(task->GetHead() == nullptr);
@@ -89,7 +90,7 @@ public:
         \note      If the task is in \c m_tasks, delegates to RemoveActive() which also
                    updates the cursor. If the task is in \c m_sleep, simply unlinks it.
     */
-    void RemoveTask(IKernelTask *task)
+    void RemoveTask(IKernelTask *task) override
     {
         STK_ASSERT(task != nullptr);
         STK_ASSERT(GetSize() != 0);
@@ -110,7 +111,7 @@ public:
         \note      If the cursor itself is \c nullptr (all tasks were sleeping and none have woken),
                    the method returns \c nullptr immediately without touching \c m_prev.
     */
-    IKernelTask *GetNext()
+    IKernelTask *GetNext() override
     {
         IKernelTask *ret = m_prev;
 
@@ -129,7 +130,7 @@ public:
         \note      Preference is given to runnable tasks. The sleep fallback allows the kernel to
                    identify any task even when all are currently sleeping.
     */
-    IKernelTask *GetFirst() const
+    IKernelTask *GetFirst() const override
     {
         STK_ASSERT(GetSize() != 0U);
 
@@ -142,7 +143,7 @@ public:
     /*! \brief  Get total number of tasks managed by this strategy.
         \return Sum of tasks in \c m_tasks (runnable) and \c m_sleep (sleeping).
     */
-    size_t GetSize() const
+    size_t GetSize() const override
     {
         return m_tasks.GetSize() + m_sleep.GetSize();
     }
@@ -152,7 +153,7 @@ public:
         \note      Moves the task from \c m_tasks to \c m_sleep via RemoveActive(), which
                    also updates the cursor so GetNext() continues correctly.
     */
-    void OnTaskSleep(IKernelTask *task)
+    void OnTaskSleep(IKernelTask *task) override
     {
         STK_ASSERT(task != nullptr);
         STK_ASSERT(task->IsSleeping());
@@ -168,7 +169,7 @@ public:
                    also restores the cursor if it was null (i.e. this is the first
                    runnable task after a period where all tasks were sleeping).
     */
-    void OnTaskWake(IKernelTask *task)
+    void OnTaskWake(IKernelTask *task) override
     {
         STK_ASSERT(task != nullptr);
         STK_ASSERT(!task->IsSleeping());
@@ -176,16 +177,6 @@ public:
 
         m_sleep.Unlink(task);
         AddActive(task);
-    }
-
-    /*! \brief     Not supported, asserts unconditionally.
-        \note      This strategy uses DEADLINE_MISSED_API = 0. See OnTaskDeadlineMissed() for rationale.
-    */
-    bool OnTaskDeadlineMissed(IKernelTask */*task*/)
-    {
-        // Budget Overrun API unsupported
-        STK_ASSERT(false);
-        return false;
     }
 
 protected:

@@ -142,24 +142,6 @@ TEST(UserTask, GetIdAndName)
     CHECK_EQUAL((const char *)NULL, taskw.GetTraceName());
 }
 
-TEST(UserTask, TaskWUnsupportedHrt)
-{
-    TaskMockW<10, ACCESS_USER> taskw;
-
-    try
-    {
-        g_TestContext.ExpectAssert(true);
-        // on next tick kernel will attempt to remove pending task and will check its deadline
-        taskw.OnDeadlineMissed(0);
-        CHECK_TEXT(false, "expecting assertion - task with weights do not support HRT");
-    }
-    catch (TestAssertPassed &pass)
-    {
-        CHECK(true);
-        g_TestContext.ExpectAssert(false);
-    }
-}
-
 TEST_GROUP(StackMemoryWrapper)
 {
     void setup() {}

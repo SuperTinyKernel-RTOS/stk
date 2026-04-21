@@ -2011,11 +2011,6 @@
 			<locationURI>PARENT-4-PROJECT_LOC/stk/include/arch/x86/win32/stk_arch_x86-win32.h</locationURI>
 		</link>
 		<link>
-			<name>deps/stk/src/arch/arm/cortex-m/stk_arch_arm-cortex-m (5).cpp</name>
-			<type>1</type>
-			<locationURI>PARENT-4-PROJECT_LOC/stk/src/arch/arm/cortex-m/stk_arch_arm-cortex-m%20(5).cpp</locationURI>
-		</link>
-		<link>
 			<name>deps/stk/src/arch/arm/cortex-m/stk_arch_arm-cortex-m.cpp</name>
 			<type>1</type>
 			<locationURI>PARENT-4-PROJECT_LOC/stk/src/arch/arm/cortex-m/stk_arch_arm-cortex-m.cpp</locationURI>

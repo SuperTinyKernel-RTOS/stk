@@ -58,7 +58,7 @@ namespace sync {
     \see  ISyncObject, IWaitObject, IKernelService::Wait
     \note Only available when kernel is compiled with \a KERNEL_SYNC mode enabled.
 */
-class Event : public ITraceable, private ISyncObject
+class Event final : public ITraceable, private ISyncObject
 {
 public:
     /*! \brief     Constructor.

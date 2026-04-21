@@ -547,7 +547,7 @@ public:
         \note      After this call returns, IPlatform::ProcessHardFault() is invoked and the
                    system enters a safe state. This function should not attempt to recover scheduling.
     */
-    virtual void OnDeadlineMissed(uint32_t duration) = 0;
+    virtual void OnDeadlineMissed(uint32_t duration) { STK_UNUSED(duration); }
 
     /*! \brief     Called by the kernel before removal from the scheduling (see stk::KERNEL_DYNAMIC).
         \note      The task's stack is no longer in use but the ITask object itself is still valid.
@@ -557,13 +557,14 @@ public:
                    only (e.g. stk::sync::Semaphore::Signal(), stk::sync::EventFlags::Set()).
         \note      KERNEL_DYNAMIC only. Never called in KERNEL_STATIC mode.
     */
-    virtual void OnExit() = 0;
+    virtual void OnExit() {}
 
     /*! \brief     Get static base weight of the task.
         \return    Static weight value of the task (must be non-zero, positive 24-bit number).
-        \see       SwitchStrategySmoothWeightedRoundRobin, IKernelTask::GetWeight
+        \see       SwitchStrategyFixedPriority, SwitchStrategySmoothWeightedRoundRobin,
+                   IKernelTask::GetWeight, IKernelService::InheritWeight, IKernelService::RestoreWeight
     */
-    virtual Weight GetWeight() const = 0;
+    virtual Weight GetWeight() const { return DEFAULT_WEIGHT; }
     /*! \brief     Get task Id set by application.
         \return    Application-defined task identifier. Return 0 if unused.
         \note      Used for debugging and tracing only. The kernel does not interpret this value.
@@ -575,7 +576,7 @@ public:
         \note      Used for debugging and tracing only (e.g. SEGGER SystemView). Kernel does not
                    interpret this value.
     */
-    virtual const char *GetTraceName() const = 0;
+    virtual const char *GetTraceName() const { return nullptr; }
 };
 
 /*! \class IKernelTask
@@ -964,9 +965,9 @@ public:
                    the strategy can recover without a hard fault.
         \param[in] task: The task whose deadline was missed. Must not be \c nullptr.
         \return    \c true  — the strategy has absorbed the overrun (e.g. by escalating its
-                              scheduling mode); the kernel must \e not call
+                              scheduling mode): the kernel must \e not call
                               HrtHardFailDeadline() for this tick.
-                   \c false — the strategy cannot recover; the kernel must call
+                   \c false — the strategy cannot recover: the kernel must call
                               HrtHardFailDeadline() as normal.
         \note      Budget Overrun API. Called by the kernel from UpdateTaskState() within a
                    tick, after GetNext() has already been called for that tick. Only invoked
@@ -980,7 +981,11 @@ public:
         \note      The base implementation returns \c false (unrecoverable), which is the
                    correct default for strategies that do not implement overrun recovery.
     */
-    virtual bool OnTaskDeadlineMissed(IKernelTask *task) = 0;
+    virtual bool OnTaskDeadlineMissed(IKernelTask *task)
+    {
+        STK_UNUSED(task);
+        return false;
+    }
 
     /*! \brief     Notification that a runnable task's scheduling weight has changed.
         \param[in] task: The task whose weight was just updated via SetWeight().
@@ -992,7 +997,11 @@ public:
                    m_ready_bitmap.
         \note      Called from within a ScopedCriticalSection.
     */
-    virtual void OnTaskWeightChange(IKernelTask *task, Weight old_weight) = 0;
+    virtual void OnTaskWeightChange(IKernelTask *task, Weight old_weight)
+    {
+        STK_UNUSED(task);
+        STK_UNUSED(old_weight);
+    }
 };
 
 /*! \class IKernel

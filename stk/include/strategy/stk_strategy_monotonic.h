@@ -66,7 +66,7 @@ enum EMonotonicSwitchStrategyType
     \see   SwitchStrategyRM, SwitchStrategyDM, SchedulabilityCheck, ITaskSwitchStrategy
 */
 template <EMonotonicSwitchStrategyType _Type>
-class SwitchStrategyMonotonic : public ITaskSwitchStrategy
+class SwitchStrategyMonotonic final : public ITaskSwitchStrategy
 {
 public:
     /*! \enum  EConfig
@@ -74,9 +74,10 @@ public:
     */
     enum EConfig
     {
-        WEIGHT_API          = 0, //!< This strategy does not use per-task weights. Priority is derived from HRT timing parameters (GetHrtPeriodicity() for RM, GetHrtDeadline() for DM) at AddTask() time.
-        SLEEP_EVENT_API     = 0, //!< This strategy does not use OnTaskSleep() / OnTaskWake() events. Sleeping tasks remain in \c m_tasks and are skipped by GetNext() via IKernelTask::IsSleeping(). Delivering these events will trigger an assertion.
-        DEADLINE_MISSED_API = 0  //!< This strategy does not use OnTaskDeadlineMissed() events.
+        WEIGHT_API               = 0, //!< This strategy does not use per-task weights. Priority is derived from HRT timing parameters (GetHrtPeriodicity() for RM, GetHrtDeadline() for DM) at AddTask() time.
+        SLEEP_EVENT_API          = 0, //!< This strategy does not use OnTaskSleep() / OnTaskWake() events. Sleeping tasks remain in \c m_tasks and are skipped by GetNext() via IKernelTask::IsSleeping(). Delivering these events will trigger an assertion.
+        DEADLINE_MISSED_API      = 0, //!< This strategy does not use OnTaskDeadlineMissed() events.
+        PRIORITY_INHERITANCE_API = 0  //!< This strategy does not require Priority Inheritance and OnTaskPriorityChange() events.
     };
 
     /*! \brief Construct an empty strategy with no tasks.
@@ -106,7 +107,7 @@ public:
         \note      Tasks with equal keys are ordered by registration time: later-added tasks go
                    behind earlier-added tasks with the same key.
     */
-    void AddTask(IKernelTask *task)
+    void AddTask(IKernelTask *task) override
     {
         STK_ASSERT(task != nullptr);
         STK_ASSERT(task->GetHead() == nullptr);
@@ -163,7 +164,7 @@ public:
                    all tasks, runnable and sleeping, reside in \c m_tasks, so this method
                    simply unlinks the task unconditionally without a list-membership check.
     */
-    void RemoveTask(IKernelTask *task)
+    void RemoveTask(IKernelTask *task) override
     {
         STK_ASSERT(task != nullptr);
         STK_ASSERT(GetSize() != 0U);
@@ -183,7 +184,7 @@ public:
         \note      Asserts if \c m_tasks is empty; at least one task must be registered before
                    GetNext() is called.
     */
-    IKernelTask *GetNext()
+    IKernelTask *GetNext() override
     {
         STK_ASSERT(!m_tasks.IsEmpty());
 
@@ -214,7 +215,7 @@ public:
                    returned task may be sleeping; the kernel uses it only to seed the initial
                    context before the first GetNext() call.
     */
-    IKernelTask *GetFirst() const
+    IKernelTask *GetFirst() const override
     {
         STK_ASSERT(m_tasks.GetSize() != 0U);
 
@@ -225,7 +226,7 @@ public:
         \return    Number of tasks in \c m_tasks. Includes both runnable and sleeping tasks
                    since this strategy does not maintain a separate sleep list.
     */
-    size_t GetSize() const
+    size_t GetSize() const override
     {
         return m_tasks.GetSize();
     }
@@ -235,7 +236,7 @@ public:
                    in their sorted position and are detected by IsSleeping() in GetNext().
                    Calling this method indicates a kernel/strategy configuration mismatch.
     */
-    void OnTaskSleep(IKernelTask */*task*/)
+    void OnTaskSleep(IKernelTask */*task*/) override
     {
         // Sleep API unsupported: RM/DM keeps a single sorted non-volatile list.
         STK_ASSERT(false);
@@ -244,20 +245,10 @@ public:
     /*! \brief     Not supported, asserts unconditionally.
         \note      This strategy uses SLEEP_EVENT_API = 0. See OnTaskSleep() for rationale.
     */
-    void OnTaskWake(IKernelTask */*task*/)
+    void OnTaskWake(IKernelTask */*task*/) override
     {
         // Sleep API unsupported: RM/DM keeps a single sorted non-volatile list.
         STK_ASSERT(false);
-    }
-
-    /*! \brief     Not supported, asserts unconditionally.
-        \note      This strategy uses DEADLINE_MISSED_API = 0. See OnTaskDeadlineMissed() for rationale.
-    */
-    bool OnTaskDeadlineMissed(IKernelTask */*task*/)
-    {
-        // Budget Overrun API unsupported
-        STK_ASSERT(false);
-        return false;
     }
 
 private:

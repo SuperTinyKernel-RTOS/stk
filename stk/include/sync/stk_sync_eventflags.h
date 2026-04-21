@@ -72,7 +72,7 @@ namespace sync {
     \see  Event, Semaphore, ConditionVariable
     \note Only available when kernel is compiled with \a KERNEL_SYNC mode enabled.
 */
-class EventFlags : public ITraceable
+class EventFlags final : public ITraceable
 {
 public:
 

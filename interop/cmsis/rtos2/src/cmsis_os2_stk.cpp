@@ -90,6 +90,16 @@ template <typename T> static constexpr size_t StkGetWordCountForType()
     return ((sizeof(T) + sizeof(stk::Word) - 1) / sizeof(stk::Word));
 }
 
+// Private memory allocators.
+void *stk::memory::MemoryAllocator::Allocate(size_t size)
+{
+    return malloc(size);
+}
+void stk::memory::MemoryAllocator::Free(void *ptr)
+{
+    free(ptr);
+}
+
 // ---------------------------------------------------------------------------
 // Priority mapping:
 //   CMSIS range: osPriorityIdle(1) .. osPriorityISR(56)  ->  57 levels
@@ -222,7 +232,6 @@ struct StkThread : public stk::ITask
     stk::EAccessMode GetAccessMode() const override { return stk::ACCESS_PRIVILEGED; }
     void OnDeadlineMissed(uint32_t)  override       {}
     int32_t GetWeight()              const override { return m_stk_priority; }
-    stk::TId GetId()                 const override { return stk::hw::PtrToWord(this); }
     const char *GetTraceName()       const override { return m_name; }
 
     // ---- Members ----

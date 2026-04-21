@@ -25,24 +25,26 @@ namespace stk
         int32_t resolution;
 
         static IKernelService *GetInstance() { return NULL; }
-        TId GetTid() const { return 0; }
-        Ticks GetTicks() const { return ticks; }
-        uint32_t GetTickResolution() const { return resolution; }
-        Cycles GetSysTimerCount() const { return 0; }
-        uint32_t GetSysTimerFrequency() const { return 0; }
-        void Delay(Timeout ticks) { (void)ticks; }
-        void Sleep(Timeout ticks) { (void)ticks; }
-        void SleepUntil(Ticks timestamp) { (void)timestamp; }
-        void SwitchToNext() {}
-        IWaitObject *Wait(ISyncObject *sobj, IMutex *mutex, Timeout timeout)
+        TId GetTid() const override { return 0; }
+        Ticks GetTicks() const override { return ticks; }
+        uint32_t GetTickResolution() const override { return resolution; }
+        Cycles GetSysTimerCount() const override { return 0; }
+        uint32_t GetSysTimerFrequency() const override { return 0; }
+        void Delay(Timeout ticks) override { (void)ticks; }
+        void Sleep(Timeout ticks) override { (void)ticks; }
+        void SleepUntil(Ticks timestamp) override { (void)timestamp; }
+        void SwitchToNext() override {}
+        IWaitObject *Wait(ISyncObject *sobj, IMutex *mutex, Timeout timeout) override
         {
             (void)sobj;
             (void)mutex;
             (void)timeout;
             return nullptr;
         }
-        Timeout Suspend() { return 1; }
-        void Resume(Timeout elapsed_ticks) { (void)elapsed_ticks; }
+        Timeout Suspend() override { return 1; }
+        void Resume(Timeout elapsed_ticks) override { (void)elapsed_ticks; }
+        void InheritWeight(TId tid, Weight weight) override { (void)tid; (void)weight; }
+        void RestoreWeight(TId tid, ISyncObject *sobj) override { (void)tid; (void)sobj; }
     }
     s_KernelServiceMock;
 

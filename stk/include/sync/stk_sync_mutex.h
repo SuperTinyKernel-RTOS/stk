@@ -51,7 +51,7 @@ namespace sync {
     \note Only available when kernel is compiled with \a KERNEL_SYNC mode enabled.
     \see  ISyncObject, IWaitObject, IKernelService::Wait
 */
-class Mutex : public IMutex, public ITraceable, private ISyncObject
+class Mutex final : public IMutex, public ITraceable, private ISyncObject
 {
 public:
     /*! \brief     Constructor.
@@ -80,7 +80,7 @@ public:
     /*! \brief     Acquire lock.
         \warning   ISR-unsafe.
     */
-    void Lock() { STK_UNUSED(TimedLock(WAIT_INFINITE)); }
+    void Lock() override { STK_UNUSED(TimedLock(WAIT_INFINITE)); }
 
     /*! \brief     Acquire the lock.
         \warning   ISR-safe.
@@ -91,7 +91,7 @@ public:
     /*! \brief     Release lock.
         \warning   ISR-safe.
     */
-    void Unlock();
+    void Unlock() override;
 
     /*! \brief     Get owner of the mutex.
         \warning   ISR-safe.

@@ -467,13 +467,13 @@ struct HiResClock
     \return TId derived from the bound ITask pointer address (unique per task instance).
     \see    GetUserTaskFromTid
 */
-static constexpr TId GetTidFromUserTask(const ITask *task) { return hw::PtrToWord(task); }
+static constexpr TId GetTidFromUserTask(const ITask *task) noexcept { return hw::PtrToWord(task); }
 
 /*! \brief  Get task instance from its identifier.
     \return ITask instance.
     \see    GetTidFromUserTask
 */
-static constexpr ITask *GetUserTaskFromTid(TId task_id) { return hw::WordToPtr<ITask>(task_id); }
+static constexpr ITask *GetUserTaskFromTid(TId task_id) noexcept { return hw::WordToPtr<ITask>(task_id); }
 
 } // namespace stk
 

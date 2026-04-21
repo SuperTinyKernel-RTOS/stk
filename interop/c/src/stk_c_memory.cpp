@@ -8,6 +8,7 @@
  */
 
 #include <cstddef> // for std::size_t
+#include <cstdlib> // for malloc, free
 
 #include <stk_config.h>
 #include <stk.h>
@@ -16,11 +17,6 @@
 #include "stk_c.h"
 #include "stk_c_memory.h"
 
-#ifndef _NEW
-inline void *operator new(std::size_t, void *ptr) noexcept { return ptr; }
-inline void operator delete(void *, void *) noexcept { /* nothing for placement delete */ }
-#endif
-
 using namespace stk;
 using namespace stk::memory;
 
@@ -28,6 +24,16 @@ using namespace stk::memory;
 template <typename T> static constexpr size_t StkGetWordCountForType()
 {
     return ((sizeof(T) + sizeof(stk::Word) - 1) / sizeof(stk::Word));
+}
+
+// Private memory allocators.
+void *stk::memory::MemoryAllocator::Allocate(size_t size)
+{
+    return malloc(size);
+}
+void stk::memory::MemoryAllocator::Free(void *ptr)
+{
+    free(ptr);
 }
 
 // ---------------------------------------------------------------------------

@@ -60,7 +60,7 @@ namespace sync {
 
     \see   Mutex, ConditionVariable, ScopedReadMutex
 */
-class RWMutex : public IMutex, public ITraceable
+class RWMutex final : public IMutex, public ITraceable
 {
 public:
     /*! \brief  Construct an RWMutex in the unlocked state with no active readers or writers.
@@ -177,7 +177,7 @@ public:
         \note      Non-recursive.
         \warning   ISR-safe.
     */
-    void Lock() { STK_UNUSED(TimedLock(WAIT_INFINITE)); }
+    void Lock() override { STK_UNUSED(TimedLock(WAIT_INFINITE)); }
 
     /*! \brief     Attempt to acquire the lock for exclusive writing without blocking.
         \details   Checks if any readers are active or if another writer is active.
@@ -192,7 +192,7 @@ public:
                    writers are waiting, wakes all waiting readers.
         \warning   ISR-safe.
     */
-    void Unlock();
+    void Unlock() override;
 
 private:
     STK_NONCOPYABLE_CLASS(RWMutex);
