@@ -22,6 +22,7 @@ namespace memory {
 } // namespace memory
 } // namespace stk
 
+#include "stk_memory_allocator.h"
 #include "stk_memory_blockpool.h"
 
 #endif /* STK_MEMORY_H_ */

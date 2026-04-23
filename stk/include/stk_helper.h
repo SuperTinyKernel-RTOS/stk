@@ -51,34 +51,10 @@ class Task : public ITask
 public:
     enum { STACK_SIZE = _StackSize }; //!< Stack size in elements of Word, mirrors the _StackSize template parameter.
 
-    Word *GetStack() const { return const_cast<Word *>(m_stack); }
-    size_t GetStackSize() const { return _StackSize; }
-    size_t GetStackSizeBytes() const { return _StackSize * sizeof(Word); }
-    EAccessMode GetAccessMode() const { return _AccessMode; }
-
-    /*! \brief Default no-op handler. Override in subclass to log or handle missed deadlines.
-        \note  HRT deadline misses are only possible when the kernel is started with KERNEL_HRT.
-    */
-    virtual void OnDeadlineMissed(uint32_t duration) { STK_UNUSED(duration); }
-
-    /*! \brief Default no-op handler. Override to implement join semantics (signal a waiting joiner).
-        \note  Called by the kernel only in KERNEL_DYNAMIC mode.
-    */
-    virtual void OnExit() {}
-
-    /*! \brief Default weight of 1. Override in subclass if custom scheduling weight is needed.
-        \note  Only relevant when using SwitchStrategySmoothWeightedRoundRobin. Prefer TaskW for
-               compile-time weight assignment.
-    */
-    virtual int32_t GetWeight() const { return 1; }
-
-    /*! \brief Get object's own address as its Id. Unique per task instance, requires no manual assignment.
-    */
-    virtual TId GetId() const { return hw::PtrToWord(this); }
-
-    /*! \brief Override in subclass to supply a name for SEGGER SystemView tracing. Returns NULL by default.
-    */
-    virtual const char *GetTraceName() const { return nullptr; }
+    Word *GetStack() const override { return const_cast<Word *>(m_stack); }
+    size_t GetStackSize() const override { return _StackSize; }
+    size_t GetStackSizeBytes() const override { return _StackSize * sizeof(Word); }
+    EAccessMode GetAccessMode() const override { return _AccessMode; }
 
 protected:
     STK_NONCOPYABLE_CLASS(Task);
@@ -117,38 +93,17 @@ private:
 
     See Task for full usage example and implementation guidance.
 */
-template <int32_t _Weight, size_t _StackSize, EAccessMode _AccessMode>
+template <Weight _Weight, size_t _StackSize, EAccessMode _AccessMode>
 class TaskW : public ITask
 {
 public:
     enum { STACK_SIZE = _StackSize }; //!< Stack size in elements of Word, mirrors the _StackSize template parameter.
 
-    Word *GetStack() const { return const_cast<Word *>(m_stack); }
-    size_t GetStackSize() const { return _StackSize; }
-    size_t GetStackSizeBytes() const { return _StackSize * sizeof(Word); }
-    EAccessMode GetAccessMode() const { return _AccessMode; }
-
-    /*! \brief Hard Real-Time mode is unsupported for weighted tasks. Triggers an assertion if called.
-        \warning Do not use TaskW with KERNEL_HRT. Use Task instead.
-    */
-    virtual void OnDeadlineMissed(uint32_t duration) { STK_ASSERT(false); STK_UNUSED(duration); }
-
-    /*! \brief Default no-op handler. Override to implement join semantics (signal a waiting joiner).
-        \note  Called by the kernel only in KERNEL_DYNAMIC mode.
-    */
-    virtual void OnExit() {}
-
-    /*! \brief Returns the compile-time weight _Weight.
-    */
-    virtual int32_t GetWeight() const { return _Weight; }
-
-    /*! \brief Get object's own address as its Id. Unique per task instance, requires no manual assignment.
-    */
-    virtual TId GetId() const { return hw::PtrToWord(this); }
-
-    /*! \brief Override in subclass to supply a name for SEGGER SystemView tracing. Returns NULL by default.
-    */
-    virtual const char *GetTraceName() const { return nullptr; }
+    Word *GetStack() const override { return const_cast<Word *>(m_stack); }
+    size_t GetStackSize() const override { return _StackSize; }
+    size_t GetStackSizeBytes() const override { return _StackSize * sizeof(Word); }
+    EAccessMode GetAccessMode() const override { return _AccessMode; }
+    Weight GetWeight() const override { return _Weight; }
 
 protected:
     STK_NONCOPYABLE_CLASS(TaskW);
@@ -206,19 +161,72 @@ public:
 
     /*! \brief Get pointer to the first element of the wrapped stack array.
     */
-    Word *GetStack() const { return (*m_stack); }
+    Word *GetStack() const override { return (*m_stack); }
 
     /*! \brief Get number of elements in the wrapped stack array.
     */
-    size_t GetStackSize() const { return _StackSize; }
+    size_t GetStackSize() const override { return _StackSize; }
 
     /*! \brief Get size of the wrapped stack array in bytes.
     */
-    size_t GetStackSizeBytes() const { return _StackSize * sizeof(Word); }
+    size_t GetStackSizeBytes() const override { return (_StackSize * sizeof(Word)); }
 
 private:
     MemoryType *m_stack; //!< Pointer to the externally-owned stack memory array.
 };
+
+//! Implementation of ISyncObject::Tick, see \a ISyncObject. Placed here as it depends on hw namespace.
+inline bool ISyncObject::Tick(Timeout elapsed_ticks)
+{
+    // note: ScopedCriticalSection usage
+    //
+    // Single-core: no critical section needed - Tick() runs inside the
+    // SysTick ISR which already executes with interrupts disabled, making
+    // re-entrancy impossible on the local core.
+    //
+    // Multi-core: critical section is required because the tick handler on
+    // each core may call Tick() concurrently for the same Semaphore instance,
+    // and ISyncObject::Tick() is not re-entrant.
+#if (STK_ARCH_CPU_COUNT > 1)
+    hw::CriticalSection::ScopedLock cs_;
+#endif
+
+    IWaitObject *itr = static_cast<IWaitObject *>(m_wait_list.GetFirst());
+
+    while (itr != nullptr)
+    {
+        IWaitObject *next = static_cast<IWaitObject *>(itr->GetNext());
+
+        if (!itr->Tick(elapsed_ticks))
+            itr->Wake(true);
+
+        itr = next;
+    }
+
+    return !m_wait_list.IsEmpty();
+}
+
+//! Implementation of ISyncObject::Tick, see \a ISyncObject. Placed here as it depends on \a GetUserTaskFromTid.
+inline Weight ISyncObject::FindWeightHigherThan(Weight comp) const
+{
+    Weight max_weight = NO_WEIGHT;
+
+    for (const IWaitObject *itr = static_cast<IWaitObject *>(m_wait_list.GetFirst()); (itr != nullptr);
+            itr = static_cast<IWaitObject *>(itr->GetNext()))
+    {
+        Weight w = GetUserTaskFromTid(itr->GetTid())->GetWeight();
+        if (w > max_weight)
+            max_weight = w;
+    }
+
+    return ((max_weight > comp) ? max_weight : NO_WEIGHT);
+}
+
+//! Implementation of ITask::GetId, see \a ITask. Placed here as it depends on \a GetTidFromUserTask.
+inline TId ITask::GetId() const
+{
+    return GetTidFromUserTask(this);
+}
 
 /*! \brief     Get task/thread Id of the calling task.
     \return    Id of the calling task/thread.
@@ -292,11 +300,9 @@ static inline int64_t GetTimeNowMs()
 {
     IKernelService *service = IKernelService::GetInstance();
     int32_t resolution = service->GetTickResolution();
+    Ticks ticks = service->GetTicks();
 
-    if (resolution == 1000) // fast path: tick == 1 ms, no conversion needed
-        return service->GetTicks();
-    else
-        return (service->GetTicks() * resolution) / 1000;
+    return ((resolution == 1000) ? ticks : ((ticks * resolution) / 1000));
 }
 
 /*! \brief     Get system timer count value.

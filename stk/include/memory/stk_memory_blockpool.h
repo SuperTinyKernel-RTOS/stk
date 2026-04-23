@@ -10,12 +10,7 @@
 #ifndef STK_MEMORY_BLOCKPOOL_H_
 #define STK_MEMORY_BLOCKPOOL_H_
 
-#include <stdint.h>
-#include <stddef.h>
-#include <new>
-
-#include "stk_common.h"
-#include "stk_helper.h"
+#include "stk_memory_allocator.h"
 #include "sync/stk_sync_cv.h"
 
 /*! \file  stk_memory_blockpool.h
@@ -134,7 +129,9 @@ public:
         \note      Mirrors the heap-fallback path in \c osMemoryPoolNew().
         \note      ISR-unsafe.
     */
+#if STK_MEMORY_PLACEMENT_NEW
     explicit BlockMemoryPool(size_t capacity, size_t raw_block_size, const char *name = nullptr);
+#endif
 
     /*! \brief     Destructor.
         \details   Frees heap-allocated storage if \c m_storage_owned is \c true.
@@ -327,19 +324,24 @@ private:
 
 inline BlockMemoryPool::BlockMemoryPool(size_t capacity, size_t raw_block_size, uint8_t *storage,
                                         size_t storage_size, const char *name)
-    : m_storage(storage),
-      m_free_list(nullptr),
-      m_block_size(AlignBlockSize(raw_block_size)),
-      m_capacity(capacity),
-      m_used_count(0U),
-      m_storage_owned(false)
+: m_storage(storage),
+  m_free_list(nullptr),
+  m_block_size(AlignBlockSize(raw_block_size)),
+  m_capacity(capacity),
+  m_used_count(0U),
+  m_storage_owned(false)
 {
     STK_ASSERT(capacity > 0U);
     STK_ASSERT(capacity <= CAPACITY_MAX);
     STK_ASSERT(raw_block_size > 0U);
     STK_ASSERT(storage != nullptr);
+
     // API contract: caller-supplied buffer must be large enough
     STK_ASSERT(storage_size >= (capacity * m_block_size));
+
+    // in Release builds we ensure capacity which fits storage size, in Debug build the assertion above will be hit
+    if ((capacity * m_block_size) > storage_size)
+        m_capacity = storage_size / m_block_size;
 
 #if STK_SYNC_DEBUG_NAMES
     SetTraceName(name);
@@ -350,13 +352,14 @@ inline BlockMemoryPool::BlockMemoryPool(size_t capacity, size_t raw_block_size, 
     BuildFreeList();
 }
 
+#if STK_MEMORY_PLACEMENT_NEW
 inline BlockMemoryPool::BlockMemoryPool(size_t capacity, size_t raw_block_size, const char *name)
-    : m_storage(new (std::nothrow) uint8_t[capacity * AlignBlockSize(raw_block_size)]),
-      m_free_list(nullptr),
-      m_block_size(AlignBlockSize(raw_block_size)),
-      m_capacity(capacity),
-      m_used_count(0U),
-      m_storage_owned(true)
+: m_storage(MemoryAllocator::AllocateArrayT<uint8_t>(capacity * AlignBlockSize(raw_block_size))),
+  m_free_list(nullptr),
+  m_block_size(AlignBlockSize(raw_block_size)),
+  m_capacity(capacity),
+  m_used_count(0U),
+  m_storage_owned(true)
 {
     STK_ASSERT(capacity > 0U);
     STK_ASSERT(capacity <= CAPACITY_MAX);
@@ -372,15 +375,18 @@ inline BlockMemoryPool::BlockMemoryPool(size_t capacity, size_t raw_block_size, 
         BuildFreeList();
     // else: m_free_list remains nullptr; caller must check IsStorageValid()
 }
+#endif
 
 inline BlockMemoryPool::~BlockMemoryPool()
 {
     // ConditionVariable destructor asserts the wait list is empty
+#if STK_MEMORY_PLACEMENT_NEW
     if (m_storage_owned)
     {
-        delete[] m_storage;
+        MemoryAllocator::FreeArrayT(m_storage, (m_capacity * m_block_size));
         m_storage = nullptr;
     }
+#endif
 }
 
 // ---------------------------------------------------------------------------

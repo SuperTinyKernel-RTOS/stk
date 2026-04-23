@@ -46,17 +46,12 @@
  *     recursive (osMutexRecursive is therefore always effective).
  */
 
-#include "cmsis_os2.h"
-
-#include <cstring>
-#include <cstdlib>
-#include <new>
-#include <stdint.h>
-
 #include "stk.h"
 #include "sync/stk_sync.h"
 #include "time/stk_time.h"
 #include "memory/stk_memory.h"
+
+#include "cmsis_os2.h"
 
 // ---------------------------------------------------------------------------
 // Kernel version / identification
@@ -89,6 +84,13 @@ template <typename T> static constexpr size_t StkGetWordCountForType()
 {
     return ((sizeof(T) + sizeof(stk::Word) - 1) / sizeof(stk::Word));
 }
+
+// Private memory allocators (we define malloc, free here to overcome absence of declaration in
+// case of -ffreestanding compiler flag).
+extern "C" void *malloc(size_t size);
+extern "C" void free(void *ptr);
+void *stk::memory::MemoryAllocator::Allocate(size_t size) { return malloc(size); }
+void stk::memory::MemoryAllocator::Free(void *ptr) { free(ptr); }
 
 // ---------------------------------------------------------------------------
 // Priority mapping:
@@ -222,7 +224,6 @@ struct StkThread : public stk::ITask
     stk::EAccessMode GetAccessMode() const override { return stk::ACCESS_PRIVILEGED; }
     void OnDeadlineMissed(uint32_t)  override       {}
     int32_t GetWeight()              const override { return m_stk_priority; }
-    stk::TId GetId()                 const override { return stk::hw::PtrToWord(this); }
     const char *GetTraceName()       const override { return m_name; }
 
     // ---- Members ----

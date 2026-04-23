@@ -136,6 +136,11 @@
 			<locationURI>PARENT-4-PROJECT_LOC/stk/include/memory/stk_memory.h</locationURI>
 		</link>
 		<link>
+			<name>deps/stk/include/memory/stk_memory_allocator.h</name>
+			<type>1</type>
+			<locationURI>PARENT-4-PROJECT_LOC/stk/include/memory/stk_memory_allocator.h</locationURI>
+		</link>
+		<link>
 			<name>deps/stk/include/memory/stk_memory_blockpool.h</name>
 			<type>1</type>
 			<locationURI>PARENT-4-PROJECT_LOC/stk/include/memory/stk_memory_blockpool.h</locationURI>

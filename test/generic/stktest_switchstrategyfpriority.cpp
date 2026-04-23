@@ -59,33 +59,6 @@ TEST(SwitchStrategyFixedPriority, GetNextEmpty)
     CHECK_EQUAL(0, strategy->GetNext());
 }
 
-TEST(SwitchStrategyFixedPriority, OnTaskDeadlineMissedNotSupported)
-{
-    Kernel<KERNEL_DYNAMIC, 1, SwitchStrategyFP32, PlatformTestMock> kernel;
-    TaskMock<ACCESS_USER> task1;
-    ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
-
-    kernel.Initialize();
-    kernel.AddTask(&task1);
-
-    try
-    {
-        g_TestContext.ExpectAssert(true);
-        strategy->OnTaskDeadlineMissed(strategy->GetFirst());
-        CHECK_TEXT(false, "expecting assertion - OnTaskDeadlineMissed not supported");
-    }
-    catch (TestAssertPassed &pass)
-    {
-        CHECK(true);
-        g_TestContext.ExpectAssert(false);
-    }
-
-    // we need this workaround to pass 100% coverage test by blocking the exception
-    g_TestContext.ExpectAssert(true);
-    g_TestContext.RethrowAssertException(false);
-    strategy->OnTaskDeadlineMissed(strategy->GetFirst());
-}
-
 TEST(SwitchStrategyFixedPriority, EndlessNext)
 {
     Kernel<KERNEL_DYNAMIC, 3, SwitchStrategyFP32, PlatformTestMock> kernel;
@@ -212,13 +185,13 @@ static struct PrioritySleepRelaxCpuContext
         // ISR calls OnSysTick (task1 = active, task2 = idle (sleeping))
         if (counter == 0)
         {
-            CHECK_EQUAL_TEXT(active->SP, (size_t)task1->GetStack(), "sleep: expecting low-priority task1");
+            CHECK_EQUAL_TEXT(active->SP, (Word)task1->GetStack(), "sleep: expecting low-priority task1");
         }
         else
         // ISR calls OnSysTick (task1 = idle (lower priority), task2 = active (higher priority))
         if (counter == 1)
         {
-            CHECK_EQUAL_TEXT(active->SP, (size_t)task2->GetStack(), "sleep: expecting high-priority task2");
+            CHECK_EQUAL_TEXT(active->SP, (Word)task2->GetStack(), "sleep: expecting high-priority task2");
         }
 
         ++counter;
@@ -244,10 +217,10 @@ TEST(SwitchStrategyFixedPriority, Priority)
     kernel.AddTask(&task2);
     kernel.Start();
 
-    CHECK_EQUAL_TEXT(active->SP, (size_t)task2.GetStack(), "expecting high-priority task2 on start");
+    CHECK_EQUAL_TEXT(active->SP, (Word)task2.GetStack(), "expecting high-priority task2 on start");
 
     platform->ProcessTick();
-    CHECK_EQUAL_TEXT(active->SP, (size_t)task2.GetStack(), "expecting task2");
+    CHECK_EQUAL_TEXT(active->SP, (Word)task2.GetStack(), "expecting task2");
 
     g_RelaxCpuHandler = PrioritySleepRelaxCpu;
     g_PrioritySleepRelaxCpuContext.Clear();
@@ -259,11 +232,11 @@ TEST(SwitchStrategyFixedPriority, Priority)
     Sleep(2);
 
     // task2 is active again
-    CHECK_EQUAL_TEXT(active->SP, (size_t)task2.GetStack(), "expecting high-priority task2 again after it slept");
+    CHECK_EQUAL_TEXT(active->SP, (Word)task2.GetStack(), "expecting high-priority task2 again after it slept");
 
     // ISR calls OnSysTick, higher priority task2 is scheduled
     platform->ProcessTick();
-    CHECK_EQUAL_TEXT(active->SP, (size_t)task2.GetStack(), "expecting high-priority task2 again");
+    CHECK_EQUAL_TEXT(active->SP, (Word)task2.GetStack(), "expecting high-priority task2 again");
 
     g_RelaxCpuHandler = NULL;
 }

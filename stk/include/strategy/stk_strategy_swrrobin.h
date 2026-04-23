@@ -59,7 +59,7 @@ namespace stk {
            when sizing TASKS_MAX on severely constrained targets.
     \see   SwitchStrategySWRR, ITaskSwitchStrategy, ITask::GetWeight, IKernelTask::GetWeight
 */
-class SwitchStrategySmoothWeightedRoundRobin : public ITaskSwitchStrategy
+class SwitchStrategySmoothWeightedRoundRobin final : public ITaskSwitchStrategy
 {
 public:
     /*! \enum  EConfig
@@ -67,9 +67,10 @@ public:
     */
     enum EConfig
     {
-        WEIGHT_API          = 1, //!< This strategy uses per-task static and dynamic weights; the kernel must expose the Weight API on each IKernelTask.
-        SLEEP_EVENT_API     = 1, //!< This strategy requires OnTaskSleep() / OnTaskWake() events to keep \c m_total_weight accurate as tasks move between the runnable and sleeping sets.
-        DEADLINE_MISSED_API = 0  //!< This strategy does not use OnTaskDeadlineMissed() events.
+        WEIGHT_API               = 1, //!< This strategy uses per-task static and dynamic weights; the kernel must expose the Weight API on each IKernelTask.
+        SLEEP_EVENT_API          = 1, //!< This strategy requires OnTaskSleep() / OnTaskWake() events to keep \c m_total_weight accurate as tasks move between the runnable and sleeping sets.
+        DEADLINE_MISSED_API      = 0, //!< This strategy does not use OnTaskDeadlineMissed() events.
+        PRIORITY_INHERITANCE_API = 0  //!< This strategy does not require Priority Inheritance and OnTaskPriorityChange() events.
     };
 
     /*! \brief Construct an empty strategy with no tasks and a zero total weight.
@@ -94,13 +95,12 @@ public:
                    position in the selection cycle.
         \note      Delegates to AddActive() which also increments \c m_total_weight.
     */
-    void AddTask(IKernelTask *task)
+    void AddTask(IKernelTask *task) override
     {
         STK_ASSERT(task != nullptr);
-
         STK_ASSERT((task->GetWeight() > 0) && (task->GetWeight() <= 0x7FFFFF)); // must not be negative, max 24-bit number
 
-        task->SetCurrentWeight(0);
+        task->SetCurrentWeight(NO_WEIGHT);
 
         AddActive(task);
     }
@@ -113,10 +113,10 @@ public:
                    unlinks it (\c m_total_weight is not adjusted since sleeping tasks are
                    already excluded from the weight sum).
     */
-    void RemoveTask(IKernelTask *task)
+    void RemoveTask(IKernelTask *task) override
     {
         STK_ASSERT(task != nullptr);
-        STK_ASSERT(task->GetHead() == &m_tasks || task->GetHead() == &m_sleep);
+        STK_ASSERT((task->GetHead() == &m_tasks) || (task->GetHead() == &m_sleep));
 
         if (task->GetHead() == &m_tasks)
             RemoveActive(task);
@@ -136,7 +136,7 @@ public:
         \note      The assertion `selected != NULL` guards against a logic error where
                    \c m_tasks is non-empty but no task was picked (should never occur).
     */
-    IKernelTask *GetNext()
+    IKernelTask *GetNext() override
     {
         if (m_tasks.IsEmpty())
             return nullptr; // idle
@@ -171,7 +171,7 @@ public:
         \note      Preference is given to runnable tasks. The sleep fallback allows the kernel to
                    identify any task even when all are currently sleeping.
     */
-    IKernelTask *GetFirst() const
+    IKernelTask *GetFirst() const override
     {
         STK_ASSERT(GetSize() != 0U);
 
@@ -184,7 +184,7 @@ public:
     /*! \brief  Get the total number of tasks managed by this strategy.
         \return Sum of tasks in \c m_tasks (runnable) and \c m_sleep (sleeping).
     */
-    size_t GetSize() const
+    size_t GetSize() const override
     {
         return m_tasks.GetSize() + m_sleep.GetSize();
     }
@@ -195,7 +195,7 @@ public:
                    also decrements \c m_total_weight by the task's static weight. Sleeping
                    tasks do not participate in weight distribution until they wake.
     */
-    void OnTaskSleep(IKernelTask *task)
+    void OnTaskSleep(IKernelTask *task) override
     {
         STK_ASSERT(task != nullptr);
         STK_ASSERT(task->IsSleeping());
@@ -207,7 +207,7 @@ public:
 
     /*! \brief     Notification that a task has become runnable again.
         \param[in] task: The task that woke up. Must be in \c m_sleep (asserted).
-        \note      Applies a <b>priority boost</b> before re-inserting into \c m_tasks:
+        \note      Applies a priority boost before re-inserting into \c m_tasks:
                    the task's current weight is set to \c m_total_weight (the sum of all
                    runnable tasks' static weights). On the next GetNext() call every
                    runnable task increases its current weight by its static weight, but the
@@ -217,7 +217,7 @@ public:
                    the fairness behaviour of plain Round-Robin for equal-weight tasks.
         \note      After the boost, delegates to AddActive() which increments \c m_total_weight.
     */
-    void OnTaskWake(IKernelTask *task)
+    void OnTaskWake(IKernelTask *task) override
     {
         STK_ASSERT(task != nullptr);
         STK_ASSERT(!task->IsSleeping());
@@ -230,16 +230,6 @@ public:
         task->SetCurrentWeight(m_total_weight);
 
         AddActive(task);
-    }
-
-    /*! \brief     Not supported, asserts unconditionally.
-        \note      This strategy uses DEADLINE_MISSED_API = 0. See OnTaskDeadlineMissed() for rationale.
-    */
-    bool OnTaskDeadlineMissed(IKernelTask */*task*/)
-    {
-        // Budget Overrun API unsupported
-        STK_ASSERT(false);
-        return false;
     }
 
 private:

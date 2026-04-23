@@ -1545,6 +1545,116 @@ TEST(Kernel, SyncWaitTicklessDuration)
     CHECK_EQUAL(true, mutex.m_locked);
 }
 
+static struct SyncFindWeightHigherThanContext
+{
+    SyncFindWeightHigherThanContext()
+    {
+        Reset();
+    }
+
+    void Reset()
+    {
+        counter  = 0;
+        platform = NULL;
+        sobj     = NULL;
+    }
+
+    uint32_t          counter;
+    PlatformTestMock *platform;
+    SyncObjectMock   *sobj;
+
+    void Process()
+    {
+        platform->ProcessTick();
+        ++counter;
+
+        if (counter == 1)
+        {
+            CHECK_EQUAL(2, sobj->FindWeightHigherThan(0));
+        }
+    }
+}
+g_SyncFindWeightHigherThan;
+
+static void SyncFindWeightHigherThanRelaxCpu()
+{
+    g_SyncFindWeightHigherThan.Process();
+}
+
+TEST(Kernel, SyncFindWeightHigherThan)
+{
+    Kernel<KERNEL_STATIC | KERNEL_SYNC, 2, SwitchStrategyFP32, PlatformTestMock> kernel;
+    PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
+    TaskMockW<1, ACCESS_USER> task1;
+    TaskMockW<2, ACCESS_USER> task2;
+
+    MutexMock mutex;
+    SyncObjectMock sobj;
+
+    g_SyncFindWeightHigherThan.Reset();
+    g_SyncFindWeightHigherThan.platform = platform;
+    g_SyncFindWeightHigherThan.sobj     = &sobj;
+    g_RelaxCpuHandler = SyncFindWeightHigherThanRelaxCpu;
+
+    kernel.Initialize();
+    kernel.AddTask(&task1);
+    kernel.AddTask(&task2);
+    kernel.Start();
+
+    // no task is waiting
+    CHECK_EQUAL(NO_WEIGHT, sobj.FindWeightHigherThan(0));
+
+    MutexMock::ScopedLock guard(mutex);
+
+    // sleep_ticks should be equal to 2 on first OnTick call
+    IWaitObject *wo = IKernelService::GetInstance()->Wait(&sobj, &mutex, 5);
+
+    CHECK_TRUE(wo != nullptr);
+    CHECK_EQUAL(true, mutex.m_locked);
+
+    // no task is waiting here
+    CHECK_EQUAL(NO_WEIGHT, sobj.FindWeightHigherThan(0));
+}
+
+TEST(Kernel, SyncInheritWeight)
+{
+    Kernel<KERNEL_STATIC | KERNEL_SYNC, 2, SwitchStrategyFP32, PlatformTestMock> kernel;
+    TaskMockW<1, ACCESS_USER> task1;
+    TaskMockW<2, ACCESS_USER> task2;
+
+    MutexMock mutex;
+    SyncObjectMock sobj;
+
+    kernel.Initialize();
+    kernel.AddTask(&task1);
+    kernel.AddTask(&task2);
+    kernel.Start();
+
+    IKernelTask *ktasks[2];
+    kernel.EnumerateKernelTasks(ktasks, 2);
+
+    // current weight is dynamic value used by strategy with PRIORITY_INHERITANCE_API, if not overridden
+    // by InheritWeight should be NO_WEIGHT
+    CHECK_EQUAL(NO_WEIGHT, ktasks[0]->GetCurrentWeight());
+
+    // original weight
+    CHECK_EQUAL(1, ktasks[0]->GetWeight());
+
+    IKernelService::GetInstance()->InheritWeight(task1.GetId(), 2);
+
+    // boosted weight
+    CHECK_EQUAL(2, ktasks[0]->GetCurrentWeight());
+    CHECK_EQUAL(2, ktasks[0]->GetWeight()); // using GetCurrentWeight
+
+    IKernelService::GetInstance()->RestoreWeight(task1.GetId());
+
+    // dynamic is back to NO_WEIGHT
+    CHECK_EQUAL(NO_WEIGHT, ktasks[0]->GetCurrentWeight());
+
+    // back to own weight
+    CHECK_EQUAL(1, ktasks[0]->GetWeight());
+}
+
 TEST(Kernel, EnumTasks)
 {
     Kernel<KERNEL_STATIC, 2, SwitchStrategyRR, PlatformTestMock> kernel;

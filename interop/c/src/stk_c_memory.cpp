@@ -16,11 +16,6 @@
 #include "stk_c.h"
 #include "stk_c_memory.h"
 
-#ifndef _NEW
-inline void *operator new(std::size_t, void *ptr) noexcept { return ptr; }
-inline void operator delete(void *, void *) noexcept { /* nothing for placement delete */ }
-#endif
-
 using namespace stk;
 using namespace stk::memory;
 
@@ -29,6 +24,13 @@ template <typename T> static constexpr size_t StkGetWordCountForType()
 {
     return ((sizeof(T) + sizeof(stk::Word) - 1) / sizeof(stk::Word));
 }
+
+// Private memory allocators (we define malloc, free here to overcome absence of declaration in
+// case of -ffreestanding compiler flag).
+extern "C" void *malloc(size_t size);
+extern "C" void free(void *ptr);
+void *stk::memory::MemoryAllocator::Allocate(size_t size) { return malloc(size); }
+void stk::memory::MemoryAllocator::Free(void *ptr) { free(ptr); }
 
 // ---------------------------------------------------------------------------
 // stk_blockpool_t — wraps a BlockMemoryPool instance

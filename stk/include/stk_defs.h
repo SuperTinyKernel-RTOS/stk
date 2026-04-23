@@ -118,6 +118,21 @@
     #define __stk_aligned(x)
 #endif
 
+/*! \def   __stk_weak
+    \brief Marks a function or variable as weak, allowing it to be overridden by the user.
+    \note  On compilers not listed below the attribute expands to nothing.
+           If not supported, multiple definition errors may occur during linking.
+*/
+#if defined(__GNUC__) || defined(__clang__)
+    #define __stk_weak __attribute__((weak))
+#elif defined(__ICCARM__)
+    #define __stk_weak __weak
+#elif defined(__CC_ARM) || defined(__ARMCC_VERSION)
+    #define __stk_weak __attribute__((weak))
+#else
+    #define __stk_weak
+#endif
+
 /*! \def   __stk_attr_naked
     \brief Suppresses compiler-generated function prologue and epilogue (function prefix).
     \note  The decorated function must consist of inline assembly only. C statements that rely

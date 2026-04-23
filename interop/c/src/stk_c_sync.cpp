@@ -12,15 +12,12 @@
 #include <stk_config.h>
 #include <stk.h>
 #include <sync/stk_sync.h>
+#include <memory/stk_memory.h>
+
 #include "stk_c.h"
 
 using namespace stk;
 using namespace stk::sync;
-
-#ifndef _NEW
-inline void *operator new(std::size_t, void *ptr) noexcept { return ptr; }
-inline void operator delete(void *, void *) noexcept { /* nothing for placement delete */ }
-#endif
 
 // ---------------------------------------------------------------------------
 // C-interface

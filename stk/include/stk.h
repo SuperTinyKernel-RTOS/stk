@@ -77,7 +77,11 @@ namespace stk {
     \endcode
 */
 template <uint8_t TMode, uint32_t TSize, class TStrategy, class TPlatform>
-class Kernel : public IKernel, private IPlatform::IEventHandler
+class Kernel
+#ifndef _STK_UNDER_TEST
+final
+#endif
+: public IKernel, private IPlatform::IEventHandler
 {
 protected:
     /*! \typedef SleepTrapStackMemory
@@ -113,7 +117,7 @@ protected:
         A slot is "free" when m_user == NULL (IsBusy() == false). The Kernel pre-allocates
         TSize slots in m_task_storage; AddTask() finds a free slot and calls Bind().
     */
-    class KernelTask : public IKernelTask
+    class KernelTask final : public IKernelTask
     {
         friend class Kernel;
 
@@ -145,7 +149,7 @@ protected:
             \note  In KERNEL_SYNC mode the embedded WaitObject back-pointer is wired to this
                    KernelTask at construction so the wait object can wake its owning task.
         */
-        explicit KernelTask() : m_user(nullptr), m_stack(), m_state(STATE_NONE), m_time_sleep(0),
+        explicit KernelTask() : m_user(nullptr), m_stack(), m_state(STATE_NONE), m_time_sleep(NO_WAIT),
             m_srt(), m_hrt(), m_rt_weight()
         {
             // bind to wait object
@@ -156,12 +160,12 @@ protected:
         /*! \brief  Get bound user task.
             \return Pointer to the ITask, or \c NULL if the slot is free (IsBusy() == false).
         */
-        ITask *GetUserTask() { return m_user; }
+        ITask *GetUserTask() override { return m_user; }
 
         /*! \brief  Get stack descriptor for this task slot.
             \return Pointer to the Stack (SP register value and access mode flags).
         */
-        Stack *GetUserStack() { return &m_stack; }
+        Stack *GetUserStack() override { return &m_stack; }
 
         /*! \brief  Check whether this slot is bound to a user task.
             \return \c true if a user task is assigned (m_user != NULL); \c false if the slot is free.
@@ -171,18 +175,18 @@ protected:
         /*! \brief  Check whether this task is currently sleeping (waiting for a tick or a wake event).
             \return \c true if m_time_sleep < 0 (negative value encodes remaining sleep ticks).
         */
-        bool IsSleeping() const { return (m_time_sleep < 0); }
+        bool IsSleeping() const override { return (m_time_sleep < 0); }
 
         /*! \brief  Get task identifier.
             \return TId derived from the bound ITask pointer address (unique per task instance).
         */
-        TId GetTid() const { return hw::PtrToWord(m_user); }
+        TId GetTid() const { return GetTidFromUserTask(m_user); }
 
         /*! \brief  Wake this task on the next scheduling tick.
             \note   Sets m_time_sleep to -1 (one tick remaining) so the task exits sleep state
                     on the next UpdateTaskState() pass. Asserts that the task is currently sleeping.
         */
-        void Wake()
+        void Wake() override
         {
             STK_ASSERT(IsSleeping());
 
@@ -193,7 +197,7 @@ protected:
         /*! \brief     Update the run-time scheduling weight (weighted strategies only).
             \param[in] weight: New current weight. Ignored unless TStrategy::WEIGHT_API is true.
         */
-        void SetCurrentWeight(int32_t weight)
+        void SetCurrentWeight(Weight weight) override
         {
             if (TStrategy::WEIGHT_API)
                 m_rt_weight[0] = weight;
@@ -202,20 +206,32 @@ protected:
         /*! \brief  Get static scheduling weight from the user task.
             \return ITask::GetWeight() if WEIGHT_API is true; 1 otherwise.
         */
-        int32_t GetWeight() const { return (TStrategy::WEIGHT_API ? m_user->GetWeight() : 1); }
+        Weight GetWeight() const override
+        {
+            if (TStrategy::PRIORITY_INHERITANCE_API)
+            {
+                if (m_rt_weight[0] != NO_WEIGHT)
+                    return m_rt_weight[0];
+            }
+
+            return (TStrategy::WEIGHT_API ? m_user->GetWeight() : DEFAULT_WEIGHT);
+        }
 
         /*! \brief  Get current (run-time) scheduling weight.
             \return m_rt_weight[0] if WEIGHT_API is true; 1 otherwise.
             \note   The run-time weight is decremented each tick by the weighted strategy and
                     reset to GetWeight() when exhausted.
         */
-        int32_t GetCurrentWeight() const { return (TStrategy::WEIGHT_API ? m_rt_weight[0] : 1); }
+        Weight GetCurrentWeight() const override
+        {
+            return (TStrategy::WEIGHT_API ? m_rt_weight[0] : DEFAULT_WEIGHT);
+        }
 
         /*! \brief  Get HRT scheduling periodicity.
             \return Period in ticks between successive activations of this task.
             \note   KERNEL_HRT mode only. Asserts if called outside HRT mode.
         */
-        Timeout GetHrtPeriodicity() const
+        Timeout GetHrtPeriodicity() const override
         {
             STK_ASSERT(IsHrtMode());
 
@@ -227,7 +243,7 @@ protected:
                     of being switched in, or OnDeadlineMissed() is invoked.
             \note   KERNEL_HRT mode only. Asserts if called outside HRT mode.
         */
-        Timeout GetHrtDeadline() const
+        Timeout GetHrtDeadline() const override
         {
             STK_ASSERT(IsHrtMode());
 
@@ -239,7 +255,7 @@ protected:
                     A negative or zero value means the deadline has been missed.
             \note   KERNEL_HRT mode only. Asserts if called outside HRT mode or while sleeping.
         */
-        Timeout GetHrtRelativeDeadline() const
+        Timeout GetHrtRelativeDeadline() const override
         {
             STK_ASSERT(IsHrtMode());
             STK_ASSERT(!IsSleeping());
@@ -250,7 +266,7 @@ protected:
         Timeout GetSleepTicks(Timeout sleep_ticks)
         {
             // note: task sleep time is negative
-            Timeout task_sleep = Max<Timeout>(0, -m_time_sleep);
+            Timeout task_sleep = Max<Timeout>(NO_WAIT, -m_time_sleep);
 
             if (IsSyncMode())
             {
@@ -261,7 +277,7 @@ protected:
                     task_sleep = m_wait_obj->m_time_wait;
 
                     // we shall account for only valid time (when task is waiting during sync operation)
-                    if (task_sleep > 0)
+                    if (task_sleep > NO_WAIT)
                         sleep_ticks = Min(sleep_ticks, task_sleep);
                 }
                 else
@@ -341,7 +357,7 @@ protected:
             \note  One WaitObject per KernelTask, the back-pointer m_task is wired at
                    KernelTask construction and never changes.
         */
-        struct WaitObject : public IWaitObject
+        struct WaitObject final : public IWaitObject
         {
             explicit WaitObject() : m_task(nullptr), m_sync_obj(nullptr), m_timeout(false), m_time_wait(0)
             {}
@@ -365,12 +381,12 @@ protected:
             /*! \brief  Get the TId of the task that owns this wait object.
                 \return TId of m_task.
             */
-            TId GetTid() const { return m_task->GetTid(); }
+            TId GetTid() const override { return m_task->GetTid(); }
 
             /*! \brief  Check whether the wait expired due to timeout.
                 \return \c true if the wait timed out before being signalled, \c false if woken by Wake().
             */
-            bool IsTimeout() const { return m_timeout; }
+            bool IsTimeout() const override { return m_timeout; }
 
             /*! \brief  Check if busy with waiting.
                 \return \c true if waiting, \c false if not.
@@ -382,7 +398,7 @@ protected:
                 \note      Clears m_time_wait, records the timeout flag, removes this object from
                            m_sync_obj's wait list, nulls m_sync_obj, then calls m_task->Wake().
             */
-            void Wake(bool timeout)
+            void Wake(bool timeout) override
             {
                 STK_ASSERT(IsWaiting());
 
@@ -401,7 +417,7 @@ protected:
                 \note   Called by UpdateSyncObjects() each kernel tick.
                         WAIT_INFINITE waits never time out and always return \c true.
             */
-            bool Tick(Timeout elapsed_ticks)
+            bool Tick(Timeout elapsed_ticks) override
             {
                 if ((m_time_wait != WAIT_INFINITE) && !m_timeout)
                 {
@@ -460,6 +476,10 @@ protected:
 
             // bind user task
             m_user = user_task;
+
+            // initialize current weight to NO_WEIGHT for priority inheritance mechanism
+            if (TStrategy::PRIORITY_INHERITANCE_API)
+                SetCurrentWeight(NO_WEIGHT);
         }
 
         /*! \brief Reset this slot to the free (unbound) state, clearing all scheduling metadata.
@@ -587,7 +607,10 @@ protected:
         /*! \brief     Check if deadline missed.
             \note      Related to stk::KERNEL_HRT mode only.
         */
-        bool HrtIsDeadlineMissed(Timeout duration) const { return (duration > m_hrt[0].deadline); }
+        bool HrtIsDeadlineMissed(Timeout duration) const
+        {
+            return (duration > m_hrt[0].deadline);
+        }
 
         /*! \brief     Put the task into a sleeping state for the specified number of ticks.
             \param[in] ticks: Number of ticks to sleep. Must be > 0.
@@ -605,7 +628,7 @@ protected:
             // set state first as kernel checks it when task IsSleeping
             if (TStrategy::SLEEP_EVENT_API)
             {
-                if (m_time_sleep >= 0)
+                if (!IsSleeping())
                     m_state |= STATE_SLEEP_PENDING;
             }
 
@@ -629,7 +652,7 @@ protected:
         volatile Timeout  m_time_sleep; //!< Sleep countdown: negative while sleeping (absolute value = ticks remaining), zero when awake.
         SrtInfo           m_srt[STK_ALLOCATE_COUNT(TMode, KERNEL_HRT, 0, 1)];       //!< SRT metadata. Zero-size (no memory) in KERNEL_HRT mode.
         HrtInfo           m_hrt[STK_ALLOCATE_COUNT(TMode, KERNEL_HRT, 1, 0)];       //!< HRT metadata. Zero-size (no memory) in non-HRT mode.
-        int32_t           m_rt_weight[STK_ALLOCATE_COUNT(TStrategy::WEIGHT_API, 1, 1, 0)]; //!< Run-time weight for weighted-round-robin scheduling. Zero-size for unweighted strategies.
+        Weight            m_rt_weight[STK_ALLOCATE_COUNT(TStrategy::WEIGHT_API, 1, 1, 0)]; //!< Run-time weight for weighted-round-robin scheduling. Zero-size for unweighted strategies.
         WaitObject        m_wait_obj[STK_ALLOCATE_COUNT(TMode, KERNEL_SYNC, 1, 0)]; //!< Embedded wait object for synchronization. Zero-size (no memory) if KERNEL_SYNC is not set.
     };
 
@@ -640,22 +663,22 @@ protected:
         SysTick) and a typed pointer to the platform driver. Tasks access this object via
         IKernelService::GetInstance() which returns the singleton registered at Initialize().
     */
-    class KernelService : public IKernelService
+    class KernelService final : public IKernelService
     {
         friend class Kernel;
 
     public:
-        TId GetTid() const { return m_platform->GetTid(); }
+        TId GetTid() const override { return m_kernel->m_platform.GetTid(); }
 
-        Ticks GetTicks() const { return hw::ReadVolatile64(&m_ticks); }
+        Ticks GetTicks() const override { return hw::ReadVolatile64(&m_ticks); }
 
-        uint32_t GetTickResolution() const  { return m_platform->GetTickResolution(); }
+        uint32_t GetTickResolution() const override  { return m_kernel->m_platform.GetTickResolution(); }
 
-        Cycles GetSysTimerCount() const { return m_platform->GetSysTimerCount(); }
+        Cycles GetSysTimerCount() const override { return m_kernel->m_platform.GetSysTimerCount(); }
 
-        uint32_t GetSysTimerFrequency() const { return m_platform->GetSysTimerFrequency(); }
+        uint32_t GetSysTimerFrequency() const override { return m_kernel->m_platform.GetSysTimerFrequency(); }
 
-        __stk_attr_noinline void Delay(Timeout ticks)
+        void Delay(Timeout ticks) override
         {
             STK_ASSERT(!hw::IsInsideISR());
             STK_ASSERT(ticks >= 0);
@@ -670,14 +693,14 @@ protected:
             }
         }
 
-        __stk_attr_noinline void Sleep(Timeout ticks)
+        void Sleep(Timeout ticks) override
         {
             STK_ASSERT(!hw::IsInsideISR());
             STK_ASSERT(ticks >= 0);
 
             if (!IsHrtMode())
             {
-                m_platform->Sleep(ticks);
+                m_kernel->m_platform.Sleep(ticks);
             }
             else
             {
@@ -686,14 +709,14 @@ protected:
             }
         }
 
-        __stk_attr_noinline void SleepUntil(Ticks timestamp)
+        void SleepUntil(Ticks timestamp) override
         {
             STK_ASSERT(!hw::IsInsideISR());
             STK_ASSERT(timestamp >= 0);
 
             if (!IsHrtMode())
             {
-                m_platform->SleepUntil(timestamp);
+                m_kernel->m_platform.SleepUntil(timestamp);
             }
             else
             {
@@ -702,18 +725,18 @@ protected:
             }
         }
 
-        void SwitchToNext()
+        void SwitchToNext() override
         {
             STK_ASSERT(!hw::IsInsideISR());
 
-            m_platform->SwitchToNext();
+            m_kernel->m_platform.SwitchToNext();
         }
 
-        IWaitObject *Wait(ISyncObject *sobj, IMutex *mutex, Timeout ticks)
+        IWaitObject *Wait(ISyncObject *sobj, IMutex *mutex, Timeout ticks) override
         {
             if (IsSyncMode())
             {
-                return m_platform->Wait(sobj, mutex, ticks);
+                return m_kernel->m_platform.Wait(sobj, mutex, ticks);
             }
             else
             {
@@ -722,11 +745,11 @@ protected:
             }
         }
 
-        Timeout Suspend()
+        Timeout Suspend() override
         {
             if (IsTicklessMode())
             {
-                return m_platform->Suspend();
+                return m_kernel->m_platform.Suspend();
             }
             else
             {
@@ -735,11 +758,11 @@ protected:
             }
         }
 
-        void Resume(Timeout elapsed_ticks)
+        void Resume(Timeout elapsed_ticks) override
         {
             if (IsTicklessMode())
             {
-                return m_platform->Resume(elapsed_ticks);
+                return m_kernel->m_platform.Resume(elapsed_ticks);
             }
             else
             {
@@ -747,11 +770,23 @@ protected:
             }
         }
 
+        void InheritWeight(TId tid, Weight weight) override
+        {
+            if (TStrategy::PRIORITY_INHERITANCE_API)
+                m_kernel->OnInheritWeight(tid, weight);
+        }
+
+        void RestoreWeight(TId tid, ISyncObject *sobj) override
+        {
+            if (TStrategy::PRIORITY_INHERITANCE_API)
+                m_kernel->OnRestoreWeight(tid, sobj);
+        }
+
     private:
         /*! \brief Construct an uninitialized service instance (m_platform = null, m_ticks = 0).
             \note  Fully initialized by Initialize(). Private; constructed only as a member of Kernel.
         */
-        explicit KernelService() : m_platform(nullptr), m_ticks(0)
+        explicit KernelService() : m_kernel(nullptr), m_ticks(0)
         {}
 
         /*! \brief Destructor.
@@ -763,11 +798,12 @@ protected:
         /*! \brief     Initialize instance.
             \note      When call completes Singleton<IKernelService *> will start referencing this
                        instance (see g_KernelService).
+            \param[in] kernel: Kernel instance.
             \param[in] platform: IPlatform instance.
         */
-        void Initialize(IPlatform *platform)
+        void Initialize(Kernel *kernel)
         {
-            m_platform = static_cast<TPlatform *>(platform);
+            m_kernel = kernel;
         }
 
         /*! \brief     Increment counter by value.
@@ -779,8 +815,8 @@ protected:
             hw::WriteVolatile64(&m_ticks, m_ticks + advance);
         }
 
-        TPlatform     *m_platform; //!< Typed platform driver pointer, set at Initialize().
-        volatile Ticks m_ticks;    //!< Global tick counter. Written via hw::WriteVolatile64() by IncrementTick() (ISR context); read via hw::ReadVolatile64() by GetTicks() (task context) for a lock-free consistent 64-bit read on 32-bit CPUs.
+        Kernel        *m_kernel; //!< Pointer to the Kernel.
+        volatile Ticks m_ticks;  //!< Global tick counter. Written via hw::WriteVolatile64() by IncrementTick() (ISR context); read via hw::ReadVolatile64() by GetTicks() (task context) for a lock-free consistent 64-bit read on 32-bit CPUs.
     };
 
 public:
@@ -829,7 +865,7 @@ public:
                    QEMU does not have enough resolution on Windows to operate correctly at sub-millisecond resolution.
         \note      Kernel must be in \a STATE_INACTIVE state.
     */
-    __stk_attr_noinline void Initialize(uint32_t resolution_us = PERIODICITY_DEFAULT)
+    __stk_attr_noinline void Initialize(uint32_t resolution_us = PERIODICITY_DEFAULT) override
     {
         STK_ASSERT(resolution_us != 0);
         STK_ASSERT(resolution_us <= PERIODICITY_MAX);
@@ -840,7 +876,7 @@ public:
         m_fsm_state = FSM_STATE_NONE;
         m_request   = REQUEST_NONE;
 
-        m_service.Initialize(&m_platform);
+        m_service.Initialize(this);
 
         m_platform.Initialize(this, &m_service, resolution_us, (IsDynamicMode() ? &m_exit_trap[0].stack : nullptr));
 
@@ -856,7 +892,7 @@ public:
         \warning   Asserts if called in KERNEL_HRT mode (use the HRT overload instead),
                    if called after Start() without KERNEL_DYNAMIC, or if TASKS_MAX is exceeded.
     */
-    __stk_attr_noinline void AddTask(ITask *user_task)
+    __stk_attr_noinline void AddTask(ITask *user_task) override
     {
         if (!IsHrtMode())
         {
@@ -895,7 +931,8 @@ public:
         \note      Must be called before Start(). Dynamic (post-Start) HRT task addition is not supported.
         \warning   Asserts if called outside KERNEL_HRT mode (use the SRT overload instead) or after Start().
     */
-    __stk_attr_noinline void AddTask(ITask *user_task, Timeout periodicity_tc, Timeout deadline_tc, Timeout start_delay_tc)
+    __stk_attr_noinline void AddTask(ITask *user_task, Timeout periodicity_tc, Timeout deadline_tc,
+        Timeout start_delay_tc) override
     {
         if (IsHrtMode())
         {
@@ -919,7 +956,7 @@ public:
         \warning   KERNEL_DYNAMIC mode only. Asserts if called in KERNEL_STATIC or KERNEL_HRT mode,
                    or if called after Start().
     */
-    __stk_attr_noinline void RemoveTask(ITask *user_task)
+    __stk_attr_noinline void RemoveTask(ITask *user_task) override
     {
         if (IsDynamicMode())
         {
@@ -942,7 +979,7 @@ public:
         \warning   KERNEL_DYNAMIC mode only. Asserts if called in KERNEL_STATIC or KERNEL_HRT mode,
                    or if called after Start().
     */
-    __stk_attr_noinline void ScheduleTaskRemoval(ITask *user_task)
+    __stk_attr_noinline void ScheduleTaskRemoval(ITask *user_task) override
     {
         if (IsDynamicMode())
         {
@@ -968,7 +1005,7 @@ public:
         \note       hw::CriticalSection must not be active otherwise a deadlock will
                     happen if task is suspending self.
     */
-    void SuspendTask(ITask *user_task, bool &suspended)
+    void SuspendTask(ITask *user_task, bool &suspended) override
     {
         STK_ASSERT(user_task != nullptr);
 
@@ -1003,7 +1040,7 @@ public:
     /*! \brief     Resume task.
         \param[in] user_task: Pointer to the user task to resume.
     */
-    void ResumeTask(ITask *user_task)
+    void ResumeTask(ITask *user_task) override
     {
         STK_ASSERT(user_task != nullptr);
 
@@ -1017,12 +1054,34 @@ public:
             task->Wake();
     }
 
-     /*! \brief     Enumerate tasks.
+   /*! \brief     Enumerate kernel tasks.
+       \param[in,out] user_tasks: Pointer to the array for IKernelTask pointers.
+       \param[in] max_size: Max size of the provided array.
+       \return    Number of tasks in the array.
+   */
+   size_t EnumerateKernelTasks(IKernelTask **tasks, const size_t max_size) override
+   {
+       size_t count = 0U;
+
+       // avoid race with OnTick
+       hw::CriticalSection::ScopedLock cs_;
+
+       for (uint32_t i = 0U; i < Min(max_size, static_cast<size_t>(TASKS_MAX)); ++i)
+       {
+           KernelTask *task = &m_task_storage[i];
+           if (task->IsBusy())
+               tasks[count++] = task;
+       }
+
+       return count;
+   }
+
+    /*! \brief     Enumerate tasks.
         \param[in,out] user_tasks: Pointer to the array for ITask pointers.
         \param[in] max_size: Max size of the provided array.
         \return    Number of tasks in the array.
     */
-    size_t EnumerateTasks(ITask **user_tasks, const size_t max_size)
+    size_t EnumerateTasks(ITask **user_tasks, const size_t max_size) override
     {
         size_t count = 0U;
 
@@ -1047,7 +1106,7 @@ public:
         \warning   At least one task must have been added via AddTask() before calling Start().
                    Asserts if called before Initialize().
     */
-    __stk_attr_noinline void Start()
+    __stk_attr_noinline void Start() override
     {
         STK_ASSERT(IsInitialized());
 
@@ -1080,16 +1139,16 @@ public:
     /*! \brief  Get platform driver instance owned by this kernel.
         \return Pointer to the internal TPlatform cast to IPlatform*.
     */
-    IPlatform *GetPlatform() { return &m_platform; }
+    IPlatform *GetPlatform() override { return &m_platform; }
 
     /*! \brief  Get task-switching strategy instance owned by this kernel.
         \return Pointer to the internal TStrategy cast to ITaskSwitchStrategy*.
     */
-    ITaskSwitchStrategy *GetSwitchStrategy() { return &m_strategy; }
+    ITaskSwitchStrategy *GetSwitchStrategy() override { return &m_strategy; }
 
     /*! \brief  Get kernel state.
     */
-    EState GetState() const { return m_state; }
+    EState GetState() const override { return m_state; }
 
 protected:
     /*! \enum  EFsmState
@@ -1360,7 +1419,7 @@ protected:
         \note       If STK_SEGGER_SYSVIEW is enabled, emits a task-start trace event for the first task.
         \warning    At least one task must have been added via AddTask(); asserts if the strategy pool is empty.
     */
-    __stk_attr_noinline void OnStart(Stack *&active)
+    __stk_attr_noinline void OnStart(Stack *&active) override
     {
         STK_ASSERT(m_strategy.GetSize() != 0);
 
@@ -1427,7 +1486,7 @@ protected:
                 kernel back to STATE_READY so Start() may be called again.
         \note   Has no effect in KERNEL_STATIC mode (static kernels never stop).
     */
-    __stk_attr_noinline void OnStop()
+    __stk_attr_noinline void OnStop() override
     {
         if (IsDynamicMode())
         {
@@ -1458,7 +1517,7 @@ protected:
     #if STK_TICKLESS_IDLE
         , Timeout &ticks
     #endif
-    )
+    ) override
     {
     #if !STK_TICKLESS_IDLE
         // in non-tickless mode kernel is advancing strictly by 1 tick on every OnTick call
@@ -1481,12 +1540,12 @@ protected:
         return UpdateFsmState(idle, active);
     }
 
-    void OnTaskSwitch(Word caller_SP)
+    void OnTaskSwitch(Word caller_SP) override
     {
         OnTaskSleep(caller_SP, YIELD_TICKS);
     }
 
-    void OnTaskSleep(Word caller_SP, Timeout ticks)
+    void OnTaskSleep(Word caller_SP, Timeout ticks) override
     {
         KernelTask *task = FindTaskBySP(caller_SP);
         STK_ASSERT(task != nullptr);
@@ -1506,7 +1565,7 @@ protected:
         task->BusyWaitWhileSleeping();
     }
 
-    void OnTaskSleepUntil(Word caller_SP, Ticks timestamp)
+    void OnTaskSleepUntil(Word caller_SP, Ticks timestamp) override
     {
         STK_ASSERT(!IsHrtMode());
 
@@ -1527,7 +1586,7 @@ protected:
         task->BusyWaitWhileSleeping();
     }
 
-    void OnTaskExit(Stack *stack)
+    void OnTaskExit(Stack *stack) override
     {
         if (IsDynamicMode())
         {
@@ -1544,7 +1603,7 @@ protected:
         }
     }
 
-    IWaitObject *OnTaskWait(Word caller_SP, ISyncObject *sync_obj, IMutex *mutex, Timeout timeout)
+    IWaitObject *OnTaskWait(Word caller_SP, ISyncObject *sync_obj, IMutex *mutex, Timeout timeout) override
     {
         if (IsSyncMode())
         {
@@ -1584,7 +1643,7 @@ protected:
         }
     }
 
-    TId OnGetTid(Word caller_SP)
+    TId OnGetTid(Word caller_SP) override
     {
         KernelTask *task = FindTaskBySP(caller_SP);
         STK_ASSERT(task != nullptr);
@@ -1592,12 +1651,48 @@ protected:
         return task->GetTid();
     }
 
-    void OnSuspend(bool suspended)
+    void OnSuspend(bool suspended) override
     {
         if (suspended)
             m_state = ((m_state == STATE_RUNNING) ? STATE_SUSPENDED : m_state);
         else
             m_state = ((m_state == STATE_SUSPENDED) ? STATE_RUNNING : m_state);
+    }
+
+    void OnInheritWeight(TId tid, Weight weight)
+    {
+        STK_ASSERT(tid != TID_NONE);
+        STK_ASSERT(TStrategy::WEIGHT_API && TStrategy::PRIORITY_INHERITANCE_API);
+
+        if (weight != NO_WEIGHT)
+        {
+            KernelTask *task = FindTaskByUserTask(GetUserTaskFromTid(tid));
+            STK_ASSERT(task != nullptr);
+
+            Weight prev_weight = task->GetWeight();
+
+            if (prev_weight < weight)
+            {
+                task->SetCurrentWeight(weight);
+                m_strategy.OnTaskWeightChange(task, prev_weight);
+            }
+        }
+    }
+
+    void OnRestoreWeight(TId tid, ISyncObject *sobj)
+    {
+        STK_ASSERT(tid != TID_NONE);
+        STK_ASSERT(TStrategy::WEIGHT_API && TStrategy::PRIORITY_INHERITANCE_API);
+
+        KernelTask *task = FindTaskByUserTask(GetUserTaskFromTid(tid));
+        STK_ASSERT(task != nullptr);
+
+        Weight prev_weight = task->GetWeight();
+
+        // restore to original or boost from wait objects
+        task->SetCurrentWeight(sobj != nullptr ? sobj->FindWeightHigherThan(task->GetWeight()) : NO_WEIGHT);
+
+        m_strategy.OnTaskWeightChange(task, prev_weight);
     }
 
     /*! \brief     Update tasks (sleep, requests).
@@ -1666,7 +1761,7 @@ protected:
                 if (TStrategy::SLEEP_EVENT_API)
                 {
                     // notify strategy that task woke up
-                    if (task->m_time_sleep >= 0)
+                    if (!task->IsSleeping())
                         m_strategy.OnTaskWake(task);
                 }
             }
@@ -2048,10 +2143,14 @@ protected:
     STK_STATIC_ASSERT_N(KERNEL_MODE_HRT_ALONE, (((TMode & KERNEL_HRT) == 0U) ||
         ((((TMode & KERNEL_HRT) != 0U)) && (((TMode & KERNEL_STATIC) != 0U) || ((TMode & KERNEL_DYNAMIC) != 0U)))));
 
-    // if hit here: KERNEL_TICKLESS is incompatible with KERNEL_HRT. Tickless suppresses the timer,
+    // If hit here: KERNEL_TICKLESS is incompatible with KERNEL_HRT. Tickless suppresses the timer,
     // which destroys the precise periodicity HRT depends on.
     STK_STATIC_ASSERT_N(TICKLESS_HRT_CONFLICT,
         (((TMode & KERNEL_TICKLESS) == 0U) || ((TMode & KERNEL_HRT) == 0U)));
+
+    // If hit here: Strategy which supports Priority Inheritance API must also support Weight API.
+    STK_STATIC_ASSERT_N(KERNEL_MODE_MUST_BE_SET, (TStrategy::PRIORITY_INHERITANCE_API && TStrategy::WEIGHT_API) ||
+        !TStrategy::PRIORITY_INHERITANCE_API);
 
     /*! \typedef TaskStorageType
         \brief   KernelTask array type used as a storage for the KernelTask instances.

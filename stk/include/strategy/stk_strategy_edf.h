@@ -57,7 +57,7 @@ namespace stk {
            beyond the list membership, all scheduling decisions are deferred to GetNext().
     \see   ITaskSwitchStrategy, IKernelTask::GetHrtRelativeDeadline
 */
-class SwitchStrategyEDF : public ITaskSwitchStrategy
+class SwitchStrategyEDF final : public ITaskSwitchStrategy
 {
 public:
     /*! \enum  EConfig
@@ -65,9 +65,10 @@ public:
     */
     enum EConfig
     {
-        WEIGHT_API          = 0, //!< This strategy does not use per-task weights. Deadline tracking is handled by the kernel in KERNEL_HRT mode via GetHrtRelativeDeadline().
-        SLEEP_EVENT_API     = 1, //!< This strategy requires OnTaskSleep() / OnTaskWake() events to move tasks between the runnable and sleeping lists.
-        DEADLINE_MISSED_API = 0  //!< This strategy does not use OnTaskDeadlineMissed() events.
+        WEIGHT_API               = 0, //!< This strategy does not use per-task weights. Deadline tracking is handled by the kernel in KERNEL_HRT mode via GetHrtRelativeDeadline().
+        SLEEP_EVENT_API          = 1, //!< This strategy requires OnTaskSleep() / OnTaskWake() events to move tasks between the runnable and sleeping lists.
+        DEADLINE_MISSED_API      = 0, //!< This strategy does not use OnTaskDeadlineMissed() events.
+        PRIORITY_INHERITANCE_API = 0  //!< This strategy does not require Priority Inheritance and OnTaskPriorityChange() events.
     };
 
     /*! \brief Construct an empty strategy with no tasks.
@@ -89,7 +90,7 @@ public:
         \note      Insertion order determines tie-breaking: when two tasks share the same relative
                    deadline, the one added earlier (closer to the list head) wins.
     */
-    void AddTask(IKernelTask *task)
+    void AddTask(IKernelTask *task) override
     {
         STK_ASSERT(task != nullptr);
         STK_ASSERT(task->GetHead() == nullptr);
@@ -103,7 +104,7 @@ public:
         \note      Dispatch is by list membership check. No cursor or bitmap state is affected
                    because EDF maintains no per-task scheduling state outside list membership.
     */
-    void RemoveTask(IKernelTask *task)
+    void RemoveTask(IKernelTask *task) override
     {
         STK_ASSERT(task != nullptr);
         STK_ASSERT(GetSize() != 0U);
@@ -131,7 +132,7 @@ public:
         \note      This method is called once per kernel tick. On an n-task system it
                    performs n−1 comparisons and n \c GetHrtRelativeDeadline() calls per tick.
     */
-    IKernelTask *GetNext()
+    IKernelTask *GetNext() override
     {
         if (m_tasks.IsEmpty())
             return nullptr; // idle
@@ -156,7 +157,7 @@ public:
                    at kernel start to seed the initial context; EDF ordering begins with the
                    first GetNext() call.
     */
-    IKernelTask *GetFirst() const
+    IKernelTask *GetFirst() const override
     {
         STK_ASSERT(GetSize() != 0U);
 
@@ -169,7 +170,7 @@ public:
     /*! \brief  Get total number of tasks managed by this strategy.
         \return Sum of tasks in \c m_tasks (runnable) and \c m_sleep (sleeping).
     */
-    size_t GetSize() const
+    size_t GetSize() const override
     {
         return m_tasks.GetSize() + m_sleep.GetSize();
     }
@@ -180,7 +181,7 @@ public:
                    state is affected — EDF maintains no per-task cursor, so this is a
                    simpler operation than the equivalent in RR or FP strategies.
     */
-    void OnTaskSleep(IKernelTask *task)
+    void OnTaskSleep(IKernelTask *task) override
     {
         STK_ASSERT(task != nullptr);
         STK_ASSERT(task->IsSleeping());
@@ -198,7 +199,7 @@ public:
                    deadline urgency is determined naturally by GetHrtRelativeDeadline() on
                    the next GetNext() call.
     */
-    void OnTaskWake(IKernelTask *task)
+    void OnTaskWake(IKernelTask *task) override
     {
         STK_ASSERT(task != nullptr);
         STK_ASSERT(!task->IsSleeping());
@@ -206,16 +207,6 @@ public:
 
         m_sleep.Unlink(task);
         m_tasks.LinkBack(task);
-    }
-
-    /*! \brief     Not supported, asserts unconditionally.
-        \note      This strategy uses DEADLINE_MISSED_API = 0. See OnTaskDeadlineMissed() for rationale.
-    */
-    bool OnTaskDeadlineMissed(IKernelTask */*task*/)
-    {
-        // Budget Overrun API unsupported
-        STK_ASSERT(false);
-        return false;
     }
 
 protected:

@@ -55,7 +55,7 @@ namespace stk {
     \see   SwitchStrategyFP32, ITaskSwitchStrategy, ITask::GetWeight
 */
 template <uint8_t MAX_PRIORITIES>
-class SwitchStrategyFixedPriority : public ITaskSwitchStrategy
+class SwitchStrategyFixedPriority final : public ITaskSwitchStrategy
 {
 public:
     /*! \enum  EConfig
@@ -63,9 +63,10 @@ public:
     */
     enum EConfig
     {
-        WEIGHT_API          = 1, //!< This strategy interprets GetWeight() as the task's fixed priority level (0 .. MAX_PRIORITIES - 1). Dynamic weight functions are not used.
-        SLEEP_EVENT_API     = 1, //!< This strategy requires OnTaskSleep() / OnTaskWake() events to maintain per-priority runnable lists and keep \c m_ready_bitmap accurate.
-        DEADLINE_MISSED_API = 0  //!< This strategy does not use OnTaskDeadlineMissed() events.
+        WEIGHT_API               = 1, //!< This strategy interprets GetWeight() as the task's fixed priority level (0 .. MAX_PRIORITIES - 1). Dynamic weight functions are not used.
+        SLEEP_EVENT_API          = 1, //!< This strategy requires OnTaskSleep() / OnTaskWake() events to maintain per-priority runnable lists and keep \c m_ready_bitmap accurate.
+        DEADLINE_MISSED_API      = 0, //!< This strategy does not use OnTaskDeadlineMissed() events.
+        PRIORITY_INHERITANCE_API = 1  //!< This strategy expects OnTaskPriorityChange() events to support priority inheritance requests.
     };
 
     /*! \enum  EPriority
@@ -108,7 +109,7 @@ public:
                    the tail before insertion, it is advanced to the new tail so GetNext() will
                    include the new task in the very next rotation at this priority level.
     */
-    void AddTask(IKernelTask *task)
+    void AddTask(IKernelTask *task) override
     {
         STK_ASSERT(task != nullptr);
         STK_ASSERT(task->GetHead() == nullptr);
@@ -133,7 +134,7 @@ public:
                    RemoveActive() which also updates the cursor and clears the bitmap bit
                    if the priority level becomes empty.
     */
-    void RemoveTask(IKernelTask *task)
+    void RemoveTask(IKernelTask *task) override
     {
         STK_ASSERT(task != nullptr);
         STK_ASSERT(GetSize() != 0U);
@@ -142,7 +143,7 @@ public:
         if (task->GetHead() == &m_sleep)
             m_sleep.Unlink(task);
         else
-            RemoveActive(task);
+            RemoveActive(task, GetTaskPriority(task));
     }
 
     /*! \brief     Select and return the next task to run.
@@ -154,7 +155,7 @@ public:
         \note      Tasks at a lower priority are never returned while any higher-priority task
                    has its bitmap bit set — preemption is enforced entirely by the bitmap lookup.
     */
-    IKernelTask *GetNext()
+    IKernelTask *GetNext() override
     {
         if (m_ready_bitmap == 0U)
             return nullptr; // idle
@@ -175,7 +176,7 @@ public:
                    with GetNext(). The sleep fallback allows the kernel to identify any task even
                    when all are currently sleeping.
     */
-    IKernelTask *GetFirst() const
+    IKernelTask *GetFirst() const override
     {
         STK_ASSERT(GetSize() != 0U);
 
@@ -191,7 +192,7 @@ public:
         \note   O(MAX_PRIORITIES): iterates all priority levels to accumulate the count.
                 Unlike the RR and SWRR strategies this is not O(1).
     */
-    size_t GetSize() const
+    size_t GetSize() const override
     {
         size_t total = m_sleep.GetSize();
         for (Priority i = 0U; i < MAX_PRIORITIES; i += 1U)
@@ -206,13 +207,13 @@ public:
                    updates the per-level cursor, and clears bit \c prio in \c m_ready_bitmap if this
                    was the last runnable task at that level. Then appends the task to \c m_sleep.
     */
-    void OnTaskSleep(IKernelTask *task)
+    void OnTaskSleep(IKernelTask *task) override
     {
         STK_ASSERT(task != nullptr);
         STK_ASSERT(task->IsSleeping());
         STK_ASSERT(task->GetHead() == &m_tasks[GetTaskPriority(task)]);
 
-        RemoveActive(task);
+        RemoveActive(task, GetTaskPriority(task));
         m_sleep.LinkBack(task);
     }
 
@@ -225,7 +226,7 @@ public:
                    the round-robin rotation at that level. Its preemption guarantee is provided
                    solely by its fixed priority relative to other runnable levels.
     */
-    void OnTaskWake(IKernelTask *task)
+    void OnTaskWake(IKernelTask *task) override
     {
         STK_ASSERT(task != nullptr);
         STK_ASSERT(!task->IsSleeping());
@@ -235,14 +236,32 @@ public:
         AddActive(task);
     }
 
-    /*! \brief     Not supported, asserts unconditionally.
-        \note      This strategy uses DEADLINE_MISSED_API = 0. See OnTaskDeadlineMissed() for rationale.
+    /*! \brief     Move a runnable task to a new priority level after its weight changed.
+        \param[in] task: Task whose weight was just updated.
+        \param[in] old_weight: Priority level the task occupied before the change.
+        \note      Removes from the old-priority list (using old_weight to locate it),
+                   then re-inserts via AddActive() which reads the new GetWeight().
+                   m_ready_bitmap is updated by both RemoveActive and AddActive.
+        \note      No-op if old and new priority are identical.
+        \note      Called from within a hw::CriticalSection.
     */
-    bool OnTaskDeadlineMissed(IKernelTask */*task*/)
+    void OnTaskWeightChange(IKernelTask *task, Weight old_weight) override
     {
-        // Budget Overrun API unsupported
-        STK_ASSERT(false);
-        return false;
+        const Priority old_prio = GetTaskPriorityFromWeight(old_weight);
+
+        STK_ASSERT(GetTaskPriority(task) < MAX_PRIORITIES);
+        STK_ASSERT(old_prio < MAX_PRIORITIES);
+
+        if (task->GetHead() != &m_sleep)
+        {
+            STK_ASSERT(task->GetHead() == &m_tasks[old_prio]);
+
+            // remove from the old priority list
+            RemoveActive(task, old_prio);
+
+            // re-add to the current priority list
+            AddActive(task);
+        }
     }
 
 protected:
@@ -275,6 +294,7 @@ protected:
 
     /*! \brief     Remove a task from its priority level's runnable list and update the bitmap/cursor.
         \param[in] task: Runnable task to remove.
+        \param[in] prio: Priority of the task with which it was registered with AddActive.
         \note      Cursor update algorithm (same as SwitchStrategyRoundRobin::RemoveActive, applied
                    per priority level):
                    - Capture \c next = task->GetNext() \e before unlinking.
@@ -285,9 +305,8 @@ protected:
                      and clear bit \c prio in \c m_ready_bitmap. GetNext() will then select the
                      next highest set bit, falling through to a lower priority level.
     */
-    void RemoveActive(IKernelTask *task)
+    void RemoveActive(IKernelTask *task, const Priority prio)
     {
-        const Priority prio = GetTaskPriority(task);
         IKernelTask *next = (*task->GetNext());
 
         m_tasks[prio].Unlink(task);
@@ -306,13 +325,22 @@ protected:
         }
     }
 
-    /*! \brief     Get priority from the task..
+    /*! \brief     Get priority from the task.
+        \param[in] weight: Weight of the task read from \c GetWeight().
+        \return    Weight value.
+    */
+    static __stk_forceinline Priority GetTaskPriorityFromWeight(int32_t weight)
+    {
+        return static_cast<Priority>(weight);
+    }
+
+    /*! \brief     Get priority from the task.
         \param[in] task: Pointer to the task. Priority is read from \c GetWeight().
         \return    Priority level.
     */
     static __stk_forceinline Priority GetTaskPriority(IKernelTask *task)
     {
-        return static_cast<Priority>(task->GetWeight());
+        return GetTaskPriorityFromWeight(task->GetWeight());
     }
 
     /*! \brief     Find the index of the highest set bit in \a bitmap.
@@ -327,12 +355,12 @@ protected:
     static __stk_forceinline Priority GetHighestReadyPriority(uint32_t bitmap)
     {
     #if defined(__GNUC__)
-        return static_cast<Priority>(31U - __builtin_clz(bitmap));
+        return GetTaskPriorityFromWeight(31U - __builtin_clz(bitmap));
     #else
         for (int8_t i = 31; i >= 0; --i)
         {
             if (bitmap & (1U << i))
-                return static_cast<Priority>(i);
+                return GetTaskPriorityFromWeight(i);
         }
         return 0;
     #endif

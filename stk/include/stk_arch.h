@@ -91,7 +91,7 @@ namespace hw {
     \see       WordToPtr
 */
 template <typename T>
-__stk_forceinline Word PtrToWord(T *ptr) noexcept
+static constexpr Word PtrToWord(T *ptr) noexcept
 {
     STK_STATIC_ASSERT(sizeof(Word) == sizeof(T *));
     return reinterpret_cast<Word>(ptr);
@@ -108,7 +108,7 @@ __stk_forceinline Word PtrToWord(T *ptr) noexcept
     \see       PtrToWord
 */
 template <typename T>
-__stk_forceinline T *WordToPtr(Word value) noexcept
+static constexpr T *WordToPtr(Word value) noexcept
 {
     STK_STATIC_ASSERT(sizeof(Word) == sizeof(T *));
     return reinterpret_cast<T *>(value);
@@ -463,36 +463,17 @@ struct HiResClock
 
 } // namespace hw
 
-//! Implementation of ISyncObject::Tick, see \a ISyncObject. Placed here as it depends on hw namespace.
-inline bool ISyncObject::Tick(Timeout elapsed_ticks)
-{
-    // note: ScopedCriticalSection usage
-    //
-    // Single-core: no critical section needed - Tick() runs inside the
-    // SysTick ISR which already executes with interrupts disabled, making
-    // re-entrancy impossible on the local core.
-    //
-    // Multi-core: critical section is required because the tick handler on
-    // each core may call Tick() concurrently for the same Semaphore instance,
-    // and ISyncObject::Tick() is not re-entrant.
-#if (STK_ARCH_CPU_COUNT > 1)
-    hw::CriticalSection::ScopedLock cs_;
-#endif
+/*! \brief  Get task identifier from ITask instance.
+    \return TId derived from the bound ITask pointer address (unique per task instance).
+    \see    GetUserTaskFromTid
+*/
+static constexpr TId GetTidFromUserTask(const ITask *task) noexcept { return hw::PtrToWord(task); }
 
-    IWaitObject *itr = static_cast<IWaitObject *>(m_wait_list.GetFirst());
-
-    while (itr != nullptr)
-    {
-        IWaitObject *next = static_cast<IWaitObject *>(itr->GetNext());
-
-        if (!itr->Tick(elapsed_ticks))
-            itr->Wake(true);
-
-        itr = next;
-    }
-
-    return !m_wait_list.IsEmpty();
-}
+/*! \brief  Get task instance from its identifier.
+    \return ITask instance.
+    \see    GetTidFromUserTask
+*/
+static constexpr ITask *GetUserTaskFromTid(TId task_id) noexcept { return hw::WordToPtr<ITask>(task_id); }
 
 } // namespace stk
 

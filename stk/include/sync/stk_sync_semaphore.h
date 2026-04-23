@@ -52,7 +52,7 @@ namespace sync {
     \see  ISyncObject, IWaitObject, IKernelService::Wait
     \note Only available when kernel is compiled with \a KERNEL_SYNC mode enabled.
 */
-class Semaphore : public ITraceable, private ISyncObject
+class Semaphore final : public ITraceable, private ISyncObject
 {
 public:
     /*! \brief     Max count supported.

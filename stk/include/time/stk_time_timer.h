@@ -332,13 +332,12 @@ private:
         void OnDeadlineMissed(uint32_t)   override {}
         void OnExit()                     override {}
         int32_t GetWeight()         const override { return m_weight; }
-        TId GetId()                 const override { return hw::PtrToWord(this); }
         const char *GetTraceName()  const override { return nullptr; }
 
         // IStackMemory
         Word *GetStack()            const override { return m_stack; }
         size_t GetStackSize()       const override { return m_stack_size; }
-        size_t GetStackSizeBytes()  const override { return m_stack_size * sizeof(Word); }
+        size_t GetStackSizeBytes()  const override { return (m_stack_size * sizeof(Word)); }
 
         /*! \brief     Bind this task to a host, stack buffer, access mode, and entry function.
             \param[in] host: TimerHost instance this task belongs to.
@@ -355,7 +354,7 @@ private:
             m_stack      = stack;
             m_stack_size = stack_size;
             m_mode       = mode;
-            m_weight     = 1;
+            m_weight     = DEFAULT_WEIGHT;
         }
 
         /*! \brief     Override the scheduling weight assigned by Initialize().

@@ -371,12 +371,6 @@ void stk_task_set_weight(stk_task_t *task, uint32_t weight);
 */
 void stk_task_set_priority(stk_task_t *task, uint8_t priority);
 
-/*! \brief     Assign application-defined task ID (for tracing/debugging).
-    \param[in] task: Task handle.
-    \param[in] tid: Arbitrary 32-bit task identifier.
-*/
-void stk_task_set_id(stk_task_t *task, uint32_t tid);
-
 /*! \brief     Assign human-readable task name (for tracing/debugging).
     \param[in] task: Task handle.
     \param[in] tname: Null-terminated string (may be NULL).

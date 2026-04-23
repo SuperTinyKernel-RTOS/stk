@@ -9,20 +9,15 @@
 
 #include <cstddef> // for std::size_t
 
-#include <stk_config.h>
 #include <stk.h>
 #include <sync/stk_sync.h>
+#include <memory/stk_memory.h>
 
 #include "stk_c.h"
 
 using namespace stk;
 
 #define STK_C_TASKS_MAX (STK_C_KERNEL_MAX_TASKS)
-
-#ifndef _NEW
-inline void *operator new(std::size_t, void *ptr) noexcept { return ptr; }
-inline void operator delete(void *, void *) noexcept { /* nothing for placement delete */ }
-#endif
 
 static void FreeTask(const stk_task_t *task);
 
@@ -36,7 +31,6 @@ public:
     EAccessMode GetAccessMode() const override { return m_mode; }
     void OnDeadlineMissed(uint32_t duration) override { (void)duration; }
     int32_t GetWeight() const override { return m_weight; }
-    stk_tid_t GetId() const override { return m_tid; }
     const char *GetTraceName() const override { return m_tname; }
 
     // IStackMemory
@@ -59,7 +53,6 @@ public:
     }
 
     void SetWeight(int32_t weight) { m_weight = weight; }
-    void SetId(stk_tid_t tid) { m_tid = tid; }
     void SetName(const char *tname) { m_tname = tname; }
 
 private:
@@ -75,7 +68,6 @@ private:
     size_t           m_stack_size;
     EAccessMode      m_mode;
     int32_t          m_weight;
-    stk_tid_t        m_tid;
     const char      *m_tname;
 };
 
@@ -357,13 +349,6 @@ void stk_task_set_priority(stk_task_t *task, uint8_t priority)
     STK_ASSERT(priority <= 31);
 
     stk_task_set_weight(task, priority);
-}
-
-void stk_task_set_id(stk_task_t *task, uint32_t tid)
-{
-    STK_ASSERT(task != nullptr);
-
-    task->handle.SetId(tid);
 }
 
 void stk_task_set_name(stk_task_t *task, const char *tname)

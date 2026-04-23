@@ -9,8 +9,9 @@
 
 #include <cstddef> // for std::size_t
 
-#include <stk_config.h>
 #include <stk.h>
+#include <memory/stk_memory.h>
+
 #include "stk_c.h"
 #include "stk_c_time.h"
 
@@ -24,11 +25,6 @@
 #define STK_TIMER_HANDLER_STACK_SIZE (STK_C_TIMER_HANDLER_STACK_SIZE)
 #include <time/stk_time_timer.h>
 #include <time/stk_time_util.h>
-
-#ifndef _NEW
-inline void *operator new(std::size_t, void *ptr) noexcept { return ptr; }
-inline void operator delete(void *, void *) noexcept { /* nothing for placement delete */ }
-#endif
 
 using namespace stk;
 using namespace stk::time;
