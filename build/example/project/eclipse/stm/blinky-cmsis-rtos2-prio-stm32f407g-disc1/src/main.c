@@ -48,7 +48,9 @@
 #include "RTE_Components.h"     // CMSIS_device_header definition, Example driver include
 #include CMSIS_device_header    // STK config
 
-#define FIX_PRIORITY_INHERITANCE_DEADLOCK 0
+// when 1 the RED led will be periodically blinking because MidPrioThread will cooperate
+// and periodically release time to LowPrioThread when MidPrioThread is sleeping
+#define FIX_COOPERATIVE_BEHAVIOR 0
 
 /* --------------------------------------------------------------------------
  *  Mutex
@@ -143,7 +145,7 @@ void MidPrioThread (void *argument) {
      * but this is NOT a blocking wait on a mutex/semaphore/flag – MidPrio
      * will always re-schedule before LowPrio (absent priority inheritance).
      */
-#if FIX_PRIORITY_INHERITANCE_DEADLOCK
+#if FIX_COOPERATIVE_BEHAVIOR
     osThreadYield();
 #endif
   }

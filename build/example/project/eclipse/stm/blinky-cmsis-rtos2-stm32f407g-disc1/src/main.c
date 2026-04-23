@@ -45,7 +45,7 @@ struct phases_t {
  *      Switch LED on
  *---------------------------------------------------------------------------*/
 void Switch_On (unsigned char led) {
-  printf("LED On:  #%d\n", led);
+  //printf("LED On:  #%d\n", led);
   Led_Set(led, true);
 }
 
@@ -53,7 +53,7 @@ void Switch_On (unsigned char led) {
  *      Switch LED off
  *---------------------------------------------------------------------------*/
 void Switch_Off (unsigned char led) {
-  printf("LED Off: #%d\n", led);
+  //printf("LED Off: #%d\n", led);
   Led_Set(led, false);
 }
 
@@ -152,7 +152,7 @@ void app_main (void */*argument*/) {
   osDelay(osWaitForever);
 }
 
-int main (void) {
+int main (int, char*[]) {
 
   // System Initialization
   SystemCoreClockUpdate();

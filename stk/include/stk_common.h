@@ -1084,7 +1084,15 @@ public:
     */
     virtual void ResumeTask(ITask *user_task) = 0;
 
-    /*! \brief     Enumerate tasks.
+    /*! \brief     Enumerate kernel tasks.
+        \param[in,out] user_tasks: Pointer to the array for IKernelTask pointers.
+        \param[in] max_size: Max size of the provided array.
+        \return    Number of tasks in the array.
+        \warning   ISR-safe.
+    */
+    virtual size_t EnumerateKernelTasks(IKernelTask **tasks, size_t max_size) = 0;
+
+    /*! \brief     Enumerate user tasks.
         \param[in,out] user_tasks: Pointer to the array for ITask pointers.
         \param[in] max_size: Max size of the provided array.
         \return    Number of tasks in the array.

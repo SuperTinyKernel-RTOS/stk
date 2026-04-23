@@ -8,7 +8,6 @@
  */
 
 #include <cstddef> // for std::size_t
-#include <cstdlib> // for malloc, free
 
 #include <stk_config.h>
 #include <stk.h>
@@ -26,15 +25,12 @@ template <typename T> static constexpr size_t StkGetWordCountForType()
     return ((sizeof(T) + sizeof(stk::Word) - 1) / sizeof(stk::Word));
 }
 
-// Private memory allocators.
-void *stk::memory::MemoryAllocator::Allocate(size_t size)
-{
-    return malloc(size);
-}
-void stk::memory::MemoryAllocator::Free(void *ptr)
-{
-    free(ptr);
-}
+// Private memory allocators (we define malloc, free here to overcome absence of declaration in
+// case of -ffreestanding compiler flag).
+extern "C" void *malloc(size_t size);
+extern "C" void free(void *ptr);
+void *stk::memory::MemoryAllocator::Allocate(size_t size) { return malloc(size); }
+void stk::memory::MemoryAllocator::Free(void *ptr) { free(ptr); }
 
 // ---------------------------------------------------------------------------
 // stk_blockpool_t — wraps a BlockMemoryPool instance

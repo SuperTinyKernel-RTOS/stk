@@ -62,6 +62,16 @@ TEST(Basic, MinMax)
     }
 }
 
+TEST(Basic, ISwitchStrategyStub)
+{
+    SwitchStrategyRR ss;
+
+    // these are just stubs for interface noop functions to achieve 100% coverage, providing nullptr
+    // for ITasks should be noop too
+    ss.OnTaskDeadlineMissed(nullptr);
+    ss.OnTaskWeightChange(nullptr, NO_WEIGHT);
+}
+
 // ============================================================================ //
 // ============================= UserTask ===================================== //
 // ============================================================================ //
@@ -134,8 +144,14 @@ TEST(UserTask, GetIdAndName)
     TaskMock<ACCESS_USER> task;
     TaskMockW<1, ACCESS_USER> taskw;
 
-    CHECK_EQUAL((Word)&task, task.GetId());
-    CHECK_EQUAL((Word)&taskw, taskw.GetId());
+    CHECK_EQUAL((TId)&task, task.GetId());
+    CHECK_EQUAL((TId)&taskw, taskw.GetId());
+
+    CHECK_EQUAL((TId)&task, stk::GetTidFromUserTask(&task));
+    CHECK_EQUAL((TId)&taskw, stk::GetTidFromUserTask(&taskw));
+
+    CHECK_EQUAL(&task, stk::GetUserTaskFromTid(stk::GetTidFromUserTask(&task)));
+    CHECK_EQUAL(&taskw, stk::GetUserTaskFromTid(stk::GetTidFromUserTask(&taskw)));
 
     // expect NULL name by default
     CHECK_EQUAL((const char *)NULL, task.GetTraceName());

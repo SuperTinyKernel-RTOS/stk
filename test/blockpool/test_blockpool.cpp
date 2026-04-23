@@ -37,8 +37,8 @@ STK_TEST_DECL_ASSERT;
 
 // Private memory allocators (we define malloc, free here to overcome absence of declaration in
 // case of -ffreestanding compiler flag).
-extern "C" void* malloc(size_t size);
-extern "C" void free(void* ptr);
+extern "C" void *malloc(size_t size);
+extern "C" void free(void *ptr);
 void *stk::memory::MemoryAllocator::Allocate(size_t size) { return malloc(size); }
 void stk::memory::MemoryAllocator::Free(void *ptr) { free(ptr); }
 

@@ -1054,7 +1054,29 @@ public:
             task->Wake();
     }
 
-     /*! \brief     Enumerate tasks.
+   /*! \brief     Enumerate kernel tasks.
+       \param[in,out] user_tasks: Pointer to the array for IKernelTask pointers.
+       \param[in] max_size: Max size of the provided array.
+       \return    Number of tasks in the array.
+   */
+   size_t EnumerateKernelTasks(IKernelTask **tasks, const size_t max_size) override
+   {
+       size_t count = 0U;
+
+       // avoid race with OnTick
+       hw::CriticalSection::ScopedLock cs_;
+
+       for (uint32_t i = 0U; i < Min(max_size, static_cast<size_t>(TASKS_MAX)); ++i)
+       {
+           KernelTask *task = &m_task_storage[i];
+           if (task->IsBusy())
+               tasks[count++] = task;
+       }
+
+       return count;
+   }
+
+    /*! \brief     Enumerate tasks.
         \param[in,out] user_tasks: Pointer to the array for ITask pointers.
         \param[in] max_size: Max size of the provided array.
         \return    Number of tasks in the array.
