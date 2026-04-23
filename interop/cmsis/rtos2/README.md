@@ -33,12 +33,12 @@ See reference [CMSIS-RTOS2 example](https://github.com/SuperTinyKernel-RTOS/stk/
 
 ## Known Limitations
 
-| Area                                                   | Behaviour                                            |
-|--------------------------------------------------------|------------------------------------------------------|
-| Priority inheritance (`osMutexPrioInherit`)            | Ignored.                                             |
-| Robust mutex (`osMutexRobust`)                         | Ignored.                                             |
-| Message priority (`osMessageQueuePut` `msg_prio`)      | Ignored. STK queues are FIFO with no priority lanes. |
-| SMP affinity (`osThreadSetAffinityMask`)               | Ignored. STK uses a per-core AMP model.              |
+| Area                                              | Behaviour                                                                                    |
+|---------------------------------------------------|----------------------------------------------------------------------------------------------|
+| Priority inheritance (`osMutexPrioInherit`)       | Ignored. STK supports it automatically for `SwitchStrategyFixedPriority/SwitchStrategyFP32`. |
+| Robust mutex (`osMutexRobust`)                    | Ignored as unsuported. Will assert in Debug build as unsafe coding practice.                 |
+| Message priority (`osMessageQueuePut` `msg_prio`) | Ignored. STK queues are FIFO with no priority lanes.                                         |
+| SMP affinity (`osThreadSetAffinityMask`)          | Ignored. STK uses a per-core AMP model.                                                      |
 
 ## Quick Integration
 

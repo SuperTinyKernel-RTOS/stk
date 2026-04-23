@@ -41,9 +41,9 @@
  *     semantics (Put/Get with configurable timeouts, ISR-safe TryPut/TryGet).
  *
  * Limitations / deviations from the specification:
- *   - Priority inheritance (osMutexPrioInherit) and robust mutex
- *     (osMutexRobust) attributes are silently ignored; STK Mutex is always
- *     recursive (osMutexRecursive is therefore always effective).
+ *   - Priority inheritance (osMutexPrioInherit): ignored, always supported.
+ *   - Robust mutex (osMutexRobust): will assert as unsafe code.
+ *   - Recursive mutex (osMutexRecursive): ignored, always recursive by default.
  */
 
 #include "stk.h"
@@ -1249,11 +1249,15 @@ osMutexId_t osMutexNew(const osMutexAttr_t *attr)
     if (IsIrqContext())
         return nullptr;
 
-    // osMutexPrioInherit / osMutexRobust: accepted but silently ignored.
-    // osMutexRecursive: STK Mutex is always recursive.
+    // osMutexPrioInherit: ignored, supported by default.
+    // osMutexRecursive: ignored, sync::Mutex is always recursive.
+    // osMutexRobust: will assert as unsafe code.
     const char *name   = (attr != nullptr ? attr->name    : nullptr);
     void       *cb_mem = (attr != nullptr ? attr->cb_mem  : nullptr);
     uint32_t    cb_sz  = (attr != nullptr ? attr->cb_size : 0U);
+    bool        robust = (attr != nullptr) && (attr->attr_bits & osMutexRobust);
+
+    STK_ASSERT(!robust);
 
     StkMutex *m = PlacementNewOrHeap<StkMutex>(cb_mem, cb_sz, name);
     return static_cast<osMutexId_t>(m);
