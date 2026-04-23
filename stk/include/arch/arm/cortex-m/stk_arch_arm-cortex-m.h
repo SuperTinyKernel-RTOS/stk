@@ -39,7 +39,7 @@ public:
     uint32_t GetSysTimerFrequency() const;
     void SwitchToNext();
     void Sleep(Timeout ticks);
-    void SleepUntil(Ticks timestamp);
+    bool SleepUntil(Ticks timestamp);
     IWaitObject *Wait(ISyncObject *sync_obj, IMutex *mutex, Timeout timeout);
     void ProcessTick();
     void ProcessHardFault();

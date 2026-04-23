@@ -1774,9 +1774,9 @@ void PlatformArmCortexM::Sleep(Timeout ticks)
     GetContext().m_handler->OnTaskSleep(HW_GetCallerSP(), ticks);
 }
 
-void PlatformArmCortexM::SleepUntil(Ticks timestamp)
+bool PlatformArmCortexM::SleepUntil(Ticks timestamp)
 {
-    GetContext().m_handler->OnTaskSleepUntil(HW_GetCallerSP(), timestamp);
+    return GetContext().m_handler->OnTaskSleepUntil(HW_GetCallerSP(), timestamp);
 }
 
 IWaitObject *PlatformArmCortexM::Wait(ISyncObject *sync_obj, IMutex *mutex, Timeout timeout)

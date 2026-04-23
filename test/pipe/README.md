@@ -1,6 +1,6 @@
 # Pipe Test Suite
 
-Test suite for `stk::sync::Pipe`.  
+Test suite for `stk::sync::Pipe` and `stk::sync::PipeT`.  
 Source: `test/pipe/test_pipe.cpp`
 
 ---
@@ -11,80 +11,117 @@ Source: `test/pipe/test_pipe.cpp`
 #include <sync/stk_sync_pipe.h>
 ```
 
-`Pipe<T, N>` is a thread-safe FIFO ring-buffer for inter-task data transfer. It holds
-up to `N` elements of type `T` and implements **blocking** semantics on both ends:
+### `stk::sync::PipeT<T, N>`
 
-- `Write()` blocks if the pipe is full until a consumer frees a slot or the timeout
-  expires.
-- `Read()` blocks if the pipe is empty until a producer writes data or the timeout
-  expires.
-
-Internally `Pipe` owns two `ConditionVariable` instances (`m_cv_empty`, `m_cv_full`)
-plus the `Mutex` embedded in each `ConditionVariable`. It does not expose those
-primitives directly; all synchronization is encapsulated.
-
-Requires kernel mode: `KERNEL_DYNAMIC | KERNEL_SYNC`.
+Type-safe, compile-time-sized FIFO ring-buffer with internal storage. Holds up to `N`
+elements of type `T`. Direct typed assignment — no `memcpy` overhead for scalar types.
 
 ```cpp
-// Construction
-stk::sync::Pipe<int32_t, 8>  g_Pipe;           // capacity 8 int32_t elements
-stk::sync::Pipe<MyStruct, 4> g_StructPipe;     // capacity 4 struct elements
+stk::sync::PipeT<int32_t, 8>  g_Pipe;       // capacity 8 int32_t elements
+stk::sync::PipeT<MyStruct, 4> g_StructPipe; // capacity 4 struct elements
 ```
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `Write` | `bool Write(const T &data, Timeout timeout = WAIT_INFINITE)` | Copies one element into the FIFO. Blocks if full until space is available or timeout expires. Returns `true` if written, `false` on timeout. ISR-unsafe. |
-| `WriteBulk` | `size_t WriteBulk(const T *src, size_t count, Timeout timeout = WAIT_INFINITE)` | Copies `count` elements from `src`. Blocks until all elements are written or timeout occurs. Returns number of elements actually written (equals `count` unless timeout occurred). ISR-unsafe. |
-| `Read` | `bool Read(T &data, Timeout timeout = WAIT_INFINITE)` | Removes one element from the FIFO into `data`. Blocks if empty until data is available or timeout expires. Returns `true` if read, `false` on timeout. ISR-unsafe. |
-| `ReadBulk` | `size_t ReadBulk(T *dst, size_t count, Timeout timeout = WAIT_INFINITE)` | Removes `count` elements into `dst`. Blocks until all elements are read or timeout occurs. Returns number of elements actually read (equals `count` unless timeout occurred). ISR-unsafe. |
-| `GetSize` | `size_t GetSize() const` | Returns the current number of elements in the pipe. Point-in-time snapshot — may change immediately if another task is active. |
-| `IsEmpty` | `bool IsEmpty() const` | Returns `true` if the pipe currently holds no elements. Point-in-time snapshot. |
+| `Write` | `bool Write(const T &data, Timeout timeout = WAIT_INFINITE)` | Copies one element into the FIFO. Blocks if full. Returns `true` if written, `false` on timeout. ISR-unsafe. |
+| `TryWrite` | `bool TryWrite(const T &data)` | Non-blocking `Write`. Returns `false` instantly if full. ISR-safe. |
+| `WriteBulk` | `size_t WriteBulk(const T *src, size_t count, Timeout timeout = WAIT_INFINITE)` | Copies `count` elements. Blocks until all written or timeout. Returns elements written. ISR-unsafe. |
+| `Read` | `bool Read(T &data, Timeout timeout = WAIT_INFINITE)` | Removes one element. Blocks if empty. Returns `true` if read, `false` on timeout. ISR-unsafe. |
+| `TryRead` | `bool TryRead(T &data)` | Non-blocking `Read`. Returns `false` instantly if empty. ISR-safe. |
+| `ReadBulk` | `size_t ReadBulk(T *dst, size_t count, Timeout timeout = WAIT_INFINITE)` | Removes `count` elements. Blocks until all read or timeout. Returns elements read. ISR-unsafe. |
+| `GetCount` | `size_t GetCount() const` | Current number of elements. Point-in-time snapshot. |
+| `IsEmpty` | `bool IsEmpty() const` | `true` if pipe holds no elements. Point-in-time snapshot. |
+| `IsFull` | `bool IsFull() const` | `true` if pipe is at capacity. Point-in-time snapshot. |
 
-**Copy strategy in `WriteBulk()` / `ReadBulk()`:**
+### `stk::sync::Pipe`
 
-For non-scalar element types or pipe capacities `< 8`, elements are copied one at a
-time with a loop to correctly invoke copy constructors/assignment. For scalar types
-with capacity `≥ 8`, split `memcpy` is used for the contiguous portions of the ring
-buffer to maximize throughput.
+Runtime-sized, untyped FIFO ring-buffer over an **external** backing buffer.
+Parameterised on `element_size` (bytes) rather than a C++ type; all transfers use
+`memcpy`. Suitable for C-ABI structs and heterogeneous payloads. Exposes the full
+`ReadBulkTriggered` API used by the FreeRTOS stream-buffer wrapper.
 
-**Key invariants:**
+```cpp
+static uint8_t s_buf[8 * sizeof(MyStruct)];
+stk::sync::Pipe g_Pipe(s_buf, 8, sizeof(MyStruct)); // capacity 8, element 4 bytes
+```
 
-- `Write()` / `Read()` notifications use `NotifyOne()`; `WriteBulk()` / `ReadBulk()`
-  use `NotifyAll()` after each batch to wake all waiting tasks immediately.
-- `GetSize()` and `IsEmpty()` are unguarded reads of `m_count` — safe to call from
-  any task as a non-binding hint, but must not be relied upon for flow control outside
-  a critical section.
-- Destroying a `Pipe` with tasks still blocked inside `Write()` or `Read()` is a
-  logic error; the embedded `ConditionVariable` destructor asserts in debug builds.
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `Write` | `bool Write(const void *data, Timeout timeout = WAIT_INFINITE)` | Copies one element (`element_size` bytes). Blocks if full. ISR-unsafe. |
+| `TryWrite` | `bool TryWrite(const void *data)` | Non-blocking `Write`. ISR-safe. |
+| `WriteBulk` | `size_t WriteBulk(const void *src, size_t count, Timeout timeout = WAIT_INFINITE)` | Copies `count` elements. Blocks until all written or timeout. ISR-unsafe. |
+| `TryWriteBulk` | `size_t TryWriteBulk(const void *src, size_t count)` | Non-blocking `WriteBulk`. ISR-safe. |
+| `Read` | `bool Read(void *data, Timeout timeout = WAIT_INFINITE)` | Removes one element. Blocks if empty. ISR-unsafe. |
+| `TryRead` | `bool TryRead(void *data)` | Non-blocking `Read`. ISR-safe. |
+| `ReadBulk` | `size_t ReadBulk(void *dst, size_t count, Timeout timeout = WAIT_INFINITE)` | Removes `count` elements. Blocks until all read or timeout. ISR-unsafe. |
+| `TryReadBulk` | `size_t TryReadBulk(void *dst, size_t count)` | Non-blocking `ReadBulk`. ISR-safe. |
+| `ReadBulkTriggered` | `size_t ReadBulkTriggered(void *dst, size_t trigger, size_t max_count, Timeout timeout = WAIT_INFINITE)` | Blocks until at least `trigger` elements are present, then drains up to `max_count` in one atomic critical-section pass. With `NO_WAIT` the trigger is ignored and whatever is available is returned immediately. Returns elements read; `< trigger` means timeout fired before threshold was reached. ISR-unsafe (ISR-safe with `NO_WAIT`). |
+| `TryReadBulkTriggered` | `size_t TryReadBulkTriggered(void *dst, size_t max_count)` | Non-blocking `ReadBulkTriggered` (trigger = 1, `NO_WAIT`). ISR-safe. |
+| `Reset` | `void Reset()` | Discards all elements, resets head/tail/count to zero, wakes blocked producers. Does **not** unblock blocked readers — matches FreeRTOS `xStreamBufferReset` semantics. ISR-safe. |
+| `GetCapacity` | `size_t GetCapacity() const` | Construction-time capacity (elements). |
+| `GetElementSize` | `size_t GetElementSize() const` | Construction-time element size (bytes). |
+| `GetCount` | `size_t GetCount() const` | Current element count. Point-in-time snapshot. |
+| `GetSpace` | `size_t GetSpace() const` | Current free slots. Point-in-time snapshot. |
+| `IsEmpty` | `bool IsEmpty() const` | `true` if pipe holds no elements. |
+| `IsFull` | `bool IsFull() const` | `true` if pipe is at capacity. |
+
+**`ReadBulkTriggered` — trigger clamping:** if `trigger > max_count`, trigger is
+clamped to `max_count` internally, ensuring the wait condition is always satisfiable.
+
+**`Reset` — reader contract:** `Reset()` wakes blocked producers via `m_cv_not_full`
+but does not signal `m_cv_not_empty`. A reader blocked in `ReadBulk` or
+`ReadBulkTriggered` will remain blocked until its own timeout expires or data arrives.
+Callers that need guaranteed unblocking must use a finite timeout.
+
+Requires kernel mode: `KERNEL_DYNAMIC | KERNEL_SYNC`.
 
 ---
 
 ## Test Configuration
 
+### `PipeT` tests (tests 1–8)
+
 | Constant | Value | Purpose |
 |----------|-------|---------|
 | `_STK_PIPE_TEST_TASKS_MAX` | `5` | Total tasks per test run |
-| `_STK_PIPE_TEST_TIMEOUT` | `300` ticks | Blocking timeout for `Write()` / `Read()` calls that must succeed |
+| `_STK_PIPE_TEST_TIMEOUT` | `300` ticks | Blocking timeout for calls that must succeed |
 | `_STK_PIPE_TEST_SHORT_SLEEP` | `10` ticks | Sleep used to pace task sequencing |
 | `_STK_PIPE_TEST_LONG_SLEEP` | `100` ticks | Sleep used by verifier tasks to wait for workers |
 | `_STK_PIPE_CAPACITY` | `8` | Pipe capacity (elements) used by all tests |
 | `_STK_PIPE_STACK_SIZE` | `128` (M0) / `256` (others) | Per-task stack size in `size_t` words |
 
-`g_TestPipe` is **reconstructed in-place** via placement-new inside `ResetTestState()`
-before each test. This resets `m_head`, `m_tail`, `m_count`, and both internal
-`ConditionVariable` instances to a fully clean state without requiring a separately
-managed mutex or condition variable.
+`g_TestPipe` (`PipeT<int32_t, 8>`) is **reconstructed in-place** via placement-new
+inside `ResetTestState()` before each test, resetting all internal state including both
+`ConditionVariable` instances.
 
-`NeedsExtendedTasks` excludes tests 1–6 (all tasks-0-to-2-only tests) from tasks 3–4.
-Tests 7 and 8 always use all five tasks.
+### Raw `Pipe` tests (tests 9–16)
+
+Raw `Pipe` tests live in `namespace stk::test::rawpipe` and use a dedicated
+`g_RawKernel` (same template parameters as `g_Kernel`) and `g_RawPipe` constructed
+over a static `uint8_t g_RawBuf[RAW_CAPACITY * RAW_ELEM_SIZE]`.
+
+| Constant | Value | Purpose |
+|----------|-------|---------|
+| `RAW_ELEM_SIZE` | `4` bytes (`sizeof(RawElem)`) | Element size; exercises `element_size > 1` in all copy paths |
+| `RAW_CAPACITY` | `8` (= `_STK_PIPE_CAPACITY`) | Pipe capacity in elements |
+
+`RawElem` is a plain `struct { int32_t value; }`. Using a struct rather than a bare
+`int32_t` ensures the ring-buffer arithmetic and `DrainLocked` memcpy paths are
+exercised with a non-trivial element size.
+
+`g_RawPipe` is **reconstructed in-place** via placement-new inside
+`ResetRawPipeState()` before each raw test, identical in principle to `ResetTestState`.
+
+`NeedsExtendedTasks` excludes all single-task and two-task tests (1–6, 9–16) from
+tasks 3–4. Tests 7 and 8 always use all five tasks.
 
 ---
 
 ## Platform Notes
 
-On **Cortex-M0** (`__ARM_ARCH_6M__`) the device has insufficient RAM to link eight
-distinct task class templates simultaneously. Tests 1–7 are skipped on M0 and only
-`StressTest` (test 8) runs, under `#ifndef __ARM_ARCH_6M__`.
+On **Cortex-M0** (`__ARM_ARCH_6M__`) the device has insufficient RAM to link the full
+set of task class templates simultaneously. Tests 1–7 and 9–16 are skipped on M0;
+only `StressTest` (test 8) runs, under `#ifndef __ARM_ARCH_6M__`.
 
 `StressTest` runs on M0 because it uses a single task class template (`StressTestTask`)
 instantiated for all five task slots, fitting within the available memory.
@@ -206,12 +243,129 @@ All five tasks alternate producer and consumer roles by iteration index: even it
 call `Write(i, _STK_PIPE_TEST_SHORT_SLEEP)` (may block briefly if pipe is full); odd
 iterations call `Read(_STK_PIPE_TEST_SHORT_SLEEP)` (may time out if pipe is empty).
 Each task tracks its own `written` and `consumed` counts and adds `written - consumed`
-into `g_SharedCounter`. After all tasks finish, task 4 reads `g_TestPipe.GetSize()` for
+into `g_SharedCounter`. After all tasks finish, task 4 reads `g_TestPipe.GetCount()` for
 any elements still in the pipe. The invariant `g_SharedCounter + remaining >= 0` confirms
 that total reads never exceeded total writes — which would indicate data corruption or
 a double-read.
 
-**Pass condition:** `g_SharedCounter + g_TestPipe.GetSize() >= 0`
+**Pass condition:** `g_SharedCounter + g_TestPipe.GetCount() >= 0`
+
+---
+
+## Raw `Pipe` Tests (tests 9–16)
+
+These tests exercise `stk::sync::Pipe` directly, using a `uint8_t` backing buffer and
+`element_size = sizeof(RawElem) = 4`. All tasks live in `namespace stk::test::rawpipe`
+and run on `g_RawKernel`. Helper functions `WriteElem` / `TryWriteElem` / `ReadElem`
+wrap the `void*` API to keep test bodies readable.
+
+---
+
+### Test 9 — `RawBasicWriteRead`
+**Tasks:** 0–2 only &nbsp;|&nbsp; **Param:** `iterations = 20`
+
+Mirrors test 1 for the raw `Pipe` API. Task 0 writes `RawElem{0}..RawElem{19}`
+sequentially via `Write(&elem, timeout)`. Task 1 reads them back and verifies each
+`value` field matches its expected sequence number. Confirms that `Write`/`Read` with
+a 4-byte struct element size transfers data correctly and preserves FIFO ordering.
+
+**Pass condition:** `counter == 20`
+
+---
+
+### Test 10 — `RawBulkWriteRead`
+**Tasks:** 0–2 only
+
+Mirrors test 5 for the raw `Pipe` API. Task 0 builds `RawElem src[8] = {{0}..{7}}`
+and writes it via `WriteBulk(src, 8, timeout)`. Task 1 calls `ReadBulk(dst, 8, timeout)`
+and verifies the returned count equals `8` and every `value` field matches its sequence
+number. Exercises the ring-buffer two-part `memcpy` path with a non-unit element size.
+
+**Pass condition:** `written == 8` and `counter == 8`
+
+---
+
+### Test 11 — `RawTriggeredSatisfied`
+**Tasks:** 0–2 only
+
+Task 1 (consumer) calls `ReadBulkTriggered(dst, trigger=4, max_count=8, timeout=300)`
+on an empty pipe and blocks. Task 2 (producer) sleeps `_STK_PIPE_TEST_SHORT_SLEEP`
+then writes all 8 elements in one `WriteBulk`. The consumer must unblock — because
+`m_count` reaches 4, satisfying the trigger — and drain all 8 elements in one atomic
+critical-section pass. Verifies the core trigger-wait path and the post-trigger
+full-drain behaviour.
+
+**Pass condition:** `n >= trigger` (4) and all `n` values correct; `counter == 8`
+
+---
+
+### Test 12 — `RawTriggeredTimeoutPartial`
+**Tasks:** 0–2 only
+
+Task 1 calls `ReadBulkTriggered(dst, trigger=6, max_count=8, timeout=80)`. Task 2
+writes only 3 elements (below the trigger threshold) after a short delay. The trigger
+is never reached; the 80-tick timeout fires. The consumer must return exactly 3 — the
+bytes that arrived before the deadline — proving the FreeRTOS partial-timeout drain
+semantics: when timeout fires, whatever is in the pipe is drained and returned rather
+than discarded.
+
+**Pass condition:** `n == 3` and all 3 values correct; `counter == 3`
+
+---
+
+### Test 13 — `RawTriggeredNoWait`
+**Tasks:** 0–2 only
+
+Task 1 pre-loads 3 elements via `TryWrite` (no producer task needed), then calls
+`ReadBulkTriggered(dst, trigger=6, max_count=8, NO_WAIT)`. With `NO_WAIT` the trigger
+threshold is ignored: the call must return immediately with 3 elements. Elapsed time is
+measured and must be under 5 ms, proving the `NO_WAIT` fast-path bypasses the CV wait
+entirely regardless of the trigger value.
+
+**Pass condition:** `n == 3`, `elapsed < 5 ms`, all values correct; `counter == 3`
+
+---
+
+### Test 14 — `RawTriggeredClamp`
+**Tasks:** 0–2 only
+
+Task 1 calls `ReadBulkTriggered(dst, trigger=8, max_count=2, timeout=300)`. The trigger
+(8) exceeds `max_count` (2) and is clamped to 2 internally, making the wait condition
+satisfiable. Task 2 writes exactly 2 elements. The consumer must unblock and return
+those 2 elements. Without clamping, `trigger > max_count` would create a condition that
+can never be satisfied, blocking the reader indefinitely.
+
+**Pass condition:** `n == 2`, values `{10, 20}` correct; `counter == 2`
+
+---
+
+### Test 15 — `RawResetDoesNotReleaseReader`
+**Tasks:** 0–2 only
+
+Verifies that `Pipe::Reset()` matches FreeRTOS `xStreamBufferReset()` semantics: it
+does **not** unblock a blocked reader. Task 1 calls `ReadBulkTriggered(dst, trigger=8,
+max_count=8, timeout=80)` on an empty pipe. Task 2 calls `Reset()` after
+`_STK_PIPE_TEST_SHORT_SLEEP` (10 ms). The reader must remain blocked for the full 80
+ticks — `Reset()` only signals `m_cv_not_full` (waking producers), never
+`m_cv_not_empty`. The consumer finally times out and returns 0. Elapsed time is
+measured to confirm `Reset()` did not cause an early return.
+
+**Pass condition:** `n == 0`, `elapsed >= 75 ms`, `IsEmpty() == true`, `GetCount() == 0`; `counter == 1`
+
+---
+
+### Test 16 — `RawStateInvariants`
+**Tasks:** 0–2 only (task 1 is the sole active worker)
+
+Single-task invariant check across a complete fill-and-drain cycle, mirroring test 6
+for the raw `Pipe` API and additionally checking `GetCapacity`, `GetElementSize`,
+`GetSpace`, and `IsFull`. Task 1 asserts: construction-time properties are immutable;
+`IsEmpty`/`GetCount`/`GetSpace` are correct on an empty pipe; after each `TryWrite`,
+`GetCount` equals `i + 1` and `GetSpace` equals `CAPACITY - i - 1`; after filling,
+`IsFull` is true and `GetSpace` is 0; after each `TryRead`, counts track back down;
+after full drain, `IsEmpty` is true and `GetCount` is 0.
+
+**Pass condition:** `counter == 1` (all assertions passed)
 
 ---
 
@@ -224,6 +378,14 @@ a double-read.
 | 3 | `ReadBlocksWhenEmptyTask` | 0–2 | `counter == 1` | `Read()` blocks on an empty pipe; unblocks when producer writes; received value matches |
 | 4 | `TimeoutTask` | 0–2 | `counter == 2` | `Read()` on empty and `Write()` on full both return `false` within `[45, 65]` ms |
 | 5 | `BulkWriteReadTask` | 0–2 | `written == 8`, `counter == 8` | `WriteBulk()` / `ReadBulk()` transfers a full block; count and all element values correct |
-| 6 | `GetSizeIsEmptyTask` | 0–2 | `counter == 1` | `GetSize()` tracks exactly after every `Write()` and `Read()`; `IsEmpty()` correct before and after |
+| 6 | `GetSizeIsEmptyTask` | 0–2 | `counter == 1` | `GetCount()` tracks exactly after every `Write()` and `Read()`; `IsEmpty()` correct before and after |
 | 7 | `MultiProducerConsumerTask` | 0–4 | `counter == 40` | Two concurrent producers and two concurrent consumers transfer all items without loss or duplication |
 | 8 | `StressTestTask` | 0–4 | `net + remaining >= 0` | No data corruption under full five-task contention mixing blocking writes and reads; runs on all platforms |
+| 9 | `RawBasicWriteReadTask` | 0–2 | `counter == 20` | `Pipe::Write()` / `Read()` transfers a 4-byte `RawElem` struct in FIFO order |
+| 10 | `RawBulkWriteReadTask` | 0–2 | `written == 8`, `counter == 8` | `Pipe::WriteBulk()` / `ReadBulk()` transfers a full block; `memcpy` with `element_size=4` correct |
+| 11 | `RawTriggeredSatisfiedTask` | 0–2 | `n >= 4`, `counter == 8` | `ReadBulkTriggered()` blocks until trigger met; drains full available batch atomically |
+| 12 | `RawTriggeredTimeoutPartialTask` | 0–2 | `counter == 3` | Timeout before trigger fires partial drain of bytes that arrived; nothing is discarded |
+| 13 | `RawTriggeredNoWaitTask` | 0–2 | `counter == 3`, `elapsed < 5 ms` | `NO_WAIT` bypasses trigger and returns immediately with available data |
+| 14 | `RawTriggeredClampTask` | 0–2 | `counter == 2` | `trigger > max_count` is clamped to `max_count`; wait is always satisfiable |
+| 15 | `RawResetDoesNotReleaseReaderTask` | 0–2 | `counter == 1`, `elapsed >= 75 ms` | `Reset()` does not unblock blocked readers; reader waits full timeout (matches FreeRTOS semantics) |
+| 16 | `RawStateInvariantsTask` | 0–2 | `counter == 1` | `GetCapacity` / `GetElementSize` / `GetCount` / `GetSpace` / `IsEmpty` / `IsFull` track exactly throughout fill and drain |

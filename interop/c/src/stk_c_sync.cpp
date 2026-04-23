@@ -332,7 +332,7 @@ uint32_t stk_ef_trywait(stk_ef_t *ef, uint32_t flags, uint32_t options)
 // ---------------------------------------------------------------------------
 // Pipe (template instantiation for stk_word_t, STK_PIPE_SIZE)
 // ---------------------------------------------------------------------------
-typedef Pipe<stk_word_t, STK_PIPE_SIZE> PipeX;
+typedef PipeT<stk_word_t, STK_PIPE_SIZE> PipeX;
 
 struct stk_pipe_t
 {
@@ -384,11 +384,11 @@ size_t stk_pipe_read_bulk(stk_pipe_t *pipe, stk_word_t *dst, size_t count, int32
     return pipe->handle.ReadBulk(dst, count, timeout);
 }
 
-size_t stk_pipe_get_size(stk_pipe_t *pipe)
+size_t stk_pipe_get_count(stk_pipe_t *pipe)
 {
     STK_ASSERT(pipe != nullptr);
 
-    return pipe->handle.GetSize();
+    return pipe->handle.GetCount();
 }
 
 // ---------------------------------------------------------------------------

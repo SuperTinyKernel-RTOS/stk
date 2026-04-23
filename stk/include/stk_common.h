@@ -263,7 +263,7 @@ public:
                  was overwritten.
         \warning Stack type: Bottom to Top (index[0]).
     */
-    virtual size_t GetStackSpace()
+    virtual size_t GetStackSpace() const
     {
         const Word *stack = GetStack();
         const size_t stack_size = GetStackSize();
@@ -731,8 +731,9 @@ public:
         /*! \brief      Called by Thread process (via IKernelService::SleepUntil) for exclusion of the calling process from scheduling (sleeping).
             \param[in]  caller_SP: Value of Stack Pointer (SP) register (for locating the calling process inside the kernel).
             \param[in]  timestamp: Absolute timestamp (ticks).
+            \return     True if sleep succeeded, false otherwise.
         */
-        virtual void OnTaskSleepUntil(Word caller_SP, Ticks timestamp) = 0;
+        virtual bool OnTaskSleepUntil(Word caller_SP, Ticks timestamp) = 0;
 
         /*! \brief      Called from the Thread process when task finished (its Run function exited by return).
             \param[out] stack: Stack of the exited task.
@@ -839,8 +840,9 @@ public:
         \note      Unsupported in HRT mode (see stk::KERNEL_HRT); in HRT mode tasks sleep automatically according to their periodicity and workload.
         \param[in] timestamp: Absolute timestamp (ticks).
         \warning   ISR-unsafe. Calling from an ISR context is not permitted and will trigger an assertion.
+        \return    True if sleep succeeded, false otherwise.
     */
-    virtual void SleepUntil(Ticks timestamp) = 0;
+    virtual bool SleepUntil(Ticks timestamp) = 0;
 
     /*! \brief     Process one tick.
         \note      Normally system tick is processed by the platform driver implementation.
@@ -1229,8 +1231,16 @@ public:
         \note      Unsupported in HRT mode (see stk::KERNEL_HRT); in HRT mode tasks sleep automatically according to their periodicity and workload.
         \param[in] timestamp: Absolute timestamp (ticks).
         \warning   ISR-unsafe. Calling from an ISR context is not permitted and will trigger an assertion.
+        \return    True if sleep succeeded, false otherwise.
     */
-    virtual void SleepUntil(Ticks timestamp) = 0;
+    virtual bool SleepUntil(Ticks timestamp) = 0;
+
+    /*! \brief     Cancel sleep of the task.
+        \param[in] task_id: Id of the task.
+        \note      No-op if task was not in a sleeping state.
+        \note      ISR-safe.
+    */
+    virtual void SleepCancel(TId task_id) = 0;
 
     /*! \brief     Notify scheduler to switch to the next task (yield).
         \note      A cooperation mechanism in HRT mode (see stk::KERNEL_HRT).

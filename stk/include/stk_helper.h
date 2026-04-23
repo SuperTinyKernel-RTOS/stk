@@ -352,10 +352,21 @@ static inline void SleepMs(Timeout ms)
     \note      Unsupported in HRT mode (see stk::KERNEL_HRT); in HRT mode tasks sleep automatically according to their periodicity and workload.
     \param[in] timestamp: Absolute timestamp (ticks). 0 does not cause yield, use Yield instead. Negative will cause an assertion.
     \warning   ISR-unsafe. Calling from an ISR context is not permitted and will trigger an assertion.
+    \return    True if sleep succeeded, false otherwise.
 */
-__stk_forceinline void SleepUntil(Ticks timestamp)
+__stk_forceinline bool SleepUntil(Ticks timestamp)
 {
-    IKernelService::GetInstance()->SleepUntil(timestamp);
+    return IKernelService::GetInstance()->SleepUntil(timestamp);
+}
+
+/*! \brief     Cancel sleep of the task.
+    \param[in] task_id: Id of the task.
+    \note      No-op if task was not in a sleeping state.
+    \note      ISR-safe.
+*/
+__stk_forceinline void SleepCancel(TId task_id)
+{
+    IKernelService::GetInstance()->SleepCancel(task_id);
 }
 
 /*! \brief     Notify scheduler to switch to the next runnable task.

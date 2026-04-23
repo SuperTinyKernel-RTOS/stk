@@ -681,6 +681,354 @@ private:
 };
 
 // ---------------------------------------------------------------------------
+// Test 11a – TryPutFront basic: priority ordering (single task)
+// ---------------------------------------------------------------------------
+
+/*! \class TryPutFrontTask
+    \brief Verifies that TryPutFront inserts a message at the front of the queue,
+           making it the next item returned by Get(). Also checks that a mix of
+           Put() (back) and PutFront() (front) yields the correct dequeue order,
+           and that TryPutFront on a full queue returns false immediately.
+*/
+template <EAccessMode _AccessMode>
+class TryPutFrontTask : public Task<_STK_MQ_STACK_SIZE, _AccessMode>
+{
+    uint8_t m_task_id;
+
+public:
+    TryPutFrontTask(uint8_t task_id, int32_t) : m_task_id(task_id)
+    {}
+
+private:
+    void Run() override
+    {
+        if (m_task_id == 0)
+        {
+            bool ok = true;
+
+            // --- Part 1: single front-insert ---
+            // Queue is empty; TryPutFront must succeed and be the only message.
+            uint8_t front_msg[_STK_MQ_MSG_SIZE];
+            memset(front_msg, 0xF0, sizeof(front_msg));
+            ok &= g_Queue->TryPutFront(front_msg);
+            ok &= (g_Queue->GetCount() == 1U);
+            ok &= (g_Queue->GetSpace() == _STK_MQ_CAPACITY - 1U);
+
+            uint8_t rx[_STK_MQ_MSG_SIZE] = {};
+            ok &= g_Queue->TryGet(rx);
+            ok &= (memcmp(rx, front_msg, _STK_MQ_MSG_SIZE) == 0);
+            ok &= g_Queue->IsEmpty();
+
+            // --- Part 2: interleaved Put/PutFront ordering ---
+            // Enqueue via the back: A, B.  Then prepend C to the front.
+            // Expected dequeue order: C, A, B.
+            uint8_t msg_a[_STK_MQ_MSG_SIZE]; memset(msg_a, 0xAA, sizeof(msg_a));
+            uint8_t msg_b[_STK_MQ_MSG_SIZE]; memset(msg_b, 0xBB, sizeof(msg_b));
+            uint8_t msg_c[_STK_MQ_MSG_SIZE]; memset(msg_c, 0xCC, sizeof(msg_c));
+
+            ok &= g_Queue->TryPut(msg_a);
+            ok &= g_Queue->TryPut(msg_b);
+            ok &= g_Queue->TryPutFront(msg_c);
+            ok &= (g_Queue->GetCount() == 3U);
+
+            uint8_t got[_STK_MQ_MSG_SIZE] = {};
+
+            ok &= g_Queue->TryGet(got);
+            ok &= (memcmp(got, msg_c, _STK_MQ_MSG_SIZE) == 0); // C first
+
+            ok &= g_Queue->TryGet(got);
+            ok &= (memcmp(got, msg_a, _STK_MQ_MSG_SIZE) == 0); // then A
+
+            ok &= g_Queue->TryGet(got);
+            ok &= (memcmp(got, msg_b, _STK_MQ_MSG_SIZE) == 0); // then B
+
+            ok &= g_Queue->IsEmpty();
+
+            // --- Part 3: multiple consecutive TryPutFront calls ---
+            // Each front-insert becomes the new head, so dequeue order is LIFO
+            // with respect to the front-insert sequence: D, E, F inserted at
+            // front → dequeue order F, E, D.
+            uint8_t msg_d[_STK_MQ_MSG_SIZE]; memset(msg_d, 0xD0, sizeof(msg_d));
+            uint8_t msg_e[_STK_MQ_MSG_SIZE]; memset(msg_e, 0xE0, sizeof(msg_e));
+            uint8_t msg_f[_STK_MQ_MSG_SIZE]; memset(msg_f, 0xFF, sizeof(msg_f));
+
+            ok &= g_Queue->TryPutFront(msg_d);
+            ok &= g_Queue->TryPutFront(msg_e);
+            ok &= g_Queue->TryPutFront(msg_f);
+            ok &= (g_Queue->GetCount() == 3U);
+
+            ok &= g_Queue->TryGet(got);
+            ok &= (memcmp(got, msg_f, _STK_MQ_MSG_SIZE) == 0);
+
+            ok &= g_Queue->TryGet(got);
+            ok &= (memcmp(got, msg_e, _STK_MQ_MSG_SIZE) == 0);
+
+            ok &= g_Queue->TryGet(got);
+            ok &= (memcmp(got, msg_d, _STK_MQ_MSG_SIZE) == 0);
+
+            ok &= g_Queue->IsEmpty();
+
+            // --- Part 4: TryPutFront on full queue must fail without blocking ---
+            for (size_t i = 0; i < _STK_MQ_CAPACITY; ++i)
+            {
+                uint8_t fill[_STK_MQ_MSG_SIZE] = {};
+                ok &= g_Queue->TryPut(fill);
+            }
+            ok &= g_Queue->IsFull();
+
+            uint8_t extra[_STK_MQ_MSG_SIZE] = {};
+            ok &= !g_Queue->TryPutFront(extra); // must return false
+            ok &= (g_Queue->GetCount() == _STK_MQ_CAPACITY); // count unchanged
+
+            // Drain for cleanliness
+            while (!g_Queue->IsEmpty())
+            {
+                uint8_t tmp[_STK_MQ_MSG_SIZE] = {};
+                g_Queue->TryGet(tmp);
+            }
+
+            printf("TryPutFront: %s\n", ok ? "PASS" : "FAIL");
+            if (ok)
+                g_TestResult = 1;
+        }
+
+        ++g_InstancesDone;
+    }
+};
+
+// ---------------------------------------------------------------------------
+// Test 11b – PutFront wrap-around: front-insert across the ring-buffer boundary
+// ---------------------------------------------------------------------------
+
+/*! \class PutFrontWrapAroundTask
+    \brief Advances both head and tail into the middle of the ring buffer by
+           filling and partially draining the queue, then exercises TryPutFront
+           so that the retreated tail pointer wraps from index 0 back to
+           CAPACITY-1, verifying correct modular arithmetic and payload
+           integrity across the boundary.
+*/
+template <EAccessMode _AccessMode>
+class PutFrontWrapAroundTask : public Task<_STK_MQ_STACK_SIZE, _AccessMode>
+{
+    uint8_t m_task_id;
+
+public:
+    PutFrontWrapAroundTask(uint8_t task_id, int32_t) : m_task_id(task_id)
+    {}
+
+private:
+    void Run() override
+    {
+        if (m_task_id == 0)
+        {
+            bool ok = true;
+            const size_t HALF = _STK_MQ_CAPACITY / 2U;
+
+            // Step 1: fill the queue completely, then drain it entirely so that
+            // both head and tail sit at 0.
+            for (size_t i = 0; i < _STK_MQ_CAPACITY; ++i)
+            {
+                uint8_t tx[_STK_MQ_MSG_SIZE];
+                memset(tx, (uint8_t)i, sizeof(tx));
+                ok &= g_Queue->TryPut(tx);
+            }
+            while (!g_Queue->IsEmpty())
+            {
+                uint8_t rx[_STK_MQ_MSG_SIZE] = {};
+                g_Queue->TryGet(rx);
+            }
+            ok &= g_Queue->IsEmpty();
+
+            // Step 2: put HALF messages via the back so that head == HALF,
+            // tail == 0 (tail is at the ring-buffer origin).
+            for (size_t i = 0; i < HALF; ++i)
+            {
+                uint8_t tx[_STK_MQ_MSG_SIZE];
+                memset(tx, (uint8_t)(0x10U + i), sizeof(tx));
+                ok &= g_Queue->TryPut(tx);
+            }
+            ok &= (g_Queue->GetCount() == HALF);
+
+            // Step 3: TryPutFront when tail == 0 must wrap to CAPACITY-1.
+            // The front-inserted message should be retrieved first.
+            uint8_t front[_STK_MQ_MSG_SIZE];
+            memset(front, 0xFE, sizeof(front));
+            ok &= g_Queue->TryPutFront(front);
+            ok &= (g_Queue->GetCount() == HALF + 1U);
+
+            // Step 4: Get() must return the front-inserted message first.
+            uint8_t rx[_STK_MQ_MSG_SIZE] = {};
+            ok &= g_Queue->TryGet(rx);
+            ok &= (memcmp(rx, front, _STK_MQ_MSG_SIZE) == 0);
+
+            // Step 5: remaining messages must follow in original FIFO order.
+            for (size_t i = 0; i < HALF; ++i)
+            {
+                uint8_t expected[_STK_MQ_MSG_SIZE];
+                memset(expected, (uint8_t)(0x10U + i), sizeof(expected));
+                memset(rx, 0, sizeof(rx));
+                ok &= g_Queue->TryGet(rx);
+                ok &= (memcmp(rx, expected, _STK_MQ_MSG_SIZE) == 0);
+            }
+
+            ok &= g_Queue->IsEmpty();
+
+            printf("PutFrontWrapAround: %s\n", ok ? "PASS" : "FAIL");
+            if (ok)
+                g_TestResult = 1;
+        }
+
+        ++g_InstancesDone;
+    }
+};
+
+// ---------------------------------------------------------------------------
+// Test 11c – Blocking PutFront: woken by Get when queue is full
+// ---------------------------------------------------------------------------
+
+/*! \class BlockingPutFrontTask
+    \brief Task 0 fills the queue completely and then waits; Task 1 calls
+           PutFront() on the full queue so it blocks. Task 0 then calls Get()
+           to free one slot, which must unblock Task 1. After Task 1 is unblocked
+           and its message is front-inserted, Get() must return it before any of
+           the originally-queued messages.
+*/
+template <EAccessMode _AccessMode>
+class BlockingPutFrontTask : public Task<_STK_MQ_STACK_SIZE, _AccessMode>
+{
+    uint8_t m_task_id;
+
+public:
+    BlockingPutFrontTask(uint8_t task_id, int32_t) : m_task_id(task_id)
+    {}
+
+private:
+    void Run() override
+    {
+        if (m_task_id == 0)
+        {
+            // Fill queue with a recognizable pattern
+            for (size_t i = 0; i < _STK_MQ_CAPACITY; ++i)
+            {
+                uint8_t msg[_STK_MQ_MSG_SIZE];
+                memset(msg, (uint8_t)(0x10U + i), sizeof(msg));
+                g_Queue->TryPut(msg);
+            }
+
+            // Give task 1 time to enter the blocking PutFront()
+            stk::Sleep(_STK_MQ_TEST_SHORT_SLEEP * 2);
+
+            // Free one slot — must unblock task 1
+            uint8_t rx[_STK_MQ_MSG_SIZE] = {};
+            g_Queue->Get(rx); // consumes slot 0 (value 0x10)
+
+            // Give task 1 time to complete its PutFront
+            stk::Sleep(_STK_MQ_TEST_SHORT_SLEEP * 2);
+        }
+        else
+        if (m_task_id == 1)
+        {
+            // Queue is full; PutFront() must block until task 0 calls Get()
+            uint8_t priority[_STK_MQ_MSG_SIZE];
+            memset(priority, 0x50, sizeof(priority)); // 0x50 ('P') sentinel
+            bool sent = g_Queue->PutFront(priority);
+
+            if (sent)
+                g_SharedCounter = 1; // signal that PutFront eventually succeeded
+        }
+
+        ++g_InstancesDone;
+
+        if (m_task_id == 0)
+        {
+            while (g_InstancesDone < 2)
+                stk::Sleep(_STK_MQ_TEST_SHORT_SLEEP);
+
+            // The priority message must now be at the front of the queue.
+            uint8_t rx[_STK_MQ_MSG_SIZE] = {};
+            bool got_priority = g_Queue->TryGet(rx);
+            uint8_t expected[_STK_MQ_MSG_SIZE];
+            memset(expected, 0x50, sizeof(expected)); // 'P'
+            bool payload_ok = got_priority && (memcmp(rx, expected, _STK_MQ_MSG_SIZE) == 0);
+
+            // Drain leftover messages
+            while (!g_Queue->IsEmpty())
+                g_Queue->TryGet(rx);
+
+            bool ok = (g_SharedCounter == 1) && payload_ok && g_Queue->IsEmpty();
+            printf("BlockingPutFront: %s\n", ok ? "PASS" : "FAIL");
+            if (ok)
+                g_TestResult = 1;
+        }
+    }
+};
+
+// ---------------------------------------------------------------------------
+// Test 11d – Timed PutFront timeout: expires when queue remains full
+// ---------------------------------------------------------------------------
+
+/*! \class TimedPutFrontTimeoutTask
+    \brief Task 0 fills the queue and holds it full for longer than Task 1's
+           timeout; Task 1's PutFront() with a short timeout must return false
+           within the expected time window, mirroring the TimedPutTimeout test.
+*/
+template <EAccessMode _AccessMode>
+class TimedPutFrontTimeoutTask : public Task<_STK_MQ_STACK_SIZE, _AccessMode>
+{
+    uint8_t m_task_id;
+
+public:
+    TimedPutFrontTimeoutTask(uint8_t task_id, int32_t) : m_task_id(task_id)
+    {}
+
+private:
+    void Run() override
+    {
+        if (m_task_id == 0)
+        {
+            // Fill queue
+            for (size_t i = 0; i < _STK_MQ_CAPACITY; ++i)
+            {
+                uint8_t msg[_STK_MQ_MSG_SIZE] = {};
+                g_Queue->TryPut(msg);
+            }
+
+            // Hold full well past task 1's timeout, then drain
+            stk::Sleep(200);
+
+            uint8_t rx[_STK_MQ_MSG_SIZE] = {};
+            while (!g_Queue->IsEmpty())
+                g_Queue->TryGet(rx);
+        }
+        else
+        if (m_task_id == 1)
+        {
+            stk::Sleep(_STK_MQ_TEST_SHORT_SLEEP); // let task 0 fill queue first
+
+            uint8_t tx[_STK_MQ_MSG_SIZE] = {};
+
+            int64_t start   = GetTimeNowMs();
+            bool    sent    = g_Queue->PutFront(tx, 50); // 50 ms timeout
+            int64_t elapsed = GetTimeNowMs() - start;
+
+            bool ok = !sent && (elapsed >= 45) && (elapsed <= 65);
+            g_SharedCounter = ok ? 1 : 0;
+
+            printf("TimedPutFrontTimeout: sent=%s elapsed=%d %s\n",
+                sent ? "true" : "false", (int)elapsed, ok ? "PASS" : "FAIL");
+        }
+
+        ++g_InstancesDone;
+
+        if (m_task_id == 1)
+        {
+            if (g_SharedCounter == 1)
+                g_TestResult = 1;
+        }
+    }
+};
+
+// ---------------------------------------------------------------------------
 // Test 11 – Multi-task ping-pong: counter incremented by producer + consumer
 // ---------------------------------------------------------------------------
 
@@ -837,6 +1185,196 @@ private:
 };
 
 // ---------------------------------------------------------------------------
+// Test 13a – Peek: inspect next message without consuming it (single task)
+// ---------------------------------------------------------------------------
+
+/*! \class PeekTask
+    \brief Verifies that Peek() copies the oldest message without removing it,
+           that a subsequent Get() returns the same payload, and that TryPeek()
+           returns false immediately on an empty queue.
+*/
+template <EAccessMode _AccessMode>
+class PeekTask : public Task<_STK_MQ_STACK_SIZE, _AccessMode>
+{
+    uint8_t m_task_id;
+
+public:
+    PeekTask(uint8_t task_id, int32_t) : m_task_id(task_id)
+    {}
+
+private:
+    void Run() override
+    {
+        if (m_task_id == 0)
+        {
+            bool ok = true;
+
+            // --- Part 1: TryPeek on empty queue must fail immediately ---
+            uint8_t rx[_STK_MQ_MSG_SIZE] = {};
+            ok &= !g_Queue->TryPeek(rx);
+            ok &= g_Queue->IsEmpty();
+
+            // --- Part 2: Peek does not consume the message ---
+            uint8_t tx[_STK_MQ_MSG_SIZE];
+            memset(tx, 0xA5, sizeof(tx));
+            ok &= g_Queue->TryPut(tx);
+            ok &= (g_Queue->GetCount() == 1U);
+
+            uint8_t peek_rx[_STK_MQ_MSG_SIZE] = {};
+            ok &= g_Queue->TryPeek(peek_rx);
+            ok &= (memcmp(peek_rx, tx, _STK_MQ_MSG_SIZE) == 0); // payload matches
+            ok &= (g_Queue->GetCount() == 1U);                   // count unchanged
+            ok &= !g_Queue->IsEmpty();                           // message still present
+
+            // Get() must return the same message Peek() observed
+            uint8_t get_rx[_STK_MQ_MSG_SIZE] = {};
+            ok &= g_Queue->TryGet(get_rx);
+            ok &= (memcmp(get_rx, tx, _STK_MQ_MSG_SIZE) == 0);
+            ok &= g_Queue->IsEmpty();
+
+            // --- Part 3: Peek is non-destructive across multiple calls ---
+            uint8_t msg[_STK_MQ_MSG_SIZE];
+            memset(msg, 0x3C, sizeof(msg));
+            ok &= g_Queue->TryPut(msg);
+
+            // Peek twice; count must remain 1 both times
+            uint8_t p1[_STK_MQ_MSG_SIZE] = {};
+            uint8_t p2[_STK_MQ_MSG_SIZE] = {};
+            ok &= g_Queue->TryPeek(p1);
+            ok &= g_Queue->TryPeek(p2);
+            ok &= (memcmp(p1, msg, _STK_MQ_MSG_SIZE) == 0);
+            ok &= (memcmp(p2, msg, _STK_MQ_MSG_SIZE) == 0);
+            ok &= (g_Queue->GetCount() == 1U);
+
+            // Consume the message and confirm the queue is empty
+            uint8_t fin[_STK_MQ_MSG_SIZE] = {};
+            ok &= g_Queue->TryGet(fin);
+            ok &= (memcmp(fin, msg, _STK_MQ_MSG_SIZE) == 0);
+            ok &= g_Queue->IsEmpty();
+
+            // --- Part 4: Peek respects FIFO order (oldest message is returned) ---
+            uint8_t m0[_STK_MQ_MSG_SIZE]; memset(m0, 0x11, sizeof(m0));
+            uint8_t m1[_STK_MQ_MSG_SIZE]; memset(m1, 0x22, sizeof(m1));
+            ok &= g_Queue->TryPut(m0);
+            ok &= g_Queue->TryPut(m1);
+
+            uint8_t fifo_peek[_STK_MQ_MSG_SIZE] = {};
+            ok &= g_Queue->TryPeek(fifo_peek);
+            ok &= (memcmp(fifo_peek, m0, _STK_MQ_MSG_SIZE) == 0); // oldest, not newest
+
+            while (!g_Queue->IsEmpty())
+                g_Queue->TryGet(rx);
+
+            printf("Peek: %s\n", ok ? "PASS" : "FAIL");
+            if (ok)
+                g_TestResult = 1;
+        }
+
+        ++g_InstancesDone;
+    }
+};
+
+// ---------------------------------------------------------------------------
+// Test 13b – PeekFront: inspect front-inserted message without consuming it
+// ---------------------------------------------------------------------------
+
+/*! \class PeekFrontTask
+    \brief Verifies that PeekFront() copies the most recently front-inserted
+           message without removing it, that a subsequent Get() returns the
+           same payload, and that TryPeekFront() returns false on an empty queue.
+*/
+template <EAccessMode _AccessMode>
+class PeekFrontTask : public Task<_STK_MQ_STACK_SIZE, _AccessMode>
+{
+    uint8_t m_task_id;
+
+public:
+    PeekFrontTask(uint8_t task_id, int32_t) : m_task_id(task_id)
+    {}
+
+private:
+    void Run() override
+    {
+        if (m_task_id == 0)
+        {
+            bool ok = true;
+
+            // --- Part 1: TryPeekFront on empty queue must fail immediately ---
+            uint8_t rx[_STK_MQ_MSG_SIZE] = {};
+            ok &= !g_Queue->TryPeekFront(rx);
+            ok &= g_Queue->IsEmpty();
+
+            // --- Part 2: PeekFront on a pure-Put queue matches Peek ---
+            // When no PutFront has been called, PeekFront reads Prev(m_tail)
+            // which is the most-recently-written back slot.
+            uint8_t back[_STK_MQ_MSG_SIZE];
+            memset(back, 0xBB, sizeof(back));
+            ok &= g_Queue->TryPut(back);
+
+            uint8_t pf[_STK_MQ_MSG_SIZE] = {};
+            ok &= g_Queue->TryPeekFront(pf);
+            ok &= (memcmp(pf, back, _STK_MQ_MSG_SIZE) == 0);
+            ok &= (g_Queue->GetCount() == 1U); // non-destructive
+
+            while (!g_Queue->IsEmpty())
+                g_Queue->TryGet(rx);
+
+            // --- Part 3: PeekFront returns the PutFront message ---
+            // Back-insert A and B, then front-insert C.
+            // PeekFront must return C; Peek must still return A.
+            uint8_t msg_a[_STK_MQ_MSG_SIZE]; memset(msg_a, 0xAA, sizeof(msg_a));
+            uint8_t msg_b[_STK_MQ_MSG_SIZE]; memset(msg_b, 0xBB, sizeof(msg_b));
+            uint8_t msg_c[_STK_MQ_MSG_SIZE]; memset(msg_c, 0xCC, sizeof(msg_c));
+
+            ok &= g_Queue->TryPut(msg_a);
+            ok &= g_Queue->TryPut(msg_b);
+            ok &= g_Queue->TryPutFront(msg_c);
+            ok &= (g_Queue->GetCount() == 3U);
+
+            uint8_t peek_result[_STK_MQ_MSG_SIZE]      = {};
+            uint8_t peek_front_result[_STK_MQ_MSG_SIZE] = {};
+            ok &= g_Queue->TryPeek(peek_result);
+            ok &= g_Queue->TryPeekFront(peek_front_result);
+            ok &= (memcmp(peek_result,       msg_c, _STK_MQ_MSG_SIZE) == 0); // oldest = C (front)
+            ok &= (memcmp(peek_front_result, msg_c, _STK_MQ_MSG_SIZE) == 0); // front-peek also C
+            ok &= (g_Queue->GetCount() == 3U);                                // both non-destructive
+
+            // Consume all three and verify the ordering: C, A, B
+            uint8_t got[_STK_MQ_MSG_SIZE] = {};
+            ok &= g_Queue->TryGet(got); ok &= (memcmp(got, msg_c, _STK_MQ_MSG_SIZE) == 0);
+            ok &= g_Queue->TryGet(got); ok &= (memcmp(got, msg_a, _STK_MQ_MSG_SIZE) == 0);
+            ok &= g_Queue->TryGet(got); ok &= (memcmp(got, msg_b, _STK_MQ_MSG_SIZE) == 0);
+            ok &= g_Queue->IsEmpty();
+
+            // --- Part 4: PeekFront tracks the most recent PutFront ---
+            // Insert D at front, then E at front. PeekFront must return E
+            // (the newest front insert), while Peek returns E as well since
+            // E is now the oldest (head) of the logical sequence.
+            uint8_t msg_d[_STK_MQ_MSG_SIZE]; memset(msg_d, 0xD0, sizeof(msg_d));
+            uint8_t msg_e[_STK_MQ_MSG_SIZE]; memset(msg_e, 0xE0, sizeof(msg_e));
+
+            ok &= g_Queue->TryPutFront(msg_d);
+            ok &= g_Queue->TryPutFront(msg_e);
+            ok &= (g_Queue->GetCount() == 2U);
+
+            uint8_t pf2[_STK_MQ_MSG_SIZE] = {};
+            ok &= g_Queue->TryPeekFront(pf2);
+            ok &= (memcmp(pf2, msg_e, _STK_MQ_MSG_SIZE) == 0); // E is the newest front insert
+            ok &= (g_Queue->GetCount() == 2U);                  // non-destructive
+
+            while (!g_Queue->IsEmpty())
+                g_Queue->TryGet(rx);
+
+            printf("PeekFront: %s\n", ok ? "PASS" : "FAIL");
+            if (ok)
+                g_TestResult = 1;
+        }
+
+        ++g_InstancesDone;
+    }
+};
+
+// ---------------------------------------------------------------------------
 // Helper – reset shared state between tests
 // ---------------------------------------------------------------------------
 
@@ -862,10 +1400,14 @@ static void ResetTestState()
 */
 static bool NeedsOnlyOneTask(const char *test_name)
 {
-    return (strcmp(test_name, "TryPutGet")  == 0) ||
-           (strcmp(test_name, "FillDrain")  == 0) ||
-           (strcmp(test_name, "Accessors")  == 0) ||
-           (strcmp(test_name, "WrapAround") == 0);
+    return (strcmp(test_name, "TryPutGet")           == 0) ||
+           (strcmp(test_name, "FillDrain")           == 0) ||
+           (strcmp(test_name, "Accessors")           == 0) ||
+           (strcmp(test_name, "WrapAround")          == 0) ||
+           (strcmp(test_name, "TryPutFront")         == 0) ||
+           (strcmp(test_name, "PutFrontWrapAround")  == 0) ||
+           (strcmp(test_name, "Peek")                == 0) ||
+           (strcmp(test_name, "PeekFront")           == 0);
 }
 
 /*! \fn    NeedsAllTasks
@@ -990,7 +1532,25 @@ int main(int argc, char **argv)
     RUN(stk::test::msgqueue::AccessorsTask,        "Accessors",        0);
 
     // Test 10: Ring-buffer wrap-around preserves FIFO payload integrity
-    RUN(stk::test::msgqueue::WrapAroundTask,       "WrapAround",       0);
+    RUN(stk::test::msgqueue::WrapAroundTask,            "WrapAround",            0);
+
+    // Test 10a: TryPutFront basic ordering and TryPutFront-on-full returns false
+    RUN(stk::test::msgqueue::TryPutFrontTask,           "TryPutFront",           0);
+
+    // Test 10b: PutFront tail wrap-around across the ring-buffer boundary
+    RUN(stk::test::msgqueue::PutFrontWrapAroundTask,    "PutFrontWrapAround",    0);
+
+    // Test 10c: Blocking PutFront woken by Get when queue is full
+    RUN(stk::test::msgqueue::BlockingPutFrontTask,      "BlockingPutFront",      0);
+
+    // Test 10d: Timed PutFront expires when queue remains full
+    RUN(stk::test::msgqueue::TimedPutFrontTimeoutTask,  "TimedPutFrontTimeout",  0);
+
+    // Test 13a: Peek inspects oldest message without consuming it
+    RUN(stk::test::msgqueue::PeekTask,                  "Peek",                  0);
+
+    // Test 13b: PeekFront inspects front-inserted message without consuming it
+    RUN(stk::test::msgqueue::PeekFrontTask,             "PeekFront",             0);
 
     // Test 11: Single-producer / single-consumer ping-pong (30 iterations)
     RUN(stk::test::msgqueue::PingPongTask,         "PingPong",         30);

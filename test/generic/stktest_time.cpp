@@ -32,7 +32,8 @@ namespace stk
         uint32_t GetSysTimerFrequency() const override { return 0; }
         void Delay(Timeout ticks) override { (void)ticks; }
         void Sleep(Timeout ticks) override { (void)ticks; }
-        void SleepUntil(Ticks timestamp) override { (void)timestamp; }
+        bool SleepUntil(Ticks timestamp) override { (void)timestamp; return false; }
+        void SleepCancel(TId task_id) override { (void)task_id; }
         void SwitchToNext() override {}
         IWaitObject *Wait(ISyncObject *sobj, IMutex *mutex, Timeout timeout) override
         {

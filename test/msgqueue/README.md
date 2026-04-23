@@ -34,8 +34,14 @@ stk::sync::MessageQueueT<8, sizeof(SensorMsg)> g_Q;
 |--------|-----------|-------------|
 | `Put` | `bool Put(const void *msg_ptr, Timeout timeout = WAIT_INFINITE)` | Copies `msg_size` bytes from `msg_ptr` into the next free slot. Blocks if the queue is full until space is available or the timeout expires. Returns `true` on success, `false` on timeout. ISR-safe only with `timeout == NO_WAIT`. |
 | `TryPut` | `bool TryPut(const void *msg_ptr)` | Non-blocking `Put(msg_ptr, NO_WAIT)`. Returns `false` immediately if the queue is full. ISR-safe. |
+| `PutFront` | `bool PutFront(const void *msg_ptr, Timeout timeout = WAIT_INFINITE)` | Copies `msg_size` bytes from `msg_ptr` into the slot immediately before the current read pointer, making it the next message returned by `Get()`. Blocks if the queue is full until space is available or the timeout expires. Returns `true` on success, `false` on timeout. ISR-safe only with `timeout == NO_WAIT`. |
+| `TryPutFront` | `bool TryPutFront(const void *msg_ptr)` | Non-blocking `PutFront(msg_ptr, NO_WAIT)`. Returns `false` immediately if the queue is full. ISR-safe. |
 | `Get` | `bool Get(void *msg_ptr, Timeout timeout = WAIT_INFINITE)` | Copies `msg_size` bytes from the oldest slot into `msg_ptr`. Blocks if the queue is empty until a message is produced or the timeout expires. Returns `true` on success, `false` on timeout. ISR-safe only with `timeout == NO_WAIT`. |
 | `TryGet` | `bool TryGet(void *msg_ptr)` | Non-blocking `Get(msg_ptr, NO_WAIT)`. Returns `false` immediately if the queue is empty. ISR-safe. |
+| `Peek` | `bool Peek(void *msg_ptr, Timeout timeout = WAIT_INFINITE)` | Copies `msg_size` bytes from the oldest slot into `msg_ptr` **without** removing the message. Blocks if the queue is empty until a message is produced or the timeout expires. Returns `true` on success, `false` on timeout. ISR-safe only with `timeout == NO_WAIT`. |
+| `TryPeek` | `bool TryPeek(void *msg_ptr)` | Non-blocking `Peek(msg_ptr, NO_WAIT)`. Returns `false` immediately if the queue is empty. ISR-safe. |
+| `PeekFront` | `bool PeekFront(void *msg_ptr, Timeout timeout = WAIT_INFINITE)` | Copies `msg_size` bytes from the most recently front-inserted slot (i.e. `Prev(m_tail)`) into `msg_ptr` **without** removing the message. Blocks if the queue is empty until a message is produced or the timeout expires. Returns `true` on success, `false` on timeout. ISR-safe only with `timeout == NO_WAIT`. |
+| `TryPeekFront` | `bool TryPeekFront(void *msg_ptr)` | Non-blocking `PeekFront(msg_ptr, NO_WAIT)`. Returns `false` immediately if the queue is empty. ISR-safe. |
 | `Reset` | `void Reset()` | Discards all messages and resets head, tail and count to zero. Wakes all tasks blocked in `Put()` so they can re-evaluate. ISR-unsafe. |
 | `GetCapacity` | `size_t GetCapacity() const` | Returns the construction-time capacity (maximum number of messages). ISR-safe. |
 | `GetMsgSize` | `size_t GetMsgSize() const` | Returns the construction-time message size in bytes. ISR-safe. |
@@ -55,11 +61,36 @@ queue full, timeout == NO_WAIT  →  return false immediately
 queue full, timeout > 0         →  Wait on cv_not_full; retry or return false on expiry
 ```
 
+**`PutFront()` flow:**
+
+```
+queue not full  →  retreat m_tail (m_tail = Prev(m_tail)), memcpy into Slot(m_tail),
+                   ++m_count, NotifyOne on cv_not_empty, return true
+queue full, timeout == NO_WAIT  →  return false immediately
+queue full, timeout > 0         →  Wait on cv_not_full; retry or return false on expiry
+```
+
 **`Get()` flow:**
 
 ```
 queue not empty  →  memcpy from Slot(m_tail), advance m_tail, --m_count,
                     NotifyOne on cv_not_full, return true
+queue empty, timeout == NO_WAIT  →  return false immediately
+queue empty, timeout > 0         →  Wait on cv_not_empty; retry or return false on expiry
+```
+
+**`Peek()` flow:**
+
+```
+queue not empty  →  memcpy from Slot(m_tail), m_tail and m_count unchanged, return true
+queue empty, timeout == NO_WAIT  →  return false immediately
+queue empty, timeout > 0         →  Wait on cv_not_empty; retry or return false on expiry
+```
+
+**`PeekFront()` flow:**
+
+```
+queue not empty  →  memcpy from Slot(Prev(m_tail)), m_tail and m_count unchanged, return true
 queue empty, timeout == NO_WAIT  →  return false immediately
 queue empty, timeout > 0         →  Wait on cv_not_empty; retry or return false on expiry
 ```
@@ -75,12 +106,19 @@ NotifyAll on cv_not_full  →  wakes all blocked Put() callers
 
 - The queue is parameterised on a byte count, not a C++ type; payload is always
   transferred with `memcpy`.
-- `Put()` signals `cv_not_empty` after each successful enqueue; `Get()` signals
-  `cv_not_full` after each successful dequeue.
+- `Put()` and `PutFront()` both signal `cv_not_empty` after each successful enqueue;
+  `Get()` signals `cv_not_full` after each successful dequeue.
+- `Peek()` and `PeekFront()` wait on `cv_not_empty` identically to `Get()` but
+  leave `m_tail` and `m_count` unchanged; they never signal any condition variable.
+- `PeekFront()` reads from `Slot(Prev(m_tail))`, i.e. the slot most recently written
+  by `PutFront()`, without retreating `m_tail` or altering any state.
+- `PutFront()` retreats `m_tail` using the `Prev()` helper (modulo `m_capacity`) and
+  writes into that slot, leaving `m_head` unchanged. The message becomes the next item
+  returned by `Get()`.
 - `Reset()` signals `cv_not_full` with `NotifyAll` so every blocked producer is
   woken at once.
-- Head and tail indices wrap modulo `m_capacity` via the `Next()` helper, forming
-  a true ring buffer.
+- Head and tail indices wrap modulo `m_capacity` via the `Next()` / `Prev()` helpers,
+  forming a true ring buffer.
 - Destroying a queue while tasks are waiting is a logic error; `ConditionVariable`
   destructors assert an empty wait list in debug builds.
 
@@ -107,17 +145,17 @@ to zero before each test.
 
 | Predicate | Tests | Tasks added |
 |-----------|-------|-------------|
-| `NeedsOnlyOneTask()` | TryPutGet, FillDrain, Accessors, WrapAround | task 0 only |
-| *(default)* | BlockingGet, BlockingPut, TimedGetTimeout, TimedGetSuccess, TimedPutTimeout, Reset, PingPong | tasks 0–1 |
+| `NeedsOnlyOneTask()` | TryPutGet, FillDrain, Accessors, WrapAround, TryPutFront, PutFrontWrapAround, Peek, PeekFront | task 0 only |
+| *(default)* | BlockingGet, BlockingPut, TimedGetTimeout, TimedGetSuccess, TimedPutTimeout, Reset, PingPong, BlockingPutFront, TimedPutFrontTimeout | tasks 0–1 |
 | `NeedsAllTasks()` | Stress | tasks 0–4 |
 
 ---
 
 ## Platform Notes
 
-On **Cortex-M0** (`__ARM_ARCH_6M__`) insufficient RAM prevents linking eleven
-distinct task class templates simultaneously. Tests 1–11 are skipped and only
-`StressTask` (test 12) runs, under `#ifndef __ARM_ARCH_6M__`.
+On **Cortex-M0** (`__ARM_ARCH_6M__`) insufficient RAM prevents linking the full set of
+distinct task class templates simultaneously. Tests 1–14 are skipped and only
+`StressTask` (test 15) runs, under `#ifndef __ARM_ARCH_6M__`.
 
 `StressTask` runs on M0 because it uses a single task class template instantiated
 for all five task slots, fitting within available memory.
@@ -271,6 +309,110 @@ in exact FIFO order; `IsEmpty()` after drain
 
 ---
 
+### Test 10a — `TryPutFront`
+**Tasks:** 0 only
+
+Task 0 verifies `TryPutFront` correctness in four sub-cases:
+
+1. **Single front-insert on an empty queue.** `TryPutFront()` fills a message with
+   `0xF0` and enqueues it. `GetCount()` must rise to 1 and the message must come back
+   intact via `TryGet()`.
+
+2. **Mixed back/front ordering.** Two messages A (`0xAA`) and B (`0xBB`) are enqueued
+   via `TryPut()`, then C (`0xCC`) is prepended via `TryPutFront()`. The dequeue order
+   must be C → A → B.
+
+3. **Consecutive front-inserts produce LIFO order.** Three messages D, E, F are each
+   inserted at the front in that order; because every call retreats the tail one slot,
+   the dequeue order must be F → E → D.
+
+4. **`TryPutFront` on a full queue returns `false` immediately.** The queue is filled to
+   capacity, a further `TryPutFront()` is called, and the return value must be `false`
+   with `GetCount()` unchanged.
+
+**Pass condition:** all ordering checks and accounting checks hold across all four sub-cases
+
+---
+
+### Test 10b — `PutFrontWrapAround`
+**Tasks:** 0 only
+
+Task 0 exercises `TryPutFront` specifically at the ring-buffer boundary where the tail
+pointer must wrap from index 0 back to `CAPACITY - 1`. The buffer is first filled and
+fully drained so both head and tail sit at 0. `HALF = 4` messages are then enqueued via
+`TryPut()` so that `m_tail == 0` and `m_head == 4`. A single `TryPutFront()` is called;
+the `Prev()` helper must wrap the tail from 0 to index 7 (i.e. `CAPACITY - 1`). The
+front-inserted message (payload `0xFE`) must be the first item returned by `TryGet()`,
+followed by the 4 back-inserted messages in their original FIFO order.
+
+**Pass condition:** front-inserted payload retrieved first; remaining 4 messages in exact
+FIFO order; `IsEmpty()` after full drain
+
+---
+
+### Test 10c — `BlockingPutFront`
+**Tasks:** 0–1
+
+Task 0 fills the queue to capacity with 8 messages (payloads `0x10`–`0x17`) then sleeps
+`_STK_MQ_TEST_SHORT_SLEEP * 2` ticks. Task 1 calls `PutFront()` on the full queue with a
+priority sentinel payload (`0x50`) and must block. Task 0 calls `Get()` to consume the
+oldest message, freeing one slot; this must unblock task 1's `PutFront()`. Task 1 sets
+`g_SharedCounter = 1` on a successful return. After a second sleep, task 0 waits at a
+`g_InstancesDone < 2` barrier, calls `TryGet()` and verifies the payload is the `0x50`
+sentinel (confirming the message landed at the front), then drains the remaining messages.
+
+**Pass condition:** `g_SharedCounter == 1`; first dequeued message is the `0x50` sentinel;
+queue empty after drain
+
+---
+
+### Test 10d — `TimedPutFrontTimeout`
+**Tasks:** 0–1
+
+Mirrors `TimedPutTimeout` but targets `PutFront()`. Task 0 fills the queue via `TryPut()`
+and holds it full for 200 ms. Task 1 sleeps `_STK_MQ_TEST_SHORT_SLEEP` to let task 0
+fill first, then calls `PutFront(tx, 50)` and measures elapsed time with `GetTimeNowMs()`.
+The call must return `false` and the elapsed time must fall in `[45, 65]` ms. `g_TestResult`
+is set directly inside task 1's branch.
+
+**Pass condition:** `PutFront()` returned `false` and elapsed ∈ `[45, 65]` ms
+
+---
+
+### Test 13a — `Peek`
+**Tasks:** 0 only
+
+Task 0 exercises `Peek()` and `TryPeek()` across four sub-cases:
+
+1. **`TryPeek` on an empty queue returns `false` immediately.** No message is written; `TryPeek()` must return `false` and `IsEmpty()` must remain `true`.
+
+2. **`Peek` is non-destructive.** One message (`0xA5`) is enqueued. `TryPeek()` must return `true` with the correct payload, and `GetCount()` must remain `1` afterwards. A subsequent `TryGet()` must return the same payload, confirming the message was not consumed by the peek.
+
+3. **`Peek` is idempotent across multiple calls.** One message (`0x3C`) is enqueued. Two consecutive `TryPeek()` calls must each return the correct payload and leave `GetCount() == 1`. A final `TryGet()` drains the slot.
+
+4. **`Peek` obeys FIFO order.** Two messages (`0x11`, `0x22`) are enqueued in that order. `TryPeek()` must return `0x11` (the oldest), not `0x22`.
+
+**Pass condition:** all sub-cases pass; queue empty after each drain
+
+---
+
+### Test 13b — `PeekFront`
+**Tasks:** 0 only
+
+Task 0 exercises `PeekFront()` and `TryPeekFront()` across four sub-cases:
+
+1. **`TryPeekFront` on an empty queue returns `false` immediately.**
+
+2. **`PeekFront` on a pure-`Put` queue.** With no `PutFront()` ever called, `PeekFront()` reads `Slot(Prev(m_tail))`, which is the most-recently-written back slot. The returned payload must match and `GetCount()` must remain `1`.
+
+3. **`PeekFront` returns the `PutFront` message while `Peek` agrees.** Messages A and B are back-inserted; C is front-inserted via `TryPutFront()`. Both `TryPeek()` and `TryPeekFront()` must return C (since C is both the oldest in the logical sequence and the most recently front-inserted). Both calls must leave `GetCount() == 3`. The queue is then fully drained in the expected order: C → A → B.
+
+4. **`PeekFront` tracks the newest `PutFront`.** Messages D then E are inserted at the front in that order. `TryPeekFront()` must return E (the most recent front-insert) and leave `GetCount() == 2` unchanged.
+
+**Pass condition:** all sub-cases pass; queue empty after each drain
+
+---
+
 ### Test 11 — `PingPong`
 **Tasks:** 0–1 &nbsp;|&nbsp; **Param:** `iterations = 30`
 
@@ -305,17 +447,24 @@ and no deadlock occurred.
 
 ## Summary Table
 
-| # | Test | Tasks | Stack | Pass condition | What it verifies |
-|---|------|-------|-------|----------------|------------------|
-| 1 | `TryPutGetTask` | 0 | `_STK_MQ_STACK_SIZE` | payload intact; `TryGet()` on empty returns `false` | `TryPut()` / `TryGet()` basic cycle; all accounting accessors |
-| 2 | `FillDrainTask` | 0 | `_STK_MQ_STACK_SIZE` | FIFO order across all 8 slots; `TryPut()` on full returns `false` | `IsFull()`, `GetCount()`, `GetSpace()`, FIFO ordering, capacity enforcement |
-| 3 | `BlockingGetTask` | 0–1 | `_STK_MQ_STACK_SIZE` | `g_SharedCounter == 1`; queue empty | `Get()` blocks on empty queue; producer wakes consumer; payload survives inter-task transfer |
-| 4 | `BlockingPutTask` | 0–1 | `_STK_MQ_STACK_SIZE` | `g_SharedCounter == 1`; queue empty | `Put()` blocks on full queue; consumer wakes producer by freeing a slot |
-| 5 | `TimedGetTimeoutTask` | 0–1 | `_STK_MQ_STACK_SIZE` | `Get()` returned `false`; elapsed ∈ `[45, 65]` ms | `Get()` with timeout expires in the correct window when queue stays empty |
-| 6 | `TimedGetSuccessTask` | 0–1 | `_STK_MQ_STACK_SIZE` | `Get()` returned `true` | `Get()` with timeout succeeds when message arrives before expiry |
-| 7 | `TimedPutTimeoutTask` | 0–1 | `_STK_MQ_STACK_SIZE` | `Put()` returned `false`; elapsed ∈ `[45, 65]` ms | `Put()` with timeout expires in the correct window when queue stays full |
-| 8 | `ResetTask` | 0–1 | `_STK_MQ_STACK_SIZE` | `g_SharedCounter == 1`; queue empty | `Reset()` discards all messages and wakes blocked producers via `NotifyAll` |
-| 9 | `AccessorsTask` | 0 | `_STK_MQ_STACK_SIZE` | all accessors match construction values | `GetCapacity`, `GetMsgSize`, `GetBuffer`, `GetCount`, `GetSpace`, `IsStorageValid` for both external and internal (`MessageQueueT`) storage |
-| 10 | `WrapAroundTask` | 0 | `_STK_MQ_STACK_SIZE` | all 8 post-wrap payloads in FIFO order; `IsEmpty()` after drain | Ring-buffer `Next()` wrap-around preserves payload integrity across the physical slot boundary |
-| 11 | `PingPongTask` | 0–1 | `_STK_MQ_STACK_SIZE` | `counter == 30`; queue empty | Blocking `Put()` / `Get()` sustain correct in-order delivery across 30 iterations of single-producer / single-consumer traffic |
-| 12 | `StressTask` | 0–4 | `_STK_MQ_STACK_SIZE` | `g_SharedCounter == 0`; queue empty | No message loss, duplication, or deadlock under full five-task contention mixing `TryPut`, `Put`, `Put(timeout)`, `TryGet`, `Get`, and `Get(timeout)`; runs on all platforms |
+| #   | Test | Tasks | Stack | Pass condition | What it verifies |
+|-----|------|-------|-------|----------------|------------------|
+| 1   | `TryPutGetTask` | 0 | `_STK_MQ_STACK_SIZE` | payload intact; `TryGet()` on empty returns `false` | `TryPut()` / `TryGet()` basic cycle; all accounting accessors |
+| 2   | `FillDrainTask` | 0 | `_STK_MQ_STACK_SIZE` | FIFO order across all 8 slots; `TryPut()` on full returns `false` | `IsFull()`, `GetCount()`, `GetSpace()`, FIFO ordering, capacity enforcement |
+| 3   | `BlockingGetTask` | 0–1 | `_STK_MQ_STACK_SIZE` | `g_SharedCounter == 1`; queue empty | `Get()` blocks on empty queue; producer wakes consumer; payload survives inter-task transfer |
+| 4   | `BlockingPutTask` | 0–1 | `_STK_MQ_STACK_SIZE` | `g_SharedCounter == 1`; queue empty | `Put()` blocks on full queue; consumer wakes producer by freeing a slot |
+| 5   | `TimedGetTimeoutTask` | 0–1 | `_STK_MQ_STACK_SIZE` | `Get()` returned `false`; elapsed ∈ `[45, 65]` ms | `Get()` with timeout expires in the correct window when queue stays empty |
+| 6   | `TimedGetSuccessTask` | 0–1 | `_STK_MQ_STACK_SIZE` | `Get()` returned `true` | `Get()` with timeout succeeds when message arrives before expiry |
+| 7   | `TimedPutTimeoutTask` | 0–1 | `_STK_MQ_STACK_SIZE` | `Put()` returned `false`; elapsed ∈ `[45, 65]` ms | `Put()` with timeout expires in the correct window when queue stays full |
+| 8   | `ResetTask` | 0–1 | `_STK_MQ_STACK_SIZE` | `g_SharedCounter == 1`; queue empty | `Reset()` discards all messages and wakes blocked producers via `NotifyAll` |
+| 9   | `AccessorsTask` | 0 | `_STK_MQ_STACK_SIZE` | all accessors match construction values | `GetCapacity`, `GetMsgSize`, `GetBuffer`, `GetCount`, `GetSpace`, `IsStorageValid` for both external and internal (`MessageQueueT`) storage |
+| 10  | `WrapAroundTask` | 0 | `_STK_MQ_STACK_SIZE` | all 8 post-wrap payloads in FIFO order; `IsEmpty()` after drain | Ring-buffer `Next()` wrap-around preserves payload integrity across the physical slot boundary |
+| 10a | `TryPutFrontTask` | 0 | `_STK_MQ_STACK_SIZE` | all ordering and accounting checks pass across four sub-cases | `TryPutFront()` basic ordering (single insert, mixed back/front, consecutive front-inserts, full-queue rejection) |
+| 10b | `PutFrontWrapAroundTask` | 0 | `_STK_MQ_STACK_SIZE` | front-inserted payload first; remaining 4 in FIFO order; `IsEmpty()` after drain | `PutFront()` tail `Prev()` wrap-around from index 0 to `CAPACITY-1`; ring-buffer integrity across the boundary |
+| 10c | `BlockingPutFrontTask` | 0–1 | `_STK_MQ_STACK_SIZE` | `g_SharedCounter == 1`; sentinel payload at front; queue empty | `PutFront()` blocks on full queue; consumer `Get()` wakes blocked front-producer; priority message lands at head |
+| 10d | `TimedPutFrontTimeoutTask` | 0–1 | `_STK_MQ_STACK_SIZE` | `PutFront()` returned `false`; elapsed ∈ `[45, 65]` ms | `PutFront()` with timeout expires in the correct window when queue stays full |
+| 11  | `PingPongTask` | 0–1 | `_STK_MQ_STACK_SIZE` | `counter == 30`; queue empty | Blocking `Put()` / `Get()` sustain correct in-order delivery across 30 iterations of single-producer / single-consumer traffic |
+| 12  | `StressTask` | 0–4 | `_STK_MQ_STACK_SIZE` | `g_SharedCounter == 0`; queue empty | No message loss, duplication, or deadlock under full five-task contention mixing `TryPut`, `Put`, `Put(timeout)`, `TryGet`, `Get`, and `Get(timeout)`; runs on all platforms |
+| 13  | `PeekTask` | 0 | `_STK_MQ_STACK_SIZE` | all sub-cases pass; queue empty after each drain | `TryPeek()` on empty returns `false`; `Peek()` is non-destructive and idempotent; respects FIFO order |
+| 13a | `PeekFrontTask` | 0 | `_STK_MQ_STACK_SIZE` | all sub-cases pass; queue empty after each drain | `TryPeekFront()` on empty returns `false`; `PeekFront()` is non-destructive; returns the front-inserted slot (`Prev(m_tail)`) without altering queue state |
+

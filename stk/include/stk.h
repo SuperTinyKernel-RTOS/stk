@@ -709,19 +709,27 @@ protected:
             }
         }
 
-        void SleepUntil(Ticks timestamp) override
+        bool SleepUntil(Ticks timestamp) override
         {
             STK_ASSERT(!hw::IsInsideISR());
-            STK_ASSERT(timestamp >= 0);
 
             if (!IsHrtMode())
             {
-                m_kernel->m_platform.SleepUntil(timestamp);
+                return m_kernel->m_platform.SleepUntil(timestamp);
             }
             else
             {
                 // sleeping is not supported in HRT mode, task will sleep according to its periodicity and workload
                 STK_ASSERT(false);
+                return false;
+            }
+        }
+
+        void SleepCancel(TId task_id) override
+        {
+            if (!IsHrtMode())
+            {
+                m_kernel->OnTaskSleepCancel(task_id);
             }
         }
 
@@ -1565,25 +1573,43 @@ protected:
         task->BusyWaitWhileSleeping();
     }
 
-    void OnTaskSleepUntil(Word caller_SP, Ticks timestamp) override
+    bool OnTaskSleepUntil(Word caller_SP, Ticks timestamp) override
     {
         STK_ASSERT(!IsHrtMode());
 
         KernelTask *task = FindTaskBySP(caller_SP);
         STK_ASSERT(task != nullptr);
 
+        bool result = true;
+
         // make change to HRT state and sleep time atomic
         {
             hw::CriticalSection::ScopedLock cs_;
 
-            Timeout ticks = Max(static_cast<Timeout>(0), static_cast<Timeout>(timestamp - m_service.m_ticks));
+            // calculate signed delta (handles wrap-around correctly)
+            const Ticks delta = timestamp - m_service.m_ticks;
 
-            if (ticks > 0)
-                task->ScheduleSleep(ticks);
+            if (delta > 0)
+                task->ScheduleSleep(static_cast<Timeout>(Min(delta, static_cast<Ticks>(INT32_MAX))));
+            else
+                result = false; // deadline already hit or passed
         }
 
         // note: we do not spin long here, kernel will switch this task out from scheduling on the next tick
         task->BusyWaitWhileSleeping();
+        return result;
+    }
+
+    void OnTaskSleepCancel(TId task_id)
+    {
+        KernelTask *task = FindTaskByUserTask(GetUserTaskFromTid(task_id));
+        if (task != nullptr)
+        {
+            hw::CriticalSection::ScopedLock cs_;
+
+            if (task->IsSleeping())
+                task->Wake();
+        }
     }
 
     void OnTaskExit(Stack *stack) override
