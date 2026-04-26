@@ -33,7 +33,7 @@ using namespace stk::time;
 // Internal concrete Timer subclass that bridges C++ OnExpired() -> C callback
 // ---------------------------------------------------------------------------
 
-class CTimerWrapper : public TimerHost::Timer
+class CTimerWrapper final : public TimerHost::Timer
 {
 public:
     CTimerWrapper() : m_host_handle(nullptr), m_callback(nullptr), m_user_data(nullptr)

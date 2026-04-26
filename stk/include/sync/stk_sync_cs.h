@@ -57,7 +57,8 @@ class ScopedCriticalSection final : public IMutex
     friend class Mutex;
     friend class RWMutex;
     friend class Semaphore;
-    template <typename T, size_t N> friend class Pipe;
+    friend class Pipe;
+    template <typename T, size_t N> friend class PipeT;
 
 public:
     /*! \brief Enters critical section.

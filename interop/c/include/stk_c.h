@@ -1022,7 +1022,7 @@ size_t stk_pipe_read_bulk(stk_pipe_t *pipe, stk_word_t *dst, size_t count, int32
     \param[in] pipe: Pipe handle.
     \return    Current element count.
 */
-size_t stk_pipe_get_size(stk_pipe_t *pipe);
+size_t stk_pipe_get_count(stk_pipe_t *pipe);
 
 // ───── MessageQueue ──────────────────────────────────────────────────────────
 

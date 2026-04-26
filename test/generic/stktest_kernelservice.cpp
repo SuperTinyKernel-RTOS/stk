@@ -22,6 +22,9 @@ TEST_GROUP(KernelService)
     void teardown()
     {
         g_RelaxCpuHandler = NULL;
+
+        g_TestContext.RethrowAssertException(true);
+        g_TestContext.ExpectAssert(false);
     }
 };
 
@@ -660,6 +663,71 @@ TEST(KernelService, SleepAndWakeTickless)
     CHECK_EQUAL(2, platform->m_context_switch_nr);
 }
 
+static struct SleepCancelRelaxCpuContext
+{
+    SleepCancelRelaxCpuContext()
+    {
+        Clear();
+    }
+
+    void Clear()
+    {
+        counter  = 0;
+        platform = NULL;
+        task1    = NULL;
+    }
+
+    uint32_t               counter;
+    PlatformTestMock      *platform;
+    TaskMock<ACCESS_USER> *task1;
+
+    void Process()
+    {
+        platform->ProcessTick();
+
+        if (counter == 0)
+        {
+            SleepCancel(task1->GetId());
+        }
+
+        ++counter;
+    }
+}
+g_SleepCancelRelaxCpuContext;
+
+static void SleepCancelRelaxCpu()
+{
+    g_SleepCancelRelaxCpuContext.Process();
+}
+
+TEST(KernelService, SleepCancel)
+{
+    Kernel<KERNEL_STATIC, 2, SwitchStrategyRR, PlatformTestMock> kernel;
+    TaskMock<ACCESS_USER> task1;
+    PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
+    Stack *&active = platform->m_stack_active;
+
+    kernel.Initialize();
+    kernel.AddTask(&task1);
+    kernel.Start();
+
+    // on start Round-Robin selects the very first task
+    CHECK_EQUAL(active->SP, (size_t)task1.GetStack());
+
+    g_RelaxCpuHandler = SleepCancelRelaxCpu;
+    g_SleepCancelRelaxCpuContext.Clear();
+    g_SleepCancelRelaxCpuContext.platform = platform;
+    g_SleepCancelRelaxCpuContext.task1    = &task1;
+
+    CHECK_EQUAL(0, platform->m_ticks_count);
+
+    // task1 calls Sleep to become idle, inside SleepCancelRelaxCpu it will call SleepCancel
+    Sleep(10);
+
+    // 2 = 1 tick for going to sleep, +1 tick for going out of sleep
+    CHECK_EQUAL(2, platform->m_ticks_count);
+}
+
 // ============================================================================ //
 // =+==================== KernelServiceIsrSafety ============================== //
 // ============================================================================ //
@@ -676,6 +744,9 @@ TEST_GROUP(KernelServiceIsrSafety)
         g_InsideISR = false;
         g_DelayContext.Clear();
         g_RelaxCpuHandler = NULL;
+
+        g_TestContext.RethrowAssertException(true);
+        g_TestContext.ExpectAssert(false);
     }
 };
 

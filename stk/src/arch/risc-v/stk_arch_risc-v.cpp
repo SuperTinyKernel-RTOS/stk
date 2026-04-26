@@ -1971,9 +1971,9 @@ void PlatformRiscV::Sleep(Timeout ticks)
     GetContext().m_handler->OnTaskSleep(HW_GetCallerSP(), ticks);
 }
 
-void PlatformRiscV::SleepUntil(Ticks timestamp)
+bool PlatformRiscV::SleepUntil(Ticks timestamp)
 {
-    GetContext().m_handler->OnTaskSleepUntil(HW_GetCallerSP(), timestamp);
+    return GetContext().m_handler->OnTaskSleepUntil(HW_GetCallerSP(), timestamp);
 }
 
 IWaitObject *PlatformRiscV::Wait(ISyncObject *sync_obj, IMutex *mutex, Timeout timeout)

@@ -173,7 +173,7 @@ static uint32_t  g_StkKernelLocked = 0;
 //   Priority is stored as STK weight (0..31) and returned via GetWeight().
 // ---------------------------------------------------------------------------
 
-struct StkThread : public stk::ITask
+struct StkThread final : public stk::ITask
 {
     // --- Join support ---
     enum class JoinState : uint8_t
@@ -304,7 +304,7 @@ struct StkEventFlags
 static stk::time::TimerHost *g_TimerHost = nullptr;
 static stk::Word             g_TimerHostBuf[StkGetWordCountForType<stk::time::TimerHost>()];
 
-struct StkTimer : public stk::time::TimerHost::Timer
+struct StkTimer final : public stk::time::TimerHost::Timer
 {
     explicit StkTimer(osTimerFunc_t f, osTimerType_t t, void *arg, const char *n)
         : m_func(f), m_argument(arg), m_type(t), m_name(n), m_period_ticks(0U), m_cb_owned(true)
@@ -1257,7 +1257,10 @@ osMutexId_t osMutexNew(const osMutexAttr_t *attr)
     uint32_t    cb_sz  = (attr != nullptr ? attr->cb_size : 0U);
     bool        robust = (attr != nullptr) && (attr->attr_bits & osMutexRobust);
 
+    // disallow osMutexRobust
     STK_ASSERT(!robust);
+    if (robust)
+        return nullptr;
 
     StkMutex *m = PlacementNewOrHeap<StkMutex>(cb_mem, cb_sz, name);
     return static_cast<osMutexId_t>(m);

@@ -175,9 +175,9 @@ public:
         m_event_handler->OnTaskSleep(GetCallerSP(), ticks);
     }
 
-    void SleepUntil(Ticks timestamp) override
+    bool SleepUntil(Ticks timestamp) override
     {
-        m_event_handler->OnTaskSleepUntil(GetCallerSP(), timestamp);
+        return m_event_handler->OnTaskSleepUntil(GetCallerSP(), timestamp);
     }
 
     IWaitObject *Wait(ISyncObject *sobj, IMutex *mutex, Timeout timeout)
@@ -337,9 +337,15 @@ public:
         (void)ticks;
     }
 
-    void SleepUntil(Ticks timestamp) override
+    bool SleepUntil(Ticks timestamp) override
     {
         (void)timestamp;
+        return false;
+    }
+
+    void SleepCancel(TId task_id) override
+    {
+        (void)task_id;
     }
 
     void SwitchToNext() override

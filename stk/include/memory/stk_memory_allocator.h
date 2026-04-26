@@ -54,6 +54,56 @@ namespace memory {
 */
 struct MemoryAllocator
 {
+    /*! \brief Default memory pool capacity in bytes.
+        \see   Stats
+    */
+    static const size_t CAPACITY_DEFAULT = 12288U;
+
+    /*! \class Stats
+        \brief Snapshot of the memory allocator's statistics.
+    */
+    struct Stats
+    {
+        Stats(size_t _capacity = CAPACITY_DEFAULT)
+            : capacity(_capacity), allocated(0U), allocate_count(0U), free_count(0U), min_ever_free(_capacity)
+        {}
+
+        const size_t    capacity;       //!< Total capacity of the memory pool in bytes.
+        volatile size_t allocated;      //!< Number of bytes currently allocated (dynamic value).
+        volatile size_t allocate_count; //!< Number of succesful allocations with Allocate().
+        volatile size_t free_count;     //!< Number of succesful frees with Free().
+        volatile size_t min_ever_free;  //!< Minimum free bytes recorded since system start (watermark).
+
+        /*! \brief     Get total capacity of the memory pool.
+            \return    Capacity in bytes.
+        */
+        size_t GetCapacity() const { return capacity; }
+
+        /*! \brief     Get number of bytes currently available for allocation.
+            \return    Available bytes.
+        */
+        size_t GetAvailable() const { return ((allocated < capacity) ? (capacity - allocated) : 0U); }
+
+        /*! \brief     Record sucessful allocation.
+            \param[in] size: Size of allocated memory chunk.
+        */
+        void RecordAllocate(size_t size)
+        {
+            allocated += size;
+            min_ever_free = Min(GetAvailable(), min_ever_free);
+        }
+
+        /*! \brief     Record sucessful deallocation.
+            \param[in] size: Size of freed memory chunk.
+        */
+        void RecordFree(size_t size)
+        {
+            STK_ASSERT(allocated >= size);
+
+            allocated -= size;
+        }
+    };
+
     /*! \brief     Allocate the memory chunk.
         \param[in] size: Size of the memory chunk.
         \return    Pointer to the allocated memory chunk, nullptr if allocator failed to allocate it.
@@ -64,6 +114,11 @@ struct MemoryAllocator
         \param[in] ptr: Pointer to the memory chunk. nullptr is allowed and results in noop.
     */
     static void Free(void *ptr) __stk_weak;
+
+    /*! \brief     Get stats of memory allocation.
+        \return    Stats structure.
+    */
+    static Stats GetStats() __stk_weak;
 
 #if STK_MEMORY_PLACEMENT_NEW
 

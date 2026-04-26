@@ -1006,6 +1006,12 @@ TEST(Kernel, HrtSleepNotAllowed)
         CHECK(true);
         g_TestContext.ExpectAssert(false);
     }
+
+    g_TestContext.ExpectAssert(true);
+    g_TestContext.RethrowAssertException(false);
+    CHECK_EQUAL(false, SleepUntil(GetTicks() + 1));
+    g_TestContext.RethrowAssertException(true);
+    g_TestContext.ExpectAssert(false);
 }
 
 TEST(Kernel, HrtTaskCompleted)

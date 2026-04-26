@@ -151,9 +151,9 @@
 			<locationURI>PARENT-4-PROJECT_LOC/stk/include/sync/stk_sync_event.h</locationURI>
 		</link>
 		<link>
-			<name>deps/stk/include/sync/stk_sync_pipe.h</name>
+			<name>deps/stk/include/sync/stk_sync_msgqueue.h</name>
 			<type>1</type>
-			<locationURI>PARENT-4-PROJECT_LOC/stk/include/sync/stk_sync_pipe.h</locationURI>
+			<locationURI>PARENT-4-PROJECT_LOC/stk/include/sync/stk_sync_msgqueue.h</locationURI>
 		</link>
 		<link>
 			<name>deps/stk/include/sync/stk_sync_pipe.h</name>

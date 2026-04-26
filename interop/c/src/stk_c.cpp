@@ -24,7 +24,7 @@ static void FreeTask(const stk_task_t *task);
 // Forward decl.
 struct stk_task_t;
 
-class TaskWrapper : public ITask
+class TaskWrapper final : public ITask
 {
 public:
     // ITask

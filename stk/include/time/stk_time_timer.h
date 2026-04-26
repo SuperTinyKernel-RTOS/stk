@@ -434,22 +434,22 @@ private:
     /*! \typedef TaskTickMemory
         \brief   Stack memory type for the single tick task.
     */
-    typedef StackMemoryDef<TASK_TICK_MEMORY_SIZE>::Type   TaskTickMemory;
+    typedef StackMemoryDef<TASK_TICK_MEMORY_SIZE>::Type    TaskTickMemory;
 
     /*! \typedef TimerHostMemory
         \brief   Stack memory type for each handler task.
     */
-    typedef StackMemoryDef<TASK_HANDLER_STACK_SIZE>::Type TimerHostMemory;
+    typedef StackMemoryDef<TASK_HANDLER_STACK_SIZE>::Type  TimerHostMemory;
 
     /*! \typedef ReadyQueue
         \brief   Lock-free pipe used to transfer expired timer pointers from the tick task to handler tasks.
     */
-    typedef sync::Pipe<Timer *, STK_TIMER_COUNT_MAX>      ReadyQueue;
+    typedef sync::PipeT<Timer *, STK_TIMER_COUNT_MAX>      ReadyQueue;
 
     /*! \typedef CommandQueue
         \brief   Lock-free pipe used to send TimerCommand records from API callers to the tick task.
     */
-    typedef sync::Pipe<TimerCommand, STK_TIMER_COUNT_MAX> CommandQueue;
+    typedef sync::PipeT<TimerCommand, STK_TIMER_COUNT_MAX> CommandQueue;
 
     TaskTickMemory                m_task_tick_memory;                             //!< tick task memory
     TimerHostMemory               m_task_handler_memory[STK_TIMER_THREADS_COUNT]; //!< handler task memory
