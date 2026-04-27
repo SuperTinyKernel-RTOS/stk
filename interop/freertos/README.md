@@ -398,6 +398,14 @@ Backed by a `stk::sync::MessageQueue` envelope FIFO paired with a `stk::memory::
 
 ---
 
+## Example
+
+There is a working example for STM32F407G-DISC1 development board:
+
+- [Advanced Blinky](https://github.com/SuperTinyKernel-RTOS/stk/tree/main/build/example/project/eclipse/stm/blinky-freertos-stm32f407g-disc1/src//main.c)
+
+---
+
 ## Quick Integration
 
 ### 1. Add the wrapper source to your build
