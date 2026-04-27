@@ -1,5 +1,5 @@
 /*
- * SuperTinyKernel™ (STK): Lightweight High-Performance Deterministic C++ RTOS for Embedded Systems.
+ * SuperTinyKernel(TM) RTOS: Lightweight High-Performance Deterministic C++ RTOS for Embedded Systems.
  *
  * Source: https://github.com/SuperTinyKernel-RTOS
  *
@@ -16,13 +16,13 @@
 #include <assert.h>
 
 /*! \file     stk_c.h
-    \brief    C language binding/interface for SuperTinyKernel (STK).
+    \brief    C language binding/interface for SuperTinyKernel RTOS.
 
     This header provides a pure C API to create, configure and run STK kernel
     from C code.
 
     \defgroup c_api STK C API
-    \brief    Pure C interface for C++ API of SuperTinyKernel (STK).
+    \brief    Pure C interface for C++ API of SuperTinyKernel RTOS.
     @{
 */
 

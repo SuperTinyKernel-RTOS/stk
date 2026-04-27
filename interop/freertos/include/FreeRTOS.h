@@ -1,123 +1,10 @@
 /*
- * FreeRTOS API wrapper for SuperTinyKernel (STK) RTOS.
+ * SuperTinyKernel(TM) RTOS: Lightweight High-Performance Deterministic C++ RTOS for Embedded Systems.
  *
- * Maps the standard FreeRTOS C API onto the STK C++ API, allowing existing
- * FreeRTOS-based projects to run on STK with minimal or no application changes.
+ * Source: https://github.com/SuperTinyKernel-RTOS
  *
- * Supported API groups:
- *   - Kernel control        (vTaskStartScheduler, taskENTER/EXIT_CRITICAL,
- *                            xTaskGetTickCount, vTaskDelay, vTaskDelayUntil,
- *                            xTaskDelayUntil, xTaskGetSchedulerState)
- *   - Task management       (xTaskCreate, vTaskDelete, vTaskSuspend, vTaskResume,
- *                            xTaskAbortDelay, vTaskPrioritySet, uxTaskPriorityGet,
- *                            xTaskGetHandle, xTaskGetCurrentTaskHandle, pcTaskGetName,
- *                            uxTaskGetStackHighWaterMark, eTaskGetState,
- *                            uxTaskGetSystemState,
- *                            xTaskCreateRestricted, xTaskCreateRestrictedStatic,
- *                            vTaskList, vTaskGetRunTimeStats)
- *   - Queue                 (xQueueCreate, xQueueCreateStatic, vQueueDelete,
- *                            xQueueSend, xQueueSendToBack, xQueueSendToFront,
- *                            xQueueReceive, xQueuePeek, xQueuePeekFromISR,
- *                            xQueueOverwrite, xQueueOverwriteFromISR,
- *                            uxQueueMessagesWaiting, uxQueueMessagesWaitingFromISR,
- *                            uxQueueSpacesAvailable, xQueueReset,
- *                            xQueueSendFromISR, xQueueReceiveFromISR,
- *                            xQueueSendToBackFromISR, xQueueSendToFrontFromISR,
- *                            xQueueIsQueueEmptyFromISR, xQueueIsQueueFullFromISR,
- *                            xQueueGetMutexHolder, xQueueGetMutexHolderFromISR,
- *                            xQueueCreateSet, xQueueAddToSet, xQueueRemoveFromSet,
- *                            xQueueSelectFromSet, xQueueSelectFromSetFromISR)
- *   - Semaphore / Mutex     (xSemaphoreCreateBinary, xSemaphoreCreateBinaryStatic,
- *                            xSemaphoreCreateCounting, xSemaphoreCreateCountingStatic,
- *                            xSemaphoreCreateMutex, xSemaphoreCreateMutexStatic,
- *                            xSemaphoreCreateRecursiveMutex,
- *                            xSemaphoreCreateRecursiveMutexStatic,
- *                            vSemaphoreDelete, xSemaphoreTake, xSemaphoreTakeFromISR,
- *                            xSemaphoreTakeRecursive, xSemaphoreGive,
- *                            xSemaphoreGiveRecursive, xSemaphoreGiveFromISR,
- *                            uxSemaphoreGetCount,
- *                            xSemaphoreGetMutexHolder,
- *                            xSemaphoreGetMutexHolderFromISR)
- *   - Software timers       (xTimerCreate, xTimerCreateStatic, xTimerDelete,
- *                            xTimerStart, xTimerStop, xTimerReset,
- *                            xTimerChangePeriod, xTimerIsTimerActive,
- *                            pvTimerGetTimerID, pcTimerGetName,
- *                            xTimerStartFromISR, xTimerStopFromISR,
- *                            xTimerResetFromISR, xTimerChangePeriodFromISR,
- *                            xTimerPendFunctionCall, xTimerPendFunctionCallFromISR)
- *   - Event groups          (xEventGroupCreate, xEventGroupCreateStatic,
- *                            vEventGroupDelete,
- *                            xEventGroupSetBits, xEventGroupClearBits,
- *                            xEventGroupGetBits, xEventGroupWaitBits,
- *                            xEventGroupSetBitsFromISR, xEventGroupClearBitsFromISR,
- *                            xEventGroupSync)
- *   - Task notifications    (xTaskNotifyGive, ulTaskNotifyTake,
- *                            xTaskNotify, xTaskNotifyWait, xTaskNotifyFromISR,
- *                            xTaskNotifyGiveIndexed, ulTaskNotifyTakeIndexed,
- *                            xTaskNotifyIndexed, xTaskNotifyWaitIndexed,
- *                            xTaskNotifyFromISRIndexed,
- *                            xTaskNotifyAndQuery, xTaskNotifyAndQueryIndexed,
- *                            xTaskNotifyAndQueryFromISR,
- *                            xTaskNotifyAndQueryFromISRIndexed,
- *                            xTaskNotifyStateClear, xTaskNotifyStateClearIndexed,
- *                            ulTaskNotifyValueClear, ulTaskNotifyValueClearIndexed)
- *   - Stream buffers        (xStreamBufferCreate, xStreamBufferCreateStatic,
- *                            xStreamBufferCreateWithCallback,
- *                            xStreamBufferCreateStaticWithCallback,
- *                            xStreamBufferSend, xStreamBufferReceive,
- *                            xStreamBufferSendFromISR, xStreamBufferReceiveFromISR,
- *                            vStreamBufferDelete, xStreamBufferBytesAvailable,
- *                            xStreamBufferSpacesAvailable, xStreamBufferIsEmpty,
- *                            xStreamBufferIsFull, xStreamBufferReset,
- *                            xStreamBufferResetFromISR,
- *                            xStreamBufferSetTriggerLevel,
- *                            xStreamBufferGetTriggerLevel,
- *                            xStreamBufferNextMessageLengthBytes)
- *   - Message buffers       (xMessageBufferCreate, xMessageBufferCreateStatic,
- *                            xMessageBufferCreateWithCallback,
- *                            xMessageBufferCreateStaticWithCallback,
- *                            xMessageBufferSend, xMessageBufferSendFromISR,
- *                            xMessageBufferReceive, xMessageBufferReceiveFromISR,
- *                            vMessageBufferDelete, xMessageBufferIsEmpty,
- *                            xMessageBufferIsFull, xMessageBufferSpacesAvailable,
- *                            xMessageBufferReset, xMessageBufferResetFromISR,
- *                            xMessageBufferNextLengthBytes)
- *
- * Design notes:
- *   - All objects are heap-allocated with operator new/delete.
- *     For static deployments replace with a static pool allocator.
- *   - One global STK Kernel instance (g_StkKernel) is configured with
- *     KERNEL_DYNAMIC | KERNEL_SYNC and SwitchStrategyFP32 (32 fixed-priority
- *     levels, same strategy used by the CMSIS wrapper).
- *     FreeRTOS priorities (0=lowest .. configMAX_PRIORITIES-1=highest) map
- *     directly to STK priority levels 0..configMAX_PRIORITIES-1.
- *     configMAX_PRIORITIES must be <= 32 (compile-time assertion in the .cpp).
- *     The highest-priority ready task always preempts lower ones, exactly
- *     matching FreeRTOS fixed-priority preemptive scheduling semantics.
- *   - portMAX_DELAY (0xFFFFFFFF) is translated to stk::WAIT_INFINITE.
- *   - Timeout values are in ticks; STK also takes ticks, so no conversion needed
- *     when tick resolution is 1 ms (the default PERIODICITY_DEFAULT).
- *   - Recursive mutexes are backed by stk::sync::Mutex (always recursive in STK).
- *   - Binary semaphores are backed by stk::sync::Semaphore with max_count=1.
- *   - Counting semaphores are backed by stk::sync::Semaphore.
- *   - Event groups are backed by stk::sync::EventFlags (32-bit, bits 0..23 usable
- *     per FreeRTOS convention; bits 24..30 are free, bit 31 is reserved by STK).
- *   - Software timers are backed by stk::time::TimerHost.
- *   - Task notifications are backed by per-task stk::sync::Semaphore.
- *   - Queue sets are backed by a per-set stk::sync::MessageQueue of void*
- *     tokens (sizeof(void*) per slot).  Member queues and semaphores carry a
- *     non-owning back-pointer to their registered set; QueueSetNotify() posts
- *     the member handle into the set's token FIFO after every successful send
- *     or signal.  Type discrimination between FrtosQueue and FrtosSemaphore
- *     uses the fact that SemKind (offset 0 in FrtosSemaphore, values 0 or 1)
- *     is always < the first byte of a MessageQueue vtable pointer (>= 4).
- *
- * Limitations / deviations:
- *   - Priority inheritance is not supported (STK mutex is always recursive,
- *     not priority-inheriting).
- *   - configUSE_PREEMPTION is assumed to be 1; cooperative scheduling is not modelled.
- *   - Task notifications: indexed API supports slots 0 .. configTASK_NOTIFICATION_ARRAY_ENTRIES-1.
- *   - uxTaskGetNumberOfTasks() requires the kernel to be running.
+ * Copyright (c) 2022-2026 Neutron Code Limited <stk@neutroncode.com>. All Rights Reserved.
+ * License: MIT License, see LICENSE for a full text.
  */
 
 #ifndef FREERTOS_STK_H_
@@ -127,6 +14,133 @@
 #include <stddef.h>
 
 #include "FreeRTOSConfig.h"
+
+/*! \file     FreeRTOS.h
+    \brief    FreeRTOS interface for SuperTinyKernel RTOS.
+
+    \defgroup freertos STK FreeRTOS API
+    \brief    FreeRTOS interface for C++ API of SuperTinyKernel RTOS.
+
+    Maps standard FreeRTOS C API onto the STK C++ API, allowing existing
+    FreeRTOS-based projects to run on STK with minimal or no application changes.
+
+    Supported API groups:
+      - Kernel control        (vTaskStartScheduler, taskENTER/EXIT_CRITICAL,
+                               xTaskGetTickCount, vTaskDelay, vTaskDelayUntil,
+                               xTaskDelayUntil, xTaskGetSchedulerState)
+      - Task management       (xTaskCreate, vTaskDelete, vTaskSuspend, vTaskResume,
+                               xTaskAbortDelay, vTaskPrioritySet, uxTaskPriorityGet,
+                               xTaskGetHandle, xTaskGetCurrentTaskHandle, pcTaskGetName,
+                               uxTaskGetStackHighWaterMark, eTaskGetState,
+                               uxTaskGetSystemState,
+                               xTaskCreateRestricted, xTaskCreateRestrictedStatic,
+                               vTaskList, vTaskGetRunTimeStats)
+      - Queue                 (xQueueCreate, xQueueCreateStatic, vQueueDelete,
+                               xQueueSend, xQueueSendToBack, xQueueSendToFront,
+                               xQueueReceive, xQueuePeek, xQueuePeekFromISR,
+                               xQueueOverwrite, xQueueOverwriteFromISR,
+                               uxQueueMessagesWaiting, uxQueueMessagesWaitingFromISR,
+                               uxQueueSpacesAvailable, xQueueReset,
+                               xQueueSendFromISR, xQueueReceiveFromISR,
+                               xQueueSendToBackFromISR, xQueueSendToFrontFromISR,
+                               xQueueIsQueueEmptyFromISR, xQueueIsQueueFullFromISR,
+                               xQueueGetMutexHolder, xQueueGetMutexHolderFromISR,
+                               xQueueCreateSet, xQueueAddToSet, xQueueRemoveFromSet,
+                               xQueueSelectFromSet, xQueueSelectFromSetFromISR)
+      - Semaphore / Mutex     (xSemaphoreCreateBinary, xSemaphoreCreateBinaryStatic,
+                               xSemaphoreCreateCounting, xSemaphoreCreateCountingStatic,
+                               xSemaphoreCreateMutex, xSemaphoreCreateMutexStatic,
+                               xSemaphoreCreateRecursiveMutex,
+                               xSemaphoreCreateRecursiveMutexStatic,
+                               vSemaphoreDelete, xSemaphoreTake, xSemaphoreTakeFromISR,
+                               xSemaphoreTakeRecursive, xSemaphoreGive,
+                               xSemaphoreGiveRecursive, xSemaphoreGiveFromISR,
+                               uxSemaphoreGetCount,
+                               xSemaphoreGetMutexHolder,
+                               xSemaphoreGetMutexHolderFromISR)
+      - Software timers       (xTimerCreate, xTimerCreateStatic, xTimerDelete,
+                               xTimerStart, xTimerStop, xTimerReset,
+                               xTimerChangePeriod, xTimerIsTimerActive,
+                               pvTimerGetTimerID, pcTimerGetName,
+                               xTimerStartFromISR, xTimerStopFromISR,
+                               xTimerResetFromISR, xTimerChangePeriodFromISR,
+                               xTimerPendFunctionCall, xTimerPendFunctionCallFromISR)
+      - Event groups          (xEventGroupCreate, xEventGroupCreateStatic,
+                               vEventGroupDelete,
+                               xEventGroupSetBits, xEventGroupClearBits,
+                               xEventGroupGetBits, xEventGroupWaitBits,
+                               xEventGroupSetBitsFromISR, xEventGroupClearBitsFromISR,
+                               xEventGroupSync)
+      - Task notifications    (xTaskNotifyGive, ulTaskNotifyTake,
+                               xTaskNotify, xTaskNotifyWait, xTaskNotifyFromISR,
+                               xTaskNotifyGiveIndexed, ulTaskNotifyTakeIndexed,
+                               xTaskNotifyIndexed, xTaskNotifyWaitIndexed,
+                               xTaskNotifyFromISRIndexed,
+                               xTaskNotifyAndQuery, xTaskNotifyAndQueryIndexed,
+                               xTaskNotifyAndQueryFromISR,
+                               xTaskNotifyAndQueryFromISRIndexed,
+                               xTaskNotifyStateClear, xTaskNotifyStateClearIndexed,
+                               ulTaskNotifyValueClear, ulTaskNotifyValueClearIndexed)
+      - Stream buffers        (xStreamBufferCreate, xStreamBufferCreateStatic,
+                               xStreamBufferCreateWithCallback,
+                               xStreamBufferCreateStaticWithCallback,
+                               xStreamBufferSend, xStreamBufferReceive,
+                               xStreamBufferSendFromISR, xStreamBufferReceiveFromISR,
+                               vStreamBufferDelete, xStreamBufferBytesAvailable,
+                               xStreamBufferSpacesAvailable, xStreamBufferIsEmpty,
+                               xStreamBufferIsFull, xStreamBufferReset,
+                               xStreamBufferResetFromISR,
+                               xStreamBufferSetTriggerLevel,
+                               xStreamBufferGetTriggerLevel,
+                               xStreamBufferNextMessageLengthBytes)
+      - Message buffers       (xMessageBufferCreate, xMessageBufferCreateStatic,
+                               xMessageBufferCreateWithCallback,
+                               xMessageBufferCreateStaticWithCallback,
+                               xMessageBufferSend, xMessageBufferSendFromISR,
+                               xMessageBufferReceive, xMessageBufferReceiveFromISR,
+                               vMessageBufferDelete, xMessageBufferIsEmpty,
+                               xMessageBufferIsFull, xMessageBufferSpacesAvailable,
+                               xMessageBufferReset, xMessageBufferResetFromISR,
+                               xMessageBufferNextLengthBytes)
+
+    Design notes:
+      - All objects are heap-allocated with operator new/delete.
+        For static deployments replace with a static pool allocator.
+      - One global STK Kernel instance (g_StkKernel) is configured with
+        KERNEL_DYNAMIC | KERNEL_SYNC and SwitchStrategyFP32 (32 fixed-priority
+        levels, same strategy used by the CMSIS wrapper).
+        FreeRTOS priorities (0=lowest .. configMAX_PRIORITIES-1=highest) map
+        directly to STK priority levels 0..configMAX_PRIORITIES-1.
+        configMAX_PRIORITIES must be <= 32 (compile-time assertion in the .cpp).
+        The highest-priority ready task always preempts lower ones, exactly
+        matching FreeRTOS fixed-priority preemptive scheduling semantics.
+      - portMAX_DELAY (0xFFFFFFFF) is translated to stk::WAIT_INFINITE.
+      - Timeout values are in ticks; STK also takes ticks, so no conversion needed
+        when tick resolution is 1 ms (the default PERIODICITY_DEFAULT).
+      - Recursive mutexes are backed by stk::sync::Mutex (always recursive in STK).
+      - Binary semaphores are backed by stk::sync::Semaphore with max_count=1.
+      - Counting semaphores are backed by stk::sync::Semaphore.
+      - Event groups are backed by stk::sync::EventFlags (32-bit, bits 0..23 usable
+        per FreeRTOS convention; bits 24..30 are free, bit 31 is reserved by STK).
+      - Software timers are backed by stk::time::TimerHost.
+      - Task notifications are backed by per-task stk::sync::Semaphore.
+      - Queue sets are backed by a per-set stk::sync::MessageQueue of void*
+        tokens (sizeof(void*) per slot).  Member queues and semaphores carry a
+        non-owning back-pointer to their registered set; QueueSetNotify() posts
+        the member handle into the set's token FIFO after every successful send
+        or signal.  Type discrimination between FrtosQueue and FrtosSemaphore
+        uses the fact that SemKind (offset 0 in FrtosSemaphore, values 0 or 1)
+        is always < the first byte of a MessageQueue vtable pointer (>= 4).
+
+    Limitations / deviations:
+      - Priority inheritance is not supported (STK mutex is always recursive,
+        not priority-inheriting).
+      - configUSE_PREEMPTION is assumed to be 1; cooperative scheduling is not modelled.
+      - Task notifications: indexed API supports slots 0 .. configTASK_NOTIFICATION_ARRAY_ENTRIES-1.
+      - uxTaskGetNumberOfTasks() requires the kernel to be running.
+
+    @{
+*/
 
 /* -------------------------------------------------------------------------
  * Portability macros - mirror what FreeRTOS normally provides via
@@ -2018,5 +2032,7 @@ void vPortGetHeapStats(HeapStats_t *pxHeapStats);
 #ifdef __cplusplus
 }
 #endif
+
+ /** @} */
 
 #endif /* FREERTOS_STK_H_ */

@@ -991,6 +991,8 @@ public:
 
     /*! \brief     Notification that a runnable task's scheduling weight has changed.
         \param[in] task: The task whose weight was just updated via SetWeight().
+        \param[in] old_weight: The previous weight of this task (required to remove it from
+                   the priority list belonging to that weight).
         \note      Called only for tasks that are currently in the runnable set
                    (not sleeping). The strategy must relink the task to reflect
                    its new weight. For strategies with WEIGHT_API = 0 this is a
@@ -1087,7 +1089,7 @@ public:
     virtual void ResumeTask(ITask *user_task) = 0;
 
     /*! \brief     Enumerate kernel tasks.
-        \param[in,out] user_tasks: Pointer to the array for IKernelTask pointers.
+        \param[in,out] tasks: Pointer to the array for IKernelTask pointers.
         \param[in] max_size: Max size of the provided array.
         \return    Number of tasks in the array.
         \warning   ISR-safe.

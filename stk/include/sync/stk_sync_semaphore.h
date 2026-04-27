@@ -60,7 +60,13 @@ public:
     static const size_t COUNT_MAX = 0xFFFEU;
 
     /*! \brief     Constructor.
-        \param[in] initial_count: Starting value of the semaphore.
+        \details   Initializes the semaphore with a specific count and maximum limit.
+                   Setting \a initial_count to a non-zero value allows for immediate
+                   resource acquisition.
+        \param[in] initial_count: Starting value of the internal counter (available permits).
+        \param[in] max_count: Maximum value the counter is allowed to reach.
+        \pre       \a initial_count <= \a max_count.
+        \note      Triggers an assertion in a debug build if \a initial_count exceeds \a max_count.
     */
     explicit Semaphore(uint16_t initial_count = 0U, uint16_t max_count = COUNT_MAX)
         : m_count(initial_count), m_count_max(max_count)

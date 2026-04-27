@@ -557,14 +557,12 @@ protected:
 
         /*! \brief     Called when task is switched into the scheduling process.
             \note      Related to stk::KERNEL_HRT mode only.
-            \param[in] ticks: Current ticks of the Kernel.
         */
         void HrtOnSwitchedIn() {}
 
         /*! \brief     Called when task is switched out from the scheduling process.
             \note      Related to stk::KERNEL_HRT mode only.
             \param[in] platform: Platform driver instance.
-            \param[in] ticks: Current ticks of the Kernel.
         */
         void HrtOnSwitchedOut(IPlatform */*platform*/)
         {
@@ -807,7 +805,6 @@ protected:
             \note      When call completes Singleton<IKernelService *> will start referencing this
                        instance (see g_KernelService).
             \param[in] kernel: Kernel instance.
-            \param[in] platform: IPlatform instance.
         */
         void Initialize(Kernel *kernel)
         {
@@ -1288,7 +1285,6 @@ protected:
 
     /*! \brief     Allocate new instance of KernelTask and add it into the scheduling process.
         \param[in] user_task: User task for which kernel task object is allocated.
-        \return    Kernel task.
     */
     void AllocateAndAddNewTask(ITask *user_task)
     {
@@ -1304,7 +1300,6 @@ protected:
         \param[in] periodicity_tc: Periodicity time at which task is scheduled (ticks).
         \param[in] deadline_tc: Deadline time within which a task must complete its work (ticks).
         \param[in] start_delay_tc: Initial start delay for the task (ticks).
-        \return    Kernel task.
     */
     void HrtAllocateAndAddNewTask(ITask *user_task, Timeout periodicity_tc, Timeout deadline_tc, Timeout start_delay_tc)
     {

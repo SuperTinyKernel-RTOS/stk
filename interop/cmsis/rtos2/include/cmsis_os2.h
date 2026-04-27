@@ -85,10 +85,55 @@
 #include <stddef.h>
 
 /*! \file     cmsis_os2.h
-    \brief    CMSIS RTOS2 interface for SuperTinyKernel (STK).
+    \brief    CMSIS RTOS2 interface for SuperTinyKernel RTOS.
 
     \defgroup cmsis_rtos2 STK CMSIS RTOS2 API
-    \brief    CMSIS RTOS2 interface for C++ API of SuperTinyKernel (STK).
+    \brief    CMSIS RTOS2 interface for C++ API of SuperTinyKernel RTOS.
+
+    Maps the CMSIS RTOS2 C API (cmsis_os2.h) onto the STK C++ API.
+
+    Supported:
+      - Kernel management     (osKernelInitialize / Start / GetState / GetInfo /
+                               GetTickCount / GetTickFreq / GetSysTimerCount /
+                               GetSysTimerFreq / Lock / Unlock / RestoreLock)
+      - Thread management     (osThreadNew / Delete / Yield / Delay / osDelay /
+                               GetId / GetName / GetState / GetPriority /
+                               SetPriority / GetStackSize / GetStackSpace /
+                               GetCount / Terminate / Suspend / Resume, Join, Detach)
+      - Thread flags          (osThreadFlagsSet / Clear / Get / Wait)
+      - Event flags           (osEventFlagsNew / Delete / Set / Clear / Get / Wait)
+      - Mutex                 (osMutexNew / Delete / Acquire / Release / GetOwner)
+      - Semaphore             (osSemaphoreNew / Delete / Acquire / Release / GetCount)
+      - Timer                 (osTimerNew / Delete / Start / Stop / IsRunning)
+      - Message Queue         (osMessageQueueNew / Delete / Put / Get /
+                               GetCapacity / GetMsgSize / GetCount / GetSpace / Reset)
+      - Memory Pool           (osMemoryPoolNew / Delete / Alloc / Free /
+                               GetCapacity / GetBlockSize / GetCount / GetSpace /
+                               GetName)
+
+    Design notes:
+      - All objects are heap-allocated with operator new/delete.
+        For a fully static deployment, replace with a static object-pool allocator.
+      - The wrapper owns one global Kernel instance (g_StkKernel).
+        Call osKernelInitialize() before any other API, then osKernelStart().
+      - The kernel is configured with KERNEL_DYNAMIC | KERNEL_SYNC and
+        SwitchStrategyFP32 (32 fixed-priority levels).
+        osThread priority values (osPriorityIdle=1 .. osPriorityISR=56) are
+        linearly mapped to STK priority levels 0..31.
+      - CMSIS osWaitForever (0xFFFFFFFF) is translated to STK WAIT_INFINITE.
+      - Timeout values in CMSIS are in ticks; STK Sleep/Delay also take ticks,
+        so no conversion is required.
+      - Thread flags and event flags are backed by stk::sync::EventFlags,
+        STK's native 32-bit multi-flag synchronization primitive.
+      - Message queues are backed by stk::sync::MessageQueue, STK's native
+        fixed-capacity, fixed-message-size ring-buffer with integrated blocking
+        semantics (Put/Get with configurable timeouts, ISR-safe TryPut/TryGet).
+
+    Limitations / deviations from the specification:
+      - Priority inheritance (osMutexPrioInherit): ignored, always supported.
+      - Robust mutex (osMutexRobust): will assert as unsafe code.
+      - Recursive mutex (osMutexRecursive): ignored, always recursive by default.
+
     @{
 */
  

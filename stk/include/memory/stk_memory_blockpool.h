@@ -87,6 +87,8 @@ namespace memory {
         }
     }
 
+    \endcode
+
     \see  sync::ConditionVariable, sync::Semaphore, sync::Pipe
     \note Blocking alloc paths require the kernel to be compiled with \a KERNEL_SYNC.
           \c TryAlloc() and \c Free() are always available regardless of kernel mode.

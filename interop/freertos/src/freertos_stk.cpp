@@ -1,18 +1,20 @@
 /*
- * FreeRTOS API wrapper for SuperTinyKernel (STK) RTOS.
+ * SuperTinyKernel(TM) RTOS: Lightweight High-Performance Deterministic C++ RTOS for Embedded Systems.
  *
- * Maps the standard FreeRTOS C API onto the STK C++ API, allowing existing
- * FreeRTOS-based projects to run on STK with minimal or no application changes.
+ * Source: https://github.com/SuperTinyKernel-RTOS
  *
- * See freertos_stk.h for the full list of supported API functions and design notes.
+ * Copyright (c) 2022-2026 Neutron Code Limited <stk@neutroncode.com>. All Rights Reserved.
+ * License: MIT License, see LICENSE for a full text.
  */
+
+#include <stdio.h>  // snprintf (vTaskList)
 
 #include "stk.h"
 #include "sync/stk_sync.h"
 #include "time/stk_time.h"
 #include "memory/stk_memory.h"
 
-#include <stdio.h>  // snprintf (vTaskList)
+// See design notes, API coverage and other details in FreeRTOS.h.
 
 #include "FreeRTOS.h"
 

@@ -343,6 +343,7 @@ See [interop/freertos](https://github.com/SuperTinyKernel-RTOS/stk/tree/main/int
 
 
 > **Note:** Wrapper is missing important API your project is using? Contact with inquiry: [contact@supertinykernel.org](mailto:contact@supertinykernel.org)
+
 ---
 
 ## Synchronization API (`stk/stk_sync.h`)
