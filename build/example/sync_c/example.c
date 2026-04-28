@@ -41,16 +41,12 @@ typedef enum LedState {
     LED_ON
 } LedState;
 
-// Memory containers for sync primitives (static allocation)
+// Pointers to synchronization primitives
 #if STK_EXAMPLE_USE_PIPE
-static stk_pipe_mem_t  g_PipeMem;
 static stk_pipe_t     *g_CtrlSignalPipe;
 #else
-static stk_event_mem_t g_EvRdyMem, g_EvOnMem, g_EvOffMem;
 static stk_event_t    *g_EventReady, *g_EventSwitchOn, *g_EventSwitchOff;
 #endif
-
-static stk_mutex_mem_t g_HwMtxMem;
 static stk_mutex_t    *g_HwMutex;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -65,10 +61,8 @@ static void LedTask_Run(void *arg)
     while (true)
     {
     #if STK_EXAMPLE_USE_PIPE
-        size_t pipe_val;
-        if (!stk_pipe_read(g_CtrlSignalPipe, &pipe_val, 100))
+        if (!stk_pipe_read(g_CtrlSignalPipe, &task_id, 100))
             continue;
-        task_id = (LedState)pipe_val;
     #else
         switch (task_id)
         {
@@ -121,7 +115,8 @@ static void CtrlTask_Run(void *arg)
         task_start = stk_time_now_ms();
 
     #if STK_EXAMPLE_USE_PIPE
-        stk_pipe_write(g_CtrlSignalPipe, led_sw ? LED_ON : LED_OFF, STK_WAIT_INFINITE);
+        LedState new_state = led_sw ? LED_ON : LED_OFF;
+        stk_pipe_write(g_CtrlSignalPipe, &new_state, STK_WAIT_INFINITE);
     #else
         if (led_sw)
             stk_event_set(g_EventSwitchOn);
@@ -142,11 +137,21 @@ static void InitLeds()
 
 static void InitSync()
 {
-    // init Mutex
+    // Memory containers for sync primitives (static allocation)
+    static stk_mutex_mem_t g_HwMtxMem;
+#if STK_EXAMPLE_USE_PIPE
+    static stk_pipe_mem_t  g_PipeMem;
+    static LedState        s_PipeBuf[16] __stk_c_aligned;
+#else
+    static stk_event_mem_t g_EvRdyMem, g_EvOnMem, g_EvOffMem;
+#endif
+
     g_HwMutex = stk_mutex_create(&g_HwMtxMem, sizeof(g_HwMtxMem));
 
 #if STK_EXAMPLE_USE_PIPE
-    g_CtrlSignalPipe = stk_pipe_create(&g_PipeMem, sizeof(g_PipeMem));
+    g_CtrlSignalPipe = stk_pipe_create(&g_PipeMem, sizeof(g_PipeMem),
+                                        s_PipeBuf, sizeof(s_PipeBuf),
+                                        16, sizeof(LedState));
 #else
     g_EventReady     = stk_event_create(&g_EvRdyMem, sizeof(g_EvRdyMem), false);
     g_EventSwitchOn  = stk_event_create(&g_EvOnMem,  sizeof(g_EvOnMem),  false);
@@ -156,11 +161,11 @@ static void InitSync()
 
 #if STK_EXAMPLE_DUALCORE
 
-static size_t g_StackCore0_T1[TASK_STACK_SIZE] __stk_c_stack_attr;
+static size_t g_StackCore0_T1[TASK_STACK_SIZE] __stk_c_stack;
 #if !STK_EXAMPLE_USE_PIPE
-static size_t g_StackCore0_T2[TASK_STACK_SIZE] __stk_c_stack_attr;
+static size_t g_StackCore0_T2[TASK_STACK_SIZE] __stk_c_stack;
 #endif
-static size_t g_StackCore1_T1[TASK_STACK_SIZE] __stk_c_stack_attr;
+static size_t g_StackCore1_T1[TASK_STACK_SIZE] __stk_c_stack;
 
 void StartCore0()
 {

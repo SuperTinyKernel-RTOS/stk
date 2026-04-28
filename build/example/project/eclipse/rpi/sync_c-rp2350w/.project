@@ -96,6 +96,11 @@
 			<locationURI>virtual:/virtual</locationURI>
 		</link>
 		<link>
+			<name>src/driver/c_wrapper.cpp</name>
+			<type>1</type>
+			<locationURI>PARENT-4-PROJECT_LOC/driver/c_wrapper.cpp</locationURI>
+		</link>
+		<link>
 			<name>src/driver/cpu.h</name>
 			<type>1</type>
 			<locationURI>PARENT-4-PROJECT_LOC/driver/cpu.h</locationURI>

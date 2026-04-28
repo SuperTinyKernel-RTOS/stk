@@ -221,8 +221,8 @@ bool stk_timer_start_or_reset(stk_timerhost_t *host,
                the command queue is full.
 */
 bool stk_timer_set_period(stk_timerhost_t *host,
-                           stk_timer_t     *timer,
-                           uint32_t         period);
+                          stk_timer_t     *timer,
+                          uint32_t         period);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Timer query
@@ -308,9 +308,9 @@ typedef struct stk_periodic_trigger_t stk_periodic_trigger_t;
                Call \a stk_periodic_trigger_restart() before polling.
 */
 stk_periodic_trigger_t *stk_periodic_trigger_create(stk_periodic_trigger_mem_t *memory,
-                                                     uint32_t                   memory_size,
-                                                     uint32_t                   period,
-                                                     bool                       started);
+                                                    uint32_t                   memory_size,
+                                                    uint32_t                   period,
+                                                    bool                       started);
 
 /*! \brief     Destroy instance (calls the C++ destructor in-place).
     \param[in] trig: Trigger handle. May be \c NULL (no-op).

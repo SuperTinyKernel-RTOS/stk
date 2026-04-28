@@ -65,15 +65,6 @@ extern "C" {
 */
 #define STK_C_ASSERT(e) assert(e)
 
-/*! \def       __stk_c_stack_attr
-    \brief     Stack attribute (applies required alignment).
-*/
-#if defined(__GNUC__) || defined(__clang__) || defined(__ICCARM__)
-    #define __stk_c_stack_attr __attribute__((aligned(16)))
-#else
-    #define __stk_c_stack_attr
-#endif
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
 // ─────────────────────────────────────────────────────────────────────────────
@@ -114,6 +105,49 @@ typedef void (*stk_task_entry_t)(void *arg);
 /*! \brief     No timeout constant.
 */
 #define STK_NO_WAIT (0)
+
+/*! \brief     Memory buffer alignment.
+*/
+#define STK_ALIGN_SIZE sizeof(stk_word_t)
+
+/*! \brief     Alignment mask.
+*/
+#define STK_ALIGN_MASK (STK_ALIGN_SIZE - 1)
+
+/*! \def       STK_STACK_MEMORY_ALIGN
+    \brief     Stack memory alignment.
+*/
+#ifndef STK_STACK_MEMORY_ALIGN
+    #if defined(__riscv)
+        #define STK_STACK_MEMORY_ALIGN 16U
+    #elif defined(__i386__) || defined(__x86_64__) || defined(_M_IX86) || defined(_M_X64)
+        #define STK_STACK_MEMORY_ALIGN 8U
+    #else // ARM, others
+        #define STK_STACK_MEMORY_ALIGN 4U
+    #endif
+#endif
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Attributes
+// ─────────────────────────────────────────────────────────────────────────────
+
+/*! \def       __stk_c_stack
+    \brief     Stack attribute (applies required alignment for a stack memory).
+*/
+#if defined(__GNUC__) || defined(__clang__) || defined(__ICCARM__)
+    #define __stk_c_stack __attribute__((aligned(STK_STACK_MEMORY_ALIGN)))
+#else
+    #define __stk_c_stack
+#endif
+
+/*! \def       __stk_c_aligned
+    \brief     Memory buffer alignment attribute.
+*/
+#if defined(__GNUC__) || defined(__clang__) || defined(__ICCARM__)
+    #define __stk_c_aligned __attribute__((aligned(STK_ALIGN_SIZE)))
+#else
+    #define __stk_c_aligned
+#endif
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Kernel factory functions
@@ -613,7 +647,7 @@ void stk_critical_section_exit(void);
 /*! \brief     Opaque memory container for a Mutex instance.
 */
 typedef struct stk_mutex_mem_t {
-    stk_word_t data[STK_MUTEX_IMPL_SIZE] __stk_c_stack_attr;
+    stk_word_t data[STK_MUTEX_IMPL_SIZE] __stk_c_aligned;
 } stk_mutex_mem_t;
 
 /*! \brief     Opaque handle to a Mutex instance.
@@ -705,7 +739,7 @@ void stk_spinlock_unlock(stk_spinlock_t *lock);
 /*! \brief     Opaque memory container for a ConditionVariable instance.
 */
 typedef struct stk_cv_mem_t {
-    stk_word_t data[STK_CV_IMPL_SIZE] __stk_c_stack_attr;
+    stk_word_t data[STK_CV_IMPL_SIZE] __stk_c_aligned;
 } stk_cv_mem_t;
 
 /*! \brief     Opaque handle to a Condition Variable instance.
@@ -753,7 +787,7 @@ void stk_cv_notify_all(stk_cv_t *cv);
 /*! \brief     Opaque memory container for an Event instance.
 */
 typedef struct stk_event_mem_t {
-    stk_word_t data[STK_EVENT_IMPL_SIZE] __stk_c_stack_attr;
+    stk_word_t data[STK_EVENT_IMPL_SIZE] __stk_c_aligned;
 } stk_event_mem_t;
 
 /*! \brief     Opaque handle to an Event instance.
@@ -810,7 +844,7 @@ void stk_event_pulse(stk_event_t *ev);
 /*! \brief     Opaque memory container for a Semaphore instance.
 */
 typedef struct stk_sem_mem_t {
-    stk_word_t data[STK_SEM_IMPL_SIZE] __stk_c_stack_attr;
+    stk_word_t data[STK_SEM_IMPL_SIZE] __stk_c_aligned;
 } stk_sem_mem_t;
 
 /*! \brief     Opaque handle to a Semaphore instance.
@@ -871,7 +905,7 @@ static inline bool stk_ef_is_error(uint32_t result) { return ((result & STK_EF_E
 /*! \brief     Opaque memory container for an EventFlags instance.
 */
 typedef struct stk_ef_mem_t {
-    stk_word_t data[STK_EF_IMPL_SIZE] __stk_c_stack_attr;
+    stk_word_t data[STK_EF_IMPL_SIZE] __stk_c_aligned;
 } stk_ef_mem_t;
 
 /*! \brief     Opaque handle to an EventFlags instance.
@@ -952,77 +986,259 @@ uint32_t stk_ef_trywait(stk_ef_t *ef, uint32_t flags, uint32_t options);
 
 // ───── Pipe (FIFO) ───────────────────────────────────────────────────────────
 
-/*! \brief     Size of the Pipe: Pipe<stk_word_t, STK_PIPE_SIZE>.
-    \note      Adjust if larger or smaller pipe is needed.
+/*! \brief     A memory size (multiples of stk_word_t) required for a Pipe control-block.
+    \details   Covers the fixed-overhead fields of stk::sync::Pipe:
+               one uint8_t pointer plus five size_t members (capacity, element_size,
+               count, head, tail), two ConditionVariable objects (cv_not_empty,
+               cv_not_full) and an optional debug-name word.
+    \note      The backing data buffer is allocated separately by the caller and
+               passed to stk_pipe_create() via the \a buf / \a buf_size parameters.
 */
-#define STK_PIPE_SIZE 16
+#define STK_PIPE_IMPL_SIZE (6 + (2 * STK_CV_IMPL_SIZE) + (STK_SYNC_DEBUG_NAMES ? 1 : 0))
 
-/*! \brief     A memory size (multiples of stk_word_t) required for Pipe instance.
-    \note      Sized for Pipe<stk_word_t, 16>. Adjust if template parameters change.
-*/
-#define STK_PIPE_IMPL_SIZE ((27 + (STK_SYNC_DEBUG_NAMES ? 3 : 0)) + STK_PIPE_SIZE)
-
-/*! \brief     Opaque memory container for a Pipe instance.
+/*! \brief     Opaque memory container for a Pipe control-block.
 */
 typedef struct stk_pipe_mem_t {
-    stk_word_t data[STK_PIPE_IMPL_SIZE] __stk_c_stack_attr;
+    stk_word_t data[STK_PIPE_IMPL_SIZE] __stk_c_aligned;
 } stk_pipe_mem_t;
 
 /*! \brief     Opaque handle to a Pipe instance.
 */
 typedef struct stk_pipe_t stk_pipe_t;
 
-/*! \brief     Create a Pipe (using provided memory).
-    \param[in] memory: Pointer to static memory container.
-    \param[in] memory_size: Size of the container (must be >= sizeof(stk_pipe_mem_t)).
-    \return    Pipe handle.
+/*! \def       STK_PIPE_BUF_SIZE(capacity, element_size)
+    \brief     Compute the required data-buffer size (in bytes) for a Pipe.
+    \param[in] capacity: Maximum number of elements the pipe can hold.
+    \param[in] element_size: Size of a single element in bytes.
+    \note      Use this macro when declaring the \c uint8_t buffer passed to stk_pipe_create():
+
+    \code
+    #define MY_PIPE_CAP   16
+    #define MY_ELEM_SIZE  sizeof(MyMsg_t)
+
+    static uint8_t        s_pipe_buf[STK_PIPE_BUF_SIZE(MY_PIPE_CAP, MY_ELEM_SIZE)] __stk_c_aligned;
+    static stk_pipe_mem_t s_pipe_mem;
+    stk_pipe_t *g_pipe = stk_pipe_create(&s_pipe_mem, sizeof(s_pipe_mem),
+                                          s_pipe_buf, sizeof(s_pipe_buf),
+                                          MY_PIPE_CAP, MY_ELEM_SIZE);
+    \endcode
 */
-stk_pipe_t *stk_pipe_create(stk_pipe_mem_t *memory, uint32_t memory_size);
+#define STK_PIPE_BUF_SIZE(capacity, element_size) \
+    ((((capacity) * (element_size)) + STK_ALIGN_MASK) & ~STK_ALIGN_MASK)
+
+/*! \brief     Create a Pipe (using provided memory).
+    \details   Constructs a stk::sync::Pipe in-place inside \a memory. The pipe will
+               hold up to \a capacity elements, each \a element_size bytes wide.
+               The backing ring-buffer storage must be supplied by the caller via
+               \a buf / \a buf_size.
+    \param[in] memory: Pointer to static memory container for the Pipe control-block.
+               Must be at least sizeof(stk_pipe_mem_t) bytes.
+    \param[in] memory_size: Size of \a memory in bytes.
+    \param[in] buf: Pointer to the element data buffer.
+               Must be at least \a capacity * \a element_size bytes.
+    \param[in] buf_size: Size of \a buf in bytes (used for the safety assertion;
+               must equal \a capacity * \a element_size).
+    \param[in] capacity: Maximum number of elements [1, 65534].
+    \param[in] element_size: Size of each individual element in bytes (>= 1).
+    \return    Pipe handle, or NULL if any size assertion fails.
+    \note      Convenience macro STK_PIPE_BUF_SIZE(capacity, element_size) computes
+               the required \a buf_size.
+    \note      Only available when kernel is compiled with \a KERNEL_SYNC mode enabled.
+*/
+stk_pipe_t *stk_pipe_create(stk_pipe_mem_t *memory,
+                            uint32_t        memory_size,
+                            uint8_t        *buf,
+                            uint32_t        buf_size,
+                            size_t          capacity,
+                            size_t          element_size);
 
 /*! \brief     Destroy a Pipe.
     \param[in] pipe: Pipe handle.
+    \note      Any tasks still blocked on Write/Read at destruction time are considered
+               a logic error; an assertion is triggered in debug builds.
 */
 void stk_pipe_destroy(stk_pipe_t *pipe);
 
-/*! \brief     Write data to the pipe.
+/*! \brief     Write a single element to the pipe.
+    \details   Copies \a element_size bytes from \a data into the next available slot.
+               Blocks if the pipe is full until space becomes available or the timeout
+               expires.
     \param[in] pipe: Pipe handle.
-    \param[in] data: Value to write.
-    \param[in] timeout: Max time to wait in milliseconds.
-    \return    True if successful, False on timeout.
+    \param[in] data: Pointer to the element payload (must be >= element_size bytes).
+    \param[in] timeout: Max time to wait (ticks). Use \c STK_WAIT_INFINITE to block
+               indefinitely, \c STK_NO_WAIT for a non-blocking attempt.
+    \return    True if the element was written, False on timeout.
+    \warning   ISR-safe only with \a timeout = \c STK_NO_WAIT.
 */
-bool stk_pipe_write(stk_pipe_t *pipe, stk_word_t data, int32_t timeout);
+bool stk_pipe_write(stk_pipe_t *pipe, const void *data, int32_t timeout);
 
-/*! \brief      Read data from the pipe.
-    \param[in]  pipe: Pipe handle.
-    \param[out] data: Pointer to variable receiving the data.
-    \param[in]  timeout: Max time to wait in milliseconds.
-    \return     True if successful, False on timeout.
+/*! \brief     Attempt to write a single element to the pipe without blocking.
+    \param[in] pipe: Pipe handle.
+    \param[in] data: Pointer to the element payload.
+    \return    True if written, False if the pipe was full.
+    \warning   ISR-safe.
 */
-bool stk_pipe_read(stk_pipe_t *pipe, stk_word_t *data, int32_t timeout);
+bool stk_pipe_trywrite(stk_pipe_t *pipe, const void *data);
+
+/*! \brief     Read a single element from the pipe.
+    \details   Copies \a element_size bytes from the oldest slot into the buffer
+               pointed to by \a data. Blocks if the pipe is empty until data is
+               produced or the timeout expires.
+    \param[in] pipe: Pipe handle.
+    \param[out] data: Destination buffer (must be >= element_size bytes).
+    \param[in] timeout: Max time to wait (ticks). Use \c STK_WAIT_INFINITE to block
+               indefinitely, \c STK_NO_WAIT for a non-blocking attempt.
+    \return    True if an element was read, False on timeout.
+    \warning   ISR-safe only with \a timeout = \c STK_NO_WAIT.
+*/
+bool stk_pipe_read(stk_pipe_t *pipe, void *data, int32_t timeout);
+
+/*! \brief     Attempt to read a single element from the pipe without blocking.
+    \param[in] pipe: Pipe handle.
+    \param[out] data: Destination buffer (must be >= element_size bytes).
+    \return    True if an element was read, False if the pipe was empty.
+    \warning   ISR-safe.
+*/
+bool stk_pipe_tryread(stk_pipe_t *pipe, void *data);
 
 /*! \brief     Write multiple elements to the pipe.
+    \details   Copies a block of \a count elements. Blocks until the full amount is
+               written or the timeout expires.
     \param[in] pipe: Pipe handle.
-    \param[in] src: Pointer to source array.
+    \param[in] src: Pointer to the source array (must hold at least \a count
+               elements of \a element_size bytes each).
     \param[in] count: Number of elements to write.
-    \param[in] timeout: Max time to wait in milliseconds.
-    \return    Number of elements actually written.
+    \param[in] timeout: Max time to wait (ticks). Use \c STK_WAIT_INFINITE to block
+               indefinitely, \c STK_NO_WAIT for a non-blocking attempt.
+    \return    Number of elements actually written. Equal to \c count unless a timeout
+               occurred.
+    \warning   ISR-safe only with \a timeout = \c STK_NO_WAIT.
 */
-size_t stk_pipe_write_bulk(stk_pipe_t *pipe, const stk_word_t *src, size_t count, int32_t timeout);
+size_t stk_pipe_write_bulk(stk_pipe_t *pipe, const void *src, size_t count, int32_t timeout);
 
-/*! \brief      Read multiple elements from the pipe.
-    \param[in]  pipe: Pipe handle.
-    \param[out] dst: Pointer to destination array.
-    \param[in]  count: Number of elements to read.
-    \param[in]  timeout: Max time to wait in milliseconds.
-    \return     Number of elements actually read.
-*/
-size_t stk_pipe_read_bulk(stk_pipe_t *pipe, stk_word_t *dst, size_t count, int32_t timeout);
-
-/*! \brief     Get current number of elements in the pipe.
+/*! \brief     Attempt to write multiple elements to the pipe without blocking.
+    \details   Copies as many elements as possible. Elements that do not fit are discarded.
     \param[in] pipe: Pipe handle.
-    \return    Current element count.
+    \param[in] src: Pointer to the source array.
+    \param[in] count: Number of elements to write.
+    \return    Number of elements actually written.
+    \warning   ISR-safe.
 */
-size_t stk_pipe_get_count(stk_pipe_t *pipe);
+size_t stk_pipe_trywrite_bulk(stk_pipe_t *pipe, const void *src, size_t count);
+
+/*! \brief     Read multiple elements from the pipe.
+    \details   Attempts to retrieve \a count elements from the FIFO. Blocks until the
+               full amount is read or the timeout expires.
+    \param[in] pipe: Pipe handle.
+    \param[out] dst: Pointer to the destination array (must hold at least \a count
+               elements of \a element_size bytes each).
+    \param[in] count: Number of elements to read.
+    \param[in] timeout: Max time to wait (ticks). Use \c STK_WAIT_INFINITE to block
+               indefinitely, \c STK_NO_WAIT for a non-blocking attempt.
+    \return    Number of elements actually read. Equal to \c count unless a timeout occurred.
+    \warning   ISR-safe only with \a timeout = \c STK_NO_WAIT.
+*/
+size_t stk_pipe_read_bulk(stk_pipe_t *pipe, void *dst, size_t count, int32_t timeout);
+
+/*! \brief     Attempt to read multiple elements from the pipe without blocking.
+    \details   Reads as many elements as are currently available without blocking.
+    \param[in] pipe: Pipe handle.
+    \param[out] dst: Pointer to the destination array.
+    \param[in] count: Number of elements to read.
+    \return    Number of elements actually read.
+    \warning   ISR-safe.
+*/
+size_t stk_pipe_tryread_bulk(stk_pipe_t *pipe, void *dst, size_t count);
+
+/*! \brief     Read at least \a trigger elements, then drain up to \a max_count without
+               blocking.
+    \details   Blocks until at least \a trigger elements are simultaneously available
+               in the pipe, or the timeout expires. Once the threshold is reached the
+               call dequeues min(max_count, available) elements in a single atomic pass.
+    \param[in] pipe: Pipe handle.
+    \param[out] dst: Destination buffer; must hold at least \a max_count elements
+               of \a element_size bytes.
+    \param[in] trigger: Minimum number of elements that must be available before any
+               data is dequeued. Clamped to [1, max_count] internally.
+    \param[in] max_count: Maximum number of elements to return in total.
+    \param[in] timeout: Max time to wait (ticks). Use \c STK_WAIT_INFINITE to block
+               indefinitely, \c STK_NO_WAIT for a non-blocking attempt.
+    \return    Number of elements actually read (0 if timeout fired before trigger was reached).
+    \warning   ISR-safe only with \a timeout = \c STK_NO_WAIT.
+*/
+size_t stk_pipe_read_bulk_triggered(stk_pipe_t *pipe,
+                                    void       *dst,
+                                    size_t      trigger,
+                                    size_t      max_count,
+                                    int32_t     timeout);
+
+/*! \brief     Non-blocking variant of stk_pipe_read_bulk_triggered.
+    \details   Returns immediately with however many elements are available, up to
+               \a max_count. The trigger threshold is not enforced.
+    \param[in] pipe: Pipe handle.
+    \param[out] dst: Destination buffer.
+    \param[in] max_count: Maximum number of elements to read.
+    \return    Number of elements actually read.
+    \warning   ISR-safe.
+*/
+size_t stk_pipe_tryread_bulk_triggered(stk_pipe_t *pipe, void *dst, size_t max_count);
+
+/*! \brief     Discard all elements and reset the pipe to the empty state.
+    \details   Any tasks blocked in Write() are woken so they can re-evaluate.
+    \param[in] pipe: Pipe handle.
+    \warning   Elements that were in the pipe are silently discarded.
+    \warning   ISR-safe.
+*/
+void stk_pipe_reset(stk_pipe_t *pipe);
+
+/*! \brief     Get the maximum number of elements the pipe can hold.
+    \param[in] pipe: Pipe handle.
+    \return    Construction-time capacity.
+    \note      ISR-safe.
+*/
+size_t stk_pipe_get_capacity(const stk_pipe_t *pipe);
+
+/*! \brief     Get the size of each element in bytes.
+    \param[in] pipe: Pipe handle.
+    \return    Construction-time element size.
+    \note      ISR-safe.
+*/
+size_t stk_pipe_get_element_size(const stk_pipe_t *pipe);
+
+/*! \brief     Get the current number of elements in the pipe.
+    \param[in] pipe: Pipe handle.
+    \return    Point-in-time snapshot of the element count.
+    \note      ISR-safe on targets where a size_t-aligned read is atomic.
+*/
+size_t stk_pipe_get_count(const stk_pipe_t *pipe);
+
+/*! \brief     Get the number of free slots currently available.
+    \param[in] pipe: Pipe handle.
+    \return    Point-in-time snapshot of the free-slot count.
+    \note      ISR-safe.
+*/
+size_t stk_pipe_get_space(const stk_pipe_t *pipe);
+
+/*! \brief     Check whether the pipe is currently empty.
+    \param[in] pipe: Pipe handle.
+    \return    True if the pipe contains no elements.
+    \note      ISR-safe.
+*/
+bool stk_pipe_is_empty(const stk_pipe_t *pipe);
+
+/*! \brief     Check whether the pipe is currently full.
+    \param[in] pipe: Pipe handle.
+    \return    True if the pipe contains \a capacity elements.
+    \note      ISR-safe.
+*/
+bool stk_pipe_is_full(const stk_pipe_t *pipe);
+
+/*! \brief     Verify that the backing storage is valid and the pipe is ready for use.
+    \param[in] pipe: Pipe handle.
+    \return    True if the pipe is ready for use.
+    \note      ISR-safe.
+*/
+bool stk_pipe_is_storage_valid(const stk_pipe_t *pipe);
 
 // ───── MessageQueue ──────────────────────────────────────────────────────────
 
@@ -1039,7 +1255,7 @@ size_t stk_pipe_get_count(stk_pipe_t *pipe);
 /*! \brief     Opaque memory container for a MessageQueue instance.
 */
 typedef struct stk_msgq_mem_t {
-    stk_word_t data[STK_MSGQ_IMPL_SIZE] __stk_c_stack_attr;
+    stk_word_t data[STK_MSGQ_IMPL_SIZE] __stk_c_aligned;
 } stk_msgq_mem_t;
 
 /*! \brief     Opaque handle to a MessageQueue instance.
@@ -1201,7 +1417,7 @@ bool stk_msgq_is_full(const stk_msgq_t *mq);
 /*! \brief     Opaque memory container for an RWMutex instance.
 */
 typedef struct stk_rwmutex_mem_t {
-    stk_word_t data[STK_RWMUTEX_IMPL_SIZE] __stk_c_stack_attr;
+    stk_word_t data[STK_RWMUTEX_IMPL_SIZE] __stk_c_aligned;
 } stk_rwmutex_mem_t;
 
 /*! \brief     Opaque handle to an RWMutex instance.

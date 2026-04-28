@@ -330,23 +330,35 @@ uint32_t stk_ef_trywait(stk_ef_t *ef, uint32_t flags, uint32_t options)
 }
 
 // ---------------------------------------------------------------------------
-// Pipe (template instantiation for stk_word_t, STK_PIPE_SIZE)
+// Pipe (runtime-sized, external-buffer; wraps sync::Pipe)
 // ---------------------------------------------------------------------------
-typedef PipeT<stk_word_t, STK_PIPE_SIZE> PipeX;
-
 struct stk_pipe_t
 {
-    PipeX handle;
+    Pipe handle;
+
+    stk_pipe_t(uint8_t *buf, size_t capacity, size_t element_size)
+        : handle(buf, capacity, element_size)
+    {}
 };
 
-stk_pipe_t *stk_pipe_create(stk_pipe_mem_t *memory, uint32_t memory_size)
+stk_pipe_t *stk_pipe_create(stk_pipe_mem_t *memory,
+                             uint32_t       memory_size,
+                             uint8_t       *buf,
+                             uint32_t       buf_size,
+                             size_t         capacity,
+                             size_t         element_size)
 {
-    STK_ASSERT(memory != nullptr);
-    STK_ASSERT(memory_size >= sizeof(stk_pipe_t));
-    if (memory_size < sizeof(stk_pipe_t))
+    STK_ASSERT(memory       != nullptr);
+    STK_ASSERT(buf          != nullptr);
+    STK_ASSERT(capacity     >= 1U);
+    STK_ASSERT(element_size >= 1U);
+    STK_ASSERT(memory_size  >= sizeof(stk_pipe_t));
+    STK_ASSERT(buf_size     >= capacity * element_size);
+
+    if ((memory_size < sizeof(stk_pipe_t)) || (buf_size < (capacity * element_size)))
         return nullptr;
 
-    return new (memory->data) stk_pipe_t();
+    return new (memory->data) stk_pipe_t(buf, capacity, element_size);
 }
 
 void stk_pipe_destroy(stk_pipe_t *pipe)
@@ -355,40 +367,135 @@ void stk_pipe_destroy(stk_pipe_t *pipe)
         pipe->~stk_pipe_t();
 }
 
-bool stk_pipe_write(stk_pipe_t *pipe, stk_word_t data, int32_t timeout)
-{
-    STK_ASSERT(pipe != nullptr);
-
-    return pipe->handle.Write(data, timeout);
-}
-
-bool stk_pipe_read(stk_pipe_t *pipe, stk_word_t *data, int32_t timeout)
+bool stk_pipe_write(stk_pipe_t *pipe, const void *data, int32_t timeout)
 {
     STK_ASSERT(pipe != nullptr);
     STK_ASSERT(data != nullptr);
 
-    return pipe->handle.Read(*data, timeout);
+    return pipe->handle.Write(data, timeout);
 }
 
-size_t stk_pipe_write_bulk(stk_pipe_t *pipe, const stk_word_t *src, size_t count, int32_t timeout)
+bool stk_pipe_trywrite(stk_pipe_t *pipe, const void *data)
+{
+    STK_ASSERT(pipe != nullptr);
+    STK_ASSERT(data != nullptr);
+
+    return pipe->handle.TryWrite(data);
+}
+
+bool stk_pipe_read(stk_pipe_t *pipe, void *data, int32_t timeout)
+{
+    STK_ASSERT(pipe != nullptr);
+    STK_ASSERT(data != nullptr);
+
+    return pipe->handle.Read(data, timeout);
+}
+
+bool stk_pipe_tryread(stk_pipe_t *pipe, void *data)
+{
+    STK_ASSERT(pipe != nullptr);
+    STK_ASSERT(data != nullptr);
+
+    return pipe->handle.TryRead(data);
+}
+
+size_t stk_pipe_write_bulk(stk_pipe_t *pipe, const void *src, size_t count, int32_t timeout)
 {
     STK_ASSERT(pipe != nullptr);
 
     return pipe->handle.WriteBulk(src, count, timeout);
 }
 
-size_t stk_pipe_read_bulk(stk_pipe_t *pipe, stk_word_t *dst, size_t count, int32_t timeout)
+size_t stk_pipe_trywrite_bulk(stk_pipe_t *pipe, const void *src, size_t count)
+{
+    STK_ASSERT(pipe != nullptr);
+
+    return pipe->handle.TryWriteBulk(src, count);
+}
+
+size_t stk_pipe_read_bulk(stk_pipe_t *pipe, void *dst, size_t count, int32_t timeout)
 {
     STK_ASSERT(pipe != nullptr);
 
     return pipe->handle.ReadBulk(dst, count, timeout);
 }
 
-size_t stk_pipe_get_count(stk_pipe_t *pipe)
+size_t stk_pipe_tryread_bulk(stk_pipe_t *pipe, void *dst, size_t count)
+{
+    STK_ASSERT(pipe != nullptr);
+
+    return pipe->handle.TryReadBulk(dst, count);
+}
+
+size_t stk_pipe_read_bulk_triggered(stk_pipe_t *pipe, void *dst,
+                                    size_t trigger, size_t max_count, int32_t timeout)
+{
+    STK_ASSERT(pipe != nullptr);
+
+    return pipe->handle.ReadBulkTriggered(dst, trigger, max_count, timeout);
+}
+
+size_t stk_pipe_tryread_bulk_triggered(stk_pipe_t *pipe, void *dst, size_t max_count)
+{
+    STK_ASSERT(pipe != nullptr);
+
+    return pipe->handle.TryReadBulkTriggered(dst, max_count);
+}
+
+void stk_pipe_reset(stk_pipe_t *pipe)
+{
+    STK_ASSERT(pipe != nullptr);
+
+    pipe->handle.Reset();
+}
+
+size_t stk_pipe_get_capacity(const stk_pipe_t *pipe)
+{
+    STK_ASSERT(pipe != nullptr);
+
+    return pipe->handle.GetCapacity();
+}
+
+size_t stk_pipe_get_element_size(const stk_pipe_t *pipe)
+{
+    STK_ASSERT(pipe != nullptr);
+
+    return pipe->handle.GetElementSize();
+}
+
+size_t stk_pipe_get_count(const stk_pipe_t *pipe)
 {
     STK_ASSERT(pipe != nullptr);
 
     return pipe->handle.GetCount();
+}
+
+size_t stk_pipe_get_space(const stk_pipe_t *pipe)
+{
+    STK_ASSERT(pipe != nullptr);
+
+    return pipe->handle.GetSpace();
+}
+
+bool stk_pipe_is_empty(const stk_pipe_t *pipe)
+{
+    STK_ASSERT(pipe != nullptr);
+
+    return pipe->handle.IsEmpty();
+}
+
+bool stk_pipe_is_full(const stk_pipe_t *pipe)
+{
+    STK_ASSERT(pipe != nullptr);
+
+    return pipe->handle.IsFull();
+}
+
+bool stk_pipe_is_storage_valid(const stk_pipe_t *pipe)
+{
+    STK_ASSERT(pipe != nullptr);
+
+    return pipe->handle.IsStorageValid();
 }
 
 // ---------------------------------------------------------------------------

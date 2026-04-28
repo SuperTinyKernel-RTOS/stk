@@ -16,7 +16,7 @@
 #define STACK_SIZE 256
 
 static volatile uint8_t g_TaskSwitch = 0;
-static uint32_t g_Stack[STK_C_KERNEL_MAX_TASKS][STACK_SIZE] __stk_c_stack_attr;
+static uint32_t g_Stack[STK_C_KERNEL_MAX_TASKS][STACK_SIZE] __stk_c_stack;
 
 static void InitLeds()
 {
