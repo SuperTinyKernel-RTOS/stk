@@ -34,6 +34,7 @@ pure C API with no C++ headers required in your source files.
   - [SpinLock](#spinlock)
   - [Semaphore](#semaphore)
   - [Event](#event)
+  - [EventFlags](#eventflags)
   - [Message Queue](#message-queue)
   - [Reader-Writer Lock](#reader-writer-lock)
 - [Memory: Block Pool](#memory-block-pool)
@@ -386,43 +387,68 @@ stk_spinlock_unlock(sl);
 ### Semaphore
 
 ```c
-static stk_semaphore_mem_t sem_mem;
+static stk_sem_mem_t sem_mem;
 /* initial value = 0, max value = 1 → binary semaphore */
-stk_semaphore_t *sem = stk_semaphore_create(&sem_mem, sizeof(sem_mem), 0, 1);
+stk_sem_t *sem = stk_sem_create(&sem_mem, sizeof(sem_mem), 0, 1);
 
-stk_semaphore_give(sem);                       /* ISR-safe */
-stk_semaphore_take(sem);                       /* blocks */
-bool ok = stk_semaphore_try_take(sem);         /* non-blocking, ISR-safe */
-bool ok = stk_semaphore_timed_take(sem, 50);   /* ticks timeout */
+stk_sem_signal(sem);                    /* post / give — ISR-safe */
+bool ok = stk_sem_wait(sem, STK_WAIT_INFINITE); /* blocks */
+bool ok = stk_sem_trywait(sem);         /* non-blocking poll, ISR-safe */
+bool ok = stk_sem_wait(sem, 50);        /* ticks timeout */
 
-stk_semaphore_destroy(sem);
+uint16_t n = stk_sem_get_count(sem);    /* current resource counter */
+
+stk_sem_destroy(sem);
 ```
 
 ### Event
 
-An event is a set of boolean flags. Tasks can wait for any or all of them.
+A binary signal (signaled / non-signaled). Supports auto-reset and manual-reset modes.
 
 ```c
 static stk_event_mem_t ev_mem;
-stk_event_t *ev = stk_event_create(&ev_mem, sizeof(ev_mem));
+/* false = auto-reset, true = manual-reset */
+stk_event_t *ev = stk_event_create(&ev_mem, sizeof(ev_mem), false);
+
+/* From ISR or another task: */
+stk_event_set(ev);                          /* signal — ISR-safe */
+stk_event_reset(ev);                        /* clear — ISR-safe */
+stk_event_pulse(ev);                        /* signal then immediately reset */
+
+/* Waiting task: */
+bool ok = stk_event_wait(ev, STK_WAIT_INFINITE);  /* blocks */
+bool ok = stk_event_wait(ev, 100);                /* ticks timeout */
+bool ok = stk_event_trywait(ev);                  /* non-blocking, ISR-safe */
+
+stk_event_destroy(ev);
+```
+
+### EventFlags
+
+A 32-bit flags word. Tasks can wait for any subset (OR) or all bits (AND).
+
+```c
+static stk_ef_mem_t ef_mem;
+stk_ef_t *ef = stk_ef_create(&ef_mem, sizeof(ef_mem), 0);
 
 #define EVT_BUTTON  (1u << 0)
 #define EVT_UART_RX (1u << 1)
 
 /* From ISR or another task: */
-stk_event_set(ev, EVT_BUTTON);            /* ISR-safe */
+stk_ef_set(ef, EVT_BUTTON);                 /* ISR-safe */
 
 /* Wait for any of the bits (clears them on return): */
-uint32_t fired = stk_event_wait_any(ev, EVT_BUTTON | EVT_UART_RX, STK_WAIT_INFINITE);
+uint32_t fired = stk_ef_wait(ef, EVT_BUTTON | EVT_UART_RX,
+                              STK_EF_OPT_WAIT_ANY, STK_WAIT_INFINITE);
 
 /* Wait for ALL bits: */
-uint32_t fired = stk_event_wait_all(ev, EVT_BUTTON | EVT_UART_RX, STK_WAIT_INFINITE);
+uint32_t fired = stk_ef_wait(ef, EVT_BUTTON | EVT_UART_RX,
+                              STK_EF_OPT_WAIT_ALL, STK_WAIT_INFINITE);
 
-stk_event_destroy(ev);
+if (stk_ef_is_error(fired)) { /* timeout or invalid flags */ }
+
+stk_ef_destroy(ef);
 ```
-
-Pass `STK_NO_WAIT` for a non-blocking poll, `STK_WAIT_INFINITE` to block forever,
-or any positive tick count for a timeout.
 
 ### Message Queue
 

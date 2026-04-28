@@ -855,9 +855,12 @@ typedef struct stk_sem_t stk_sem_t;
     \param[in] memory: Pointer to static memory container.
     \param[in] memory_size: Size of the container (must be >= sizeof(stk_sem_mem_t)).
     \param[in] initial_count: Starting value of the resource counter.
+    \param[in] max_count: Maximum value the counter is allowed to reach.
+               Pass 0 to use the default maximum (65534). Must be > initial_count.
     \return    Semaphore handle.
 */
-stk_sem_t *stk_sem_create(stk_sem_mem_t *memory, uint32_t memory_size, uint32_t initial_count);
+stk_sem_t *stk_sem_create(stk_sem_mem_t *memory, uint32_t memory_size,
+                           uint32_t initial_count, uint32_t max_count);
 
 /*! \brief     Destroy a Semaphore.
     \param[in] sem: Semaphore handle.
@@ -866,15 +869,32 @@ void stk_sem_destroy(stk_sem_t *sem);
 
 /*! \brief     Wait for a semaphore resource.
     \param[in] sem: Semaphore handle.
-    \param[in] timeout: Max time to wait in milliseconds.
+    \param[in] timeout: Max time to wait (ticks).
     \return    True if resource acquired, False on timeout.
 */
 bool stk_sem_wait(stk_sem_t *sem, int32_t timeout);
+
+/*! \brief     Poll the semaphore without blocking.
+    \details   Acquires a resource token if one is immediately available; returns
+               \c false instantly if the counter is zero.
+    \param[in] sem: Semaphore handle.
+    \return    True if a token was acquired, False if count was zero.
+    \warning   ISR-safe.
+*/
+bool stk_sem_trywait(stk_sem_t *sem);
 
 /*! \brief     Signal/Release a semaphore resource.
     \param[in] sem: Semaphore handle.
 */
 void stk_sem_signal(stk_sem_t *sem);
+
+/*! \brief     Get the current counter value.
+    \param[in] sem: Semaphore handle.
+    \return    Advisory snapshot of the counter. May be stale by the time
+               the caller acts on it.
+    \note      ISR-safe on targets where a 16-bit aligned read is atomic.
+*/
+uint16_t stk_sem_get_count(const stk_sem_t *sem);
 
 // ───── EventFlags ────────────────────────────────────────────────────────────
 
@@ -1337,6 +1357,28 @@ bool stk_msgq_put(stk_msgq_t *mq, const void *msg, int32_t timeout);
 */
 bool stk_msgq_tryput(stk_msgq_t *mq, const void *msg);
 
+/*! \brief     Put a message into the front of the queue (priority insert).
+    \details   Copies \a msg_size bytes from \a msg into the slot immediately
+               before the current read pointer, making it the next message
+               that stk_msgq_get() will return. Blocks if the queue is full
+               until space becomes available or the timeout expires.
+    \param[in] mq: MessageQueue handle.
+    \param[in] msg: Pointer to the message payload (must be >= msg_size bytes).
+    \param[in] timeout: Max time to wait (ticks). Use \c STK_WAIT_INFINITE to block
+               indefinitely, \c STK_NO_WAIT for a non-blocking attempt.
+    \return    True if the message was enqueued at the front, False on timeout.
+    \warning   ISR-safe only with \a timeout = \c STK_NO_WAIT.
+*/
+bool stk_msgq_putfront(stk_msgq_t *mq, const void *msg, int32_t timeout);
+
+/*! \brief     Attempt to put a message into the front of the queue without blocking.
+    \param[in] mq: MessageQueue handle.
+    \param[in] msg: Pointer to the message payload.
+    \return    True if enqueued at the front, False if the queue was full.
+    \warning   ISR-safe.
+*/
+bool stk_msgq_tryputfront(stk_msgq_t *mq, const void *msg);
+
 /*! \brief      Get a message from the queue.
     \details    Copies the oldest message into \a msg. Blocks if the queue is
                 empty until a message arrives or the timeout expires.
@@ -1356,6 +1398,51 @@ bool stk_msgq_get(stk_msgq_t *mq, void *msg, int32_t timeout);
     \warning    ISR-safe.
 */
 bool stk_msgq_tryget(stk_msgq_t *mq, void *msg);
+
+/*! \brief      Peek at the next message to be delivered without removing it.
+    \details    Copies \a msg_size bytes from the oldest slot into \a msg,
+                leaving the message in place so that a subsequent
+                stk_msgq_get() returns the same message.  Blocks if the
+                queue is empty until a message is available or the timeout
+                expires.
+    \param[in]  mq: MessageQueue handle.
+    \param[out] msg: Destination buffer (must be >= msg_size bytes).
+    \param[in]  timeout: Max time to wait (ticks). Use \c STK_WAIT_INFINITE to block
+                indefinitely, \c STK_NO_WAIT for a non-blocking attempt.
+    \return     True if a message was peeked, False on timeout.
+    \warning    ISR-safe only with \a timeout = \c STK_NO_WAIT.
+*/
+bool stk_msgq_peek(stk_msgq_t *mq, void *msg, int32_t timeout);
+
+/*! \brief      Attempt to peek at the next message without blocking.
+    \param[in]  mq: MessageQueue handle.
+    \param[out] msg: Destination buffer (must be >= msg_size bytes).
+    \return     True if a message was peeked, False if the queue was empty.
+    \warning    ISR-safe.
+*/
+bool stk_msgq_trypeek(stk_msgq_t *mq, void *msg);
+
+/*! \brief      Peek at the most recently front-inserted message without removing it.
+    \details    Copies \a msg_size bytes from the front slot (i.e. the message
+                that stk_msgq_putfront() most recently placed) into \a msg,
+                leaving the message in the queue.  Blocks if the queue is
+                empty until a message is available or the timeout expires.
+    \param[in]  mq: MessageQueue handle.
+    \param[out] msg: Destination buffer (must be >= msg_size bytes).
+    \param[in]  timeout: Max time to wait (ticks). Use \c STK_WAIT_INFINITE to block
+                indefinitely, \c STK_NO_WAIT for a non-blocking attempt.
+    \return     True if a message was peeked, False on timeout.
+    \warning    ISR-safe only with \a timeout = \c STK_NO_WAIT.
+*/
+bool stk_msgq_peekfront(stk_msgq_t *mq, void *msg, int32_t timeout);
+
+/*! \brief      Attempt to peek at the front message without blocking.
+    \param[in]  mq: MessageQueue handle.
+    \param[out] msg: Destination buffer (must be >= msg_size bytes).
+    \return     True if a message was peeked, False if the queue was empty.
+    \warning    ISR-safe.
+*/
+bool stk_msgq_trypeekfront(stk_msgq_t *mq, void *msg);
 
 /*! \brief     Discard all messages and reset the queue to the empty state.
     \details   Tasks blocked in Put() are woken so they can re-enqueue into the
@@ -1401,12 +1488,31 @@ size_t stk_msgq_get_space(const stk_msgq_t *mq);
 */
 bool stk_msgq_is_empty(const stk_msgq_t *mq);
 
+/*! \brief     Get a pointer to the raw message data buffer.
+    \param[in] mq: MessageQueue handle.
+    \return    Pointer to the beginning of the backing byte buffer supplied
+               at construction time.
+    \note      ISR-safe.
+*/
+uint8_t *stk_msgq_get_buffer(stk_msgq_t *mq);
+
 /*! \brief     Check whether the queue is currently full.
     \param[in] mq: MessageQueue handle.
     \return    True if the queue contains \a capacity messages.
     \note      ISR-safe.
 */
 bool stk_msgq_is_full(const stk_msgq_t *mq);
+
+/*! \brief     Verify that the backing storage is valid and the queue is ready for use.
+    \details   Always true for queues constructed with a non-NULL buffer.
+               Useful as a post-construction sanity check in no-exceptions
+               environments; stk_msgq_create() returning NULL already covers
+               the primary failure path.
+    \param[in] mq: MessageQueue handle.
+    \return    True if the queue is ready for use.
+    \note      ISR-safe.
+*/
+bool stk_msgq_is_storage_valid(const stk_msgq_t *mq);
 
 // ───── RWMutex (Reader-Writer Lock) ──────────────────────────────────────────
 

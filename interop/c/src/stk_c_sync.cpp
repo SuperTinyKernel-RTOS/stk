@@ -231,20 +231,27 @@ void stk_event_pulse(stk_event_t *ev)
 // ---------------------------------------------------------------------------
 struct stk_sem_t
 {
-    stk_sem_t(uint32_t initial_count) : handle(initial_count)
+    stk_sem_t(uint32_t initial_count, uint32_t max_count)
+        : handle(static_cast<uint16_t>(initial_count),
+                 static_cast<uint16_t>(max_count))
     {}
 
     Semaphore handle;
 };
 
-stk_sem_t *stk_sem_create(stk_sem_mem_t *memory, uint32_t memory_size, uint32_t initial_count)
+stk_sem_t *stk_sem_create(stk_sem_mem_t *memory, uint32_t memory_size,
+                           uint32_t initial_count, uint32_t max_count)
 {
     STK_ASSERT(memory != nullptr);
     STK_ASSERT(memory_size >= sizeof(stk_sem_t));
+    STK_ASSERT(initial_count < (max_count == 0U ? Semaphore::COUNT_MAX : max_count));
+
     if (memory_size < sizeof(stk_sem_t))
         return nullptr;
 
-    return new (memory->data) stk_sem_t(initial_count);
+    const uint32_t effective_max = (max_count == 0U) ? Semaphore::COUNT_MAX : max_count;
+
+    return new (memory->data) stk_sem_t(initial_count, effective_max);
 }
 
 void stk_sem_destroy(stk_sem_t *sem)
@@ -260,11 +267,25 @@ bool stk_sem_wait(stk_sem_t *sem, int32_t timeout)
     return sem->handle.Wait(timeout);
 }
 
+bool stk_sem_trywait(stk_sem_t *sem)
+{
+    STK_ASSERT(sem != nullptr);
+
+    return sem->handle.TryWait();
+}
+
 void stk_sem_signal(stk_sem_t *sem)
 {
     STK_ASSERT(sem != nullptr);
 
     sem->handle.Signal();
+}
+
+uint16_t stk_sem_get_count(const stk_sem_t *sem)
+{
+    STK_ASSERT(sem != nullptr);
+
+    return sem->handle.GetCount();
 }
 
 // ---------------------------------------------------------------------------
@@ -552,6 +573,22 @@ bool stk_msgq_tryput(stk_msgq_t *mq, const void *msg)
     return reinterpret_cast<stk_msgq_t *>(mq)->handle.TryPut(msg);
 }
 
+bool stk_msgq_putfront(stk_msgq_t *mq, const void *msg, int32_t timeout)
+{
+    STK_ASSERT(mq != nullptr);
+    STK_ASSERT(msg != nullptr);
+
+    return reinterpret_cast<stk_msgq_t *>(mq)->handle.PutFront(msg, timeout);
+}
+
+bool stk_msgq_tryputfront(stk_msgq_t *mq, const void *msg)
+{
+    STK_ASSERT(mq != nullptr);
+    STK_ASSERT(msg != nullptr);
+
+    return reinterpret_cast<stk_msgq_t *>(mq)->handle.TryPutFront(msg);
+}
+
 bool stk_msgq_get(stk_msgq_t *mq, void *msg, int32_t timeout)
 {
     STK_ASSERT(mq != nullptr);
@@ -566,6 +603,38 @@ bool stk_msgq_tryget(stk_msgq_t *mq, void *msg)
     STK_ASSERT(msg != nullptr);
 
     return reinterpret_cast<stk_msgq_t *>(mq)->handle.TryGet(msg);
+}
+
+bool stk_msgq_peek(stk_msgq_t *mq, void *msg, int32_t timeout)
+{
+    STK_ASSERT(mq != nullptr);
+    STK_ASSERT(msg != nullptr);
+
+    return reinterpret_cast<stk_msgq_t *>(mq)->handle.Peek(msg, timeout);
+}
+
+bool stk_msgq_trypeek(stk_msgq_t *mq, void *msg)
+{
+    STK_ASSERT(mq != nullptr);
+    STK_ASSERT(msg != nullptr);
+
+    return reinterpret_cast<stk_msgq_t *>(mq)->handle.TryPeek(msg);
+}
+
+bool stk_msgq_peekfront(stk_msgq_t *mq, void *msg, int32_t timeout)
+{
+    STK_ASSERT(mq != nullptr);
+    STK_ASSERT(msg != nullptr);
+
+    return reinterpret_cast<stk_msgq_t *>(mq)->handle.PeekFront(msg, timeout);
+}
+
+bool stk_msgq_trypeekfront(stk_msgq_t *mq, void *msg)
+{
+    STK_ASSERT(mq != nullptr);
+    STK_ASSERT(msg != nullptr);
+
+    return reinterpret_cast<stk_msgq_t *>(mq)->handle.TryPeekFront(msg);
 }
 
 void stk_msgq_reset(stk_msgq_t *mq)
@@ -615,6 +684,20 @@ bool stk_msgq_is_full(const stk_msgq_t *mq)
     STK_ASSERT(mq != nullptr);
 
     return reinterpret_cast<const stk_msgq_t *>(mq)->handle.IsFull();
+}
+
+uint8_t *stk_msgq_get_buffer(stk_msgq_t *mq)
+{
+    STK_ASSERT(mq != nullptr);
+
+    return reinterpret_cast<stk_msgq_t *>(mq)->handle.GetBuffer();
+}
+
+bool stk_msgq_is_storage_valid(const stk_msgq_t *mq)
+{
+    STK_ASSERT(mq != nullptr);
+
+    return reinterpret_cast<const stk_msgq_t *>(mq)->handle.IsStorageValid();
 }
 
 // ---------------------------------------------------------------------------
