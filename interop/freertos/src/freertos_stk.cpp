@@ -2913,14 +2913,20 @@ TickType_t xTimerGetExpiryTime(TimerHandle_t xTimer)
 
 #if configUSE_EVENT_GROUPS
 
-// Translate STK EventFlags error -> FreeRTOS bits representation.
-// FreeRTOS returns the bits value on success; on timeout it returns the
-// bits that were set when the timeout occurred (we return 0 for simplicity
-// as STK does not expose that snapshot).
-static inline EventBits_t StkFlagsToFrtos(uint32_t result)
+// Translate STK EventFlags result -> FreeRTOS bits representation.
+//
+// Success path: return the matched bits directly.
+// Error path  : return the caller-supplied snapshot of the flags word taken
+//               immediately after the timeout was confirmed.  FreeRTOS documents
+//               that xEventGroupWaitBits() returns the flags value *at the time
+//               of timeout*, not zero, so callers can distinguish which bits were
+//               set even though the wait condition was not fully satisfied.
+//               Pass snapshot = 0U for call sites where a timeout return of 0
+//               is the correct contract (e.g. xEventGroupSync).
+static inline EventBits_t StkFlagsToFrtos(uint32_t result, EventBits_t snapshot = 0U)
 {
     if (stk::sync::EventFlags::IsError(result))
-        return 0U; // timeout or error — caller checks via the return value
+        return snapshot; // timeout or parameter error — return flags snapshot
 
     return static_cast<EventBits_t>(result);
 }
@@ -3013,13 +3019,18 @@ EventBits_t xEventGroupWaitBits(EventGroupHandle_t xEventGroup,
     if (IsIrqContext() || (xEventGroup == nullptr) || (uxBitsToWaitFor == 0U))
         return 0U;
 
-    uint32_t opts   = BuildStkFlagsOpts(xClearOnExit, xWaitForAllBits);
-    uint32_t result = static_cast<FrtosEventGroup *>(xEventGroup)->m_ef.Wait(
-                          static_cast<uint32_t>(uxBitsToWaitFor),
-                          opts,
-                          FrtosTimeoutToStk(xTicksToWait));
+    stk::sync::EventFlags &ef = static_cast<FrtosEventGroup *>(xEventGroup)->m_ef;
 
-    return StkFlagsToFrtos(result);
+    uint32_t opts   = BuildStkFlagsOpts(xClearOnExit, xWaitForAllBits);
+    uint32_t result = ef.Wait(static_cast<uint32_t>(uxBitsToWaitFor),
+                              opts,
+                              FrtosTimeoutToStk(xTicksToWait));
+
+    // On timeout, FreeRTOS documents that the return value is the flags word
+    // at the moment the timeout occurred, not zero.  ef.Get() is a volatile
+    // read that is atomic on all supported 32-bit STK targets; no CS needed.
+    const EventBits_t snapshot = static_cast<EventBits_t>(ef.Get());
+    return StkFlagsToFrtos(result, snapshot);
 }
 
 BaseType_t xEventGroupSetBitsFromISR(EventGroupHandle_t xEventGroup,
