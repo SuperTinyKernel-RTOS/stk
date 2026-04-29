@@ -352,6 +352,27 @@ void stk_kernel_suspend_task(stk_kernel_t *k, stk_task_t *task, bool *suspended)
 */
 void stk_kernel_resume_task(stk_kernel_t *k, stk_task_t *task);
 
+/*! \brief     Suspend scheduling (tickless idle entry point).
+    \param[in] k: Kernel handle.
+    \return    Number of ticks available for the suspension period, determined by the
+               nearest pending wake-up deadline across all sleeping tasks. The caller
+               may program a hardware timer with this value to suppress SysTick wakeups.
+    \note      ISR-safe. Pair every call with stk_kernel_resume().
+    \note      Only meaningful when the kernel was created with KERNEL_TICKLESS mode.
+    \see       stk_kernel_resume, STK_KERNEL_STATE_SUSPENDED
+*/
+int32_t stk_kernel_suspend(stk_kernel_t *k);
+
+/*! \brief     Resume scheduling after a prior stk_kernel_suspend() call.
+    \param[in] k: Kernel handle.
+    \param[in] elapsed_ticks: Number of ticks that elapsed during the suspended period.
+               The kernel uses this value to advance internal time counters and wake tasks
+               whose sleep deadlines have expired.
+    \note      ISR-safe.
+    \see       stk_kernel_suspend
+*/
+void stk_kernel_resume(stk_kernel_t *k, int32_t elapsed_ticks);
+
 /*! \brief     Enumerate all currently active tasks.
     \param[in]  k: Kernel handle.
     \param[out] tasks: Caller-allocated array of opaque task pointers.  Each element is a
@@ -361,6 +382,25 @@ void stk_kernel_resume_task(stk_kernel_t *k, stk_task_t *task);
     \note       ISR-safe.
 */
 size_t stk_kernel_enumerate_tasks(stk_kernel_t *k, stk_task_t **tasks, size_t max_count);
+
+/*! \brief     Manually deliver one scheduler tick to the kernel.
+    \param[in] k: Kernel handle.
+    \note      Use this when the platform driver's built-in SysTick handler is disabled
+               (STK_SYSTICK_HANDLER = _STK_SYSTICK_HANDLER_DISABLE in stk_config.h) and
+               the application provides its own tick source. Call from your custom tick ISR
+               at the rate matching the tick period configured in stk_kernel_init().
+    \note      ISR-safe.
+*/
+void stk_kernel_process_tick(stk_kernel_t *k);
+
+/*! \brief     Trigger a kernel hard fault (safe-state handler).
+    \param[in] k: Kernel handle.
+    \note      Normally invoked automatically by the kernel when an HRT task misses its
+               deadline. Exposed here for custom fault handlers or test harnesses that need
+               to force a controlled system halt via the platform driver's fault path.
+    \note      This call does not return.
+*/
+void stk_kernel_process_hard_fault(stk_kernel_t *k);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Task creation
@@ -410,6 +450,22 @@ void stk_task_set_priority(stk_task_t *task, uint8_t priority);
     \param[in] tname: Null-terminated string (may be NULL).
 */
 void stk_task_set_name(stk_task_t *task, const char *tname);
+
+/*! \brief     Get human-readable task name previously set with stk_task_set_name().
+    \param[in] task: Task handle.
+    \return    Null-terminated name string, or NULL if not set.
+    \note      ISR-safe (reads a stored pointer, no kernel call).
+*/
+const char *stk_task_get_name(const stk_task_t *task);
+
+/*! \brief     Get the unique identifier of a task.
+    \param[in] task: Task handle.
+    \return    Task identifier (stk_tid_t). Equivalent to the value stk_tid() returns
+               when called from within that task.
+    \note      ISR-safe.
+    \see       stk_tid
+*/
+stk_tid_t stk_task_get_id(const stk_task_t *task);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Services available from inside tasks
@@ -562,6 +618,15 @@ void stk_sleep_until(int64_t ts);
 /*! \brief     Voluntarily give up CPU to another ready task (cooperative yield).
 */
 void stk_yield(void);
+
+/*! \brief     Cancel the sleep of a task, waking it immediately.
+    \param[in] tid: Identifier of the task to wake (obtained from stk_tid() or
+               stk_task_get_id()).
+    \note      No-op if the target task is not currently sleeping.
+    \note      ISR-safe.
+    \see       stk_sleep, stk_sleep_ms, stk_sleep_until
+*/
+void stk_sleep_cancel(stk_tid_t tid);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Dynamic cleanup

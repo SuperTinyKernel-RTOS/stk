@@ -39,6 +39,9 @@ extern "C" {
 
 /*! \def   STK_C_TIMER_MAX
     \brief Maximum number of concurrent \a stk_timer_t instances per core (default: 32).
+           The total pool size is \a STK_C_TIMER_MAX × \a STK_C_CPU_COUNT slots, shared
+           across all cores.  When the pool is exhausted \a stk_timer_create() asserts
+           in debug builds and returns NULL in release builds.
     \note  Increase if your application needs more simultaneous timers.
 */
 #ifndef STK_C_TIMER_MAX
@@ -130,9 +133,12 @@ int64_t stk_timerhost_get_time_now(const stk_timerhost_t *host);
 /*! \brief     Allocate a timer from the static pool.
     \param[in] callback: Function to call when the timer expires (must not be NULL).
     \param[in] user_data: Opaque pointer forwarded to \a callback on expiration.
-    \return    Timer handle, or NULL if the pool is exhausted (\a STK_C_TIMER_MAX reached).
+    \return    Timer handle, or NULL if the pool is exhausted
+               (\a STK_C_TIMER_MAX × \a STK_C_CPU_COUNT slots total).
     \note      The returned handle is valid until \a stk_timer_destroy() is called.
                It must not be active (i.e. not currently started) when destroyed.
+    \note      The pool is shared across all CPU cores. Total capacity is
+               \a STK_C_TIMER_MAX * \a STK_C_CPU_COUNT.
 */
 stk_timer_t *stk_timer_create(stk_timer_callback_t callback, void *user_data);
 
@@ -301,11 +307,11 @@ typedef struct stk_periodic_trigger_t stk_periodic_trigger_t;
     \param[in] memory: Pointer to the caller-supplied memory container.
     \param[in] memory_size: Size of the container in bytes (must be >= sizeof(stk_periodic_trigger_mem_t)).
     \param[in] period: Trigger period in ticks. Must be > 0.
-    \param[in] started: \a true to create instance in a started state, \a false otherwise.
+    \param[in] started: \c true to create the instance in a started state (first firing occurs
+               no earlier than \a period ticks after construction); \c false to create it in a
+               stopped state (call \a stk_periodic_trigger_restart() before polling).
     \return    Trigger handle on success, or \c NULL if \a memory is \c NULL
                or \a memory_size is too small.
-    \note      The trigger is created in a stopped state.
-               Call \a stk_periodic_trigger_restart() before polling.
 */
 stk_periodic_trigger_t *stk_periodic_trigger_create(stk_periodic_trigger_mem_t *memory,
                                                     uint32_t                   memory_size,

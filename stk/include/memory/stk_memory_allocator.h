@@ -90,6 +90,7 @@ struct MemoryAllocator
         void RecordAllocate(size_t size)
         {
             allocated += size;
+            ++allocate_count;
             min_ever_free = Min(GetAvailable(), min_ever_free);
         }
 
@@ -101,6 +102,7 @@ struct MemoryAllocator
             STK_ASSERT(allocated >= size);
 
             allocated -= size;
+            ++free_count;
         }
     };
 

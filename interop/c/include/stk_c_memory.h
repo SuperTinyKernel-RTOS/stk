@@ -104,8 +104,11 @@ extern "C" {
 
 /*! \def     STK_BLOCKPOOL_STORAGE_DECL(name, capacity, raw_block_size)
     \brief   Declare a correctly sized and aligned external storage array.
-    \details Expands to a \c static \c stk_word_t_t array with the required size and
+    \details Expands to a \c static \c stk_word_t array with the required size and
              pointer-sized alignment. Intended for file-scope or function-scope use.
+             \c STK_BLOCKPOOL_ALIGN_BLOCK_SIZE() guarantees the total byte count is
+             always an exact multiple of \c sizeof(stk_word_t), so the integer
+             division in the array dimension is lossless by construction.
     \param   name: C identifier for the array variable.
     \param   capacity: Number of blocks the pool will hold.
     \param   raw_block_size: Raw per-block size in bytes.
@@ -142,6 +145,9 @@ typedef struct stk_blockpool_t stk_blockpool_t;
                Forwarded to \c ITraceable::SetTraceName().
     \return    Pool handle, or \c NULL if the static slot pool is exhausted
                (\c STK_C_BLOCKPOOL_MAX reached).
+               A non-NULL handle does \b not guarantee the backing storage was
+               successfully heap-allocated; always call \c stk_blockpool_is_storage_valid()
+               immediately after creation when operating without exceptions.
     \note      Not ISR-safe.
     \see       stk_blockpool_is_storage_valid(), stk_blockpool_destroy()
 */
@@ -180,6 +186,9 @@ stk_blockpool_t *stk_blockpool_create_static(size_t      capacity,
     \warning   Destroying a pool while tasks are blocked in \c stk_blockpool_alloc()
                or \c stk_blockpool_timed_alloc() is a logic error and triggers an
                assertion in debug builds.
+    \warning   Set the pool pointer to \c NULL after this call to prevent accidental
+               use-after-destroy (the handle slot may be reused by a subsequent
+               \c stk_blockpool_create() call).
     \note      Not ISR-safe.
 */
 void stk_blockpool_destroy(stk_blockpool_t *pool);
@@ -272,7 +281,10 @@ size_t stk_blockpool_get_block_size(const stk_blockpool_t *pool);
     \param[in] pool: Pool handle.
     \return    Point-in-time snapshot. May be stale immediately after return in a
                multi-task environment.
-    \note      ISR-safe on targets where a 16-bit aligned read is atomic.
+    \note      ISR-safety depends on target ABI: the counter is a 16-bit value, so a
+               single-instruction atomic read is guaranteed on 32-bit Cortex-M (aligned
+               halfword load) but not on 8-bit targets where two bus cycles may be needed.
+               Treat the result as advisory in all multi-core or 8-bit contexts.
 */
 size_t stk_blockpool_get_used_count(const stk_blockpool_t *pool);
 

@@ -19,6 +19,18 @@
 using namespace stk;
 using namespace stk::memory;
 
+// Guard against divergence between the C macro STK_BLOCKPOOL_ALIGN_BLOCK_SIZE and
+// the C++ BlockMemoryPool::AlignBlockSize() function.  Both must produce identical
+// results; if this assertion fires, update one of the two definitions.
+static_assert(
+    STK_BLOCKPOOL_ALIGN_BLOCK_SIZE(1)  == BlockMemoryPool::AlignBlockSize(1)  &&
+    STK_BLOCKPOOL_ALIGN_BLOCK_SIZE(3)  == BlockMemoryPool::AlignBlockSize(3)  &&
+    STK_BLOCKPOOL_ALIGN_BLOCK_SIZE(4)  == BlockMemoryPool::AlignBlockSize(4)  &&
+    STK_BLOCKPOOL_ALIGN_BLOCK_SIZE(7)  == BlockMemoryPool::AlignBlockSize(7)  &&
+    STK_BLOCKPOOL_ALIGN_BLOCK_SIZE(16) == BlockMemoryPool::AlignBlockSize(16),
+    "STK_BLOCKPOOL_ALIGN_BLOCK_SIZE and BlockMemoryPool::AlignBlockSize() have diverged. "
+    "Keep both definitions in sync.");
+
 // Returns a size of memory in stk::Word elements required for object allocation.
 template <typename T> static constexpr size_t StkGetWordCountForType()
 {
@@ -179,6 +191,9 @@ void stk_blockpool_destroy(stk_blockpool_t *pool)
 void *stk_blockpool_alloc(stk_blockpool_t *pool)
 {
     STK_ASSERT(pool != nullptr);
+    // stk_blockpool_alloc() blocks indefinitely and must never be called from an ISR.
+    // Use stk_blockpool_try_alloc() or stk_blockpool_timed_alloc(..., STK_NO_WAIT) instead.
+    STK_ASSERT(!hw::IsInsideISR());
 
     return pool->handle.Alloc();
 }
