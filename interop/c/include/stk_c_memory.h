@@ -62,9 +62,9 @@
 extern "C" {
 #endif
 
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
 // Configuration macros
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
 
 /*! \def     STK_C_BLOCKPOOL_MAX
     \brief   Maximum number of concurrent \c stk_blockpool_t instances (default: 8).
@@ -74,9 +74,9 @@ extern "C" {
     #define STK_C_BLOCKPOOL_MAX 8
 #endif
 
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
 // Storage helper macros
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
 
 /*! \def     STK_BLOCKPOOL_ALIGN
     \brief   Required storage alignment in bytes (equals sizeof(void*)).
@@ -122,17 +122,17 @@ extern "C" {
 #define STK_BLOCKPOOL_STORAGE_DECL(name, capacity, raw_block_size) \
     static stk_word_t name[STK_BLOCKPOOL_STORAGE_SIZE(capacity, raw_block_size) / sizeof(stk_word_t)]
 
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
 // Types
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
 
 /*! \brief Opaque handle to a \c stk::memory::BlockMemoryPool instance.
 */
 typedef struct stk_blockpool_t stk_blockpool_t;
 
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
 // Lifecycle - heap storage
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
 
 /*! \brief     Create a block pool backed by \b heap-allocated storage.
     \details   Allocates a flat byte buffer of
@@ -193,9 +193,9 @@ stk_blockpool_t *stk_blockpool_create_static(size_t      capacity,
 */
 void stk_blockpool_destroy(stk_blockpool_t *pool);
 
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
 // Allocation
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
 
 /*! \brief     Allocate one block, blocking indefinitely until one is available.
     \param[in] pool: Pool handle.
@@ -225,9 +225,9 @@ void *stk_blockpool_timed_alloc(stk_blockpool_t *pool, uint32_t timeout);
 */
 void *stk_blockpool_try_alloc(stk_blockpool_t *pool);
 
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
 // Deallocation
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
 
 /*! \brief     Return a previously allocated block to the pool.
     \details   Pushes the block back onto the free-list head in O(1) and wakes
@@ -246,9 +246,9 @@ void *stk_blockpool_try_alloc(stk_blockpool_t *pool);
 */
 bool stk_blockpool_free(stk_blockpool_t *pool, void *ptr);
 
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
 // Query
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
 
 /*! \brief     Verify that the backing storage is valid and the pool is ready for use.
     \details   Always \c true for pools created with \c stk_blockpool_create_static().

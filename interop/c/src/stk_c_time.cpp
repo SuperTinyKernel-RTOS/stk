@@ -29,9 +29,9 @@
 using namespace stk;
 using namespace stk::time;
 
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // Internal concrete Timer subclass that bridges C++ OnExpired() -> C callback
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 class CTimerWrapper final : public TimerHost::Timer
 {
@@ -64,7 +64,7 @@ public:
     void *GetUserData() const { return m_user_data; }
     stk_timerhost_t *GetHostHandle() const { return m_host_handle; }
 
-    void OnExpired(TimerHost */*host*/)
+    void OnExpired(TimerHost */*host*/) override
     {
         if (m_callback != nullptr)
             m_callback(m_host_handle, reinterpret_cast<stk_timer_t *>(this), m_user_data);
@@ -76,18 +76,13 @@ private:
     void                *m_user_data;
 };
 
-// ---------------------------------------------------------------------------
-// stk_timer_t  — public opaque type maps 1:1 to CTimerWrapper
-// ---------------------------------------------------------------------------
-
+// -----------------------------------------------------------------------------
+// Timer slot pool
+// -----------------------------------------------------------------------------
 struct stk_timer_t
 {
     CTimerWrapper handle;
 };
-
-// ---------------------------------------------------------------------------
-// Timer slot pool
-// ---------------------------------------------------------------------------
 
 static struct TimerSlot
 {
@@ -99,12 +94,12 @@ static struct TimerSlot
 }
 s_Timers[STK_C_TIMERS_TOTAL];
 
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // stk_timerhost_t — wraps a TimerHost instance
 //
 // One instance per CPU core, held in s_TimerHosts[]. The struct is opaque to
 // C callers.
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 struct stk_timerhost_t
 {
@@ -114,14 +109,14 @@ struct stk_timerhost_t
 // Static pool: one host per core, indexed by core_nr (0 ... STK_C_CPU_COUNT-1).
 static stk_timerhost_t s_TimerHosts[STK_C_CPU_COUNT];
 
-// ---------------------------------------------------------------------------
+// =============================================================================
 // C-interface
-// ---------------------------------------------------------------------------
+// =============================================================================
 extern "C" {
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // TimerHost
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 
 stk_timerhost_t *stk_timerhost_get(uint8_t core_nr)
 {
@@ -170,9 +165,9 @@ int64_t stk_timerhost_get_time_now(const stk_timerhost_t *host)
     return (int64_t)host->handle.GetTimeNow();
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // Timer lifecycle
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 
 stk_timer_t *stk_timer_create(stk_timer_callback_t callback, void *user_data)
 {
@@ -219,12 +214,12 @@ void stk_timer_destroy(stk_timer_t *timer)
     STK_ASSERT(false);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // Timer control helpers
 //
 // Every control function that rearms a timer also refreshes the host handle
 // stored in the wrapper so the C callback always receives the correct host.
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 
 bool stk_timer_start(stk_timerhost_t *host,
                      stk_timer_t     *timer,
@@ -286,9 +281,9 @@ bool stk_timer_set_period(stk_timerhost_t *host, stk_timer_t *timer, uint32_t pe
     return host->handle.SetPeriod(timer->handle, period);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // Timer query
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 
 bool stk_timer_is_active(const stk_timer_t *timer)
 {
@@ -325,9 +320,9 @@ uint32_t stk_timer_get_remaining_ticks(const stk_timer_t *timer)
     return timer->handle.GetRemainingTicks();
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // PeriodicTrigger
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 
 struct stk_periodic_trigger_t
 {
@@ -384,4 +379,6 @@ uint32_t stk_periodic_trigger_get_period(const stk_periodic_trigger_t *trig)
     return static_cast<uint32_t>(trig->handle.GetPeriod());
 }
 
+// =============================================================================
 } // extern "C"
+// =============================================================================

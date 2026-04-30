@@ -30,9 +30,9 @@
 extern "C" {
 #endif
 
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
 // Configuration macros (can be overridden before including this file)
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
 
 /*! \def       STK_C_KERNEL_MAX_TASKS
     \brief     Maximum number of tasks per kernel instance (default: 4).
@@ -65,9 +65,9 @@ extern "C" {
 */
 #define STK_C_ASSERT(e) assert(e)
 
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
 // Types
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
 
 /*! \brief     CPU register type.
 */
@@ -127,9 +127,9 @@ typedef void (*stk_task_entry_t)(void *arg);
     #endif
 #endif
 
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
 // Attributes
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
 
 /*! \def       __stk_c_stack
     \brief     Stack attribute (applies required alignment for a stack memory).
@@ -149,9 +149,9 @@ typedef void (*stk_task_entry_t)(void *arg);
     #define __stk_c_aligned
 #endif
 
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
 // Kernel factory functions
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
 
 /* Available kernel type definitions:
 
@@ -249,9 +249,9 @@ Kernel<KERNEL_DYNAMIC | KERNEL_TICKLESS | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, S
 */
 stk_kernel_t *stk_kernel_create(uint8_t core_nr);
 
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
 // Kernel control
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
 
 /*! \brief     Initialize kernel with given tick period.
     \param[in] k:  Kernel handle.
@@ -402,9 +402,9 @@ void stk_kernel_process_tick(stk_kernel_t *k);
 */
 void stk_kernel_process_hard_fault(stk_kernel_t *k);
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Task creation
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
+// Tasks
+// =============================================================================
 
 /*! \brief     Create privileged-mode (kernel-mode) task.
     \param[in] entry: Task entry function.
@@ -467,9 +467,9 @@ const char *stk_task_get_name(const stk_task_t *task);
 */
 stk_tid_t stk_task_get_id(const stk_task_t *task);
 
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
 // Services available from inside tasks
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
 
 /*! \brief     Returns current task/thread ID (the value set by stk_task_set_id).
     \return    Task identifier (0 if not set).
@@ -547,9 +547,9 @@ uint64_t stk_sys_timer_count(void);
 */
 uint32_t stk_sys_timer_frequency(void);
 
-// ─────────────────────────────────────────────────────────────────────────────
-// High-Resolution Clock  (hw::HiResClock)
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
+// High-Resolution Clock  (see hw::HiResClock)
+// =============================================================================
 
 /*! \brief     Get raw CPU cycle counter.
     \return    64-bit cycle count. Resolution is one clock cycle.
@@ -628,9 +628,9 @@ void stk_yield(void);
 */
 void stk_sleep_cancel(stk_tid_t tid);
 
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
 // Dynamic cleanup
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
 
 /*! \brief     Destroy dynamic kernel instance (only when not running).
     \param[in] k: Kernel handle.
@@ -646,9 +646,26 @@ void stk_kernel_destroy(stk_kernel_t *k);
 */
 void stk_task_destroy(stk_task_t *task);
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Thread-Local Storage (very simple / one pointer per task)
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
+// Thread-Local Storage (TLS)
+// =============================================================================
+
+/*! \example
+    \code
+    typedef struct {
+        int task_counter;
+        void *user_context;
+    } my_task_local_t;
+
+    // In task code:
+    static my_task_local_t my_data = { .task_counter = 0 };
+    STK_TLS_SET(&my_data);
+
+    // Later in the same task:
+    my_task_local_t *tls = STK_TLS_GET(my_task_local_t);
+    tls->task_counter++;
+    \endcode
+*/
 
 /*! \brief     Get thread-local pointer (platform-specific slot).
     \return    Pointer previously stored with stk_tls_set() (NULL if never set).
@@ -670,28 +687,11 @@ void stk_tls_set(void *ptr);
 */
 #define STK_TLS_SET(ptr) stk_tls_set((void *)(ptr))
 
-/*! \example
-    \code
-    typedef struct {
-        int task_counter;
-        void *user_context;
-    } my_task_local_t;
-
-    // In task code:
-    static my_task_local_t my_data = { .task_counter = 0 };
-    STK_TLS_SET(&my_data);
-
-    // Later in the same task:
-    my_task_local_t *tls = STK_TLS_GET(my_task_local_t);
-    tls->task_counter++;
-    \endcode
-*/
-
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
 // Synchronization Primitives
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
 
-// ───── Critical Section ──────────────────────────────────────────────────────
+// ----- Critical Section ------------------------------------------------------
 
 /*! \brief     Enter critical section - disable context switches on current core.
     \note      Supports nesting (number of enter calls must match number of exit calls).
@@ -703,7 +703,7 @@ void stk_critical_section_enter(void);
 */
 void stk_critical_section_exit(void);
 
-// ───── Mutex ─────────────────────────────────────────────────────────────────
+// ----- Mutex -----------------------------------------------------------------
 
 /*! \brief     A memory size (multiples of stk_word_t) required for Mutex instance.
 */
@@ -754,7 +754,7 @@ void stk_mutex_unlock(stk_mutex_t *mtx);
 */
 bool stk_mutex_timed_lock(stk_mutex_t *mtx, int32_t timeout);
 
-// ───── SpinLock ──────────────────────────────────────────────────────────────
+// ----- SpinLock --------------------------------------------------------------
 
 /*! \brief     A memory size (multiples of stk_word_t) required for SpinLock instance.
 */
@@ -795,7 +795,7 @@ bool stk_spinlock_trylock(stk_spinlock_t *lock);
 */
 void stk_spinlock_unlock(stk_spinlock_t *lock);
 
-// ───── Condition Variable ────────────────────────────────────────────────────
+// ----- Condition Variable ----------------------------------------------------
 
 /*! \brief     A memory size (multiples of stk_word_t) required for ConditionVariable instance.
 */
@@ -843,7 +843,7 @@ void stk_cv_notify_one(stk_cv_t *cv);
 */
 void stk_cv_notify_all(stk_cv_t *cv);
 
-// ───── Event ─────────────────────────────────────────────────────────────────
+// ----- Event -----------------------------------------------------------------
 
 /*! \brief     A memory size (multiples of stk_word_t) required for Event instance.
 */
@@ -900,7 +900,7 @@ void stk_event_reset(stk_event_t *ev);
 */
 void stk_event_pulse(stk_event_t *ev);
 
-// ───── Semaphore ─────────────────────────────────────────────────────────────
+// ----- Semaphore -------------------------------------------------------------
 
 /*! \brief     A memory size (multiples of stk_word_t) required for Semaphore instance.
 */
@@ -961,7 +961,7 @@ void stk_sem_signal(stk_sem_t *sem);
 */
 uint16_t stk_sem_get_count(const stk_sem_t *sem);
 
-// ───── EventFlags ────────────────────────────────────────────────────────────
+// ----- EventFlags ------------------------------------------------------------
 
 /*! \brief     Options bitmask constants for stk_ef_wait() / stk_ef_trywait().
 */
@@ -1069,7 +1069,7 @@ uint32_t stk_ef_wait(stk_ef_t *ef, uint32_t flags, uint32_t options, int32_t tim
 */
 uint32_t stk_ef_trywait(stk_ef_t *ef, uint32_t flags, uint32_t options);
 
-// ───── Pipe (FIFO) ───────────────────────────────────────────────────────────
+// ----- Pipe (FIFO) -----------------------------------------------------------
 
 /*! \brief     A memory size (multiples of stk_word_t) required for a Pipe control-block.
     \details   Covers the fixed-overhead fields of stk::sync::Pipe:
@@ -1325,7 +1325,7 @@ bool stk_pipe_is_full(const stk_pipe_t *pipe);
 */
 bool stk_pipe_is_storage_valid(const stk_pipe_t *pipe);
 
-// ───── MessageQueue ──────────────────────────────────────────────────────────
+// ----- MessageQueue ----------------------------------------------------------
 
 /*! \brief     A memory size (multiples of stk_word_t) required for a MessageQueue instance.
     \details   Covers the fixed-overhead fields of stk::sync::MessageQueue:
@@ -1579,7 +1579,7 @@ bool stk_msgq_is_full(const stk_msgq_t *mq);
 */
 bool stk_msgq_is_storage_valid(const stk_msgq_t *mq);
 
-// ───── RWMutex (Reader-Writer Lock) ──────────────────────────────────────────
+// ----- RWMutex (Reader-Writer Lock) ------------------------------------------
 
 /*! \brief     A memory size (multiples of stk_word_t) required for RWMutex instance.
 */

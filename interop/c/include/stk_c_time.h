@@ -33,9 +33,9 @@
 extern "C" {
 #endif
 
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
 // Configuration macros
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
 
 /*! \def   STK_C_TIMER_MAX
     \brief Maximum number of concurrent \a stk_timer_t instances per core (default: 32).
@@ -55,9 +55,9 @@ extern "C" {
     #define STK_C_TIMER_HANDLER_STACK_SIZE 256
 #endif
 
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
 // Types
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
 
 /*! \brief  Opaque handle to a \c TimerHost instance (one per CPU core).
 */
@@ -78,9 +78,9 @@ typedef void (*stk_timer_callback_t)(stk_timerhost_t *host,
                                      stk_timer_t     *timer,
                                      void            *user_data);
 
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
 // TimerHost - per-core host management
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
 
 /*! \brief     Obtain the pre-allocated TimerHost for the given CPU core.
     \param[in] core_nr: CPU core index (0 … STK_C_CPU_COUNT-1).
@@ -126,9 +126,9 @@ size_t stk_timerhost_get_size(const stk_timerhost_t *host);
 */
 int64_t stk_timerhost_get_time_now(const stk_timerhost_t *host);
 
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
 // Timer lifecycle
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
 
 /*! \brief     Allocate a timer from the static pool.
     \param[in] callback: Function to call when the timer expires (must not be NULL).
@@ -149,9 +149,9 @@ stk_timer_t *stk_timer_create(stk_timer_callback_t callback, void *user_data);
 */
 void stk_timer_destroy(stk_timer_t *timer);
 
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
 // Timer control
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
 
 /*! \brief     Start a timer.
     \param[in] host: TimerHost that will manage this timer.
@@ -230,9 +230,9 @@ bool stk_timer_set_period(stk_timerhost_t *host,
                           stk_timer_t     *timer,
                           uint32_t         period);
 
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
 // Timer query
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
 
 /*! \brief     Check whether a timer is currently active (started and not yet expired/stopped).
     \param[in] timer: Timer handle.
@@ -267,9 +267,9 @@ int64_t stk_timer_get_timestamp(const stk_timer_t *timer);
 */
 uint32_t stk_timer_get_remaining_ticks(const stk_timer_t *timer);
 
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
 // PeriodicTrigger - lightweight in-place periodic polling helper
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
 
 /*! \defgroup c_api_periodic_trigger STK C PeriodicTrigger API
     \brief    Pure C interface for stk::time::PeriodicTrigger.
