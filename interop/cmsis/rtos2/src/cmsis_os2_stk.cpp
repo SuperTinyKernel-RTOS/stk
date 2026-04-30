@@ -16,17 +16,17 @@
 
 #include "cmsis_os2.h"
 
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // Kernel version / identification
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 #define STK_WRAPPER_API_VERSION     20030000UL // 2.3.0
 #define STK_WRAPPER_KERNEL_VERSION  20030000UL
 #define STK_WRAPPER_KERNEL_ID       "STK RTOS2 Wrapper v1.0"
 
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // Kernel configuration
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 // Number of task slots in the global kernel instance.
 // Increase if more concurrent threads are needed.
@@ -55,12 +55,12 @@ extern "C" void free(void *ptr);
 void *stk::memory::MemoryAllocator::Allocate(size_t size) { return malloc(size); }
 void stk::memory::MemoryAllocator::Free(void *ptr) { free(ptr); }
 
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // Priority mapping:
 //   CMSIS range: osPriorityIdle(1) .. osPriorityISR(56)  ->  57 levels
 //   STK FP32 range: 0 .. 31                              ->  32 levels
 // Linear map: stk_prio = (cmsis_prio * 31) / 56
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 static __stk_forceinline int32_t CmsisPrioToStk(osPriority_t p)
 {
     if (p <= osPriorityIdle)
@@ -83,13 +83,13 @@ static __stk_forceinline osPriority_t StkPrioToCmsis(int32_t p)
     return static_cast<osPriority_t>(r);
 }
 
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // Convert CMSIS timeout (ticks) -> STK timeout (ticks / milliseconds).
 //
 // CMSIS ticks == STK ticks when tick resolution is 1 ms (PERIODICITY_DEFAULT).
 // For other resolutions the conversion uses the kernel's tick resolution.
 // osWaitForever -> WAIT_INFINITE.
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 static __stk_forceinline stk::Timeout CmsisTimeoutToStk(uint32_t ticks)
 {
     if (ticks > stk::WAIT_INFINITE)
@@ -102,17 +102,17 @@ static __stk_forceinline stk::Timeout CmsisTimeoutToStk(uint32_t ticks)
     return static_cast<stk::Timeout>(ticks);
 }
 
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // ISR context check
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 static __stk_forceinline bool IsIrqContext()
 {
     return stk::hw::IsInsideISR();
 }
 
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // Global kernel type alias
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 using StkKernel = stk::Kernel<stk::KERNEL_DYNAMIC | stk::KERNEL_SYNC
 #if STK_TICKLESS_IDLE
     | stk::KERNEL_TICKLESS
@@ -122,7 +122,7 @@ using StkKernel = stk::Kernel<stk::KERNEL_DYNAMIC | stk::KERNEL_SYNC
 static StkKernel g_StkKernel;
 static uint32_t  g_StkKernelLocked = 0;
 
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // Thread control block
 //
 // StkThread wraps a single CMSIS thread.
@@ -134,7 +134,7 @@ static uint32_t  g_StkKernelLocked = 0;
 //   Run() method simply calls func(argument).
 //
 //   Priority is stored as STK weight (0..31) and returned via GetWeight().
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 struct StkThread final : public stk::ITask
 {
@@ -204,9 +204,9 @@ struct StkThread final : public stk::ITask
     bool                         m_cb_owned;     // true -> heap-allocated control block, delete on Terminate(), false -> caller-supplied cb_mem, call destructor explicitly
 };
 
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // Mutex control block
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 struct StkMutex
 {
@@ -220,9 +220,9 @@ struct StkMutex
     bool             m_cb_owned; // true -> heap-allocated, false -> placement-new in caller memory
 };
 
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // Semaphore control block
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 struct StkSemaphore
 {
@@ -237,13 +237,13 @@ struct StkSemaphore
     bool                 m_cb_owned; // true -> heap-allocated, false -> placement-new in caller memory
 };
 
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // Event flags control block
 //
 // Backed directly by stk::sync::EventFlags - STK's native 32-bit multi-flag
 // synchronization primitive (Set/Clear/Get/Wait with ANY/ALL/NO_CLEAR options,
 // ISR-safe Set/Clear, absolute-deadline wait loop).
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 struct StkEventFlags
 {
@@ -257,12 +257,12 @@ struct StkEventFlags
     bool                  m_cb_owned; // true -> heap-allocated, false -> placement-new in caller memory
 };
 
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // Timer control block
 //
 // CMSIS timers are backed by stk::time::TimerHost.
 // A single global TimerHost is created on first osTimerNew().
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 static stk::time::TimerHost *g_TimerHost = nullptr;
 static stk::Word             g_TimerHostBuf[StkGetWordCountForType<stk::time::TimerHost>()];
@@ -300,11 +300,11 @@ struct StkTimer final : public stk::time::TimerHost::Timer
     bool           m_cb_owned;     // true -> heap-allocated, false -> placement-new in caller memory
 };
 
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // Memory pool control block
 //
 // Backed directly by stk::memory::BlockMemoryPool.
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 class StkMemPool
 {
@@ -333,7 +333,7 @@ public:
     bool                         m_cb_owned; // true -> heap-allocated; false -> placement-new in caller memory
 };
 
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // Message queue control block
 //
 // Backed by stk::sync::MessageQueue - STK's native fixed-capacity, fixed-
@@ -352,7 +352,7 @@ public:
 //        region is large enough to hold (msg_count * msg_size) bytes.
 //     2. Dynamic fallback: heap buffer of (msg_count * msg_size) bytes.
 //        Allocated buffer is freed in the destructor.
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 struct StkMessageQueue
 {
@@ -390,9 +390,9 @@ struct StkMessageQueue
                                         // false -> placement-new in caller memory (call dtor only)
 };
 
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // Internal helpers
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 // Placement-new helper: construct T in caller-supplied memory when the block
 // is large enough; otherwise fall back to heap (operator new).

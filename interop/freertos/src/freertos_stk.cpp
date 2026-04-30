@@ -18,15 +18,15 @@
 
 #include "FreeRTOS.h"
 
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // Wrapper version info
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 #define FREERTOS_STK_WRAPPER_VERSION   "FreeRTOS-STK Wrapper v1.0"
 
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // Kernel configuration
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 // Maximum concurrent tasks. Mirrors FREERTOS_STK_MAX_TASKS from the header.
 #ifndef FREERTOS_STK_MAX_TASKS
@@ -46,11 +46,11 @@ template <typename T> static constexpr size_t StkGetWordCountForType()
     return ((sizeof(T) + sizeof(stk::Word) - 1) / sizeof(stk::Word));
 }
 
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // Private memory allocators (we define malloc, free here to overcome absence of declaration in
 // case of -ffreestanding compiler flag).
 // Similar to FreeRTOS's heap_3.c.
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 extern "C" void *malloc(size_t size);
 extern "C" void free(void *ptr);
@@ -171,7 +171,7 @@ static void ObjFreeRaw(T *obj)
     }
 }
 
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // Heap API — pvPortMalloc / vPortFree
 //
 // Both functions delegate directly to stk::memory::MemoryAllocator::Allocate
@@ -179,7 +179,7 @@ static void ObjFreeRaw(T *obj)
 // Redefining those two functions (e.g. to point at a static pool allocator)
 // automatically redirects both internal STK allocations and any application
 // code that calls pvPortMalloc / vPortFree.
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 __stk_weak void *pvPortMalloc(size_t xWantedSize)
 {
@@ -191,7 +191,7 @@ __stk_weak void vPortFree(void *pv)
     stk::memory::MemoryAllocator::Free(pv);
 }
 
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // Heap query API — xPortGetFreeHeapSize / xPortGetMinimumEverFreeHeapSize /
 //                  vPortGetHeapStats / MemoryAllocator::GetStats
 //
@@ -218,7 +218,7 @@ __stk_weak void vPortFree(void *pv)
 //
 // MemoryAllocator::GetStats
 //   Returns the raw Stats struct for STK-native callers.
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 size_t xPortGetFreeHeapSize(void)
 {
@@ -256,7 +256,7 @@ void vPortGetHeapStats(HeapStats_t *pxHeapStats)
     pxHeapStats->xNumberOfFreeBlocks             = (free_now > 0U) ? 1U : 0U;
 }
 
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // Priority mapping:
 //   FreeRTOS range       : 0 (lowest/idle) .. configMAX_PRIORITIES-1 (highest)
 //   STK FP32 level range : 0               .. 31
@@ -271,7 +271,7 @@ void vPortGetHeapStats(HeapStats_t *pxHeapStats)
 //   configMAX_PRIORITIES must be <= 32 (compile-time assertion below).
 //   If it is less than 32, only levels 0..configMAX_PRIORITIES-1 are used
 //   and the upper FP32 slots remain empty, which is perfectly fine.
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 // Enforce that configMAX_PRIORITIES fits within the 32-level FP32 strategy.
 static_assert(configMAX_PRIORITIES <= 32U,
@@ -302,12 +302,12 @@ static inline UBaseType_t StkWeightToFrtosPrio(int32_t w)
     return p;
 }
 
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // Timeout conversion:
 //   portMAX_DELAY (0xFFFFFFFF) -> stk::WAIT_INFINITE
 //   0                          -> stk::NO_WAIT
 //   N                          -> N  (ticks pass through directly)
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 static inline stk::Timeout FrtosTimeoutToStk(TickType_t t)
 {
     if (t == portMAX_DELAY)
@@ -319,22 +319,22 @@ static inline stk::Timeout FrtosTimeoutToStk(TickType_t t)
     return static_cast<stk::Timeout>(t);
 }
 
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // ISR context check
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 static inline bool IsIrqContext()
 {
     return stk::hw::IsInsideISR();
 }
 
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // Global kernel type alias.
 // KERNEL_DYNAMIC  : tasks can be created/deleted at runtime.
 // KERNEL_SYNC     : enables all synchronisation primitives.
 // SwitchStrategyFP32: Fixed-priority preemptive, 32 levels (0=lowest, 31=highest),
 //   with round-robin within each level.  This exactly mirrors FreeRTOS scheduling
 //   semantics: the highest-priority ready task always runs immediately.
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 using FrtosKernel = stk::Kernel<stk::KERNEL_DYNAMIC | stk::KERNEL_SYNC
 #if STK_TICKLESS_IDLE
     | stk::KERNEL_TICKLESS
@@ -345,9 +345,9 @@ using FrtosKernel = stk::Kernel<stk::KERNEL_DYNAMIC | stk::KERNEL_SYNC
 
 static FrtosKernel g_StkKernel;
 
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // vPortEnterCritical / vPortExitCritical (back taskENTER/EXIT_CRITICAL macros)
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 void vPortEnterCritical(void)
 {
     stk::hw::CriticalSection::Enter();
@@ -405,7 +405,7 @@ struct FrtosTask : public stk::ITask
         }
     }
 
-    // ---- stk::ITask --------------------------------------------------------
+    // ---- stk::ITask ----
     void Run() override
     {
         m_func(m_argument);
@@ -426,12 +426,12 @@ struct FrtosTask : public stk::ITask
 
     void OnDeadlineMissed(uint32_t) override {}
 
-    // ---- Stack high-water mark inspection ----------------------------------
+    // Stack high-water mark inspection:
     // Returns the number of untouched Words at the stack base (filled with
     // STK_STACK_MEMORY_FILLER during init).
     size_t GetStackHighWaterMark() const { return GetStackSpace(); }
 
-    // ---- Members -----------------------------------------------------------
+    // ---- Members ----
     TaskFunction_t          m_func;
     void                   *m_argument;
     const char             *m_name;
@@ -453,7 +453,7 @@ struct FrtosTask : public stk::ITask
     void *m_tls[configNUM_THREAD_LOCAL_STORAGE_POINTERS];
 
 #if configUSE_TASK_NOTIFICATIONS
-    // ---- Per-slot task notification state ----------------------------------
+    // ---- Per-slot task notification state ----
     // FreeRTOS supports configTASK_NOTIFICATION_ARRAY_ENTRIES independent
     // notification slots per task.  Each slot is fully independent: it has its
     // own 32-bit value word, a pending flag (for eSetValueWithoutOverwrite), and
@@ -528,6 +528,7 @@ struct FrtosQueue
         return ObjAllocArray<uint8_t>(static_cast<size_t>(cap) * msg_size);
     }
 
+    // ---- Members ----
     stk::sync::MessageQueue m_mq;
     bool                    m_buf_owned;
     bool                    m_cb_owned;
@@ -585,9 +586,9 @@ static SemKind GetSemKindFromHandle(const void *obj)
 
     switch (first_byte)
     {
-        case static_cast<uint8_t>(SemKind::Counting): return SemKind::Counting;
-        case static_cast<uint8_t>(SemKind::Mutex):    return SemKind::Mutex;
-        default:                                       return SemKind::None;
+    case static_cast<uint8_t>(SemKind::Counting): return SemKind::Counting;
+    case static_cast<uint8_t>(SemKind::Mutex):    return SemKind::Mutex;
+    default:                                      return SemKind::None;
     }
 }
 
@@ -619,6 +620,7 @@ struct FrtosSemaphore
 #endif
     }
 
+    // ---- Members ----
     SemKind               m_kind;
     bool                  m_cb_owned;
     stk::sync::Semaphore *m_sem; // non-null for Counting kind
@@ -688,12 +690,13 @@ struct FrtosQueueSet
 
     bool IsValid() const { return (m_token_mq != nullptr); }
 
+    // ---- Members ----
     uint8_t                  *m_buf;       //!< raw backing store for m_token_mq
     bool                      m_cb_owned;  //!< true = heap-allocated, delete in ObjFree
     stk::sync::MessageQueue  *m_token_mq;  //!< FIFO of fired-member handles (void*)
 };
 
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // QueueSetNotify — called after every successful send/signal on a member.
 //
 // Posts the member's handle (a void*) into the set's token queue using a
@@ -708,7 +711,7 @@ struct FrtosQueueSet
 // Parameters:
 //   member_handle — the void* handle of the queue or semaphore that fired.
 //   set          — the FrtosQueueSet that member belongs to.
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 template <typename THost>
 static inline void QueueSetNotify(void *member_handle, THost *host)
 {
@@ -888,7 +891,7 @@ struct FrtosEventGroup
 
 #endif // configUSE_EVENT_GROUPS
 
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // FrtosStreamBuffer  [configUSE_STREAM_BUFFERS]
 //
 // Backed by a stk::sync::Pipe with element_size = 1 (byte ring-buffer).
@@ -904,7 +907,7 @@ struct FrtosEventGroup
 // Pipe::ReadBulkTriggered(), which blocks until m_trigger bytes are present
 // and then drains up to xBufferLengthBytes in one atomic CS pass —
 // no busy-spin, no second call, no lost-wakeup risk.
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 #if configUSE_STREAM_BUFFERS
 
@@ -933,6 +936,7 @@ struct FrtosStreamBuffer
             ObjFreeArray(m_pipe.GetBuffer());
     }
 
+    // ---- Members ----
     stk::sync::Pipe                m_pipe;       //!< byte ring-buffer (element_size = 1)
     size_t                         m_trigger;    //!< minimum bytes before Receive() unblocks
     bool                           m_buf_owned;  //!< true -> data buffer heap-allocated, freed in dtor
@@ -941,7 +945,7 @@ struct FrtosStreamBuffer
     StreamBufferCallbackFunction_t m_recv_cb;    //!< optional callback fired after a successful Receive
 };
 
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // FrtosMessageBuffer
 //
 // An envelope struct is pushed into m_eq for every message.  The payload lives
@@ -953,7 +957,7 @@ struct FrtosStreamBuffer
 // where
 //   block_pool_storage  = xMessageCount * AlignBlockSize(xMaxMessageSize)
 //   envelope_queue_storage = xMessageCount * sizeof(MsgEnvelope)
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 struct FrtosMessageBuffer
 {
     struct MsgEnvelope
@@ -968,9 +972,9 @@ struct FrtosMessageBuffer
     // pSendCb / pRecvCb are optional per-instance notification callbacks;
     // both default to nullptr (no callback).
     explicit FrtosMessageBuffer(size_t                         max_msg_size,
-                                 size_t                         msg_count,
-                                 StreamBufferCallbackFunction_t pSendCb = nullptr,
-                                 StreamBufferCallbackFunction_t pRecvCb = nullptr)
+                                size_t                         msg_count,
+                                StreamBufferCallbackFunction_t pSendCb = nullptr,
+                                StreamBufferCallbackFunction_t pRecvCb = nullptr)
         : m_pool(msg_count,
                  stk::memory::BlockMemoryPool::AlignBlockSize(max_msg_size)),
           m_eq(ObjAllocArray<uint8_t>(msg_count * ENVELOPE_SIZE),
@@ -985,11 +989,11 @@ struct FrtosMessageBuffer
     // Static constructor: uses caller-supplied flat storage buffer.
     // Layout: [pool_storage | eq_storage] as described above.
     explicit FrtosMessageBuffer(size_t                         max_msg_size,
-                                 size_t                         msg_count,
-                                 uint8_t                       *storage,
-                                 size_t                         storage_size,
-                                 StreamBufferCallbackFunction_t pSendCb = nullptr,
-                                 StreamBufferCallbackFunction_t pRecvCb = nullptr)
+                                size_t                         msg_count,
+                                uint8_t                       *storage,
+                                size_t                         storage_size,
+                                StreamBufferCallbackFunction_t pSendCb = nullptr,
+                                StreamBufferCallbackFunction_t pRecvCb = nullptr)
         : m_pool(msg_count,
                  stk::memory::BlockMemoryPool::AlignBlockSize(max_msg_size),
                  storage,
@@ -1011,6 +1015,7 @@ struct FrtosMessageBuffer
             ObjFreeArray(static_cast<uint8_t *>(m_eq.GetBuffer()));
     }
 
+    // ---- Members ----
     stk::memory::BlockMemoryPool   m_pool;         //!< payload block allocator
     stk::sync::MessageQueue        m_eq;           //!< envelope FIFO {len, blk}
     size_t                         m_max_msg_size; //!< max payload bytes per message
@@ -1096,12 +1101,12 @@ BaseType_t xTaskGetSchedulerState(void)
 // Task management
 // ===========================================================================
 
-BaseType_t xTaskCreate(TaskFunction_t    pvTaskCode,
-                                  const char       *pcName,
-                                  uint32_t          usStackDepth,
-                                  void             *pvParameters,
-                                  UBaseType_t       uxPriority,
-                                  TaskHandle_t     *pxCreatedTask)
+BaseType_t xTaskCreate(TaskFunction_t  pvTaskCode,
+                       const char     *pcName,
+                       uint32_t        usStackDepth,
+                       void           *pvParameters,
+                       UBaseType_t     uxPriority,
+                       TaskHandle_t   *pxCreatedTask)
 {
     if (pvTaskCode == nullptr)
         return pdFAIL;
@@ -1184,7 +1189,8 @@ TaskHandle_t xTaskCreateStatic(TaskFunction_t  pvTaskCode,
 void vTaskDelete(TaskHandle_t xTaskToDelete)
 {
     FrtosTask *t = (xTaskToDelete == nullptr) ? static_cast<FrtosTask *>(
-        reinterpret_cast<FrtosTask *>(static_cast<uintptr_t>(stk::GetTid()))) : static_cast<FrtosTask *>(xTaskToDelete);
+        reinterpret_cast<FrtosTask *>(static_cast<uintptr_t>(stk::GetTid()))) :
+            static_cast<FrtosTask *>(xTaskToDelete);
 
     if (t == nullptr)
         return;
@@ -1201,7 +1207,8 @@ void vTaskDelete(TaskHandle_t xTaskToDelete)
 void vTaskSuspend(TaskHandle_t xTaskToSuspend)
 {
     FrtosTask *t = (xTaskToSuspend == nullptr) ? static_cast<FrtosTask *>(
-        reinterpret_cast<FrtosTask *>(static_cast<uintptr_t>(stk::GetTid()))) :  static_cast<FrtosTask *>(xTaskToSuspend);
+        reinterpret_cast<FrtosTask *>(static_cast<uintptr_t>(stk::GetTid()))) :
+            static_cast<FrtosTask *>(xTaskToSuspend);
 
     if (t == nullptr)
         return;
@@ -1375,7 +1382,7 @@ const char *pcTaskGetName(TaskHandle_t xTaskToQuery)
 UBaseType_t uxTaskGetStackHighWaterMark(TaskHandle_t xTask)
 {
     const FrtosTask *t = (xTask == nullptr) ? reinterpret_cast<const FrtosTask *>(
-            static_cast<uintptr_t>(stk::GetTid())) : static_cast<const FrtosTask *>(xTask);
+        static_cast<uintptr_t>(stk::GetTid())) : static_cast<const FrtosTask *>(xTask);
 
     if (t == nullptr)
         return 0U;
@@ -1386,7 +1393,7 @@ UBaseType_t uxTaskGetStackHighWaterMark(TaskHandle_t xTask)
 configSTACK_DEPTH_TYPE uxTaskGetStackHighWaterMark2(TaskHandle_t xTask)
 {
     const FrtosTask *t = (xTask == nullptr) ? reinterpret_cast<const FrtosTask *>(
-            static_cast<uintptr_t>(stk::GetTid())) : static_cast<const FrtosTask *>(xTask);
+        static_cast<uintptr_t>(stk::GetTid())) : static_cast<const FrtosTask *>(xTask);
 
     if (t == nullptr)
         return 0U;
@@ -1394,9 +1401,9 @@ configSTACK_DEPTH_TYPE uxTaskGetStackHighWaterMark2(TaskHandle_t xTask)
     return static_cast<configSTACK_DEPTH_TYPE>(t->GetStackHighWaterMark());
 }
 
-UBaseType_t uxTaskGetSystemState(TaskStatus_t    *pxTaskStatusArray,
-                                  UBaseType_t      uxArraySize,
-                                  uint32_t        *pulTotalRunTime)
+UBaseType_t uxTaskGetSystemState(TaskStatus_t *pxTaskStatusArray,
+                                 UBaseType_t   uxArraySize,
+                                 uint32_t     *pulTotalRunTime)
 {
     // STK has no global CPU run-time accumulator; report 0 per the FreeRTOS
     // convention for targets that do not implement run-time statistics.
@@ -1463,9 +1470,8 @@ UBaseType_t uxTaskGetSystemState(TaskStatus_t    *pxTaskStatusArray,
     return filled;
 }
 
-BaseType_t xTaskCreateRestrictedStatic(
-    const TaskParameters_restricted_t *pxTaskDefinition,
-    TaskHandle_t                       *pxCreatedTask)
+BaseType_t xTaskCreateRestrictedStatic(const TaskParameters_restricted_t *pxTaskDefinition,
+                                       TaskHandle_t                      *pxCreatedTask)
 {
     // Mandatory pointer guard.
     if ((pxTaskDefinition == nullptr) ||
@@ -1496,9 +1502,8 @@ BaseType_t xTaskCreateRestrictedStatic(
     return pdPASS;
 }
 
-BaseType_t xTaskCreateRestricted(
-    const TaskParameters_restricted_t *pxTaskDefinition,
-    TaskHandle_t                       *pxCreatedTask)
+BaseType_t xTaskCreateRestricted(const TaskParameters_restricted_t *pxTaskDefinition,
+                                 TaskHandle_t                      *pxCreatedTask)
 {
     // Mandatory pointer guard (only pvTaskCode is required; the caller need not
     // supply puxStackBuffer or pxTaskBuffer — both are heap-allocated here).
@@ -1573,9 +1578,9 @@ void vTaskList(char *pcWriteBuffer)
     *p = '\0'; // null-terminate
 }
 
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // vTaskGetRunTimeStats
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // Produces the standard FreeRTOS run-time statistics table:
 //
 //   Task            Abs Time    % Time
@@ -1589,7 +1594,7 @@ void vTaskList(char *pcWriteBuffer)
 // configGENERATE_RUN_TIME_STATS is disabled, both columns are emitted as 0.
 // The function exists for link compatibility with middleware and diagnostic
 // tools that call it unconditionally.
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 void vTaskGetRunTimeStats(char *pcWriteBuffer)
 {
@@ -1657,9 +1662,9 @@ QueueHandle_t xQueueCreate(UBaseType_t uxQueueLength,
 }
 
 QueueHandle_t xQueueCreateStatic(UBaseType_t    uxQueueLength,
-                                  UBaseType_t    uxItemSize,
-                                  uint8_t       *pucQueueStorage,
-                                  StaticQueue_t *pxStaticQueue)
+                                 UBaseType_t    uxItemSize,
+                                 uint8_t       *pucQueueStorage,
+                                 StaticQueue_t *pxStaticQueue)
 {
     // All pointer arguments are mandatory for static allocation.
     if ((pucQueueStorage == nullptr) || (pxStaticQueue == nullptr))
@@ -1776,7 +1781,7 @@ BaseType_t xQueuePeek(QueueHandle_t xQueue,
 }
 
 BaseType_t xQueuePeekFromISR(QueueHandle_t xQueue,
-                              void         *pvBuffer)
+                             void         *pvBuffer)
 {
     // Delegates to TryPeek() (= Peek(NO_WAIT)), which is ISR-safe and copies
     // the oldest message atomically without removing it.
@@ -1840,8 +1845,8 @@ BaseType_t xQueueOverwrite(QueueHandle_t xQueue, const void *pvItemToQueue)
 }
 
 BaseType_t xQueueOverwriteFromISR(QueueHandle_t  xQueue,
-                                   const void    *pvItemToQueue,
-                                   BaseType_t    *pxHigherPriorityTaskWoken)
+                                  const void    *pvItemToQueue,
+                                  BaseType_t    *pxHigherPriorityTaskWoken)
 {
     // ISR-safe variant of xQueueOverwrite.  Reset() and TryPut() are both
     // ISR-safe per the STK MessageQueue contract.
@@ -1860,8 +1865,8 @@ BaseType_t xQueueOverwriteFromISR(QueueHandle_t  xQueue,
 }
 
 BaseType_t xQueueSendFromISR(QueueHandle_t  xQueue,
-                                        const void    *pvItemToQueue,
-                                        BaseType_t    *pxHigherPriorityTaskWoken)
+                             const void    *pvItemToQueue,
+                             BaseType_t    *pxHigherPriorityTaskWoken)
 {
     if ((xQueue == nullptr) || (pvItemToQueue == nullptr))
         return pdFAIL;
@@ -1882,8 +1887,8 @@ BaseType_t xQueueSendFromISR(QueueHandle_t  xQueue,
 }
 
 BaseType_t xQueueReceiveFromISR(QueueHandle_t  xQueue,
-                                           void          *pvBuffer,
-                                           BaseType_t    *pxHigherPriorityTaskWoken)
+                                void          *pvBuffer,
+                                BaseType_t    *pxHigherPriorityTaskWoken)
 {
     if ((xQueue == nullptr) || (pvBuffer == nullptr))
         return pdFAIL;
@@ -1947,9 +1952,9 @@ BaseType_t xQueueIsQueueFullFromISR(const QueueHandle_t xQueue)
     return static_cast<const FrtosQueue *>(xQueue)->m_mq.IsFull() ? pdTRUE : pdFALSE;
 }
 
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // xQueueGetMutexHolder / xQueueGetMutexHolderFromISR
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // FreeRTOS re-uses its internal queue struct for mutex semaphores, so these
 // two functions exist as QueueHandle_t-typed aliases of the semaphore
 // counterparts.  In this STK wrapper the object types are distinct:
@@ -1976,7 +1981,7 @@ BaseType_t xQueueIsQueueFullFromISR(const QueueHandle_t xQueue)
 //
 // STK Mutex always supports priority inheritance; no additional bookkeeping is
 // required here — GetOwner() already reflects the current holder.
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 #if configUSE_MUTEXES
 
@@ -2213,9 +2218,11 @@ QueueSetMemberHandle_t xQueueSelectFromSetFromISR(QueueSetHandle_t xQueueSet)
 SemaphoreHandle_t xSemaphoreCreateBinary(void)
 {
     // Binary semaphore: max count = 1, initial count = 0.
-    FrtosSemaphore *s = ObjAlloc<FrtosSemaphore>(SemKind::Counting,
-                                                  uint16_t(0U),
-                                                  uint16_t(1U));
+    FrtosSemaphore *s = ObjAlloc<FrtosSemaphore>(
+        SemKind::Counting,
+        static_cast<uint16_t>(0U),
+        static_cast<uint16_t>(1U));
+
     if ((s == nullptr) || (s->m_sem == nullptr))
     {
         ObjFree(s);
@@ -2239,7 +2246,9 @@ SemaphoreHandle_t xSemaphoreCreateBinaryStatic(StaticSemaphore_t *pxSemaphoreBuf
     // The inner stk::sync::Semaphore is a value type embedded inside
     // FrtosSemaphore, so no additional heap allocation is needed.
     FrtosSemaphore *s = new (pxSemaphoreBuffer) FrtosSemaphore(
-        SemKind::Counting, uint16_t(0U), uint16_t(1U));
+        SemKind::Counting,
+        static_cast<uint16_t>(0U),
+        static_cast<uint16_t>(1U));
 
     if (s->m_sem == nullptr)
     {
@@ -2254,7 +2263,8 @@ SemaphoreHandle_t xSemaphoreCreateBinaryStatic(StaticSemaphore_t *pxSemaphoreBuf
 
 #if configUSE_COUNTING_SEMAPHORES
 
-SemaphoreHandle_t xSemaphoreCreateCounting(UBaseType_t uxMaxCount, UBaseType_t uxInitialCount)
+SemaphoreHandle_t xSemaphoreCreateCounting(UBaseType_t uxMaxCount,
+                                           UBaseType_t uxInitialCount)
 {
     if (uxMaxCount == 0U || uxInitialCount > uxMaxCount)
         return nullptr;
@@ -2276,8 +2286,8 @@ SemaphoreHandle_t xSemaphoreCreateCounting(UBaseType_t uxMaxCount, UBaseType_t u
 }
 
 SemaphoreHandle_t xSemaphoreCreateCountingStatic(UBaseType_t        uxMaxCount,
-                                                  UBaseType_t        uxInitialCount,
-                                                  StaticSemaphore_t *pxSemaphoreBuffer)
+                                                 UBaseType_t        uxInitialCount,
+                                                 StaticSemaphore_t *pxSemaphoreBuffer)
 {
     if (pxSemaphoreBuffer == nullptr)
         return nullptr;
@@ -2313,9 +2323,11 @@ SemaphoreHandle_t xSemaphoreCreateCountingStatic(UBaseType_t        uxMaxCount,
 
 SemaphoreHandle_t xSemaphoreCreateMutex(void)
 {
-    FrtosSemaphore *s = ObjAlloc<FrtosSemaphore>(SemKind::Mutex,
-                                                  uint16_t(0U),
-                                                  uint16_t(1U));
+    FrtosSemaphore *s = ObjAlloc<FrtosSemaphore>(
+        SemKind::Mutex,
+        static_cast<uint16_t>(0U),
+        static_cast<uint16_t>(1U));
+
     if ((s == nullptr) || (s->m_mtx == nullptr))
     {
         ObjFree(s);
@@ -2335,7 +2347,9 @@ SemaphoreHandle_t xSemaphoreCreateMutexStatic(StaticSemaphore_t *pxMutexBuffer)
         "Increase STATIC_SEMAPHORE_TCB_SIZE_WORDS in freertos_stk.h.");
 
     FrtosSemaphore *s = new (pxMutexBuffer) FrtosSemaphore(
-        SemKind::Mutex, uint16_t(0U), uint16_t(1U));
+        SemKind::Mutex,
+        static_cast<uint16_t>(0U),
+        static_cast<uint16_t>(1U));
 
     if (s->m_mtx == nullptr)
     {
@@ -2393,7 +2407,7 @@ BaseType_t xSemaphoreTake(SemaphoreHandle_t xSemaphore, TickType_t xTicksToWait)
 }
 
 BaseType_t xSemaphoreTakeFromISR(SemaphoreHandle_t xSemaphore,
-                                  BaseType_t       *pxHigherPriorityTaskWoken)
+                                 BaseType_t       *pxHigherPriorityTaskWoken)
 {
     if (xSemaphore == nullptr)
         return pdFAIL;
@@ -2589,11 +2603,11 @@ TimerHandle_t xTimerCreate(const char             *pcTimerName,
 }
 
 TimerHandle_t xTimerCreateStatic(const char             *pcTimerName,
-                                  TickType_t              xTimerPeriodInTicks,
-                                  UBaseType_t             uxAutoReload,
-                                  void                   *pvTimerID,
-                                  TimerCallbackFunction_t pxCallbackFunction,
-                                  StaticTimer_t          *pxTimerBuffer)
+                                 TickType_t              xTimerPeriodInTicks,
+                                 UBaseType_t             uxAutoReload,
+                                 void                   *pvTimerID,
+                                 TimerCallbackFunction_t pxCallbackFunction,
+                                 StaticTimer_t          *pxTimerBuffer)
 {
     if (pxTimerBuffer == nullptr)
         return nullptr;
@@ -2703,7 +2717,7 @@ BaseType_t xTimerChangePeriod(TimerHandle_t xTimer,
 // ===========================================================================
 
 BaseType_t xTimerStartFromISR(TimerHandle_t xTimer,
-                               BaseType_t   *pxHigherPriorityTaskWoken)
+                              BaseType_t   *pxHigherPriorityTaskWoken)
 {
     if (pxHigherPriorityTaskWoken != nullptr)
         *pxHigherPriorityTaskWoken = pdFALSE;
@@ -2719,7 +2733,7 @@ BaseType_t xTimerStartFromISR(TimerHandle_t xTimer,
 }
 
 BaseType_t xTimerStopFromISR(TimerHandle_t xTimer,
-                              BaseType_t   *pxHigherPriorityTaskWoken)
+                             BaseType_t   *pxHigherPriorityTaskWoken)
 {
     if (pxHigherPriorityTaskWoken != nullptr)
         *pxHigherPriorityTaskWoken = pdFALSE;
@@ -2736,15 +2750,15 @@ BaseType_t xTimerStopFromISR(TimerHandle_t xTimer,
 }
 
 BaseType_t xTimerResetFromISR(TimerHandle_t xTimer,
-                               BaseType_t   *pxHigherPriorityTaskWoken)
+                              BaseType_t   *pxHigherPriorityTaskWoken)
 {
     // Reset = Restart from now, same as xTimerStart.
     return xTimerStartFromISR(xTimer, pxHigherPriorityTaskWoken);
 }
 
 BaseType_t xTimerChangePeriodFromISR(TimerHandle_t xTimer,
-                                      TickType_t    xNewPeriod,
-                                      BaseType_t   *pxHigherPriorityTaskWoken)
+                                     TickType_t    xNewPeriod,
+                                     BaseType_t   *pxHigherPriorityTaskWoken)
 {
     if (pxHigherPriorityTaskWoken != nullptr)
         *pxHigherPriorityTaskWoken = pdFALSE;
@@ -2798,9 +2812,9 @@ BaseType_t xTimerChangePeriodFromISR(TimerHandle_t xTimer,
 // ===========================================================================
 
 BaseType_t xTimerPendFunctionCall(PendedFunction_t xFunctionToPend,
-                                   void            *pvParameter1,
-                                   uint32_t         ulParameter2,
-                                   TickType_t       xTicksToWait)
+                                  void            *pvParameter1,
+                                  uint32_t         ulParameter2,
+                                  TickType_t       xTicksToWait)
 {
     // API contract: must not be called from ISR context.
     if (IsIrqContext())
@@ -2828,9 +2842,9 @@ BaseType_t xTimerPendFunctionCall(PendedFunction_t xFunctionToPend,
 }
 
 BaseType_t xTimerPendFunctionCallFromISR(PendedFunction_t  xFunctionToPend,
-                                          void             *pvParameter1,
-                                          uint32_t          ulParameter2,
-                                          BaseType_t       *pxHigherPriorityTaskWoken)
+                                         void             *pvParameter1,
+                                         uint32_t          ulParameter2,
+                                         BaseType_t       *pxHigherPriorityTaskWoken)
 {
     // STK wakes the tick task internally; no manual context switch needed.
     if (pxHigherPriorityTaskWoken != nullptr)
@@ -3060,7 +3074,7 @@ EventBits_t xEventGroupClearBitsFromISR(EventGroupHandle_t xEventGroup,
     return StkFlagsToFrtos(prev);
 }
 
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // xEventGroupSync
 //
 // Design rationale
@@ -3104,7 +3118,7 @@ EventBits_t xEventGroupClearBitsFromISR(EventGroupHandle_t xEventGroup,
 // waiter independently — which is safe because all tasks wait for the same
 // superset mask, and STK's "m_flags &= ~matched" inside Wait() is idempotent
 // once the bits are already 0.
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 EventBits_t xEventGroupSync(EventGroupHandle_t xEventGroup,
                             EventBits_t        uxBitsToSet,
@@ -3174,10 +3188,10 @@ EventBits_t xEventGroupSync(EventGroupHandle_t xEventGroup,
 
 #if configUSE_TASK_NOTIFICATIONS
 
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // Internal helper: validate slot index and resolve a NULL handle to self.
 // Returns the FrtosTask pointer on success, nullptr on failure.
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 static FrtosTask *ResolveNotifyTarget(TaskHandle_t xTask, UBaseType_t uxIndex)
 {
     STK_ASSERT(uxIndex < (UBaseType_t)configTASK_NOTIFICATION_ARRAY_ENTRIES);
@@ -3191,10 +3205,10 @@ static FrtosTask *ResolveNotifyTarget(TaskHandle_t xTask, UBaseType_t uxIndex)
     return static_cast<FrtosTask *>(xTask);
 }
 
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // Internal helper: apply a notification action to a slot under a held CS.
 // Returns pdPASS / pdFAIL (mirrors the public xTaskNotify contract).
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 static BaseType_t NotifyApplyAction(FrtosTask::NotifySlot &slot,
                                     uint32_t               ulValue,
                                     eNotifyAction          eAction)
@@ -3301,10 +3315,10 @@ BaseType_t xTaskNotifyIndexed(TaskHandle_t  xTaskToNotify,
 }
 
 BaseType_t xTaskNotifyWaitIndexed(UBaseType_t  uxIndexToWait,
-                                   uint32_t     ulBitsToClearOnEntry,
-                                   uint32_t     ulBitsToClearOnExit,
-                                   uint32_t    *pulNotificationValue,
-                                   TickType_t   xTicksToWait)
+                                  uint32_t     ulBitsToClearOnEntry,
+                                  uint32_t     ulBitsToClearOnExit,
+                                  uint32_t    *pulNotificationValue,
+                                  TickType_t   xTicksToWait)
 {
     if (IsIrqContext())
         return pdFAIL;
@@ -3340,10 +3354,10 @@ BaseType_t xTaskNotifyWaitIndexed(UBaseType_t  uxIndexToWait,
 }
 
 BaseType_t xTaskNotifyFromISRIndexed(TaskHandle_t  xTaskToNotify,
-                                      UBaseType_t   uxIndexToNotify,
-                                      uint32_t      ulValue,
-                                      eNotifyAction eAction,
-                                      BaseType_t   *pxHigherPriorityTaskWoken)
+                                     UBaseType_t   uxIndexToNotify,
+                                     uint32_t      ulValue,
+                                     eNotifyAction eAction,
+                                     BaseType_t   *pxHigherPriorityTaskWoken)
 {
     BaseType_t result = xTaskNotifyIndexed(xTaskToNotify, uxIndexToNotify, ulValue, eAction);
 
@@ -3417,9 +3431,9 @@ BaseType_t xTaskNotifyFromISR(TaskHandle_t  xTaskToNotify,
 //   and semaphore are not touched.
 // ===========================================================================
 
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // xTaskNotifyAndQueryIndexed
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 BaseType_t xTaskNotifyAndQueryIndexed(TaskHandle_t  xTaskToNotify,
                                       UBaseType_t   uxIndexToNotify,
@@ -3451,9 +3465,9 @@ BaseType_t xTaskNotifyAndQueryIndexed(TaskHandle_t  xTaskToNotify,
     return result;
 }
 
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // xTaskNotifyAndQuery (slot 0 wrapper)
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 BaseType_t xTaskNotifyAndQuery(TaskHandle_t  xTaskToNotify,
                                uint32_t      ulValue,
@@ -3464,9 +3478,9 @@ BaseType_t xTaskNotifyAndQuery(TaskHandle_t  xTaskToNotify,
                                       pulPreviousNotifyValue);
 }
 
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // xTaskNotifyAndQueryFromISRIndexed
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 BaseType_t xTaskNotifyAndQueryFromISRIndexed(TaskHandle_t  xTaskToNotify,
                                              UBaseType_t   uxIndexToNotify,
@@ -3485,9 +3499,9 @@ BaseType_t xTaskNotifyAndQueryFromISRIndexed(TaskHandle_t  xTaskToNotify,
     return result;
 }
 
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // xTaskNotifyAndQueryFromISR (slot 0 wrapper)
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 BaseType_t xTaskNotifyAndQueryFromISR(TaskHandle_t  xTaskToNotify,
                                       uint32_t      ulValue,
@@ -3500,7 +3514,7 @@ BaseType_t xTaskNotifyAndQueryFromISR(TaskHandle_t  xTaskToNotify,
                                              pxHigherPriorityTaskWoken);
 }
 
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // xTaskNotifyStateClearIndexed
 //
 // Clears the pending notification state for the specified slot.
@@ -3521,7 +3535,7 @@ BaseType_t xTaskNotifyAndQueryFromISR(TaskHandle_t  xTaskToNotify,
 //   The semaphore is binary (max_count = 1), so one TryWait() is sufficient
 //   to drain it.  We must not call sem.Wait() (blocking) from either task or
 //   ISR context — TryWait() (NO_WAIT, ISR-safe) is the correct choice here.
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 BaseType_t xTaskNotifyStateClearIndexed(TaskHandle_t xTask,
                                         UBaseType_t  uxIndexToClear)
@@ -3554,16 +3568,16 @@ BaseType_t xTaskNotifyStateClearIndexed(TaskHandle_t xTask,
     return was_pending ? pdTRUE : pdFALSE;
 }
 
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // xTaskNotifyStateClear (slot 0 wrapper)
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 BaseType_t xTaskNotifyStateClear(TaskHandle_t xTask)
 {
     return xTaskNotifyStateClearIndexed(xTask, 0U);
 }
 
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // ulTaskNotifyValueClearIndexed
 //
 // Atomically clears the specified bits in the slot's 32-bit value word and
@@ -3573,7 +3587,7 @@ BaseType_t xTaskNotifyStateClear(TaskHandle_t xTask)
 //   - Performs: old = slot.value; slot.value &= ~ulBitsToClear; return old;
 //   - The pending flag and semaphore are NOT touched.
 //   - Pass ulBitsToClear = 0xFFFFFFFF to clear all bits.
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 uint32_t ulTaskNotifyValueClearIndexed(TaskHandle_t xTask,
                                        UBaseType_t  uxIndexToClear,
@@ -3593,9 +3607,9 @@ uint32_t ulTaskNotifyValueClearIndexed(TaskHandle_t xTask,
     return prev;
 }
 
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // ulTaskNotifyValueClear (slot 0 wrapper)
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 uint32_t ulTaskNotifyValueClear(TaskHandle_t xTask,
                                 uint32_t     ulBitsToClear)
@@ -3690,7 +3704,7 @@ static_assert(sizeof(StaticStreamBuffer_t) >= sizeof(FrtosStreamBuffer),
     "Increase STATIC_STREAM_BUFFER_TCB_SIZE_WORDS in FreeRTOS.h.");
 
 StreamBufferHandle_t xStreamBufferCreate(size_t xBufferSizeBytes,
-                                          size_t xTriggerLevelBytes)
+                                         size_t xTriggerLevelBytes)
 {
     if (xBufferSizeBytes == 0U)
         return nullptr;
@@ -3746,9 +3760,9 @@ void vStreamBufferDelete(StreamBufferHandle_t xStreamBuffer)
 }
 
 size_t xStreamBufferSend(StreamBufferHandle_t xStreamBuffer,
-                          const void          *pvTxData,
-                          size_t               xDataLengthBytes,
-                          TickType_t           xTicksToWait)
+                         const void          *pvTxData,
+                         size_t               xDataLengthBytes,
+                         TickType_t           xTicksToWait)
 {
     if ((xStreamBuffer == nullptr) || (pvTxData == nullptr) || (xDataLengthBytes == 0U))
         return 0U;
@@ -3771,9 +3785,9 @@ size_t xStreamBufferSend(StreamBufferHandle_t xStreamBuffer,
 }
 
 size_t xStreamBufferSendFromISR(StreamBufferHandle_t  xStreamBuffer,
-                                 const void           *pvTxData,
-                                 size_t                xDataLengthBytes,
-                                 BaseType_t           *pxHigherPriorityTaskWoken)
+                                const void           *pvTxData,
+                                size_t                xDataLengthBytes,
+                                BaseType_t           *pxHigherPriorityTaskWoken)
 {
     if (pxHigherPriorityTaskWoken != nullptr)
         *pxHigherPriorityTaskWoken = pdFALSE;
@@ -3799,9 +3813,9 @@ size_t xStreamBufferSendFromISR(StreamBufferHandle_t  xStreamBuffer,
 }
 
 size_t xStreamBufferReceive(StreamBufferHandle_t xStreamBuffer,
-                             void                *pvRxData,
-                             size_t               xBufferLengthBytes,
-                             TickType_t           xTicksToWait)
+                            void                *pvRxData,
+                            size_t               xBufferLengthBytes,
+                            TickType_t           xTicksToWait)
 {
     if ((xStreamBuffer == nullptr) || (pvRxData == nullptr) || (xBufferLengthBytes == 0U))
         return 0U;
@@ -3834,9 +3848,9 @@ size_t xStreamBufferReceive(StreamBufferHandle_t xStreamBuffer,
 }
 
 size_t xStreamBufferReceiveFromISR(StreamBufferHandle_t  xStreamBuffer,
-                                    void                 *pvRxData,
-                                    size_t                xBufferLengthBytes,
-                                    BaseType_t           *pxHigherPriorityTaskWoken)
+                                   void                 *pvRxData,
+                                   size_t                xBufferLengthBytes,
+                                   BaseType_t           *pxHigherPriorityTaskWoken)
 {
     if (pxHigherPriorityTaskWoken != nullptr)
         *pxHigherPriorityTaskWoken = pdFALSE;
@@ -3914,7 +3928,7 @@ BaseType_t xStreamBufferSetTriggerLevel(StreamBufferHandle_t xStreamBuffer,
 }
 
 BaseType_t xStreamBufferResetFromISR(StreamBufferHandle_t  xStreamBuffer,
-                                      BaseType_t           *pxHigherPriorityTaskWoken)
+                                     BaseType_t           *pxHigherPriorityTaskWoken)
 {
     if (pxHigherPriorityTaskWoken != nullptr)
         *pxHigherPriorityTaskWoken = pdFALSE;
@@ -3938,9 +3952,9 @@ size_t xStreamBufferGetTriggerLevel(StreamBufferHandle_t xStreamBuffer)
     return static_cast<const FrtosStreamBuffer *>(xStreamBuffer)->m_trigger;
 }
 
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // xStreamBufferNextMessageLengthBytes
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // A stream buffer carries an unframed byte sequence with no length-prefix
 // headers, so there is no concept of a discrete "next message" boundary.
 // The FreeRTOS reference implementation therefore defines
@@ -3951,7 +3965,7 @@ size_t xStreamBufferGetTriggerLevel(StreamBufferHandle_t xStreamBuffer)
 // The function exists primarily so that code written against the combined
 // stream/message buffer API can call the same introspection function on both
 // handle types without a type-discriminating branch.
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 size_t xStreamBufferNextMessageLengthBytes(StreamBufferHandle_t xStreamBuffer)
 {
@@ -3960,14 +3974,14 @@ size_t xStreamBufferNextMessageLengthBytes(StreamBufferHandle_t xStreamBuffer)
     return xStreamBufferBytesAvailable(xStreamBuffer);
 }
 
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // xStreamBufferCreateWithCallback / xStreamBufferCreateStaticWithCallback
 //
 // Identical to xStreamBufferCreate / xStreamBufferCreateStatic but store two
 // optional per-instance notification callbacks (m_send_cb, m_recv_cb) in
 // FrtosStreamBuffer.  Callbacks fire at the end of every successful Send /
 // Receive (including ISR variants), outside any critical section.
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 StreamBufferHandle_t xStreamBufferCreateWithCallback(
     size_t                         xBufferSizeBytes,
@@ -4114,7 +4128,7 @@ MessageBufferHandle_t xMessageBufferCreateStatic(
     return static_cast<MessageBufferHandle_t>(mb);
 }
 
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // xMessageBufferCreateWithCallback / xMessageBufferCreateStaticWithCallback
 //
 // Identical to xMessageBufferCreate / xMessageBufferCreateStatic but store two
@@ -4123,7 +4137,7 @@ MessageBufferHandle_t xMessageBufferCreateStatic(
 // Receive (including ISR variants), outside any critical section.
 // The handle passed to each callback is the MessageBufferHandle_t cast to
 // StreamBufferHandle_t, matching the FreeRTOS convention for this callback type.
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 MessageBufferHandle_t xMessageBufferCreateWithCallback(
     size_t                         xBufferSizeBytes,
@@ -4246,9 +4260,9 @@ size_t xMessageBufferSend(MessageBufferHandle_t xMessageBuffer,
 }
 
 size_t xMessageBufferReceive(MessageBufferHandle_t xMessageBuffer,
-                              void                 *pvRxData,
-                              size_t                xBufferLengthBytes,
-                              TickType_t            xTicksToWait)
+                             void                 *pvRxData,
+                             size_t                xBufferLengthBytes,
+                             TickType_t            xTicksToWait)
 {
     if ((xMessageBuffer == nullptr) || (pvRxData == nullptr) || (xBufferLengthBytes == 0U))
         return 0U;
@@ -4384,9 +4398,9 @@ BaseType_t xMessageBufferReset(MessageBufferHandle_t xMessageBuffer)
 // ===========================================================================
 
 size_t xMessageBufferSendFromISR(MessageBufferHandle_t  xMessageBuffer,
-                                  const void            *pvTxData,
-                                  size_t                 xDataLengthBytes,
-                                  BaseType_t            *pxHigherPriorityTaskWoken)
+                                 const void            *pvTxData,
+                                 size_t                 xDataLengthBytes,
+                                 BaseType_t            *pxHigherPriorityTaskWoken)
 {
     if (pxHigherPriorityTaskWoken != nullptr)
         *pxHigherPriorityTaskWoken = pdFALSE;
@@ -4433,9 +4447,9 @@ size_t xMessageBufferSendFromISR(MessageBufferHandle_t  xMessageBuffer,
 }
 
 size_t xMessageBufferReceiveFromISR(MessageBufferHandle_t  xMessageBuffer,
-                                     void                  *pvRxData,
-                                     size_t                 xBufferLengthBytes,
-                                     BaseType_t            *pxHigherPriorityTaskWoken)
+                                    void                  *pvRxData,
+                                    size_t                 xBufferLengthBytes,
+                                    BaseType_t            *pxHigherPriorityTaskWoken)
 {
     if (pxHigherPriorityTaskWoken != nullptr)
         *pxHigherPriorityTaskWoken = pdFALSE;
@@ -4477,7 +4491,7 @@ size_t xMessageBufferReceiveFromISR(MessageBufferHandle_t  xMessageBuffer,
 }
 
 BaseType_t xMessageBufferResetFromISR(MessageBufferHandle_t  xMessageBuffer,
-                                       BaseType_t            *pxHigherPriorityTaskWoken)
+                                      BaseType_t            *pxHigherPriorityTaskWoken)
 {
     if (pxHigherPriorityTaskWoken != nullptr)
         *pxHigherPriorityTaskWoken = pdFALSE;
