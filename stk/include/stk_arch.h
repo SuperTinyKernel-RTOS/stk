@@ -153,6 +153,8 @@ void SetTls(Word tp);
     \return    Pointer to the current task's TLS object, or \c nullptr if TLS has not been set.
     \note      Equivalent to \c reinterpret_cast<_TyTls*>(GetTls()). Prefer this over calling
                GetTls() directly to avoid scattered reinterpret_casts throughout the codebase.
+    \warning   For ARM Cortex-M arch you must compile all translation units with -ffixed-r9 compiler flag,
+               see extended description in stk_arch_arm-cortex-m.h for GetTls/SetTls.
 */
 template <class _TyTls>
 __stk_forceinline _TyTls *GetTlsPtr()
@@ -165,6 +167,8 @@ __stk_forceinline _TyTls *GetTlsPtr()
     \param[in] tp: Pointer to the new task's TLS object.
     \note      Equivalent to \c SetTls(reinterpret_cast<Word>(tp)). Called by the scheduler
                during context switches to install the incoming task's TLS pointer.
+    \warning   For ARM Cortex-M arch you must compile all translation units with -ffixed-r9 compiler flag,
+               see extended description in stk_arch_arm-cortex-m.h for GetTls/SetTls.
 */
 template <class _TyTls>
 __stk_forceinline void SetTlsPtr(const _TyTls *tp)

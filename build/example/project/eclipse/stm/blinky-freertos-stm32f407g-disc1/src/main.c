@@ -191,9 +191,10 @@ int main (int, char*[]) {
   SystemCoreClockUpdate();
 
   // Init LEDs
-  Led_Init(LED_RED,   false);
+  Led_Init(LED_RED, false);
+  Led_Init(LED_ORANGE, false);
   Led_Init(LED_GREEN, false);
-  Led_Init(LED_BLUE,  false);
+  Led_Init(LED_BLUE, false);
 
   // ...
 

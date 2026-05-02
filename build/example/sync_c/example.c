@@ -49,29 +49,29 @@ static stk_event_t    *g_EventReady, *g_EventSwitchOn, *g_EventSwitchOff;
 #endif
 static stk_mutex_t    *g_HwMutex;
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // Task Entry Points (C functions)
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 
 // LED Task: Handles hardware interaction
 static void LedTask_Run(void *arg)
 {
-    LedState task_id = (LedState)(size_t)arg;
+    LedState task_id = (LedState)((size_t)arg);
 
     while (true)
     {
     #if STK_EXAMPLE_USE_PIPE
-        if (!stk_pipe_read(g_CtrlSignalPipe, &task_id, 100))
+        if (!stk_pipe_read(g_CtrlSignalPipe, &task_id, STK_WAIT_INFINITE))
             continue;
     #else
         switch (task_id)
         {
         case LED_ON:
-            if (!stk_event_wait(g_EventSwitchOn, 100))
+            if (!stk_event_wait(g_EventSwitchOn, STK_WAIT_INFINITE))
                 continue;
             break;
         case LED_OFF:
-            if (!stk_event_wait(g_EventSwitchOff, 100))
+            if (!stk_event_wait(g_EventSwitchOff, STK_WAIT_INFINITE))
                 continue;
             break;
         }
@@ -92,13 +92,17 @@ static void LedTask_Run(void *arg)
 static void CtrlTask_Run(void *arg)
 {
     (void)arg;
-    int64_t task_start = stk_time_now_ms();
 
 #if !STK_EXAMPLE_USE_PIPE
     stk_event_set(g_EventReady);
 #endif
 
     bool led_sw = false;
+
+    // we employ drift-free timing which is not affected by any work done before and after
+    // calling stk_sleep_until
+    stk_tick_t timeline = stk_ticks();
+    const stk_timeout_t period = stk_ticks_from_ms(250);
 
     while (true)
     {
@@ -107,12 +111,11 @@ static void CtrlTask_Run(void *arg)
             continue;
     #endif
 
-        int32_t sleep = 250 + (int32_t)(task_start - stk_time_now_ms());
-        if (sleep > 0)
-            stk_sleep_ms(sleep);
+        // sleep in exact periods drift-free
+        timeline += period;
+        stk_sleep_until(timeline);
 
         led_sw = !led_sw;
-        task_start = stk_time_now_ms();
 
     #if STK_EXAMPLE_USE_PIPE
         LedState new_state = led_sw ? LED_ON : LED_OFF;
@@ -126,9 +129,9 @@ static void CtrlTask_Run(void *arg)
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // Initialization and Startup
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 
 static void InitLeds()
 {

@@ -12,6 +12,12 @@
 #include <time/stk_time.h>
 #include "example.h"
 
+// for PipeT which is used as a non-blocking data pipe between Hard Real-Time (HRT) tasks which
+// should not block to avoid missing the deadline
+#include <sync/stk_sync_pipe.h>
+
+using namespace bsp;
+
 // R2350 requires larger stack due to stack-memory heavy SDK API
 #ifdef _PICO_H
 enum { TASK_STACK_SIZE = 1024 };
@@ -19,9 +25,12 @@ enum { TASK_STACK_SIZE = 1024 };
 enum { TASK_STACK_SIZE = 256 };
 #endif
 
-#define USE_EDF 1
+#define USE_EDF 0
 
-static uint8_t g_Led = 0;
+// One single-slot pipe per LED task. CtrlTask writes a command token; the
+// corresponding HwLedTask drains it with TryRead (non-blocking, HRT-safe).
+// Capacity = 1: CtrlTask produces at most one pending command per period.
+static stk::sync::PipeT<uint8_t, 1> g_LedPipe[LED_MAX];
 
 template <stk::EAccessMode _AccessMode>
 class HwLedTask : public stk::Task<TASK_STACK_SIZE, _AccessMode>
@@ -37,29 +46,18 @@ private:
     {
         for (;;)
         {
-            if (g_Led == m_task_id)
-            {
-                g_Led = ~0;
+            // activation token here but could be used as a useful command
+            uint8_t cmd;
 
-                switch (m_task_id)
-                {
-                case 0:
-                    Led::Set(Led::RED, true);
-                    Led::Set(Led::GREEN, false);
-                    Led::Set(Led::BLUE, false);
-                    break;
-                case 1:
-                    Led::Set(Led::RED, false);
-                    Led::Set(Led::GREEN, true);
-                    Led::Set(Led::BLUE, false);
-                    break;
-                case 2:
-                    Led::Set(Led::RED, false);
-                    Led::Set(Led::GREEN, false);
-                    Led::Set(Led::BLUE, true);
-                    break;
-                }
+            // TryRead (NO_WAIT): HRT tasks must never block — poll and proceed
+            if (g_LedPipe[m_task_id].TryRead(cmd))
+            {
+                // switch on corresponding LED
+                Led::SwitchOnExclusive(static_cast<LedId>(cmd));
             }
+
+            // do some other work in the task
+            for (volatile uint32_t i = 0; i < 1000; ++i);
 
             stk::Yield();
         }
@@ -82,10 +80,16 @@ private:
 
         for (;;)
         {
+            // do some other work in the task
+            for (volatile uint32_t i = 0; i < 3000; ++i);
+
             if (trigger.Poll())
             {
-                led = (led + 1) % 3;
-                g_Led = led;
+                led = (led + 1) % LED_MAX;
+
+                // TryWrite: sole producer into a depth-1 pipe; pipe is always
+                // empty here by design, so this never blocks
+                g_LedPipe[led].TryWrite(led);
             }
 
             // wait for a next turn
@@ -99,13 +103,6 @@ private:
         (void)duration;
     }
 };
-
-static void InitLeds()
-{
-    Led::Init(Led::RED, false);
-    Led::Init(Led::GREEN, false);
-    Led::Init(Led::BLUE, false);
-}
 
 // optional: you can override sleep and hard fault default behaviors
 class PlatformEventHandler : public stk::IPlatform::IEventOverrider
@@ -121,9 +118,7 @@ private:
     bool OnHardFault()
     {
         // switch on Red LED as indication of the error
-        Led::Set(Led::RED, true);
-        Led::Set(Led::GREEN, false);
-        Led::Set(Led::BLUE, false);
+        Led::SwitchOnExclusive(Led::RED);
 
         // if handled inside this function then return true, otherwise event will be handled by the driver
         // note: prior a call to this function a task which had deadline missed had a call to OnDeadlineMissed
@@ -135,9 +130,9 @@ void RunExample()
 {
     using namespace stk;
 
-    InitLeds();
+    Led::InitAll(false);
 
-    enum { TASK_COUNT = 4 };
+    enum { TASK_COUNT = 5 };
 
 #if USE_EDF
     typedef SwitchStrategyEDF SchedulerType;
@@ -148,7 +143,7 @@ void RunExample()
     static Kernel<KERNEL_STATIC | KERNEL_HRT, TASK_COUNT, SchedulerType, PlatformDefault> kernel;
 
     // assume that hardware LED tasks have highest priority
-    static HwLedTask<ACCESS_PRIVILEGED> hwt0(0), hwt1(1), hwt2(2);
+    static HwLedTask<ACCESS_PRIVILEGED> hwt0(0), hwt1(1), hwt2(2), hwt3(3);
 
     // control task is sending commands to hardware tasks
     static CtrlTask<ACCESS_USER> ctrl;
@@ -166,6 +161,7 @@ void RunExample()
     kernel.AddTask(&hwt0, MSEC(200),   MSEC(20), MSEC(0));
     kernel.AddTask(&hwt1, MSEC(200),   MSEC(20), MSEC(0));
     kernel.AddTask(&hwt2, MSEC(200),   MSEC(20), MSEC(0));
+    kernel.AddTask(&hwt3, MSEC(200),   MSEC(20), MSEC(0));
 
 #if !USE_EDF
     auto wcrt_sched = SchedulabilityCheck::IsSchedulableWCRT<TASK_COUNT>(kernel.GetSwitchStrategy());

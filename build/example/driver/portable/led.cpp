@@ -13,20 +13,24 @@
 #include <time.h>
 #include "../led.h"
 
+using namespace bsp;
+
+static bool g_LedState[LED_MAX] = {};
+
 static const char *Led_GetPin(Led::Id led)
 {
     switch (led)
     {
     case LED_RED: return "RED";
+    case LED_ORANGE: return "ORANGE";
     case LED_GREEN: return "GREEN";
     case LED_BLUE: return "BLUE";
     default:
-        assert(false);
-        return NULL;
+        return "UNK";
     }
 }
 
-void Log(const char *label, Led::Id led, bool state)
+static void PrintMsg(const char *label, Led::Id led, bool state)
 {
     static const time_t g_SecNow = time(NULL);
     time_t now = time(NULL);
@@ -36,15 +40,31 @@ void Log(const char *label, Led::Id led, bool state)
 
 void Led::Init(Id led, bool init_state)
 {
-    Log("LED_INIT", led, init_state);
-
     // required to show log in Eclipse IDE Console for 64-bit binary
 #if defined(_WIN32) && !defined(_MSC_VER)
-    setbuf(stdout, NULL);
+    static bool s_init = false;
+    if (!s_init)
+    {
+        setbuf(stdout, NULL);
+        s_init = true;
+    }
 #endif
+
+    if (static_cast<uint32_t>(led) < LED_MAX)
+        g_LedState[led] = init_state;
+
+    PrintMsg("LED_INIT", led, init_state);
 }
 
 void Led::Set(Id led, bool state)
 {
-    Log("LED_SET_STATE", led, state);
+    if (static_cast<uint32_t>(led) < LED_MAX)
+    {
+        if (g_LedState[led] == state)
+            return;
+
+        g_LedState[led] = state;
+    }
+
+    PrintMsg("LED_SET_STATE", led, state);
 }

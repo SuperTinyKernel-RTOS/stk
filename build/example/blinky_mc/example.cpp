@@ -11,56 +11,63 @@
 #include <stk.h>
 #include "example.h"
 
-enum LedState
+// Sync primitives used:
+//   sync::PipeT<LedState, 1> - typed single-slot FIFO per LedTask; CtrlTask writes a command,
+//                              the matching LedTask blocks in Read() instead of spin-sleeping.
+//   sync::Event              - CtrlTask waits on this event for the 1-second interval; a future
+//                              caller (e.g. a button ISR) can call Set() to interrupt the delay
+//                              early without any code change to CtrlTask.
+#include <sync/stk_sync_pipe.h>
+#include <sync/stk_sync_event.h>
+
+using namespace bsp;
+
+enum LedState : uint8_t
 {
-    LED_OFF, LED_ON, LED_NEXT
+    LED_OFF = 0,
+    LED_ON  = 1
 };
 
-static volatile LedState g_TaskSwitch = LED_NEXT;
-static volatile LedState g_Task = LED_OFF;
+// One single-slot pipe per LED task.  CtrlTask writes the command; the
+// corresponding LedTask blocks in Read() until its turn arrives.
+// Capacity = 1: only one pending command is ever needed per task.
+static stk::sync::PipeT<LedState, 1> g_PipeOff;  // commands for LED_OFF task
+static stk::sync::PipeT<LedState, 1> g_PipeOn;   // commands for LED_ON  task
 
-static void InitLeds()
-{
-    Led::Init(Led::GREEN, false);
-}
+// CtrlTask uses this event to sleep for around 1 s. Keeping it as an Event (rather
+// than a plain stk::Sleep) means an external caller, e.g. a button ISR, can
+// call g_WakeCtrl.Set() to shorten or cancel the delay at any time.
+static stk::sync::Event g_WakeCtrl;
 
 // Task's core (thread)
 template <stk::EAccessMode _AccessMode>
 class LedTask : public stk::Task<2048, _AccessMode>
 {
-    LedState m_task_id;
+    LedState                       m_task_id;
+    stk::sync::PipeT<LedState, 1> &m_pipe;   // reference to this task's command pipe
 
 public:
-    LedTask(LedState task_id) : m_task_id(task_id)
+    LedTask(LedState task_id, stk::sync::PipeT<LedState, 1> &pipe)
+        : m_task_id(task_id), m_pipe(pipe)
     {}
 
 private:
-    void Run()
+    void Run() override
     {
-        LedState task_id = m_task_id;
-
         while (true)
         {
-            if (g_TaskSwitch != task_id)
-            {
-                // to avoid hot loop and excessive CPU usage sleep 10ms while waiting for the own turn,
-                // if scheduler does not have active threads then it will fall into a sleep mode which is
-                // saving the consumed power
-                stk::Sleep(10);
+            // block here until CtrlTask sends a command on our pipe
+            LedState cmd;
+            if (!m_pipe.Read(cmd))
                 continue;
-            }
 
             // switch LED on/off
             {
                 // we do not want preemption during IO with hardware
                 stk::hw::CriticalSection::ScopedLock __cs;
 
-                Led::Set(Led::GREEN, (task_id == LED_OFF ? false : true));
+                Led::Set(Led::GREEN, (m_task_id == LED_ON));
             }
-
-            // wait for a next switch
-            g_Task = task_id;
-            g_TaskSwitch = LED_NEXT;
         }
     }
 };
@@ -77,41 +84,30 @@ template <stk::EAccessMode _AccessMode>
 class CtrlTask : public stk::Task<TASK_STACK_SIZE, _AccessMode>
 {
 private:
-    void Run()
+    void Run() override
     {
-        int64_t task_start = stk::GetTimeNowMs();
+        LedState next = LED_ON;   // first command sent after startup
 
         while (true)
         {
-            if (g_TaskSwitch != LED_NEXT)
+            // sleep 1s and delegate work to another task switching another LED;
+            // Wait(1000) returns false on timeout (normal tick) or true if woken
+            // early by Set() - either way proceed to the next toggle
+            g_WakeCtrl.Wait(1000);
+            g_WakeCtrl.Reset(); // re-arm for the next iteration
+
+            // TryWrite is used because each pipe has capacity 1 and CtrlTask is
+            // the sole producer; the pipe is always empty here by design
+            if (next == LED_ON)
             {
-                // to avoid hot loop and excessive CPU usage sleep 10ms while waiting for the own turn,
-                // if scheduler does not have active threads then it will fall into a sleep mode which is
-                // saving the consumed power
-                stk::Sleep(10);
-                continue;
+                g_PipeOn.TryWrite(LED_ON);
+                next = LED_OFF;
             }
-
-            // sleep 1s and delegate work to another task switching another LED, hw thread could have
-            // some latency, thus account for it
-            int32_t sleep = 1000 + (int32_t)(task_start - stk::GetTimeNowMs());
-            if (sleep > 0)
-                stk::Sleep(sleep);
-
-            switch (g_Task)
+            else
             {
-            case LED_OFF:
-                g_TaskSwitch = LED_ON;
-                break;
-            case LED_ON:
-                g_TaskSwitch = LED_OFF;
-                break;
-            default:
-                STK_ASSERT(false);
-                break;
+                g_PipeOff.TryWrite(LED_OFF);
+                next = LED_ON;
             }
-
-            task_start = stk::GetTimeNowMs();
         }
     }
 };
@@ -121,10 +117,11 @@ void StartCore0()
     using namespace stk;
 
     // allocate scheduling kernel for 1 thread (tasks) with Round-robin scheduling strategy
-    static Kernel<KERNEL_STATIC, 2, SwitchStrategyRoundRobin, PlatformDefault> kernel;
+    static Kernel<KERNEL_STATIC | KERNEL_SYNC, 2, SwitchStrategyRoundRobin, PlatformDefault> kernel;
 
     // these are secure/trusted tasks which are allowed to access hardware safely
-    static LedTask<ACCESS_PRIVILEGED> secure_hw_task0(LED_OFF), secure_hw_task1(LED_ON);
+    static LedTask<ACCESS_PRIVILEGED> secure_hw_task0(LED_OFF, g_PipeOff);
+    static LedTask<ACCESS_PRIVILEGED> secure_hw_task1(LED_ON,  g_PipeOn);
 
     // init scheduling kernel
     kernel.Initialize();
@@ -145,7 +142,8 @@ void StartCore1()
     using namespace stk;
 
     // allocate scheduling kernel for 1 thread (tasks) with Round-robin scheduling strategy
-    static Kernel<KERNEL_STATIC, 1, SwitchStrategyRoundRobin, PlatformDefault> kernel;
+    static Kernel<KERNEL_STATIC | KERNEL_SYNC | (STK_TICKLESS_IDLE ? KERNEL_TICKLESS : 0), 1,
+            SwitchStrategyRoundRobin, PlatformDefault> kernel;
 
     // if MCU supports (for example Cortex-M7/M33), ACCESS_USER does not allow an access to a hardware directly,
     // therefore you can process in this thread/task an insecure context or data
@@ -166,7 +164,7 @@ void StartCore1()
 
 void RunExample()
 {
-    InitLeds();
+    Led::InitAll(false);
 
     // start on the main core (0) in the last step as it will be the last blocking call of RunExample
     Cpu::Start(1, StartCore1);

@@ -121,7 +121,7 @@ public:
                    \c NULL if \c m_tasks is empty (no runnable tasks — kernel will sleep).
         \note      <b>Algorithm (O(n) linear scan over runnable tasks):</b>
                    -# If \c m_tasks is empty, return \c NULL immediately.
-                   -# Initialise \c earliest to the first task in \c m_tasks (acts as the
+                   -# Initialize \c earliest to the first task in \c m_tasks (acts as the
                       initial minimum sentinel — avoids the need for a special INT32_MAX guard).
                    -# Iterate the remaining tasks; replace \c earliest whenever a task has a
                       strictly smaller \c GetHrtRelativeDeadline() value.

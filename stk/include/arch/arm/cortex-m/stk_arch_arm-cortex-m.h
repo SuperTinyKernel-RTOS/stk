@@ -55,9 +55,21 @@ public:
 */
 typedef PlatformArmCortexM PlatformDefault;
 
-/*! \brief  Get thread-local storage (TLS).
-    \return TLS value.
-    \note   Using r9 register.
+/*! \brief   Get thread-local storage (TLS).
+    \return  TLS value.
+    \note    Uses the r9 register as the TLS base pointer, following the ARM EABI
+             "platform register" convention (AAPCS §5.2.2, "The role of r9 is
+             platform-specific").
+    \warning **Requires \c -ffixed-r9 compiler flag for all translation units that
+             contain task code.**
+             Without it the compiler treats r9 as a normal callee-saved register:
+             it may save r9 to the task stack in a function prologue, use it as a
+             scratch register for intermediate values (e.g. 64-bit arithmetic),
+             and plan to restore it in the epilogue.
+             \c -ffixed-r9 prevents the compiler from ever allocating r9 as a
+             scratch or callee-saved register, making PendSV's save/restore of r9
+             always carry the TLS pointer and nothing else.
+    \see     SetTls, stk::hw::GetTlsPtr, stk::hw::SetTlsPtr
 */
 __stk_forceinline Word GetTls()
 {
@@ -67,8 +79,15 @@ __stk_forceinline Word GetTls()
 }
 
 /*! \brief     Set thread-local storage (TLS).
-    \param[in] tp: TLS value.
-    \note      Using r9 register.
+    \param[in] tp: TLS value to store in r9.
+    \note      Uses the r9 register as the TLS base pointer, following the ARM EABI
+               "platform register" convention (AAPCS §5.2.2).
+    \warning   **Requires \c -ffixed-r9 compiler flag for all translation units that
+               contain task code.** See \c GetTls() for a detailed explanation of why
+               omitting this flag causes silent TLS corruption after \c SleepUntil()
+               and any other kernel call that involves multi-register arithmetic before
+               entering \c BusyWaitWhileSleeping().
+    \see       GetTls, stk::hw::GetTlsPtr, stk::hw::SetTlsPtr
 */
 __stk_forceinline void SetTls(Word tp)
 {

@@ -128,6 +128,11 @@ typedef int32_t Timeout;
 */
 typedef int64_t Ticks;
 
+/*! \typedef Time
+    \brief   Time value.
+*/
+typedef int64_t Time;
+
 /*! \typedef Cycles
     \brief   Cycles value.
 */

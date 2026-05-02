@@ -77,6 +77,26 @@ typedef uintptr_t stk_word_t;
 */
 typedef stk_word_t stk_tid_t;
 
+/*! \brief     Ticks value.
+    \see       stk_ticks
+*/
+typedef int64_t stk_tick_t;
+
+/*! \brief     Time value.
+    \see       stk_time_now_ms
+*/
+typedef int64_t stk_time_t;
+
+/*! \brief     Timeout value.
+    \see       stk_sleep, stk_delay
+*/
+typedef int32_t stk_timeout_t;
+
+/*! \brief     CPU cycles value.
+    \see       stk_sys_timer_count, stk_hires_cycles
+*/
+typedef uint64_t stk_cycle_t;
+
 /*! \brief     Opaque handle to a kernel instance.
 */
 typedef struct stk_kernel_t stk_kernel_t;
@@ -100,11 +120,11 @@ typedef void (*stk_task_entry_t)(void *arg);
 
 /*! \brief     Infinite timeout constant.
 */
-#define STK_WAIT_INFINITE (INT32_MAX)
+#define STK_WAIT_INFINITE ((stk_timeout_t)(INT32_MAX))
 
 /*! \brief     No timeout constant.
 */
-#define STK_NO_WAIT (0)
+#define STK_NO_WAIT ((stk_timeout_t)(0))
 
 /*! \brief     Memory buffer alignment.
 */
@@ -479,7 +499,7 @@ stk_tid_t stk_tid(void);
 /*! \brief     Returns number of ticks elapsed since kernel start.
     \return    Tick count (monotonically increasing).
 */
-int64_t stk_ticks(void);
+stk_tick_t stk_ticks(void);
 
 /*! \brief     Returns how many microseconds correspond to one kernel tick.
     \return    Tick resolution in microseconds.
@@ -493,7 +513,7 @@ int32_t stk_tick_resolution(void);
                Requires the kernel to be initialized before calling
                (stk_tick_resolution() must return a valid non-zero value).
 */
-int64_t stk_ticks_from_ms(int64_t msec);
+stk_tick_t stk_ticks_from_ms(stk_time_t msec);
 
 /*! \brief     Get ticks from milliseconds using an explicit tick resolution.
     \param[in] msec: Milliseconds to convert.
@@ -503,7 +523,7 @@ int64_t stk_ticks_from_ms(int64_t msec);
                Use this overload when the resolution is already cached to avoid
                a repeated call to stk_tick_resolution().
 */
-static inline int64_t stk_ticks_from_ms_r(int64_t msec, int32_t resolution)
+static inline stk_tick_t stk_ticks_from_ms_r(stk_time_t msec, int32_t resolution)
 {
     return msec * 1000 / resolution;
 }
@@ -511,7 +531,7 @@ static inline int64_t stk_ticks_from_ms_r(int64_t msec, int32_t resolution)
 /*! \brief     Returns current time in milliseconds since kernel start.
     \return    Time in milliseconds.
 */
-int64_t stk_time_now_ms(void);
+stk_time_t stk_time_now_ms(void);
 
 /*! \brief     Convert ticks to milliseconds using an explicit tick resolution.
     \param[in] ticks: Tick count to convert.
@@ -519,7 +539,7 @@ int64_t stk_time_now_ms(void);
     \return    Equivalent time in milliseconds.
     \note      ISR-safe (arithmetic only).
 */
-static inline int64_t stk_ms_from_ticks_r(int64_t ticks, int32_t resolution)
+static inline stk_time_t stk_ms_from_ticks_r(stk_tick_t ticks, int32_t resolution)
 {
     return (ticks * resolution) / 1000;
 }
@@ -529,7 +549,7 @@ static inline int64_t stk_ms_from_ticks_r(int64_t ticks, int32_t resolution)
     \return    Equivalent time in milliseconds.
     \note      Requires the kernel to be initialized before calling.
 */
-static inline int64_t stk_ms_from_ticks(int64_t ticks)
+static inline stk_time_t stk_ms_from_ticks(stk_tick_t ticks)
 {
     return stk_ms_from_ticks_r(ticks, stk_tick_resolution());
 }
@@ -567,17 +587,17 @@ uint32_t stk_hires_frequency(void);
     \return    Microseconds since an arbitrary but fixed epoch (typically reset).
     \note      ISR-safe. Equivalent to stk_hires_cycles() * 1000000 / stk_hires_frequency().
 */
-int64_t stk_hires_time_us(void);
+stk_tick_t stk_hires_time_us(void);
 
 /*! \brief     Busy-wait delay (other tasks continue to run).
     \param[in] ticks: Ticks to delay.
 */
-void stk_delay(uint32_t ticks);
+void stk_delay(stk_timeout_t ticks);
 
 /*! \brief     Busy-wait delay (other tasks continue to run).
     \param[in] ms: Milliseconds to delay.
 */
-void stk_delay_ms(uint32_t ms);
+void stk_delay_ms(stk_timeout_t ms);
 
 /*! \brief     Put current task to sleep (non-HRT kernels only).
     \param[in] ms: Ticks to sleep.
@@ -589,7 +609,7 @@ void stk_delay_ms(uint32_t ms);
                according to their periodicity and workload, use stk_yield instead.
     \see       stk_sleep_ms, stk_sleep_until, stk_ticks
 */
-void stk_sleep(uint32_t ticks);
+void stk_sleep(stk_timeout_t ticks);
 
 /*! \brief     Put current task to sleep (non-HRT kernels only).
     \param[in] ms: Milliseconds to sleep.
@@ -601,7 +621,7 @@ void stk_sleep(uint32_t ticks);
                according to their periodicity and workload, use stk_yield instead.
     \see       stk_sleep, stk_sleep_until, stk_ticks
 */
-void stk_sleep_ms(uint32_t ms);
+void stk_sleep_ms(stk_timeout_t ms);
 
 /*! \brief     Put current task to sleep (non-HRT kernels only).
     \param[in] ts: Absolute time, a deadline for a sleep period.
@@ -613,7 +633,7 @@ void stk_sleep_ms(uint32_t ms);
                according to their periodicity and workload, use stk_yield instead.
     \see       stk_sleep, stk_sleep_ms, stk_ticks
 */
-void stk_sleep_until(int64_t ts);
+void stk_sleep_until(stk_tick_t ts);
 
 /*! \brief     Voluntarily give up CPU to another ready task (cooperative yield).
 */
@@ -752,7 +772,7 @@ void stk_mutex_unlock(stk_mutex_t *mtx);
     \param[in] timeout: Max time to wait in milliseconds.
     \return    True if locked successfully, False on timeout.
 */
-bool stk_mutex_timed_lock(stk_mutex_t *mtx, int32_t timeout);
+bool stk_mutex_timed_lock(stk_mutex_t *mtx, stk_timeout_t timeout);
 
 // ----- SpinLock --------------------------------------------------------------
 
@@ -831,7 +851,7 @@ void stk_cv_destroy(stk_cv_t *cv);
     \param[in] timeout: Max time to wait (or \a STK_WAIT_INFINITE).
     \return    True if signaled, False on timeout.
 */
-bool stk_cv_wait(stk_cv_t *cv, stk_mutex_t *mtx, int32_t timeout);
+bool stk_cv_wait(stk_cv_t *cv, stk_mutex_t *mtx, stk_timeout_t timeout);
 
 /*! \brief     Wake one task waiting on the condition variable.
     \param[in] cv: CV handle.
@@ -877,7 +897,7 @@ void stk_event_destroy(stk_event_t *ev);
     \param[in] timeout: Max time to wait in milliseconds.
     \return    True if signaled, False on timeout.
 */
-bool stk_event_wait(stk_event_t *ev, int32_t timeout);
+bool stk_event_wait(stk_event_t *ev, stk_timeout_t timeout);
 
 /*! \brief     Wait for the event to become signaled.
     \param[in] ev: Event handle.
@@ -937,7 +957,7 @@ void stk_sem_destroy(stk_sem_t *sem);
     \param[in] timeout: Max time to wait (ticks).
     \return    True if resource acquired, False on timeout.
 */
-bool stk_sem_wait(stk_sem_t *sem, int32_t timeout);
+bool stk_sem_wait(stk_sem_t *sem, stk_timeout_t timeout);
 
 /*! \brief     Poll the semaphore without blocking.
     \details   Acquires a resource token if one is immediately available; returns
@@ -1054,7 +1074,7 @@ uint32_t stk_ef_get(stk_ef_t *ef);
                expires, the wait succeeds and returns the matched flags.
     \warning   ISR-safe only with timeout = \c STK_NO_WAIT, ISR-unsafe otherwise.
 */
-uint32_t stk_ef_wait(stk_ef_t *ef, uint32_t flags, uint32_t options, int32_t timeout);
+uint32_t stk_ef_wait(stk_ef_t *ef, uint32_t flags, uint32_t options, stk_timeout_t timeout);
 
 /*! \brief     Non-blocking flag poll.
     \details   Checks immediately whether the flag condition is satisfied.
@@ -1155,7 +1175,7 @@ void stk_pipe_destroy(stk_pipe_t *pipe);
     \return    True if the element was written, False on timeout.
     \warning   ISR-safe only with \a timeout = \c STK_NO_WAIT.
 */
-bool stk_pipe_write(stk_pipe_t *pipe, const void *data, int32_t timeout);
+bool stk_pipe_write(stk_pipe_t *pipe, const void *data, stk_timeout_t timeout);
 
 /*! \brief     Attempt to write a single element to the pipe without blocking.
     \param[in] pipe: Pipe handle.
@@ -1176,7 +1196,7 @@ bool stk_pipe_trywrite(stk_pipe_t *pipe, const void *data);
     \return    True if an element was read, False on timeout.
     \warning   ISR-safe only with \a timeout = \c STK_NO_WAIT.
 */
-bool stk_pipe_read(stk_pipe_t *pipe, void *data, int32_t timeout);
+bool stk_pipe_read(stk_pipe_t *pipe, void *data, stk_timeout_t timeout);
 
 /*! \brief     Attempt to read a single element from the pipe without blocking.
     \param[in] pipe: Pipe handle.
@@ -1199,7 +1219,7 @@ bool stk_pipe_tryread(stk_pipe_t *pipe, void *data);
                occurred.
     \warning   ISR-safe only with \a timeout = \c STK_NO_WAIT.
 */
-size_t stk_pipe_write_bulk(stk_pipe_t *pipe, const void *src, size_t count, int32_t timeout);
+size_t stk_pipe_write_bulk(stk_pipe_t *pipe, const void *src, size_t count, stk_timeout_t timeout);
 
 /*! \brief     Attempt to write multiple elements to the pipe without blocking.
     \details   Copies as many elements as possible. Elements that do not fit are discarded.
@@ -1223,7 +1243,7 @@ size_t stk_pipe_trywrite_bulk(stk_pipe_t *pipe, const void *src, size_t count);
     \return    Number of elements actually read. Equal to \c count unless a timeout occurred.
     \warning   ISR-safe only with \a timeout = \c STK_NO_WAIT.
 */
-size_t stk_pipe_read_bulk(stk_pipe_t *pipe, void *dst, size_t count, int32_t timeout);
+size_t stk_pipe_read_bulk(stk_pipe_t *pipe, void *dst, size_t count, stk_timeout_t timeout);
 
 /*! \brief     Attempt to read multiple elements from the pipe without blocking.
     \details   Reads as many elements as are currently available without blocking.
@@ -1412,7 +1432,7 @@ void stk_msgq_destroy(stk_msgq_t *mq);
     \return    True if the message was enqueued, False on timeout.
     \warning   ISR-safe only with \a timeout = \c STK_NO_WAIT.
 */
-bool stk_msgq_put(stk_msgq_t *mq, const void *msg, int32_t timeout);
+bool stk_msgq_put(stk_msgq_t *mq, const void *msg, stk_timeout_t timeout);
 
 /*! \brief     Attempt to put a message into the queue without blocking.
     \param[in] mq: MessageQueue handle.
@@ -1434,7 +1454,7 @@ bool stk_msgq_tryput(stk_msgq_t *mq, const void *msg);
     \return    True if the message was enqueued at the front, False on timeout.
     \warning   ISR-safe only with \a timeout = \c STK_NO_WAIT.
 */
-bool stk_msgq_putfront(stk_msgq_t *mq, const void *msg, int32_t timeout);
+bool stk_msgq_putfront(stk_msgq_t *mq, const void *msg, stk_timeout_t timeout);
 
 /*! \brief     Attempt to put a message into the front of the queue without blocking.
     \param[in] mq: MessageQueue handle.
@@ -1454,7 +1474,7 @@ bool stk_msgq_tryputfront(stk_msgq_t *mq, const void *msg);
     \return     True if a message was retrieved, False on timeout.
     \warning    ISR-safe only with \a timeout = \c STK_NO_WAIT.
 */
-bool stk_msgq_get(stk_msgq_t *mq, void *msg, int32_t timeout);
+bool stk_msgq_get(stk_msgq_t *mq, void *msg, stk_timeout_t timeout);
 
 /*! \brief      Attempt to get a message from the queue without blocking.
     \param[in]  mq: MessageQueue handle.
@@ -1477,7 +1497,7 @@ bool stk_msgq_tryget(stk_msgq_t *mq, void *msg);
     \return     True if a message was peeked, False on timeout.
     \warning    ISR-safe only with \a timeout = \c STK_NO_WAIT.
 */
-bool stk_msgq_peek(stk_msgq_t *mq, void *msg, int32_t timeout);
+bool stk_msgq_peek(stk_msgq_t *mq, void *msg, stk_timeout_t timeout);
 
 /*! \brief      Attempt to peek at the next message without blocking.
     \param[in]  mq: MessageQueue handle.
@@ -1499,7 +1519,7 @@ bool stk_msgq_trypeek(stk_msgq_t *mq, void *msg);
     \return     True if a message was peeked, False on timeout.
     \warning    ISR-safe only with \a timeout = \c STK_NO_WAIT.
 */
-bool stk_msgq_peekfront(stk_msgq_t *mq, void *msg, int32_t timeout);
+bool stk_msgq_peekfront(stk_msgq_t *mq, void *msg, stk_timeout_t timeout);
 
 /*! \brief      Attempt to peek at the front message without blocking.
     \param[in]  mq: MessageQueue handle.
@@ -1625,7 +1645,7 @@ bool stk_rwmutex_try_read_lock(stk_rwmutex_t *rw);
     \param[in] timeout: Max time to wait (ticks). Use STK_NO_WAIT for non-blocking.
     \return    True if acquired, False on timeout.
 */
-bool stk_rwmutex_timed_read_lock(stk_rwmutex_t *rw, int32_t timeout);
+bool stk_rwmutex_timed_read_lock(stk_rwmutex_t *rw, stk_timeout_t timeout);
 
 /*! \brief     Release the shared reader lock.
     \details   If this is the last active reader, waiting writers are notified.
@@ -1651,7 +1671,7 @@ bool stk_rwmutex_trylock(stk_rwmutex_t *rw);
     \param[in] timeout: Max time to wait (ticks). Use STK_NO_WAIT for non-blocking.
     \return    True if acquired, False on timeout.
 */
-bool stk_rwmutex_timed_lock(stk_rwmutex_t *rw, int32_t timeout);
+bool stk_rwmutex_timed_lock(stk_rwmutex_t *rw, stk_timeout_t timeout);
 
 /*! \brief     Release the exclusive writer lock.
     \details   Prioritizes waking waiting writers. If none are waiting, all

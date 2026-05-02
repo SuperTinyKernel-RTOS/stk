@@ -11,12 +11,7 @@
 #include <stk.h>
 #include "example.h"
 
-static void InitLeds()
-{
-    Led::Init(Led::RED,   false);
-    Led::Init(Led::GREEN, false);
-    Led::Init(Led::BLUE,  false);
-}
+using namespace bsp;
 
 // R2350 requires larger stack due to stack-memory heavy SDK API
 #ifdef _PICO_H
@@ -71,23 +66,27 @@ void RunExample()
 {
     using namespace stk;
 
-    InitLeds();
+    Led::InitAll(false);
 
     // 3 tasks kernel with 3 priorities
-    static Kernel<KERNEL_STATIC, 3, SwitchStrategyFP32, PlatformDefault> kernel;
+    static Kernel<KERNEL_STATIC | (STK_TICKLESS_IDLE ? KERNEL_TICKLESS : 0), 4,
+            SwitchStrategyFP32, PlatformDefault> kernel;
 
     // RED has lowest priority, and BLUE has highest:
     // - BLUE gets more CPU time and will blink very often
-    // - GRREN blinks less often than BLUE
+    // - GREEN blinks less often than BLUE
+    // - ORANGE is blinking less often than GREEN
     // - RED is least blinking as it gets gets the least CPU time
     // note: if you set the same priority for tasks LEDs of these tasks will blink equally
     static LedTask<SwitchStrategyFP32::PRIORITY_LOWEST, ACCESS_PRIVILEGED> task_red(Led::RED);
+    static LedTask<SwitchStrategyFP32::PRIORITY_LOWER, ACCESS_PRIVILEGED> task_org(Led::ORANGE);
     static LedTask<SwitchStrategyFP32::PRIORITY_NORMAL, ACCESS_PRIVILEGED> task_green(Led::GREEN);
     static LedTask<SwitchStrategyFP32::PRIORITY_HIGHEST, ACCESS_PRIVILEGED> task_blue(Led::BLUE);
 
     kernel.Initialize();
 
     kernel.AddTask(&task_red);
+    kernel.AddTask(&task_org);
     kernel.AddTask(&task_green);
     kernel.AddTask(&task_blue);
 

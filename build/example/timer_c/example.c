@@ -45,6 +45,8 @@ static void on_shutdown_timer_expired(stk_timerhost_t *host,
     (void)timer;
     (void)user_data;
 
+    Led_InitAll(true);
+
     stk_timerhost_shutdown(host);
 }
 
@@ -54,9 +56,7 @@ static void on_shutdown_timer_expired(stk_timerhost_t *host,
 
 void RunExample(void)
 {
-    Led_Init(LED_RED,   false);
-    Led_Init(LED_GREEN, false);
-    Led_Init(LED_BLUE,  false);
+    Led_InitAll(false);
 
     // Create kernel for core 0
     stk_kernel_t *kernel = stk_kernel_create(0);
@@ -84,6 +84,7 @@ void RunExample(void)
     // Start the kernel — never returns
     stk_kernel_start(kernel);
 
-    STK_C_ASSERT(false);
+    Led_InitAll(false);
+
     for (;;) {}
 }

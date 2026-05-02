@@ -15,96 +15,89 @@
 
 #define STACK_SIZE 256
 
-static volatile uint8_t g_TaskSwitch = 0;
+// One flag bit per LED task; task 0 (RED) goes first
+static const uint32_t FLAGS_ALL[] = {
+    (1U << LED_RED),
+    (1U << LED_ORANGE),
+    (1U << LED_GREEN),
+    (1U << LED_BLUE)
+};
+
+// EventFlags object and its backing memory
+static stk_ef_mem_t g_TaskFlagsMem;
+static stk_ef_t    *g_TaskFlags;
+
+// Stack of the tasks
 static uint32_t g_Stack[STK_C_KERNEL_MAX_TASKS][STACK_SIZE] __stk_c_stack;
 
-static void InitLeds()
-{
-    Led_Init(LED_RED, false);
-    Led_Init(LED_GREEN, false);
-    Led_Init(LED_BLUE, false);
-}
+// Per-task argument passed through the void* arg
+typedef struct {
+    uint8_t  task_id;
+    uint32_t my_flag;
+    uint32_t next_flag;
+} TaskArg;
 
-// Task function switching the LED
-static void SwitchOnLED(uint8_t task_id)
-{
-    switch (task_id)
-    {
-    case 0:
-        Led_Set(LED_RED, true);
-        Led_Set(LED_GREEN, false);
-        Led_Set(LED_BLUE, false);
-        break;
-    case 1:
-        Led_Set(LED_RED, false);
-        Led_Set(LED_GREEN, true);
-        Led_Set(LED_BLUE, false);
-        break;
-    case 2:
-        Led_Set(LED_RED, false);
-        Led_Set(LED_GREEN, false);
-        Led_Set(LED_BLUE, true);
-        break;
-    }
-}
+static TaskArg g_TaskArgs[LED_MAX];
 
 void TaskFunc(void *arg)
 {
-    uint8_t task_id = (uint8_t)((uintptr_t)arg);
-
-    // just fake counters to demonstrate that scheduler is saving/restoring context correctly
-    // preserving values of floating-point and 64 bit variables
-    volatile float count = 0;
-    volatile uint64_t count_skip = 0;
+    const TaskArg *a = (const TaskArg *)arg;
 
     while (true)
     {
-        if (g_TaskSwitch != task_id)
-        {
-            // to avoid hot loop and excessive CPU usage sleep 10ms while waiting for the own turn,
-            // if scheduler does not have active threads then it will fall into a sleep mode which is
-            // saving the consumed power
-            stk_sleep_ms(10);
-
-            ++count_skip;
+        // block until this task's flag is set; auto-cleared on return
+        uint32_t result = stk_ef_wait(g_TaskFlags, a->my_flag, STK_EF_OPT_WAIT_ANY, STK_WAIT_INFINITE);
+        if (stk_ef_is_error(result))
             continue;
-        }
-
-        ++count;
 
         // change LED state
         {
             stk_critical_section_enter();
-
-            SwitchOnLED(task_id);
-
+            Led_SwitchOnExclusive((LedId)a->task_id);
             stk_critical_section_exit();
         }
 
-        // sleep 1s and delegate work to another task switching another LED
+        // sleep 1s and delegate work to the next task
         stk_sleep_ms(1000);
-        g_TaskSwitch = (task_id + 1) % 3;
+
+        // hand off to the next task
+        stk_ef_set(g_TaskFlags, a->next_flag);
     }
 }
 
 void RunExample()
 {
-    InitLeds();
+    Led_InitAll(false);
 
-    // allocate scheduling kernel
+    // initialize per-task argument structs
+    for (uint8_t i = 0; i < LED_MAX; i++)
+    {
+        g_TaskArgs[i].task_id   = i;
+        g_TaskArgs[i].my_flag   = FLAGS_ALL[i];
+        g_TaskArgs[i].next_flag = FLAGS_ALL[(i + 1) % LED_MAX];
+    }
+
+    // create EventFlags with the RED task's flag pre-set so it runs first
+    g_TaskFlags = stk_ef_create(&g_TaskFlagsMem, sizeof(g_TaskFlagsMem), FLAGS_ALL[LED_RED]);
+    STK_C_ASSERT(g_TaskFlags != NULL);
+
+    // allocate scheduling kernel (KERNEL_SYNC required for EventFlags)
     stk_kernel_t *k = stk_kernel_create(0);
+    STK_C_ASSERT(k != NULL);
 
     // init kernel with default periodicity - 1ms tick
     stk_kernel_init(k, STK_PERIODICITY_DEFAULT);
 
     // using privileged tasks as some MCUs may not allow writing to GPIO from a user thread, such ARM Cortex-M7/M33/...
-    stk_task_t *t1 = stk_task_create_privileged(TaskFunc, (void *)0, g_Stack[0], STACK_SIZE);
-    stk_task_t *t2 = stk_task_create_privileged(TaskFunc, (void *)1, g_Stack[1], STACK_SIZE);
-    stk_task_t *t3 = stk_task_create_privileged(TaskFunc, (void *)2, g_Stack[2], STACK_SIZE);
+    stk_task_t *t1 = stk_task_create_privileged(TaskFunc, &g_TaskArgs[LED_RED],    g_Stack[0], STACK_SIZE);
+    stk_task_t *t2 = stk_task_create_privileged(TaskFunc, &g_TaskArgs[LED_ORANGE], g_Stack[1], STACK_SIZE);
+    stk_task_t *t3 = stk_task_create_privileged(TaskFunc, &g_TaskArgs[LED_GREEN],  g_Stack[2], STACK_SIZE);
+    stk_task_t *t4 = stk_task_create_privileged(TaskFunc, &g_TaskArgs[LED_BLUE],   g_Stack[3], STACK_SIZE);
 
     stk_kernel_add_task(k, t1);
     stk_kernel_add_task(k, t2);
     stk_kernel_add_task(k, t3);
+    stk_kernel_add_task(k, t4);
 
     // start scheduler (it will start threads added by stk_kernel_add_task), execution in main() will be blocked on this line
     stk_kernel_start(k);

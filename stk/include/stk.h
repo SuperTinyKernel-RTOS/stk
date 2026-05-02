@@ -2189,7 +2189,7 @@ protected:
     {
         typedef SleepTrapStackMemory::MemoryType Memory;
 
-        Stack  stack;  //!< Stack descriptor (SP register value + access mode). Initialised by InitTraps() on every Start().
+        Stack  stack;  //!< Stack descriptor (SP register value + access mode). Initialized by InitTraps() on every Start().
         Memory memory; //!< Backing stack memory array. Size: STK_SLEEP_TRAP_STACK_SIZE elements of Word.
     };
 
@@ -2205,7 +2205,7 @@ protected:
     {
         typedef ExitTrapStackMemory::MemoryType Memory;
 
-        Stack  stack;  //!< Stack descriptor (SP register value + access mode). Initialised by InitTraps() on every Start().
+        Stack  stack;  //!< Stack descriptor (SP register value + access mode). Initialized by InitTraps() on every Start().
         Memory memory; //!< Backing stack memory array. Size: STACK_SIZE_MIN elements of Word.
     };
 

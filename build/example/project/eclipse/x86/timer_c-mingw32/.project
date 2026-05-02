@@ -31,12 +31,12 @@
 			<locationURI>virtual:/virtual</locationURI>
 		</link>
 		<link>
-			<name>src/timer_c</name>
+			<name>src/driver</name>
 			<type>2</type>
 			<locationURI>virtual:/virtual</locationURI>
 		</link>
 		<link>
-			<name>src/driver</name>
+			<name>src/timer_c</name>
 			<type>2</type>
 			<locationURI>virtual:/virtual</locationURI>
 		</link>
@@ -56,14 +56,9 @@
 			<locationURI>virtual:/virtual</locationURI>
 		</link>
 		<link>
-			<name>src/timer_c/example.c</name>
+			<name>src/driver/c_wrapper.cpp</name>
 			<type>1</type>
-			<locationURI>PARENT-4-PROJECT_LOC/timer_c/example.c</locationURI>
-		</link>
-		<link>
-			<name>src/timer_c/example.h</name>
-			<type>1</type>
-			<locationURI>PARENT-4-PROJECT_LOC/timer_c/example.h</locationURI>
+			<locationURI>PARENT-4-PROJECT_LOC/driver/c_wrapper.cpp</locationURI>
 		</link>
 		<link>
 			<name>src/driver/led.h</name>
@@ -74,6 +69,16 @@
 			<name>src/driver/portable</name>
 			<type>2</type>
 			<locationURI>virtual:/virtual</locationURI>
+		</link>
+		<link>
+			<name>src/timer_c/example.c</name>
+			<type>1</type>
+			<locationURI>PARENT-4-PROJECT_LOC/timer_c/example.c</locationURI>
+		</link>
+		<link>
+			<name>src/timer_c/example.h</name>
+			<type>1</type>
+			<locationURI>PARENT-4-PROJECT_LOC/timer_c/example.h</locationURI>
 		</link>
 		<link>
 			<name>deps/stk/include/arch</name>

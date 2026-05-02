@@ -11,32 +11,54 @@
 #define DRIVER_LED_H_
 
 #include <stdbool.h>
+#include <stdint.h>
 
-typedef enum LedId {
-    LED_RED,
+typedef enum LedId
+{
     LED_GREEN,
-    LED_BLUE
+    LED_ORANGE,
+    LED_RED,
+    LED_BLUE,
+
+    LED_MAX
 }
 LedId;
 
 #ifdef __cplusplus
 
+namespace bsp {
+
 struct Led
 {
     using Id = LedId;
 
-    static constexpr Id RED   = LED_RED;
-    static constexpr Id GREEN = LED_GREEN;
-    static constexpr Id BLUE  = LED_BLUE;
+    static constexpr Id GREEN  = LED_GREEN;
+    static constexpr Id ORANGE = LED_ORANGE;
+    static constexpr Id RED    = LED_RED;
+    static constexpr Id BLUE   = LED_BLUE;
 
     static void Init(Id led, bool init_state);
+    static inline void InitAll(bool init_state)
+    {
+        for (uint8_t led = 0; led < LED_MAX; ++led)
+            Led::Init(static_cast<LedId>(led), init_state);
+    }
     static void Set(Id led, bool state);
+    static void SwitchOnExclusive(Id led)
+    {
+        for (uint8_t i = 0; i < LED_MAX; ++i)
+            Led::Set(static_cast<LedId>(i), (i == led));
+    }
 };
 
-#else
+} // namespace bsp
+
+#else // __cplusplus
 
 void Led_Init(LedId led, bool init_state);
+void Led_InitAll(bool init_state);
 void Led_Set(LedId led, bool state);
+void Led_SwitchOnExclusive(LedId led);
 
 #endif
 

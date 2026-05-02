@@ -9,6 +9,8 @@
 
 #include "led.h"
 
+using namespace bsp;
+
 // C interface
 extern "C" {
 
@@ -20,6 +22,16 @@ void Led_Init(LedId led, bool init_state)
 void Led_Set(LedId led, bool state)
 {
     Led::Set(led, state);
+}
+
+void Led_InitAll(bool state)
+{
+    Led::InitAll(state);
+}
+
+void Led_SwitchOnExclusive(LedId led)
+{
+    Led::SwitchOnExclusive(led);
 }
 
 } // extern "C"
