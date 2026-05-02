@@ -176,11 +176,13 @@ static struct Context : public PlatformContext
         m_sleep_ticks  = 0;
     #endif
 
+    #if STK_TLS
         if ((m_tls = TlsAlloc()) == TLS_OUT_OF_INDEXES)
         {
             assert(false);
             return;
         }
+    #endif
 
         STK_X86_WIN32_CRITICAL_SECTION_INIT(&m_cs);
 
@@ -192,8 +194,10 @@ static struct Context : public PlatformContext
     */
     ~Context()
     {
+    #if STK_TLS
         if (m_tls != TLS_OUT_OF_INDEXES)
             TlsFree(m_tls);
+    #endif
 
         UnloadWindowsAPI();
     }
@@ -270,6 +274,7 @@ static struct Context : public PlatformContext
     Word GetCallerSP() const;
     TId GetTid() const;
     
+#if STK_TLS
     __stk_forceinline Word GetTls() 
     { 
         return hw::PtrToWord(TlsGetValue(m_tls)); 
@@ -279,6 +284,7 @@ static struct Context : public PlatformContext
     { 
         TlsSetValue(m_tls, hw::WordToPtr<void>(tp));
     }
+#endif
     
     __stk_forceinline void EnterCriticalSection()
     {
@@ -717,6 +723,7 @@ TId PlatformX86Win32::GetTid() const
     return GetContext().GetTid();
 }
 
+#if STK_TLS
 Word stk::hw::GetTls()
 {
     return GetContext().GetTls();
@@ -726,6 +733,7 @@ void stk::hw::SetTls(Word tp)
 {
     return GetContext().SetTls(tp);
 }
+#endif
 
 IKernelService *IKernelService::GetInstance()
 {

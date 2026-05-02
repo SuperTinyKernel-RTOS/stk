@@ -7,7 +7,6 @@
  * License: MIT License, see LICENSE for a full text.
  */
 
-#include <stk_config.h>
 #include <stk.h>
 #include <sync/stk_sync_eventflags.h>
 #include "example.h"
@@ -52,7 +51,7 @@ private:
     void Run() override
     {
         // we switch LEDs with 1s period
-        const stk::Timeout period = stk::GetTicksFromMs(1000);
+        const stk::Ticks period = stk::GetTicksFromMs(1000);
 
         // get a start of the timeline
         g_Timeline = stk::GetTicks();

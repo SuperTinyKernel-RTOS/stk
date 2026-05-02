@@ -14,7 +14,6 @@
 extern void STK_ASSERT_IMPL(const char *err, const char *source, int32_t line);
 #endif
 
-#include <stk_config.h>
 #include <stk_c.h>
 #include "example.h"
 

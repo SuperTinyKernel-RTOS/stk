@@ -14,7 +14,6 @@
 extern void STK_ASSERT_HANDLER(const char *err, const char *source, int32_t line);
 #endif
 
-#include <stk_config.h>
 #include <stk.h>
 #include <sync/stk_sync.h>
 #include "example.h"

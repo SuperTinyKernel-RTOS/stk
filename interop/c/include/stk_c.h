@@ -15,6 +15,8 @@
 #include <stdbool.h>
 #include <assert.h>
 
+#include <stk_config.h>
+
 /*! \file     stk_c.h
     \brief    C language binding/interface for SuperTinyKernel RTOS.
 

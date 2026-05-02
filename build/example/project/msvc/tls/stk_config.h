@@ -12,4 +12,7 @@
 
 #define _STK_ARCH_X86_WIN32
 
+// Use TLS.
+#define STK_TLS (1)
+
 #endif /* STK_CONFIG_H_ */

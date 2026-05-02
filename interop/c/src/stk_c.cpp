@@ -434,6 +434,7 @@ void        stk_yield(void)                    { stk::Yield(); }
 // -----------------------------------------------------------------------------
 // Thread-Local Storage (TLS) API
 // -----------------------------------------------------------------------------
+#if STK_TLS
 void *stk_tls_get(void)
 {
     return hw::GetTlsPtr<void *>();
@@ -443,6 +444,7 @@ void stk_tls_set(void *ptr)
 {
     hw::SetTlsPtr(ptr);
 }
+#endif
 
 // -----------------------------------------------------------------------------
 // Critical Section - Manual Enter/Exit

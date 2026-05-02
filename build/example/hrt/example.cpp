@@ -7,7 +7,6 @@
  * License: MIT License, see LICENSE for a full text.
  */
 
-#include <stk_config.h>
 #include <stk.h>
 #include <time/stk_time.h>
 #include "example.h"
