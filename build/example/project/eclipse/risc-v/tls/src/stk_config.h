@@ -12,8 +12,11 @@
 
 #include "risc-v/encoding.h"
 
-// Risc-V
+// RISC-V arch.
 #define _STK_ARCH_RISC_V
+
+// Use TLS.
+#define STK_TLS (1)
 
 // Minimal stack size depending on the configured architecture (STK default is 32).
 #if (__riscv_32e != 1)
@@ -24,6 +27,7 @@
     #endif
 #endif
 
+// Override ISR handlers if your BSP are using other names.
 #ifdef _STK_ARCH_RISC_V
     // Redefine if SysTick handler name is different from SysTick_Handler
     //#define STK_SYSTICK_HANDLER SysTick_Handler

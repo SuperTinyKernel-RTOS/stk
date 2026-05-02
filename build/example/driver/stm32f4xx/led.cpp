@@ -12,6 +12,8 @@
 #include "stm32f4xx_hal_gpio.h"
 #include "../led.h"
 
+using namespace bsp;
+
 #define LED_PORT GPIOD
 
 static void Led_InitGpio(int32_t pin)
@@ -19,21 +21,23 @@ static void Led_InitGpio(int32_t pin)
     __HAL_RCC_GPIOD_CLK_ENABLE();
 
     GPIO_InitTypeDef gpio = {};
-    gpio.Mode = GPIO_MODE_OUTPUT_PP;
-    gpio.Pin = pin;
-    gpio.Pull = GPIO_NOPULL;
-    gpio.Speed = GPIO_SPEED_FREQ_HIGH;
+    gpio.Mode      = GPIO_MODE_OUTPUT_PP;
+    gpio.Pin       = pin;
+    gpio.Pull      = GPIO_NOPULL;
+    gpio.Speed     = GPIO_SPEED_FREQ_LOW;
     gpio.Alternate = 0;
     HAL_GPIO_Init(LED_PORT, &gpio);
 }
 
 static int32_t Led_GetPin(Led::Id led)
 {
+    // STM32F407G-DISC1 LEDs are on PD12-PD15
     switch (led)
     {
-    case Led::RED: return GPIO_PIN_14;
-    case Led::GREEN: return GPIO_PIN_12;
-    case Led::BLUE: return GPIO_PIN_15;
+    case Led::GREEN:  return GPIO_PIN_12;
+    case Led::ORANGE: return GPIO_PIN_13;
+    case Led::RED:    return GPIO_PIN_14;
+    case Led::BLUE:   return GPIO_PIN_15;
     default:
         return GPIO_PIN_MASK;
     }

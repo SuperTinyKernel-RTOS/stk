@@ -11,6 +11,8 @@
 #include <stk.h>
 #include "example.h"
 
+using namespace bsp;
+
 static volatile uint8_t g_TaskSwitch = 0;
 
 // R2350 requires larger stack due to stack-memory heavy SDK API
@@ -34,63 +36,39 @@ private:
     {
         uint8_t task_id = m_task_id;
 
-        volatile float count = 0;
-        volatile uint64_t count_skip = 0;
-
         while (true)
         {
             if (g_TaskSwitch != task_id)
             {
-                ++count_skip;
+                stk::Sleep(100);
                 continue;
             }
 
-            ++count;
-
-            switch (task_id)
-            {
-            case 0:
-                Led::Set(Led::RED, true);
-                Led::Set(Led::GREEN, false);
-                Led::Set(Led::BLUE, false);
-                break;
-            case 1:
-                Led::Set(Led::RED, false);
-                Led::Set(Led::GREEN, true);
-                Led::Set(Led::BLUE, false);
-                break;
-            case 2:
-                Led::Set(Led::RED, false);
-                Led::Set(Led::GREEN, false);
-                Led::Set(Led::BLUE, true);
-                break;
-            }
+            Led::SwitchOnExclusive(static_cast<LedId>(task_id));
 
             stk::Sleep(1000);
 
-            g_TaskSwitch = (task_id + 1) % 3;
+            g_TaskSwitch = (task_id + 1) % LED_MAX;
             return;
         }
     }
 };
 
-static void InitLeds()
-{
-    Led::Init(Led::RED, false);
-    Led::Init(Led::GREEN, false);
-    Led::Init(Led::BLUE, false);
-}
-
-static stk::Kernel<stk::KERNEL_DYNAMIC, 3, stk::SwitchStrategyRoundRobin, stk::PlatformDefault> g_Kernel;
+static stk::Kernel<stk::KERNEL_DYNAMIC, 4, stk::SwitchStrategyRoundRobin, stk::PlatformDefault> g_Kernel;
 
 // note: using ACCESS_PRIVILEGED as some MCUs may not allow writing to GPIO from a user thread, such as i.MX RT1050 (Arm Cortex-M7)
-static MyTask<stk::ACCESS_PRIVILEGED> g_Task1(0), g_Task2(1), g_Task3(2);
+static MyTask<stk::ACCESS_PRIVILEGED>
+    g_Task1(Led::RED),
+    g_Task2(Led::ORANGE),
+    g_Task3(Led::GREEN),
+    g_Task4(Led::BLUE);
 
 static void RunOnce()
 {
     g_Kernel.AddTask(&g_Task1);
     g_Kernel.AddTask(&g_Task2);
     g_Kernel.AddTask(&g_Task3);
+    g_Kernel.AddTask(&g_Task4);
 
     g_TaskSwitch = 0;
 
@@ -102,20 +80,18 @@ void RunExample()
 {
     using namespace stk;
 
-    InitLeds();
+    Led::InitAll(false);
 
     g_Kernel.Initialize();
 
     // repeat 3 times
-    for (int i = 0; i < 3; ++i)
+    for (int32_t i = 0; i < 3; ++i)
     {
         RunOnce();
     }
 
     // switched on all LEDs when execution ends
-    Led::Set(Led::RED, true);
-    Led::Set(Led::GREEN, true);
-    Led::Set(Led::BLUE, true);
+    Led::InitAll(true);
 
     while (true) {}
 }

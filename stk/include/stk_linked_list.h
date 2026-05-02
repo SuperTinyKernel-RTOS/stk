@@ -59,7 +59,7 @@ template <class T, bool _ClosedLoop> class DListEntry
     friend class DListHead<T, _ClosedLoop>;
 
 public:
-    /*! \brief Construct an unlinked entry. All pointers initialised to NULL.
+    /*! \brief Construct an unlinked entry. All pointers initialized to NULL.
     */
     explicit DListEntry() : m_head(nullptr), m_next(nullptr), m_prev(nullptr)
     {}

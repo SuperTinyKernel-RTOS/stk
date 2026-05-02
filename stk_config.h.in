@@ -45,4 +45,7 @@
 // Tickless mode
 #cmakedefine STK_TICKLESS_IDLE @STK_TICKLESS_IDLE@
 
+// TLS
+#cmakedefine STK_TLS @STK_TLS@
+
 #endif /* STK_CONFIG_H_ */

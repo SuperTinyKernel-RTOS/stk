@@ -17,6 +17,9 @@
 // if Kernel is not configured as tickless it should work as non-tickless with a little
 // overhead of couple of instructions, by default we enable tickless code path to be able
 // to test with KERNEL_TICKLESS and without it in the same test suite
-#define STK_TICKLESS_IDLE 1
+#define STK_TICKLESS_IDLE (1)
+
+// Use TLS.
+#define STK_TLS (1)
 
 #endif /* STK_CONFIG_H_ */

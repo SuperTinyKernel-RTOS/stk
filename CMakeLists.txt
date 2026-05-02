@@ -85,9 +85,15 @@ if (BUILD_DOC)
 endif()
 
 # Declare tickles mode if enabled (see stk_config.h.in)
-if (MODE_TICKLESS)
+if (ENABLE_TICKLESS)
     message(STATUS "* tickless mode")
     set(STK_TICKLESS_IDLE 1)
+endif()
+
+# Declare tickles mode if enabled (see stk_config.h.in)
+if (ENABLE_TLS)
+    message(STATUS "* enable TLS")
+    set(STK_TLS 1)
 endif()
 
 # Create stk_config.h (note: must be defined after inclusion of the projects to catch value of _STK_DEVICE_INC)

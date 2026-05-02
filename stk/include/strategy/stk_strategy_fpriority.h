@@ -72,13 +72,20 @@ public:
     /*! \enum  EPriority
         \brief Symbolic priority level constants for common use cases.
         \note  Concrete values depend on MAX_PRIORITIES. For SwitchStrategyFP32 (MAX_PRIORITIES = 32):
-               PRIORITY_HIGHEST = 31, PRIORITY_NORMAL = 16, PRIORITY_LOWEST = 0.
+               PRIORITY_HIGHEST = 31, PRIORITY_HIGH = 23, PRIORITY_ABOVE_NORMAL = 17,
+               PRIORITY_NORMAL = 16, PRIORITY_BELOW_NORMAL = 15, PRIORITY_LOWER = 8,
+               PRIORITY_ABOVE_LOWEST = 1, PRIORITY_LOWEST = 0.
     */
     enum EPriority
     {
-        PRIORITY_HIGHEST = MAX_PRIORITIES - 1, //!< Highest available priority level (MAX_PRIORITIES - 1).
-        PRIORITY_NORMAL  = MAX_PRIORITIES / 2, //!< Mid-range priority level (MAX_PRIORITIES / 2).
-        PRIORITY_LOWEST  = 0                   //!< Lowest priority level. Tasks at this level only run when no higher-priority task is runnable.
+        PRIORITY_HIGHEST      = (MAX_PRIORITIES - 1),     //!< Highest available priority level.
+        PRIORITY_HIGH         = ((MAX_PRIORITIES / 2) + (MAX_PRIORITIES - 1)) / 2, //!< High priority; mid-point between NORMAL and HIGHEST.
+        PRIORITY_ABOVE_NORMAL = (MAX_PRIORITIES / 2) + 1, //!< Slightly elevated priority; one step above NORMAL.
+        PRIORITY_NORMAL       = (MAX_PRIORITIES / 2),     //!< Mid-range priority level (MAX_PRIORITIES / 2).
+        PRIORITY_BELOW_NORMAL = (MAX_PRIORITIES / 2) - 1, //!< Slightly reduced priority; one step below NORMAL.
+        PRIORITY_LOWER        = (MAX_PRIORITIES / 4),     //!< Lower priority; mid-point between LOWEST and NORMAL.
+        PRIORITY_ABOVE_LOWEST = (0 + 1),                  //!< Slightly elevated low priority; one step above LOWEST.
+        PRIORITY_LOWEST       = 0                         //!< Lowest priority level; tasks only run when idle.
     };
 
     /*! \brief Construct an empty strategy with all priority levels empty, a clear bitmap, and null cursors.
@@ -87,8 +94,7 @@ public:
     */
     explicit SwitchStrategyFixedPriority() : m_tasks(), m_sleep(), m_ready_bitmap(0U), m_prev()
     {
-        STK_STATIC_ASSERT_DESC(MAX_PRIORITIES <= 32U,
-            "MAX_PRIORITIES exceeds 32-bit bitmap width");
+        STK_STATIC_ASSERT_DESC(MAX_PRIORITIES <= 32U, "MAX_PRIORITIES exceeds 32-bit bitmap width");
     }
 
     /*! \brief Destructor.
@@ -104,7 +110,7 @@ public:
                    out of range is a programming error.
         \note      Delegates to AddActive() which appends the task to \c m_tasks[prio], sets
                    \c m_ready_bitmap bit \c prio if this is the first task at that level, and
-                   initialises \c m_prev[prio].
+                   initializes \c m_prev[prio].
         \note      Tail-cursor invariant (same as RR): if \c m_prev[prio] was already pointing at
                    the tail before insertion, it is advanced to the new tail so GetNext() will
                    include the new task in the very next rotation at this priority level.
@@ -273,7 +279,7 @@ protected:
         \note      Appends to the back of \c m_tasks[prio].
         \note      Bitmap and cursor are only updated when the level was previously empty
                    (GetSize() == 1 after LinkBack): \c m_ready_bitmap bit \c prio is set and
-                   \c m_prev[prio] is initialised to \c task. Subsequent additions at the same
+                   \c m_prev[prio] is initialized to \c task. Subsequent additions at the same
                    level leave the cursor untouched (the tail-adjustment in AddTask() handles
                    the cursor for non-first additions).
     */

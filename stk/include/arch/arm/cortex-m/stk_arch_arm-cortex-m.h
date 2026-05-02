@@ -55,9 +55,25 @@ public:
 */
 typedef PlatformArmCortexM PlatformDefault;
 
-/*! \brief  Get thread-local storage (TLS).
-    \return TLS value.
-    \note   Using r9 register.
+// Inline TLS via r9. Active when both STK_TLS and STK_TLS_PREFER_REGISTER are
+// enabled. Requires -ffixed-r9 on all translation units containing task code
+// (see GetTls/SetTls warnings below). If -ffixed-r9 is unavailable or
+// undesirable, leave STK_TLS_PREFER_REGISTER disabled; the kernel will fall back
+// to a memory-based TLS slot with a small additional load/store per access.
+#if STK_TLS && STK_TLS_PREFER_REGISTER
+
+/*! \brief   Get thread-local storage (TLS).
+    \return  TLS value.
+    \note    Uses r9 as the TLS base pointer per the ARM EABI "platform register"
+             convention (AAPCS 5.2.2).  The value is saved and restored by PendSV
+             on every context switch, so each task sees its own TLS pointer on entry.
+    \warning **Requires \c -ffixed-r9 for every translation unit that contains task
+             code** - including any library code a task calls that touches r9.
+             Without it, the compiler treats r9 as an ordinary callee-saved register:
+             it may spill r9 to the stack in a function prologue, overwrite it with an
+             intermediate value (e.g. during 64-bit arithmetic), and restore it in the
+             epilogue.
+    \see     SetTls, stk::hw::GetTlsPtr, stk::hw::SetTlsPtr
 */
 __stk_forceinline Word GetTls()
 {
@@ -67,8 +83,12 @@ __stk_forceinline Word GetTls()
 }
 
 /*! \brief     Set thread-local storage (TLS).
-    \param[in] tp: TLS value.
-    \note      Using r9 register.
+    \param[in] tp: TLS value to store in r9.
+    \note      Uses the r9 register as the TLS base pointer, following the ARM EABI
+               "platform register" convention (AAPCS §5.2.2).
+    \warning   **Requires \c -ffixed-r9 for every translation unit that contains task
+               code.** See \c GetTls() for the full explanation.
+    \see       GetTls, stk::hw::GetTlsPtr, stk::hw::SetTlsPtr
 */
 __stk_forceinline void SetTls(Word tp)
 {
@@ -76,7 +96,9 @@ __stk_forceinline void SetTls(Word tp)
 }
 
 // Notify stk_arch.h that we defined inline versions of GetTls/SetTls.
-#define _STK_INLINE_TLS_DEFINED 1
+#define STK_INLINE_TLS 1
+
+#endif // STK_TLS_PREFER_REGISTER
 
 } // namespace stk
 

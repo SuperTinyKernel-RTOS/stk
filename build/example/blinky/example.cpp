@@ -1,5 +1,5 @@
 /*
- * SuperTinyKernel™ (STK): Lightweight High-Performance Deterministic C++ RTOS for Embedded Systems.
+ * SuperTinyKernel(TM) RTOS: Lightweight High-Performance Deterministic C++ RTOS for Embedded Systems.
  *
  * Source: https://github.com/SuperTinyKernel-RTOS
  *
@@ -9,7 +9,10 @@
 
 #include <stk_config.h>
 #include <stk.h>
+#include <sync/stk_sync_eventflags.h>
 #include "example.h"
+
+using namespace bsp;
 
 // R2350 requires larger stack due to stack-memory heavy SDK API
 #ifdef _PICO_H
@@ -18,103 +21,85 @@ enum { TASK_STACK_SIZE = 1024 };
 enum { TASK_STACK_SIZE = 256 };
 #endif
 
-static volatile uint8_t g_TaskSwitch = 0;
+// One flag bit per LED task; task 0 (RED) goes first
+static const uint32_t FLAGS_ALL[] = {
+    (1U << LED_RED),
+    (1U << LED_ORANGE),
+    (1U << LED_GREEN),
+    (1U << LED_BLUE)
+};
+
+// Start with the RED task's flag set so it runs first
+static stk::sync::EventFlags g_TaskFlags(FLAGS_ALL[LED_RED]);
+
+// Timeline for a precise LED switching
+static stk::Ticks g_Timeline = 0;
 
 // Task's core (thread)
 template <stk::EAccessMode _AccessMode>
 class MyTask : public stk::Task<TASK_STACK_SIZE, _AccessMode>
 {
-    uint8_t m_task_id;
-    const char *m_name;
+    uint8_t  m_task_id;
+    uint32_t m_my_flag;
+    uint32_t m_next_flag;
 
 public:
-    MyTask(uint8_t task_id, const char *name) : m_task_id(task_id), m_name(name)
+    MyTask(uint8_t task_id) : m_task_id(task_id), m_my_flag(FLAGS_ALL[task_id]),
+          m_next_flag(FLAGS_ALL[(task_id + 1) % LED_MAX])
     {}
-
-    size_t GetId() const  { return m_task_id; }
-    const char *GetName() const  { return m_name; }
 
 private:
     void Run() override
     {
-        uint8_t task_id = m_task_id;
-        stk::Ticks ts = 0;
+        // we switch LEDs with 1s period
+        const stk::Timeout period = stk::GetTicksFromMs(1000);
+
+        // get a start of the timeline
+        g_Timeline = stk::GetTicks();
 
         while (true)
         {
-            if (g_TaskSwitch != task_id)
-            {
-                // to avoid hot loop and excessive CPU usage sleep 10ms while waiting for the own turn,
-                // if scheduler does not have active threads then it will fall into a sleep mode which is
-                // saving the consumed power
-                stk::Sleep(100);
+            // block until this task's flag is set; auto-cleared on return
+            uint32_t result = g_TaskFlags.Wait(m_my_flag, stk::sync::EventFlags::OPT_WAIT_ANY);
+            if (stk::sync::EventFlags::IsError(result))
                 continue;
-            }
 
+            // change active LED
             {
                 stk::hw::CriticalSection::ScopedLock __guard;
-
-                SwitchOnLED(task_id);
+                Led::SwitchOnExclusive(static_cast<LedId>(m_task_id));
             }
 
-            ts = stk::hw::HiResClock::GetTimeUs();
+            // sleep 1s drift-free and then delegate work to the next task
+            // we could use simple stk::Sleep() but due to other work around Sleep call we
+            // will get a time drift, STK allows to sleep until exact timestamp making it
+            // possible precise sleeping with 1 tick precision, you could also use
+            // time::TimerHost for timer-related tasks (see related 'timer' example)
+            stk::SleepUntil(g_Timeline += period);
 
-            // sleep 1s and delegate work to another task switching another LED
-            stk::Sleep(1000);
-
-            stk::Cycles diff = stk::hw::HiResClock::GetTimeUs() - ts;
-			(void)diff;
-
-            g_TaskSwitch = (task_id + 1) % 3;
-        }
-    }
-
-    static void SwitchOnLED(uint8_t task_id)
-    {
-        switch (task_id)
-        {
-        case 0:
-            Led::Set(Led::RED, true);
-            Led::Set(Led::GREEN, false);
-            Led::Set(Led::BLUE, false);
-            break;
-        case 1:
-            Led::Set(Led::RED, false);
-            Led::Set(Led::GREEN, true);
-            Led::Set(Led::BLUE, false);
-            break;
-        case 2:
-            Led::Set(Led::RED, false);
-            Led::Set(Led::GREEN, false);
-            Led::Set(Led::BLUE, true);
-            break;
+            // hand off to the next task
+            g_TaskFlags.Set(m_next_flag);
         }
     }
 };
-
-static void InitLeds()
-{
-    Led::Init(Led::RED, false);
-    Led::Init(Led::GREEN, false);
-    Led::Init(Led::BLUE, false);
-}
 
 void RunExample()
 {
     using namespace stk;
 
-    InitLeds();
+    Led::InitAll(false);
 
-    // operating in Static mode (tasks never exit) and if config requested also in tickless (STK_TICKLESS_IDLE=1) mode
-    const uint8_t KernelMode = KERNEL_STATIC | (STK_TICKLESS_IDLE ? KERNEL_TICKLESS : 0);
+    // operating in Static + Sync mode (EventFlags requires KERNEL_SYNC) and optionally tickless
+    const uint8_t KernelMode = KERNEL_STATIC | KERNEL_SYNC | (STK_TICKLESS_IDLE ? KERNEL_TICKLESS : 0);
 
     // allocate scheduling kernel for 3 threads (tasks) with Round-Robin scheduling strategy
-    static Kernel<KernelMode, 3, SwitchStrategyRR, PlatformDefault> kernel;
+    static Kernel<KernelMode, 4, SwitchStrategyRR, PlatformDefault> kernel;
 
     // note: using ACCESS_PRIVILEGED as Cortex-M3+ may not allow writing to GPIO from a less secure user thread
-    static MyTask<ACCESS_PRIVILEGED> task1(0, "LED-red");
-    static MyTask<ACCESS_PRIVILEGED> task2(1, "LED-grn");
-    static MyTask<ACCESS_PRIVILEGED> task3(2, "LED-blu");
+    static MyTask<ACCESS_PRIVILEGED> task1(LED_RED);
+    static MyTask<ACCESS_PRIVILEGED> task2(LED_ORANGE);
+    static MyTask<ACCESS_PRIVILEGED> task3(LED_GREEN);
+    static MyTask<ACCESS_PRIVILEGED> task4(LED_BLUE);
 
     // init scheduling kernel
     kernel.Initialize();
@@ -123,6 +108,7 @@ void RunExample()
     kernel.AddTask(&task1);
     kernel.AddTask(&task2);
     kernel.AddTask(&task3);
+    kernel.AddTask(&task4);
 
     // start scheduler (it will start threads added by AddTask), execution in main() will be blocked on this line
     kernel.Start();

@@ -123,10 +123,10 @@ static constexpr T *WordToPtr(Word value) noexcept
 bool IsInsideISR();
 
 // Some architectures (e.g. RISC-V with the 'tp' register) can implement TLS access as a
-// single inline instruction. When the back-end header defines _STK_INLINE_TLS_DEFINED,
+// single inline instruction. When the back-end header defines STK_INLINE_TLS,
 // GetTls and SetTls are provided as inline functions there and the declarations below
 // are suppressed to avoid duplicate definitions.
-#if !_STK_INLINE_TLS_DEFINED
+#if STK_TLS && !STK_INLINE_TLS
 
 /*! \brief     Read raw thread-pointer (TP) register used as per-task TLS storage.
     \return    Current TP register value as a \c Word.
@@ -135,6 +135,8 @@ bool IsInsideISR();
     \note      Use GetTlsPtr<T>() for a type-safe wrapper that returns a typed pointer.
     \warning   ISR-unsafe in the sense that the TP register holds the \e current task's context;
                reading it from an ISR will return the interrupted task's TLS, not an ISR-specific one.
+    \warning   For ARM Cortex-M arch you must compile all translation units with -ffixed-r9 compiler flag,
+               see extended description in stk_arch_arm-cortex-m.h for GetTls/SetTls.
 */
 Word GetTls();
 
@@ -143,16 +145,21 @@ Word GetTls();
     \note      Called by the scheduler during every context switch to update the register
                to the incoming task's TLS pointer. Not intended for direct use in application code;
                use SetTlsPtr<T>() instead.
+    \warning   For ARM Cortex-M arch you must compile all translation units with -ffixed-r9 compiler flag,
+               see extended description in stk_arch_arm-cortex-m.h for GetTls/SetTls.
 */
 void SetTls(Word tp);
 
-#endif // _STK_INLINE_TLS_DEFINED
+#endif // STK_INLINE_TLS
 
+#if STK_TLS
 /*! \brief     Type-safe wrapper around GetTls() that casts the raw TP value to a typed pointer.
     \tparam    _TyTls: The type pointed to by the TLS register (typically the per-task kernel context struct).
     \return    Pointer to the current task's TLS object, or \c nullptr if TLS has not been set.
     \note      Equivalent to \c reinterpret_cast<_TyTls*>(GetTls()). Prefer this over calling
                GetTls() directly to avoid scattered reinterpret_casts throughout the codebase.
+    \warning   For ARM Cortex-M arch you must compile all translation units with -ffixed-r9 compiler flag,
+               see extended description in stk_arch_arm-cortex-m.h for GetTls/SetTls.
 */
 template <class _TyTls>
 __stk_forceinline _TyTls *GetTlsPtr()
@@ -165,12 +172,15 @@ __stk_forceinline _TyTls *GetTlsPtr()
     \param[in] tp: Pointer to the new task's TLS object.
     \note      Equivalent to \c SetTls(reinterpret_cast<Word>(tp)). Called by the scheduler
                during context switches to install the incoming task's TLS pointer.
+    \warning   For ARM Cortex-M arch you must compile all translation units with -ffixed-r9 compiler flag,
+               see extended description in stk_arch_arm-cortex-m.h for GetTls/SetTls.
 */
 template <class _TyTls>
 __stk_forceinline void SetTlsPtr(const _TyTls *tp)
 {
     SetTls(hw::PtrToWord(tp));
 }
+#endif // STK_TLS
 
 /*! \class CriticalSection
     \brief Nestable, SMP-safe critical section that combines local interrupt masking with a

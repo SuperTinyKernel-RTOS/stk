@@ -395,7 +395,7 @@ public:
        Within this function, local variable \c Cx holds \c tasks[t].duration (WCET C) and
        \c Tx holds \c tasks[t].period (period T), matching standard WCRT notation directly.
 
-       For each task \e t the recurrence is initialised as W(0) = Cx and iterated:
+       For each task \e t the recurrence is initialized as W(0) = Cx and iterated:
 
        \code
            W(n+1) = Cx + sum( ceil(W(n) / Tj) * Cj,  for all j < t )

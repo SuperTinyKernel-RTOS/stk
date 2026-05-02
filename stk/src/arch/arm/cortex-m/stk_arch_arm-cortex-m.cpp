@@ -869,10 +869,7 @@ static struct Context : public PlatformContext
         // rearm SysTick only if tick period changed
     #if STK_TICKLESS_IDLE
         if (ticks != m_sleep_ticks)
-        {
-            ReloadTickPeriod(ticks);
-            m_sleep_ticks = ticks;
-        }
+            m_sleep_ticks = ReloadTickPeriod(ticks);
     #endif
 
         HW_EnableInterrupts();
@@ -974,11 +971,31 @@ static struct Context : public PlatformContext
         HW_SysTickStart(m_tick_resolution);
     }
 
+#if STK_TLS && !STK_INLINE_TLS
+    __stk_forceinline Word GetTls()
+    {
+        hw::CriticalSection::ScopedLock cs_;
+
+        STK_ASSERT(m_stack_active != nullptr);
+
+        return m_stack_active->tls;
+    }
+
+    __stk_forceinline void SetTls(Word tp)
+    {
+        hw::CriticalSection::ScopedLock cs_;
+
+        STK_ASSERT(m_stack_active != nullptr);
+
+        m_stack_active->tls = tp;
+    }
+#endif // STK_TLS && !STK_INLINE_TLS
+
     void Start();
     void OnStart();
     void OnStop();
 #if STK_TICKLESS_IDLE
-    void ReloadTickPeriod(Timeout ticks_requested);
+    Timeout ReloadTickPeriod(Timeout ticks_requested);
     Timeout Suspend();
     void Resume(Timeout elapsed_ticks);
 #endif
@@ -1106,12 +1123,20 @@ void PlatformArmCortexM::ProcessTick()
 }
 
 #if STK_TICKLESS_IDLE
-void Context::ReloadTickPeriod(Timeout ticks_requested)
+Timeout Context::ReloadTickPeriod(Timeout ticks_requested)
 {
+    const uint32_t SYSTICK_MAX_LOAD = 0x00FFFFFFu; // SysTick LOAD register is 24-bit
     const uint32_t reload = static_cast<uint32_t>(ConvertTimeUsToClockCycles(HW_CoreClockFrequency(), m_tick_resolution));
 
     // guard against uint32_t overflow in the reload calculation
     STK_ASSERT(static_cast<uint64_t>(ticks_requested) * reload <= UINT32_MAX);
+
+    // clamp ticks_requested so that cpu_ticks_requested fits into 24-bit SysTick LOAD register
+    // without clamping large sleep tick counts silently truncate LOAD, causing the timer to fire far too early
+    // breaking the timing
+    const Timeout max_ticks = static_cast<Timeout>(SYSTICK_MAX_LOAD / reload);
+    if (ticks_requested > max_ticks)
+        ticks_requested = max_ticks;
 
     // start counting how many CPU cycles further instructions take until SysTick timer is enabled again;
     // without DWT we will have tick error of around 80 cycles depending on CPU model and compiler optimization
@@ -1146,6 +1171,9 @@ void Context::ReloadTickPeriod(Timeout ticks_requested)
     // calculate error: subtract cycles consumed by the rearm sequence itself in the next round
     m_sleep_error = HW_DWTGetCounter() - error;
 #endif
+
+    // return actual clamped ticks armed
+    return ticks_requested;
 }
 #endif
 
@@ -1890,5 +1918,17 @@ uint32_t stk::hw::HiResClock::GetFrequency()
     STK_ASSERT(freq != 0);
     return freq;
 }
+
+#if STK_TLS && !STK_INLINE_TLS
+Word stk::hw::GetTls()
+{
+    return GetContext().GetTls();
+}
+
+void stk::hw::SetTls(Word tp)
+{
+    GetContext().SetTls(tp);
+}
+#endif // STK_TLS && !STK_INLINE_TLS
 
 #endif // _STK_ARCH_ARM_CORTEX_M

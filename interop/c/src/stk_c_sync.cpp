@@ -69,7 +69,7 @@ void stk_mutex_unlock(stk_mutex_t *mtx)
     mtx->handle.Unlock();
 }
 
-bool stk_mutex_timed_lock(stk_mutex_t *mtx, int32_t timeout)
+bool stk_mutex_timed_lock(stk_mutex_t *mtx, stk_timeout_t timeout)
 {
     STK_ASSERT(mtx != NULL);
 
@@ -142,7 +142,7 @@ void stk_cv_destroy(stk_cv_t *cv)
         cv->~stk_cv_t();
 }
 
-bool stk_cv_wait(stk_cv_t *cv, stk_mutex_t *mtx, int32_t timeout)
+bool stk_cv_wait(stk_cv_t *cv, stk_mutex_t *mtx, stk_timeout_t timeout)
 {
     STK_ASSERT(cv != nullptr);
     STK_ASSERT(mtx != nullptr);
@@ -191,7 +191,7 @@ void stk_event_destroy(stk_event_t *ev)
         ev->~stk_event_t();
 }
 
-bool stk_event_wait(stk_event_t *ev, int32_t timeout)
+bool stk_event_wait(stk_event_t *ev, stk_timeout_t timeout)
 {
     STK_ASSERT(ev != nullptr);
 
@@ -260,7 +260,7 @@ void stk_sem_destroy(stk_sem_t *sem)
         sem->~stk_sem_t();
 }
 
-bool stk_sem_wait(stk_sem_t *sem, int32_t timeout)
+bool stk_sem_wait(stk_sem_t *sem, stk_timeout_t timeout)
 {
     STK_ASSERT(sem != nullptr);
 
@@ -336,7 +336,7 @@ uint32_t stk_ef_get(stk_ef_t *ef)
     return ef->handle.Get();
 }
 
-uint32_t stk_ef_wait(stk_ef_t *ef, uint32_t flags, uint32_t options, int32_t timeout)
+uint32_t stk_ef_wait(stk_ef_t *ef, uint32_t flags, uint32_t options, stk_timeout_t timeout)
 {
     STK_ASSERT(ef != nullptr);
 
@@ -388,7 +388,7 @@ void stk_pipe_destroy(stk_pipe_t *pipe)
         pipe->~stk_pipe_t();
 }
 
-bool stk_pipe_write(stk_pipe_t *pipe, const void *data, int32_t timeout)
+bool stk_pipe_write(stk_pipe_t *pipe, const void *data, stk_timeout_t timeout)
 {
     STK_ASSERT(pipe != nullptr);
     STK_ASSERT(data != nullptr);
@@ -404,7 +404,7 @@ bool stk_pipe_trywrite(stk_pipe_t *pipe, const void *data)
     return pipe->handle.TryWrite(data);
 }
 
-bool stk_pipe_read(stk_pipe_t *pipe, void *data, int32_t timeout)
+bool stk_pipe_read(stk_pipe_t *pipe, void *data, stk_timeout_t timeout)
 {
     STK_ASSERT(pipe != nullptr);
     STK_ASSERT(data != nullptr);
@@ -420,7 +420,7 @@ bool stk_pipe_tryread(stk_pipe_t *pipe, void *data)
     return pipe->handle.TryRead(data);
 }
 
-size_t stk_pipe_write_bulk(stk_pipe_t *pipe, const void *src, size_t count, int32_t timeout)
+size_t stk_pipe_write_bulk(stk_pipe_t *pipe, const void *src, size_t count, stk_timeout_t timeout)
 {
     STK_ASSERT(pipe != nullptr);
 
@@ -434,7 +434,7 @@ size_t stk_pipe_trywrite_bulk(stk_pipe_t *pipe, const void *src, size_t count)
     return pipe->handle.TryWriteBulk(src, count);
 }
 
-size_t stk_pipe_read_bulk(stk_pipe_t *pipe, void *dst, size_t count, int32_t timeout)
+size_t stk_pipe_read_bulk(stk_pipe_t *pipe, void *dst, size_t count, stk_timeout_t timeout)
 {
     STK_ASSERT(pipe != nullptr);
 
@@ -449,7 +449,7 @@ size_t stk_pipe_tryread_bulk(stk_pipe_t *pipe, void *dst, size_t count)
 }
 
 size_t stk_pipe_read_bulk_triggered(stk_pipe_t *pipe, void *dst,
-                                    size_t trigger, size_t max_count, int32_t timeout)
+                                    size_t trigger, size_t max_count, stk_timeout_t timeout)
 {
     STK_ASSERT(pipe != nullptr);
 
@@ -557,7 +557,7 @@ void stk_msgq_destroy(stk_msgq_t *mq)
         mq->~stk_msgq_t();
 }
 
-bool stk_msgq_put(stk_msgq_t *mq, const void *msg, int32_t timeout)
+bool stk_msgq_put(stk_msgq_t *mq, const void *msg, stk_timeout_t timeout)
 {
     STK_ASSERT(mq != nullptr);
     STK_ASSERT(msg != nullptr);
@@ -573,7 +573,7 @@ bool stk_msgq_tryput(stk_msgq_t *mq, const void *msg)
     return reinterpret_cast<stk_msgq_t *>(mq)->handle.TryPut(msg);
 }
 
-bool stk_msgq_putfront(stk_msgq_t *mq, const void *msg, int32_t timeout)
+bool stk_msgq_putfront(stk_msgq_t *mq, const void *msg, stk_timeout_t timeout)
 {
     STK_ASSERT(mq != nullptr);
     STK_ASSERT(msg != nullptr);
@@ -589,7 +589,7 @@ bool stk_msgq_tryputfront(stk_msgq_t *mq, const void *msg)
     return reinterpret_cast<stk_msgq_t *>(mq)->handle.TryPutFront(msg);
 }
 
-bool stk_msgq_get(stk_msgq_t *mq, void *msg, int32_t timeout)
+bool stk_msgq_get(stk_msgq_t *mq, void *msg, stk_timeout_t timeout)
 {
     STK_ASSERT(mq != nullptr);
     STK_ASSERT(msg != nullptr);
@@ -605,7 +605,7 @@ bool stk_msgq_tryget(stk_msgq_t *mq, void *msg)
     return reinterpret_cast<stk_msgq_t *>(mq)->handle.TryGet(msg);
 }
 
-bool stk_msgq_peek(stk_msgq_t *mq, void *msg, int32_t timeout)
+bool stk_msgq_peek(stk_msgq_t *mq, void *msg, stk_timeout_t timeout)
 {
     STK_ASSERT(mq != nullptr);
     STK_ASSERT(msg != nullptr);
@@ -621,7 +621,7 @@ bool stk_msgq_trypeek(stk_msgq_t *mq, void *msg)
     return reinterpret_cast<stk_msgq_t *>(mq)->handle.TryPeek(msg);
 }
 
-bool stk_msgq_peekfront(stk_msgq_t *mq, void *msg, int32_t timeout)
+bool stk_msgq_peekfront(stk_msgq_t *mq, void *msg, stk_timeout_t timeout)
 {
     STK_ASSERT(mq != nullptr);
     STK_ASSERT(msg != nullptr);
@@ -738,7 +738,7 @@ bool stk_rwmutex_try_read_lock(stk_rwmutex_t *rw)
     return rw->handle.TryReadLock();
 }
 
-bool stk_rwmutex_timed_read_lock(stk_rwmutex_t *rw, int32_t timeout)
+bool stk_rwmutex_timed_read_lock(stk_rwmutex_t *rw, stk_timeout_t timeout)
 {
     STK_ASSERT(rw != nullptr);
 
@@ -766,7 +766,7 @@ bool stk_rwmutex_trylock(stk_rwmutex_t *rw)
     return rw->handle.TryLock();
 }
 
-bool stk_rwmutex_timed_lock(stk_rwmutex_t *rw, int32_t timeout)
+bool stk_rwmutex_timed_lock(stk_rwmutex_t *rw, stk_timeout_t timeout)
 {
     STK_ASSERT(rw != nullptr);
 

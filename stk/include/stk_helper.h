@@ -243,7 +243,7 @@ __stk_forceinline TId GetTid()
     \return    Equivalent time in milliseconds.
     \note      ISR-safe (performs only arithmetic, no kernel calls).
 */
-__stk_forceinline int64_t GetMsFromTicks(int64_t ticks, int32_t resolution)
+__stk_forceinline Time GetMsFromTicks(Ticks ticks, int32_t resolution)
 {
     return (ticks * resolution) / 1000;
 }
@@ -254,7 +254,7 @@ __stk_forceinline int64_t GetMsFromTicks(int64_t ticks, int32_t resolution)
     \return    Equivalent tick count.
     \note      ISR-safe (performs only arithmetic, no kernel calls).
 */
-__stk_forceinline Ticks GetTicksFromMs(int64_t ms, int32_t resolution)
+__stk_forceinline Ticks GetTicksFromMs(Time ms, int32_t resolution)
 {
     return ms * 1000 / resolution;
 }
@@ -285,7 +285,7 @@ __stk_forceinline int32_t GetTickResolution()
                Use the two-argument form GetTicksFromMsec(ms, resolution) in ISR context.
     \warning   ISR-unsafe (internally calls GetTickResolution() which accesses the kernel service).
 */
-__stk_forceinline Ticks GetTicksFromMs(int64_t ms)
+__stk_forceinline Ticks GetTicksFromMs(Time ms)
 {
     return GetTicksFromMs(ms, GetTickResolution());
 }
@@ -296,7 +296,7 @@ __stk_forceinline Ticks GetTicksFromMs(int64_t ms)
     \note      When the tick resolution is exactly 1000 µs (1 ms, the default PERIODICITY_DEFAULT),
                the tick count is returned directly without multiplication, avoiding a 64-bit multiply.
 */
-static inline int64_t GetTimeNowMs()
+static inline Time GetTimeNowMs()
 {
     IKernelService *service = IKernelService::GetInstance();
     int32_t resolution = service->GetTickResolution();

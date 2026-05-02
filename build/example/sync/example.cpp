@@ -19,6 +19,8 @@ extern void STK_ASSERT_HANDLER(const char *err, const char *source, int32_t line
 #include <sync/stk_sync.h>
 #include "example.h"
 
+using namespace bsp;
+
 #ifdef _PICO_H
     #define STK_EXAMPLE_DUALCORE 1
 #else
@@ -49,16 +51,11 @@ enum LedState
 };
 
 #if STK_EXAMPLE_USE_PIPE
-static stk::sync::Pipe<LedState, 1> g_CtrlSignalPipe;
+static stk::sync::PipeT<LedState, 1> g_CtrlSignalPipe;
 #else
 static stk::sync::Event g_EventReady, g_EventSwitchOn, g_EventSwitchOff;
 #endif
 static stk::sync::Mutex g_HwMutex;
-
-static void InitLeds()
-{
-    Led::Init(Led::GREEN, false);
-}
 
 // Task's core (thread)
 template <stk::EAccessMode _AccessMode>
@@ -235,7 +232,7 @@ void RunExample()
 {
     using namespace stk;
 
-    InitLeds();
+    Led::InitAll(false);
 
     // allocate scheduling kernel for 1 thread (tasks) with Round-Robin scheduling strategy
     static Kernel<KERNEL_STATIC | KERNEL_SYNC | (STK_TICKLESS_IDLE ? KERNEL_TICKLESS : 0), 3,

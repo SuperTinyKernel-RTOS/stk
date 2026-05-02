@@ -15,6 +15,8 @@
 #include <windows.h> // for system Sleep()
 #endif
 
+using namespace bsp;
+
 enum 
 {
     THREADS_MAX    = 8,
@@ -33,8 +35,8 @@ static void UnsafeIncrement()
     // we are making thread-race with this delay inevitable, we can't invoke stk::Sleep() or stk::Delay()
     // here as it will deadlock program execution because critical section temporarily frozen
     // our scheduler, thus use critical section with care and ONLY if REALLY necessary
-    volatile int32_t delay = 1000000;
-    while (--delay);
+    for (volatile uint32_t delay = 0; delay < 100000; delay++)
+    {}
 
     // it will overwrite the result which was most likely set by another thread
     // therefore counter will not be incremented ITERATIONS_MAX * THREADS_MAX times
@@ -58,15 +60,10 @@ static void IncrementWithCS(void *)
         stk::hw::CriticalSection::ScopedLock __cs1;
         stk::hw::CriticalSection::ScopedLock __cs2; // STK supports nesting of critical sections
 
+        // you can also use sync::ScopedCriticalSection instead of hw::CriticalSection
+
         UnsafeIncrement();
     }
-}
-
-static void InitLEDs()
-{
-    Led::Init(Led::RED, false);
-    Led::Init(Led::GREEN, false);
-    Led::Init(Led::BLUE, false);
 }
 
 // Task's thread object
@@ -77,14 +74,14 @@ public:
     void (* m_func) (void *user_data);
 
 private:
-    void Run() { m_func(nullptr); }
+    void Run() override { m_func(nullptr); }
 };
 
 void RunExample()
 {
     using namespace stk;
 
-    InitLEDs();
+    Led::InitAll(false);
 
     // allocate scheduling kernel for THREADS_MAX threads (tasks) with Round-robin scheduling strategy
     static Kernel<KERNEL_DYNAMIC, THREADS_MAX, SwitchStrategyRoundRobin, PlatformDefault> kernel;
@@ -94,6 +91,10 @@ void RunExample()
 
     // init scheduling kernel
     kernel.Initialize();
+
+    // RED and GREEN leds will blink one by one, in case of RED led g_Counter variable got incorrect
+    // count due to race, in case of GREEN led a critical section was used which protected
+    // variable from the race
 
     static bool toogle = false;
     while (true)

@@ -413,23 +413,23 @@ void stk_task_destroy(stk_task_t *task)
 // -----------------------------------------------------------------------------
 // Kernel services (available inside tasks)
 // -----------------------------------------------------------------------------
-stk_tid_t stk_tid(void)                   { return stk::GetTid(); }
-int64_t   stk_ticks(void)                 { return stk::GetTicks(); }
-int32_t   stk_tick_resolution(void)       { return stk::GetTickResolution(); }
-int64_t   stk_time_now_ms(void)           { return stk::GetTimeNowMs(); }
-int64_t   stk_ticks_from_ms(int64_t msec) { return stk_ticks_from_ms_r(msec, stk::GetTickResolution()); }
-uint64_t  stk_sys_timer_count(void)       { return stk::GetSysTimerCount(); }
-uint32_t  stk_sys_timer_frequency(void)   { return stk::GetSysTimerFrequency(); }
-uint64_t  stk_hires_cycles(void)          { return stk::hw::HiResClock::GetCycles(); }
-uint32_t  stk_hires_frequency(void)       { return stk::hw::HiResClock::GetFrequency(); }
-int64_t   stk_hires_time_us(void)         { return stk::hw::HiResClock::GetTimeUs(); }
-void      stk_delay(uint32_t ticks)       { stk::Delay(ticks); }
-void      stk_sleep(uint32_t ticks)       { stk::Sleep(ticks); }
-void      stk_delay_ms(uint32_t ms)       { stk::DelayMs(ms); }
-void      stk_sleep_ms(uint32_t ms)       { stk::SleepMs(ms); }
-void      stk_sleep_until(int64_t ts)     { stk::SleepUntil(ts); }
-void      stk_sleep_cancel(stk_tid_t tid) { stk::SleepCancel(tid); }
-void      stk_yield(void)                 { stk::Yield(); }
+stk_tid_t   stk_tid(void)                      { return stk::GetTid(); }
+stk_tick_t  stk_ticks(void)                    { return stk::GetTicks(); }
+int32_t     stk_tick_resolution(void)          { return stk::GetTickResolution(); }
+stk_time_t  stk_time_now_ms(void)              { return stk::GetTimeNowMs(); }
+stk_tick_t  stk_ticks_from_ms(stk_time_t msec) { return stk_ticks_from_ms_r(msec, stk::GetTickResolution()); }
+stk_cycle_t stk_sys_timer_count(void)          { return stk::GetSysTimerCount(); }
+uint32_t    stk_sys_timer_frequency(void)      { return stk::GetSysTimerFrequency(); }
+stk_cycle_t stk_hires_cycles(void)             { return stk::hw::HiResClock::GetCycles(); }
+uint32_t    stk_hires_frequency(void)          { return stk::hw::HiResClock::GetFrequency(); }
+stk_tick_t  stk_hires_time_us(void)            { return stk::hw::HiResClock::GetTimeUs(); }
+void        stk_delay(stk_timeout_t ticks)     { stk::Delay(ticks); }
+void        stk_sleep(stk_timeout_t ticks)     { stk::Sleep(ticks); }
+void        stk_delay_ms(stk_timeout_t ms)     { stk::DelayMs(ms); }
+void        stk_sleep_ms(stk_timeout_t ms)     { stk::SleepMs(ms); }
+void        stk_sleep_until(stk_tick_t ts)     { stk::SleepUntil(ts); }
+void        stk_sleep_cancel(stk_tid_t tid)    { stk::SleepCancel(tid); }
+void        stk_yield(void)                    { stk::Yield(); }
 
 // -----------------------------------------------------------------------------
 // Thread-Local Storage (TLS) API

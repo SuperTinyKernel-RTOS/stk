@@ -17,7 +17,9 @@
 
 #include "../led.h"
 
-#define NO_LED ~0
+using namespace bsp;
+
+#define NO_LED (~0)
 
 static void Led_InitGpio(uint16_t pin)
 {
@@ -28,11 +30,11 @@ static void Led_InitGpio(uint16_t pin)
     gpio_init(pin);
     gpio_set_dir(pin, GPIO_OUT);
 #elif defined(CYW43_WL_GPIO_LED_PIN)
-    static bool init = false;
-    if (!init)
+    static bool s_init = false;
+    if (!s_init)
     {
         cyw43_arch_init();
-        init = true;
+        s_init = true;
     }
 #endif
 }
@@ -41,17 +43,12 @@ static uint16_t Led_GetPin(Led::Id led)
 {
     switch (led)
     {
-    case Led::RED:
-        return NO_LED;
-    case Led::GREEN: {
+    case Led::GREEN:
     #if defined(PICO_DEFAULT_LED_PIN)
         return PICO_DEFAULT_LED_PIN;
     #elif defined(CYW43_WL_GPIO_LED_PIN)
         return CYW43_WL_GPIO_LED_PIN;
     #endif
-    }
-    case Led::BLUE:
-        return NO_LED;
     default:
         return NO_LED;
     }
