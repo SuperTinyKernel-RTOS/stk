@@ -11,7 +11,8 @@ set(TARGET_NAME stk)
 project(${TARGET_NAME})
 message(STATUS "- " ${TARGET_NAME})
 
-option(MODE_TICKLESS "enable Tickless mode usage"  OFF)
+option(ENABLE_TICKLESS "enable Tickless mode usage" OFF)
+option(ENABLE_TLS      "enable TLS"                 OFF)
 
 # Includes
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)

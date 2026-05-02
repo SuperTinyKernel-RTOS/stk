@@ -15,7 +15,7 @@ jobs:
       matrix:
         include:
           - name: "Configure CMake (Board: STM32F407DISC1, CPU: Arm Cortex-M4)"
-            cmake_flags: -DVENDOR_STM32=ON -DTARGET_CORTEX_M4=ON -DTARGET_CPU_FAMILY=STM32F407xx
+            cmake_flags: -DVENDOR_STM32=ON -DTARGET_CORTEX_M4=ON -DTARGET_CPU_FAMILY=STM32F407xx -DENABLE_TLS=ON
             cpu: cortex-m4
             board: STM32F4-Discovery
 

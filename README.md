@@ -571,55 +571,54 @@ Compatible with:
 Below example toggles RGB LEDs on a development board. Each LED is controlled by its own thread, switching at 1s intervals:
 
 ```cpp
-#include <stk_config.h>
 #include <stk.h>
-#include "example.h"
+#include <sync/stk_sync_eventflags.h>
 
-static volatile uint8_t g_TaskSwitch = 0;
+using namespace bsp;
+
+enum { TASK_STACK_SIZE = 256 };
+
+static const uint32_t FLAGS_ALL[] = {
+    (1U << LED_RED),
+    (1U << LED_ORANGE),
+    (1U << LED_GREEN),
+    (1U << LED_BLUE)
+};
+static stk::sync::EventFlags g_TaskFlags(FLAGS_ALL[LED_RED]);
+static stk::Ticks g_Timeline = 0;
 
 template <stk::EAccessMode _AccessMode>
-class MyTask : public stk::Task<256, _AccessMode>
+class MyTask : public stk::Task<TASK_STACK_SIZE, _AccessMode>
 {
-    uint8_t m_taskId;
+    uint8_t  m_task_id;
+    uint32_t m_my_flag;
+    uint32_t m_next_flag;
 
 public:
-    MyTask(uint8_t taskId) : m_taskId(taskId) 
+    MyTask(uint8_t task_id) : m_task_id(task_id), m_my_flag(FLAGS_ALL[task_id]),
+          m_next_flag(FLAGS_ALL[(task_id + 1) % LED_MAX])
     {}
 
 private:
-    void Run()
+    void Run() override
     {
-        uint8_t task_id = m_taskId;
+        const stk::Timeout period = stk::GetTicksFromMs(1000);
+        g_Timeline = stk::GetTicks();
 
         while (true)
         {
-            if (g_TaskSwitch != task_id)
-            {
-                stk::Sleep(10);
+            uint32_t result = g_TaskFlags.Wait(m_my_flag, stk::sync::EventFlags::OPT_WAIT_ANY);
+            if (stk::sync::EventFlags::IsError(result))
                 continue;
-            }
 
-            switch (task_id)
             {
-            case 0:
-                LED_SET_STATE(LED_RED, true);
-                LED_SET_STATE(LED_GREEN, false);
-                LED_SET_STATE(LED_BLUE, false);
-                break;
-            case 1:
-                LED_SET_STATE(LED_RED, false);
-                LED_SET_STATE(LED_GREEN, true);
-                LED_SET_STATE(LED_BLUE, false);
-                break;
-            case 2:
-                LED_SET_STATE(LED_RED, false);
-                LED_SET_STATE(LED_GREEN, false);
-                LED_SET_STATE(LED_BLUE, true);
-                break;
+                stk::hw::CriticalSection::ScopedLock __guard;
+                Led::SwitchOnExclusive(static_cast<LedId>(m_task_id));
             }
 
-            stk::Sleep(1000);
-            g_TaskSwitch = (task_id + 1) % 3;
+            stk::SleepUntil(g_Timeline += period);
+
+            g_TaskFlags.Set(m_next_flag);
         }
     }
 };
@@ -628,23 +627,27 @@ void RunExample()
 {
     using namespace stk;
 
-    LED_INIT(LED_RED, false);
-    LED_INIT(LED_GREEN, false);
-    LED_INIT(LED_BLUE, false);
+    Led::InitAll(false);
 
-    static Kernel<KERNEL_STATIC, 3, SwitchStrategyRoundRobin, PlatformDefault> kernel;
-    static MyTask<ACCESS_PRIVILEGED> task1(0), task2(1), task3(2);
+    const uint8_t KernelMode = KERNEL_STATIC | KERNEL_SYNC | (STK_TICKLESS_IDLE ? KERNEL_TICKLESS : 0);
 
-    kernel.Initialize(PERIODICITY_DEFAULT);
+    static Kernel<KernelMode, 4, SwitchStrategyRR, PlatformDefault> kernel;
+
+    static MyTask<ACCESS_PRIVILEGED> task1(LED_RED);
+    static MyTask<ACCESS_PRIVILEGED> task2(LED_ORANGE);
+    static MyTask<ACCESS_PRIVILEGED> task3(LED_GREEN);
+    static MyTask<ACCESS_PRIVILEGED> task4(LED_BLUE);
+
+    kernel.Initialize();
 
     kernel.AddTask(&task1);
     kernel.AddTask(&task2);
     kernel.AddTask(&task3);
+    kernel.AddTask(&task4);
 
     kernel.Start();
 
-    assert(false);
-    while (true);
+    STK_ASSERT(false);
 }
 ```
 

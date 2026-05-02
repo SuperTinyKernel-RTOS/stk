@@ -236,10 +236,15 @@ template <size_t _StackSize> struct StackMemoryDef
 */
 struct Stack
 {
-    Word        SP;   //!< Stack Pointer (SP) register (note: must be the first entry in this struct)
+    Word        SP;   //!< Stack Pointer (SP) register (note: must be the first entry in this struct).
     EAccessMode mode; //!< Hardware access mode of the owning task (see \a EAccessMode).
-#if STK_NEED_TASK_ID
-    TId         tid;  //!< task id (see \a STK_SEGGER_SYSVIEW)
+#if STK_STACK_NEEDS_TASK_ID
+    TId         tid;  //!< Task id (see \a STK_SEGGER_SYSVIEW).
+#endif
+#ifdef _STK_ARCH_ARM_CORTEX_M
+#if STK_TLS && !STK_TLS_PREFER_REGISTER
+    Word        tls;  //!< Thread-local storage if not using ARM Cortex-M R9 register for a fast inline access to TLS.
+#endif
 #endif
 };
 

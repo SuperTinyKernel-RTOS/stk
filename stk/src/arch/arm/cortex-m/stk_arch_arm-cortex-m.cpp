@@ -971,6 +971,26 @@ static struct Context : public PlatformContext
         HW_SysTickStart(m_tick_resolution);
     }
 
+#if STK_TLS && !STK_INLINE_TLS
+    __stk_forceinline Word GetTls()
+    {
+        hw::CriticalSection::ScopedLock cs_;
+
+        STK_ASSERT(m_stack_active != nullptr);
+
+        return m_stack_active->tls;
+    }
+
+    __stk_forceinline void SetTls(Word tp)
+    {
+        hw::CriticalSection::ScopedLock cs_;
+
+        STK_ASSERT(m_stack_active != nullptr);
+
+        m_stack_active->tls = tp;
+    }
+#endif // STK_TLS && !STK_INLINE_TLS
+
     void Start();
     void OnStart();
     void OnStop();
@@ -1898,5 +1918,17 @@ uint32_t stk::hw::HiResClock::GetFrequency()
     STK_ASSERT(freq != 0);
     return freq;
 }
+
+#if STK_TLS && !STK_INLINE_TLS
+Word stk::hw::GetTls()
+{
+    return GetContext().GetTls();
+}
+
+void stk::hw::SetTls(Word tp)
+{
+    GetContext().SetTls(tp);
+}
+#endif // STK_TLS && !STK_INLINE_TLS
 
 #endif // _STK_ARCH_ARM_CORTEX_M

@@ -65,6 +65,53 @@
     #error "STK_TICKLESS_TICKS_MAX is too large: cpu_ticks_requested may overflow uint32_t."
 #endif
 
+/*! \def   STK_TLS
+    \brief Enable per-task thread-local storage (TLS).
+    \note  When set to 1, the kernel saves and restores a per-task TLS pointer on
+           every context switch, making a dedicated pointer available to each task
+           at all times via stk::hw::GetTlsPtr/SetTlsPtr.
+    \note  Storage strategy is controlled by STK_TLS_PREFER_REGISTER:
+           - STK_TLS_PREFER_REGISTER=0 (default): the pointer is kept in the
+             stk::Stack::tls member. No special compiler flags required.
+           - STK_TLS_PREFER_REGISTER=1: the pointer is kept in a CPU register
+             (r9 on Cortex-M, tp on RISC-V) for single-instruction access.
+             Cortex-M additionally requires -ffixed-r9 for all task translation
+             units; see STK_TLS_PREFER_REGISTER.
+    \note  Default: 0 (disabled).
+    \see   STK_TLS_PREFER_REGISTER, stk::hw::GetTlsPtr, stk::hw::SetTlsPtr
+*/
+#ifndef STK_TLS
+    #define STK_TLS 0
+#endif
+
+/*! \def   STK_TLS_PREFER_REGISTER
+    \brief Store the per-task TLS pointer in a dedicated CPU register instead of
+           the stk::Stack::tls member, enabling single-instruction TLS access.
+    \note  **ARM Cortex-M:** uses r9 (ARM EABI "platform register", AAPCS 5.2.2).
+           Every translation unit that contains task code \e must be compiled with
+           \c -ffixed-r9. Without it the compiler may allocate r9 as an ordinary
+           callee-saved register, silently overwriting the TLS pointer after a
+           context switch. See stk_arch_arm-cortex-m.h for the full explanation.
+    \note  **RISC-V:** uses the \c tp (x4) register, which is reserved for TLS by
+           the RISC-V psABI. STK_TLS_PREFER_REGISTER is forced to 1 on RISC-V
+           regardless of this setting; no additional compiler flags are needed.
+    \note  When set to 1 on Cortex-M, stk::Stack gains no \c tls member, reducing
+           per-task RAM by one \c Word. On targets with many tasks this saving can
+           be significant.
+    \note  Default: 0 (disabled). Leave at 0 if \c -ffixed-r9 cannot be applied
+           to all task translation units (e.g. pre-built third-party libraries);
+           the memory-based fallback incurs only one extra load/store per TLS access.
+    \warning Cortex-M only: \c -ffixed-r9 must be applied to \e every translation
+           unit in the binary that contains task code, including inlined functions
+           and any library code those tasks call. A single TU compiled without
+           the flag is sufficient to cause intermittent, hard-to-reproduce TLS
+           corruption.
+    \see   STK_TLS, stk::hw::GetTlsPtr, stk::hw::SetTlsPtr
+*/
+#ifndef STK_TLS_PREFER_REGISTER
+    #define STK_TLS_PREFER_REGISTER 0
+#endif
+
 /*! \def   STK_NEED_TASK_ID
     \brief When defined as 1, the Stack descriptor (stk::Stack) carries a \c tid field
            used by the SEGGER SystemView trace back-end to identify tasks during context switches.
@@ -74,7 +121,7 @@
     \see   STK_SEGGER_SYSVIEW, stk::Stack
 */
 #if STK_SEGGER_SYSVIEW
-    #define STK_NEED_TASK_ID 1
+    #define STK_STACK_NEEDS_TASK_ID 1
 #endif
 
 /*! \def   STK_SYNC_DEBUG_NAMES

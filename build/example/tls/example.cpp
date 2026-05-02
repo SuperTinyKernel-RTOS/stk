@@ -11,10 +11,9 @@
 #include <stk.h>
 #include "example.h"
 
-// Warning: Use -ffixed-r9 compiler flag which prevents the compiler from ever allocating r9 as a
-//          scratch or callee-saved register.
-//          Otherwise, refrain from using stk::GetTls/SetTls and implement TLS via ITask by getting
-//          it vis TId by stk::GetTId().
+// Warning: On ARM Cortex-M you can use fast TLS via R9 CPU register: for that define
+//          STK_TLS_PREFER_REGISTER to (1) and use -ffixed-r9 compiler flag which prevents
+//          compiler from allocating r9 as a scratch or callee-saved register.
 
 // Sync primitive used:
 //
