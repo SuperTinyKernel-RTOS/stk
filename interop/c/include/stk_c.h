@@ -383,7 +383,7 @@ void stk_kernel_resume_task(stk_kernel_t *k, stk_task_t *task);
     \note      Only meaningful when the kernel was created with KERNEL_TICKLESS mode.
     \see       stk_kernel_resume, STK_KERNEL_STATE_SUSPENDED
 */
-int32_t stk_kernel_suspend(stk_kernel_t *k);
+stk_timeout_t stk_kernel_suspend(stk_kernel_t *k);
 
 /*! \brief     Resume scheduling after a prior stk_kernel_suspend() call.
     \param[in] k: Kernel handle.
@@ -393,7 +393,7 @@ int32_t stk_kernel_suspend(stk_kernel_t *k);
     \note      ISR-safe.
     \see       stk_kernel_suspend
 */
-void stk_kernel_resume(stk_kernel_t *k, int32_t elapsed_ticks);
+void stk_kernel_resume(stk_kernel_t *k, stk_timeout_t elapsed_ticks);
 
 /*! \brief     Enumerate all currently active tasks.
     \param[in]  k: Kernel handle.
@@ -423,6 +423,67 @@ void stk_kernel_process_tick(stk_kernel_t *k);
     \note      This call does not return.
 */
 void stk_kernel_process_hard_fault(stk_kernel_t *k);
+
+// =============================================================================
+// Platform event overrider
+// =============================================================================
+
+/*! \struct    stk_event_overrider_t
+    \brief     C-level callback table that mirrors \c stk::IPlatform::IEventOverrider.
+
+    Fill in the function pointers you want to intercept, leave the others \c NULL
+    (a NULL pointer causes the default platform driver behaviour to execute, identical
+    to returning \c false from the C++ virtual method). The \a user_data pointer is
+    forwarded to every callback so you can pass context without a global variable.
+
+    Both callbacks follow the same return-value convention as the C++ interface:
+      - return \c true  → event fully handled; the platform driver does nothing further.
+      - return \c false → not handled; the platform driver applies its default behaviour.
+
+    \note  The struct must remain valid from the \c stk_kernel_set_event_overrider() call
+           until the kernel is destroyed.  Static or global storage is recommended.
+    \note  Must be installed with \c stk_kernel_set_event_overrider() \b before
+           \c stk_kernel_start().
+    \see   stk_kernel_set_event_overrider()
+*/
+typedef struct stk_event_overrider_t
+{
+    /*! \brief     Called by the kernel when it is about to enter a sleep (idle) state.
+        \param[in] sleep_ticks: Number of ticks the kernel intends to sleep.
+        \param[in] user_data: The \a user_data pointer from this struct.
+        \return    \c true if the sleep was handled by the application (kernel skips its
+                   own sleep logic); \c false to let the platform driver handle it.
+        \note      May be \c NULL — treated as always returning \c false.
+    */
+    bool (*on_sleep)(stk_timeout_t sleep_ticks, void *user_data);
+
+    /*! \brief     Called by the kernel when a hard fault occurs (e.g. HRT deadline missed).
+        \param[in] user_data: The \a user_data pointer from this struct.
+        \return    \c true if handled; \c false to let the platform driver handle it
+                   (which typically halts the system).
+        \note      May be \c NULL — treated as always returning \c false.
+    */
+    bool (*on_hard_fault)(void *user_data);
+
+    /*! \brief     Opaque pointer forwarded unchanged to every callback.
+        \note      May be \c NULL if not needed.
+    */
+    void *user_data;
+} stk_event_overrider_t;
+
+/*! \brief     Install a platform event overrider on the kernel.
+    \details   Forwards to \c IPlatform::SetEventOverrider() via an internal C++ bridge
+               object.  Any previously installed overrider is replaced.
+    \param[in] k: Kernel handle obtained from \c stk_kernel_create().
+    \param[in] overrider: Pointer to a caller-owned \c stk_event_overrider_t.
+               Pass \c NULL to remove a previously installed overrider.
+               When non-NULL, the struct must remain valid for the entire lifetime of
+               the kernel (static or global storage is recommended).
+    \note      Must be called after \c stk_kernel_init() and \b before \c stk_kernel_start().
+    \note      Not ISR-safe.
+    \see       stk_event_overrider_t
+*/
+void stk_kernel_set_event_overrider(stk_kernel_t *k, stk_event_overrider_t *overrider);
 
 // =============================================================================
 // Tasks

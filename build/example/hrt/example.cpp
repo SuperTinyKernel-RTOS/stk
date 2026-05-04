@@ -32,7 +32,7 @@ enum { TASK_STACK_SIZE = 256 };
 static stk::sync::PipeT<uint8_t, 1> g_LedPipe[LED_MAX];
 
 template <stk::EAccessMode _AccessMode>
-class HwLedTask : public stk::Task<TASK_STACK_SIZE, _AccessMode>
+class HwLedTask final : public stk::Task<TASK_STACK_SIZE, _AccessMode>
 {
     uint8_t m_task_id;
 
@@ -41,7 +41,7 @@ public:
     {}
 
 private:
-    void Run()
+    void Run() override
     {
         for (;;)
         {
@@ -69,10 +69,9 @@ private:
 };
 
 template <stk::EAccessMode _AccessMode>
-class CtrlTask : public stk::Task<TASK_STACK_SIZE, _AccessMode>
+class CtrlTask final : public stk::Task<TASK_STACK_SIZE, _AccessMode>
 {
-private:
-    void Run()
+    void Run() override
     {
         uint8_t led = 0;
         stk::time::PeriodicTrigger trigger(1000, true);
@@ -104,17 +103,9 @@ private:
 };
 
 // optional: you can override sleep and hard fault default behaviors
-class PlatformEventHandler : public stk::IPlatform::IEventOverrider
+class PlatformEventHandler final : public stk::IPlatform::IEventOverrider
 {
-private:
-    bool OnSleep()
-    {
-        // if handled inside this function then return true, otherwise event will be handled by the driver
-        // note: if returned false once this function will not be called again until Kernel is re-started
-        return false;
-    }
-
-    bool OnHardFault()
+    bool OnHardFault() override
     {
         // switch on Red LED as indication of the error
         Led::SwitchOnExclusive(Led::RED);

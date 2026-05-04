@@ -390,6 +390,14 @@ static __stk_forceinline void HW_ExitCriticalSection(Word ses)
     : /* clobbers: none */);
 }
 
+/*! \brief  Enter low-power/sleep mode.
+*/
+static __stk_forceinline void HW_EnterSleepMode()
+{
+    __DSB(); // data barrier
+    __WFI(); // enter standby mode until time slot expires
+}
+
 /*! \brief  Stop machine timer.
 */
 static __stk_forceinline void HW_StopMTimer()
@@ -874,7 +882,7 @@ typedef HiResClockMTIME HiResClockImpl;
 #endif // !STK_SUBMICORSECOND_PRECISION_TIMER
 
 //! Internal context.
-static struct Context : public PlatformContext
+static struct Context final : public PlatformContext
 {
     Context() : PlatformContext(), m_stack_main(), m_stack_isr(), m_stack_isr_mem(),
         m_exit_buf(), m_overrider(nullptr), m_specific(nullptr), m_tick_period(0), m_last_mtime(0ULL),
@@ -892,7 +900,8 @@ static struct Context : public PlatformContext
     ~Context()
     {}
 
-    void Initialize(IPlatform::IEventHandler *handler, IKernelService *service, Stack *exit_trap, int32_t resolution_us)
+    void Initialize(IPlatform::IEventHandler *handler, IKernelService *service, Stack *exit_trap,
+        uint32_t resolution_us) override
     {
         PlatformContext::Initialize(handler, service, exit_trap, resolution_us);
 
@@ -911,8 +920,6 @@ static struct Context : public PlatformContext
 
         m_csu         = 0;
         m_csu_nesting = 0;
-        m_overrider   = NULL;
-        m_specific    = NULL;
         m_tick_period = ConvertTimeUsToClockCycles(STK_TIMER_CLOCK_FREQUENCY, resolution_us);
         m_last_mtime  = 0ULL;
         m_starting    = false;
@@ -925,7 +932,7 @@ static struct Context : public PlatformContext
     #endif
     }
 
-    __stk_forceinline void OnTick()
+    __stk_forceinline void ProcessTick()
     {
         // process tick - scheduler may update m_stack_active to point at a new task
         Word cs;
@@ -1045,10 +1052,10 @@ static struct Context : public PlatformContext
 
         // make sure timer is enabled by the Kernel::Start(), disable its start anywhere else
         STK_ASSERT(m_started);
-        STK_ASSERT(m_handler != NULL);
+        STK_ASSERT(m_handler != nullptr);
 
         // process tick - scheduler may update m_stack_active and m_sleep_ticks
-        OnTick();
+        ProcessTick();
 
         // rearm timer: use the ISR-entry mtime snapshot as the absolute base so
         // any CPU cycles consumed by OnTick do not accumulate as period drift
@@ -1060,6 +1067,8 @@ static struct Context : public PlatformContext
     #if STK_TICKLESS_IDLE
         // reset sleep ticks if kernel was restarted
         m_sleep_ticks = elapsed_ticks;
+    #else
+        STK_UNUSED(elapsed_ticks);
     #endif
 
         // start timer with default periodicity
@@ -1068,6 +1077,20 @@ static struct Context : public PlatformContext
 
         // enable timer interrupt
         set_csr(mie, MIP_MTIP);
+    }
+
+    void OnSleepOverride()
+    {
+    #if STK_TICKLESS_IDLE
+        const Timeout sleep_ticks = m_sleep_ticks;
+    #else
+        const Timeout sleep_ticks = 1;
+    #endif
+
+        if (!m_overrider->OnSleep(sleep_ticks))
+        {
+            HW_EnterSleepMode();
+        }
     }
 
     void Start();
@@ -1107,7 +1130,7 @@ void PlatformRiscV::ProcessTick()
     Word cs;
     HW_CriticalSectionStart(cs);
 
-    GetContext().OnTick();
+    GetContext().ProcessTick();
 
     HW_CriticalSectionEnd(cs);
 #else
@@ -1708,7 +1731,7 @@ STK_RISCV_ISR void STK_SVC_HANDLER()
         if (!GetContext().m_starting)
         {
             // forward event to user
-            if (GetContext().m_specific != NULL)
+            if (GetContext().m_specific != nullptr)
                 GetContext().m_specific->OnException(cause);
 
             // switch to the next instruction of the caller space (PC) after the return
@@ -1728,7 +1751,7 @@ STK_RISCV_ISR void STK_SVC_HANDLER()
     }
     else
     {
-        if (GetContext().m_specific != NULL)
+        if (GetContext().m_specific != nullptr)
         {
             // forward event to user
             GetContext().m_specific->OnException(cause);
@@ -1766,21 +1789,32 @@ static void OnTaskExit()
 
 static STK_RISCV_ISR_SECTION void OnSchedulerSleep()
 {
+    // if hit here, increase the size of STK_SLEEP_TRAP_STACK_SIZE
+    STK_STATIC_ASSERT(STK_SLEEP_TRAP_STACK_SIZE >= STK_STACK_SIZE_MIN);
+
 #if STK_SEGGER_SYSVIEW
     SEGGER_SYSVIEW_OnIdle();
 #endif
 
     for (;;)
     {
-        __DSB(); // data barrier
-        __WFI(); // enter sleep until interrupt
+        HW_EnterSleepMode();
     }
 }
 
 static STK_RISCV_ISR_SECTION void OnSchedulerSleepOverride()
 {
-    if (!GetContext().m_overrider->OnSleep())
-        OnSchedulerSleep();
+    // if hit here, increase the size of STK_SLEEP_TRAP_STACK_SIZE
+    STK_STATIC_ASSERT(STK_SLEEP_TRAP_STACK_SIZE >= STK_STACK_SIZE_MIN);
+
+#if STK_SEGGER_SYSVIEW
+    SEGGER_SYSVIEW_OnIdle();
+#endif
+
+    for (;;)
+    {
+        GetContext().OnSleepOverride();
+    }
 }
 
 static void OnSchedulerExit()
@@ -1897,7 +1931,7 @@ bool PlatformRiscV::InitStack(EStackType stack_type, Stack *stack, IStackMemory 
         break; }
 
     case STACK_SLEEP_TRAP: {
-        task_frame->MEPC  = hw::PtrToWord(GetContext().m_overrider != NULL ? &OnSchedulerSleepOverride : &OnSchedulerSleep);
+        task_frame->MEPC  = hw::PtrToWord(GetContext().m_overrider != nullptr ? &OnSchedulerSleepOverride : &OnSchedulerSleep);
         task_frame->X1_RA = STK_STACK_MEMORY_FILLER; // should not attempt to exit
         break; }
 
@@ -2025,7 +2059,7 @@ void PlatformRiscV::Resume(Timeout elapsed_ticks)
 
 void PlatformRiscV::ProcessHardFault()
 {
-    if ((GetContext().m_overrider == NULL) || !GetContext().m_overrider->OnHardFault())
+    if ((GetContext().m_overrider == nullptr) || !GetContext().m_overrider->OnHardFault())
     {
         STK_KERNEL_PANIC(KERNEL_PANIC_HRT_HARD_FAULT);
     }

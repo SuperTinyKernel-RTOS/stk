@@ -21,7 +21,7 @@ namespace stk {
 /*! \class PlatformArmCortexM
     \brief Concrete implementation of IPlatform driver for the Arm Cortex-M0, M3, M4, M7 processors.
 */
-class PlatformArmCortexM : public IPlatform
+class PlatformArmCortexM final : public IPlatform
 {
 public:
     /*! \brief Destructor.
@@ -30,24 +30,24 @@ public:
     ~PlatformArmCortexM()
     {}
 
-    void Initialize(IEventHandler *event_handler, IKernelService *service, uint32_t resolution_us, Stack *exit_trap);
-    void Start();
-    void Stop();
-    bool InitStack(EStackType stack_type, Stack *stack, IStackMemory *stack_memory, ITask *user_task);
-    uint32_t GetTickResolution() const;
-    Cycles GetSysTimerCount() const;
-    uint32_t GetSysTimerFrequency() const;
-    void SwitchToNext();
-    void Sleep(Timeout ticks);
-    bool SleepUntil(Ticks timestamp);
-    IWaitObject *Wait(ISyncObject *sync_obj, IMutex *mutex, Timeout timeout);
-    void ProcessTick();
-    void ProcessHardFault();
-    void SetEventOverrider(IEventOverrider *overrider);
-    Word GetCallerSP() const;
-    TId GetTid() const;
-    Timeout Suspend();
-    void Resume(Timeout elapsed_ticks);
+    void Initialize(IEventHandler *event_handler, IKernelService *service, uint32_t resolution_us, Stack *exit_trap) override;
+    void Start() override;
+    void Stop() override;
+    bool InitStack(EStackType stack_type, Stack *stack, IStackMemory *stack_memory, ITask *user_task) override;
+    uint32_t GetTickResolution() const override;
+    Cycles GetSysTimerCount() const override;
+    uint32_t GetSysTimerFrequency() const override;
+    void SwitchToNext() override;
+    void Sleep(Timeout ticks) override;
+    bool SleepUntil(Ticks timestamp) override;
+    IWaitObject *Wait(ISyncObject *sync_obj, IMutex *mutex, Timeout timeout) override;
+    void ProcessTick() override;
+    void ProcessHardFault() override;
+    void SetEventOverrider(IEventOverrider *overrider) override;
+    Word GetCallerSP() const override;
+    TId GetTid() const override;
+    Timeout Suspend() override;
+    void Resume(Timeout elapsed_ticks) override;
 };
 
 /*! \typedef PlatformDefault

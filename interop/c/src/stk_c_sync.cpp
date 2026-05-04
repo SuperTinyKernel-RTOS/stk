@@ -9,10 +9,10 @@
 
 #include <cstddef> // for std::size_t
 
-#include <stk_config.h>
-#include <stk.h>
-#include <sync/stk_sync.h>
-#include <memory/stk_memory.h>
+#include "stk_config.h"
+#include "stk.h"
+#include "sync/stk_sync.h"
+#include "memory/stk_memory.h"
 
 #include "stk_c.h"
 
