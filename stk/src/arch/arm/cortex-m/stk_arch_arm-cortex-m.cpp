@@ -266,6 +266,15 @@ static __stk_forceinline void HW_CriticalSectionEnd(uint32_t SES)
     __ISB();
 }
 
+/*! \brief     Enter low-power/sleep mode.
+*/
+static __stk_forceinline void HW_EnterSleepMode()
+{
+    SCB->SCR &= ~SCB_SCR_SLEEPDEEP_Msk; // disable deep-sleep, go into a WAIT mode (sleep)
+    __DSB();                            // ensure store takes effect (see ARM info)
+    __WFI();
+}
+
 #ifdef CONTROL_nPRIV_Msk
 /*! \brief     Attempt to acquire a spin-lock without blocking (M3/M4/M7).
     \details   Uses a GCC built-in atomic test-and-set with acquire memory ordering,
@@ -799,7 +808,7 @@ static __stk_forceinline uint32_t HW_DWTGetCounter()
 static volatile bool s_StkCortexmCsuLock = false;
 
 //! Internal context.
-static struct Context : public PlatformContext
+static struct Context final : public PlatformContext
 {
     Context() : PlatformContext(), m_exit_buf(), m_overrider(nullptr),
     #if STK_TICKLESS_IDLE
@@ -815,7 +824,7 @@ static struct Context : public PlatformContext
     {}
 
     void Initialize(IPlatform::IEventHandler *handler, IKernelService *service, Stack *exit_trap,
-        uint32_t resolution_us)
+        uint32_t resolution_us) override
     {
         PlatformContext::Initialize(handler, service, exit_trap, resolution_us);
 
@@ -826,9 +835,12 @@ static struct Context : public PlatformContext
 
         m_csu         = 0U;
         m_csu_nesting = 0U;
-        m_overrider   = nullptr;
         m_started     = false;
         m_exiting     = false;
+    #if STK_TICKLESS_IDLE
+        m_sleep_ticks = 0;
+        m_sleep_error = 0U;
+    #endif
 
     #if (__CORTEX_M > 1) && STK_TICKLESS_USE_ARM_DWT
         HW_DWTEnableCounter();
@@ -843,33 +855,42 @@ static struct Context : public PlatformContext
     #endif
     }
 
+#if STK_TICKLESS_IDLE
+    __stk_forceinline void OnTick(Timeout &ticks)
+#else
     __stk_forceinline void OnTick()
+#endif
+    {
+        if (m_handler->OnTick(m_stack_idle, m_stack_active
+        #if STK_TICKLESS_IDLE
+            , ticks
+        #endif
+        ))
+        {
+        #if STK_SEGGER_SYSVIEW
+            SEGGER_SYSVIEW_OnTaskStopExec();
+            if (GetContext().m_stack_active->tid != SYS_TASK_ID_SLEEP)
+                SEGGER_SYSVIEW_OnTaskStartExec(GetContext().m_stack_active->tid);
+        #endif
+
+            HW_ScheduleContextSwitch();
+        }
+    }
+
+    __stk_forceinline void ProcessTick()
     {
         HW_DisableInterrupts();
 
     #if STK_TICKLESS_IDLE
         Timeout ticks = m_sleep_ticks;
-    #endif
 
-        if (m_handler->OnTick(m_stack_idle, m_stack_active
-        #if STK_TICKLESS_IDLE
-                , ticks
-        #endif
-        ))
-        {
-            #if STK_SEGGER_SYSVIEW
-            SEGGER_SYSVIEW_OnTaskStopExec();
-            if (GetContext().m_stack_active->tid != SYS_TASK_ID_SLEEP)
-            SEGGER_SYSVIEW_OnTaskStartExec(GetContext().m_stack_active->tid);
-            #endif
-
-            HW_ScheduleContextSwitch();
-        }
+        OnTick(ticks);
 
         // rearm SysTick only if tick period changed
-    #if STK_TICKLESS_IDLE
         if (ticks != m_sleep_ticks)
             m_sleep_ticks = ReloadTickPeriod(ticks);
+    #else
+        OnTick();
     #endif
 
         HW_EnableInterrupts();
@@ -969,10 +990,13 @@ static struct Context : public PlatformContext
 
         // start SysTick timer (it is yet can't fire an interrupt due to HW_DisableInterrupts)
         HW_SysTickStart(m_tick_resolution);
+
+        // note: always after SysTick_Config because it may change SysTick priority
+        NVIC_SetPriority(SysTick_IRQn, STK_CORTEX_M_ISR_PRIORITY_LOWEST);
     }
 
 #if STK_TLS && !STK_INLINE_TLS
-    __stk_forceinline Word GetTls()
+    Word GetTls()
     {
         hw::CriticalSection::ScopedLock cs_;
 
@@ -981,7 +1005,7 @@ static struct Context : public PlatformContext
         return m_stack_active->tls;
     }
 
-    __stk_forceinline void SetTls(Word tp)
+    void SetTls(Word tp)
     {
         hw::CriticalSection::ScopedLock cs_;
 
@@ -990,6 +1014,20 @@ static struct Context : public PlatformContext
         m_stack_active->tls = tp;
     }
 #endif // STK_TLS && !STK_INLINE_TLS
+
+    void OnSleepOverride()
+    {
+    #if STK_TICKLESS_IDLE
+        const Timeout sleep_ticks = m_sleep_ticks;
+    #else
+        const Timeout sleep_ticks = 1;
+    #endif
+
+        if (!m_overrider->OnSleep(sleep_ticks))
+        {
+            HW_EnterSleepMode();
+        }
+    }
 
     void Start();
     void OnStart();
@@ -1119,7 +1157,7 @@ void STK_PANIC_HANDLER_DEFAULT(EKernelPanicId id)
 
 void PlatformArmCortexM::ProcessTick()
 {
-    GetContext().OnTick();
+    GetContext().ProcessTick();
 }
 
 #if STK_TICKLESS_IDLE
@@ -1203,7 +1241,7 @@ extern "C" void STK_SYSTICK_HANDLER()
         STK_ASSERT(ctx.m_started);
         STK_ASSERT(ctx.m_handler != nullptr);
 #endif
-        ctx.OnTick();
+        ctx.ProcessTick();
     }
 
 #if STK_SEGGER_SYSVIEW
@@ -1409,11 +1447,8 @@ void Context::OnStart()
     // start with initially 1 elapsed tick (after timer expires)
     StartTickTimer(1);
 
-    // set priority
-    // note: after SysTick_Config because it may change SysTick priority, PendSV and SysTick peripherals
-    // have equal priority to avoid race
+    // set priority for PendSV and SVCall (SysTick priority is set in StartTickTimer)
     NVIC_SetPriority(PendSV_IRQn, STK_CORTEX_M_ISR_PRIORITY_LOWEST);
-    NVIC_SetPriority(SysTick_IRQn, STK_CORTEX_M_ISR_PRIORITY_LOWEST);
     // set highest priority for SVC interrupts to support critical section for unprivileged tasks
 #ifdef CONTROL_nPRIV_Msk
     NVIC_SetPriority(SVCall_IRQn, STK_CORTEX_M_ISR_PRIORITY_HIGHEST);
@@ -1443,8 +1478,13 @@ Timeout Context::Suspend()
     // clear pending PendSV exception
     HW_ClearPendingSwitch();
 
-    // notify core
+    // notify core about suspension (it will also yield currently active task forcibly)
     m_handler->OnSuspend(true);
+
+    // update tasks and out currently active task (if any) into a sleep, it will cause a switch
+    // to a sleep trap after HW_EnableInterrupts, otherwise not
+    Timeout no_sleep = 0;
+    OnTick(no_sleep);
 
     // get already elapsed ticks since the OnTick and a call to Suspend(), we shall account for this
     // period and return only the remainder
@@ -1636,29 +1676,39 @@ static void OnTaskExit()
 
     for (;;)
     {
-        __DSB();
-        __WFI(); // enter standby mode until time slot expires
+        // enter standby mode until time slot expires
+        HW_EnterSleepMode();
     }
 }
 
 static void OnSchedulerSleep()
 {
+    // if hit here, increase the size of STK_SLEEP_TRAP_STACK_SIZE
+    STK_STATIC_ASSERT(STK_SLEEP_TRAP_STACK_SIZE >= STK_STACK_SIZE_MIN);
+
+#if STK_SEGGER_SYSVIEW
+    SEGGER_SYSVIEW_OnIdle();
+#endif
+
     for (;;)
     {
-    #if STK_SEGGER_SYSVIEW
-        SEGGER_SYSVIEW_OnIdle();
-    #endif
-
-        SCB->SCR &= ~SCB_SCR_SLEEPDEEP_Msk; // disable deep-sleep, go into a WAIT mode (sleep)
-        __DSB();                            // ensure store takes effect (see ARM info)
-        __WFI();                            // enter sleep mode
+        HW_EnterSleepMode();
     }
 }
 
 static void OnSchedulerSleepOverride()
 {
-    if (!GetContext().m_overrider->OnSleep())
-        OnSchedulerSleep();
+    // if hit here, increase the size of STK_SLEEP_TRAP_STACK_SIZE
+    STK_STATIC_ASSERT(STK_SLEEP_TRAP_STACK_SIZE >= STK_STACK_SIZE_MIN);
+
+#if STK_SEGGER_SYSVIEW
+    SEGGER_SYSVIEW_OnIdle();
+#endif
+
+    for (;;)
+    {
+        GetContext().OnSleepOverride();
+    }
 }
 
 static void OnSchedulerExit()

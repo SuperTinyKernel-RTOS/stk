@@ -1678,6 +1678,10 @@ protected:
             m_state = ((m_state == STATE_RUNNING) ? STATE_SUSPENDED : m_state);
         else
             m_state = ((m_state == STATE_SUSPENDED) ? STATE_RUNNING : m_state);
+
+        // force yield for a currently active task
+        if (!m_task_now->IsSleeping())
+            m_task_now->ScheduleSleep(YIELD_TICKS);
     }
 
     void OnInheritWeight(TId tid, Weight weight)

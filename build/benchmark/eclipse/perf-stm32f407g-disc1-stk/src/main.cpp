@@ -36,7 +36,7 @@ extern "C" void SysTick_Handler()
         g_Kernel.GetPlatform()->ProcessTick();
 }
 
-class BenchTask : public Task<_STK_BENCH_STACK_SIZE, ACCESS_PRIVILEGED>
+class BenchTask final : public Task<_STK_BENCH_STACK_SIZE, ACCESS_PRIVILEGED>
 {
 public:
     BenchTask() : m_id(~0), m_exited(false) {}
@@ -45,7 +45,7 @@ public:
     bool IsExited() const { return m_exited; }
 
 private:
-    void Run()
+    void Run() override
     {
         uint32_t index = m_id;
 
@@ -62,13 +62,12 @@ private:
     uint8_t       m_id;
     volatile bool m_exited;
 };
-
 static BenchTask g_Tasks[_STK_BENCH_TASK_MAX];
 
-class ResultTask : public Task<_STK_BENCH_STACK_SIZE, ACCESS_PRIVILEGED>
+class ResultTask final : public Task<_STK_BENCH_STACK_SIZE, ACCESS_PRIVILEGED>
 {
 private:
-    void Run()
+    void Run() override
     {
         while (g_Ticks < _STK_BENCH_WINDOW + 2)
         {
@@ -85,7 +84,6 @@ private:
         Crc32Bench::ShowResults();
     }
 };
-
 static ResultTask g_TaskResult;
 
 int main(int argc, char **argv)

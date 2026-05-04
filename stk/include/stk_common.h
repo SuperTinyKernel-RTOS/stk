@@ -777,16 +777,16 @@ public:
     class IEventOverrider
     {
     public:
-        /*! \brief  Called by Kernel when its entering a sleep mode.
+        /*! \brief  Called by the Kernel when it is entering a sleep mode.
             \return True if event is handled otherwise False to let driver handle it.
         */
-        virtual bool OnSleep() = 0;
+        virtual bool OnSleep(Timeout sleep_ticks) { STK_UNUSED(sleep_ticks); return false; }
 
         /*! \brief  Called by Kernel when hard fault happens.
             \note   Normally called by Kernel when one of the scheduled tasks missed its deadline (see stk::KERNEL_HRT, IPlatform::HardFault).
             \return True if event is handled otherwise False to let driver handle it.
         */
-        virtual bool OnHardFault() = 0;
+        virtual bool OnHardFault() { return false; }
     };
 
     /*! \brief     Initialize scheduler's context.
@@ -853,6 +853,21 @@ public:
         \return    True if sleep succeeded, false otherwise.
     */
     virtual bool SleepUntil(Ticks timestamp) = 0;
+
+    /*! \brief     Put calling process into a waiting state until synchronization object is signaled or timeout occurs.
+        \note      This function implements core blocking logic using the Monitor pattern to ensure atomicity between state check and suspension.
+        \note      The kernel automatically unlocks the provided \a mutex before the task is suspended and re-locks it before this function returns.
+        \param[in] sobj: Synchronization object to wait on.
+        \param[in] mutex: Mutex protecting the state of the synchronization object.
+        \param[in] timeout: Maximum wait time (ticks). Use \c WAIT_INFINITE to block indefinitely, use \c NO_WAIT to poll without blocking.
+        \return    Pointer to the wait object representing this wait operation (always non-NULL).
+                   The caller must check IWaitObject::IsTimeout() after this function returns to determine whether
+                   the wake was caused by a signal or by timeout expiry. The returned pointer is valid until
+                   the calling task re-enters a wait or the wait object is explicitly released by the kernel.
+                   The return value is guaranteed non nullptr and points to a valid IWaitObject.
+        \warning   ISR-unsafe.
+    */
+    virtual IWaitObject *Wait(ISyncObject *sobj, IMutex *mutex, Timeout timeout) = 0;
 
     /*! \brief     Process one tick.
         \note      Normally system tick is processed by the platform driver implementation.
@@ -1279,6 +1294,8 @@ public:
         \return    Number of ticks available for the suspension period, as determined by the
                    nearest pending wake-up. The caller may program a hardware timer with
                    this value to avoid unnecessary wakeups (tickless idle).
+        \note      After suspending the scheduler you can change the CPU frequency and then
+                   resume scheduling by calling Resume().
         \note      ISR-safe. Pair with Resume().
         \see       IKernel::EState::STATE_SUSPENDED
     */
@@ -1288,6 +1305,9 @@ public:
         \param[in] elapsed_ticks: Number of ticks that elapsed during the suspended period.
                    The kernel uses this value to advance internal time counters and
                    wake tasks whose sleep deadlines have expired.
+        \note      When resuming, the timer will start with a current CPU frequency, therefore
+                   you can change CPU frequency after Suspend() and restart scheduler with a
+                   new frequency with Resume().
         \note      ISR-safe.
         \see       IKernel::EState::STATE_SUSPENDED
     */

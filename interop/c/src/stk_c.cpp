@@ -9,11 +9,17 @@
 
 #include <cstddef> // for std::size_t
 
-#include <stk.h>
-#include <sync/stk_sync.h>
-#include <memory/stk_memory.h>
+#include "stk.h"
+#include "sync/stk_sync.h"
+#include "memory/stk_memory.h"
 
 #include "stk_c.h"
+#include "stk_c_time.h"
+
+// Override STK_TIMER_COUNT_MAX with STK_C_TIMER_MAX.
+#undef STK_TIMER_COUNT_MAX
+#define STK_TIMER_COUNT_MAX (STK_C_TIMER_MAX)
+#include "time/stk_time.h"
 
 using namespace stk;
 
@@ -87,6 +93,99 @@ static struct TaskSlot
 s_Tasks[STK_C_TASKS_MAX];
 
 // -----------------------------------------------------------------------------
+// EventOverriderWrapper - bridges stk_event_overrider_t callbacks into the
+// C++ IPlatform::IEventOverrider interface.
+//
+// One instance is embedded per kernel slot (indexed by core_nr).  The wrapper
+// is stateless when m_c == nullptr, which makes it safe to construct at file
+// scope.  SetC(nullptr) is equivalent to removing the overrider.
+// -----------------------------------------------------------------------------
+
+class EventOverrider final : public IPlatform::IEventOverrider
+{
+public:
+    EventOverrider() : m_cb(nullptr)
+    {}
+
+    /*! \brief     Bind or unbind a C-level overrider struct.
+        \param[in] c: Pointer to a caller-owned stk_event_overrider_t, or nullptr
+                   to deactivate this wrapper.
+    */
+    void SetCallback(stk_event_overrider_t *c) { m_cb = c; }
+
+    /*! \brief     Returns true when a C-level struct is currently bound.
+    */
+    bool IsActive() const { return (m_cb != nullptr); }
+
+    // IPlatform::IEventOverrider
+    bool OnSleep(Timeout sleep_ticks) override
+    {
+        if ((m_cb != nullptr) && (m_cb->on_sleep != nullptr))
+            return m_cb->on_sleep(static_cast<stk_timeout_t>(sleep_ticks), m_cb->user_data);
+
+        return false;
+    }
+    bool OnHardFault() override
+    {
+        if ((m_cb != nullptr) && (m_cb->on_hard_fault != nullptr))
+            return m_cb->on_hard_fault(m_cb->user_data);
+
+        return false;
+    }
+
+private:
+    stk_event_overrider_t *m_cb;
+};
+
+struct KernelRegistryEntry
+{
+    KernelRegistryEntry() : kernel(nullptr), event_cb()
+    {}
+
+    IKernel       *kernel;
+    EventOverrider event_cb;
+};
+static KernelRegistryEntry s_KernelMap[STK_C_CPU_COUNT];
+
+static void RegisterKernel(IKernel *k, uint8_t core_nr)
+{
+    STK_ASSERT(s_KernelMap[core_nr].kernel == nullptr);
+
+    s_KernelMap[core_nr].kernel = k;
+}
+
+static void UnregisterKernel(const IKernel *k)
+{
+    for (uint32_t i = 0; i < STK_C_CPU_COUNT; ++i)
+    {
+        if (s_KernelMap[i].kernel == k)
+        {
+            s_KernelMap[i].event_cb.SetCallback(nullptr);
+            s_KernelMap[i].kernel = nullptr;
+            break;
+        }
+    }
+}
+
+static void SetEventOverrider(IKernel *k, stk_event_overrider_t *overrider)
+{
+    for (uint32_t i = 0; i < STK_C_CPU_COUNT; ++i)
+    {
+        if (s_KernelMap[i].kernel == k)
+        {
+            s_KernelMap[i].event_cb.SetCallback(overrider);
+            k->GetPlatform()->SetEventOverrider(
+                (overrider != nullptr ? &s_KernelMap[i].event_cb : nullptr));
+            return;
+        }
+    }
+
+    // Kernel not found: stk_kernel_set_event_overrider() called before
+    // stk_kernel_create() or after stk_kernel_destroy().
+    STK_ASSERT(false);
+}
+
+// -----------------------------------------------------------------------------
 // Helpers
 // -----------------------------------------------------------------------------
 
@@ -143,16 +242,18 @@ extern "C" {
 #define STK_KERNEL_CASE(X) \
     case X: \
     { \
-        static_assert(sizeof(STK_C_KERNEL_TYPE_CPU_##X) % sizeof(Word) == 0, \
-                      "Kernel memory size must be multiple of Word"); \
-        alignas(alignof(STK_C_KERNEL_TYPE_CPU_##X)) /* instead of __stk_c_stack_attr */ \
-        static Word kernel_##X##_mem[sizeof(STK_C_KERNEL_TYPE_CPU_##X) / sizeof(Word)]; \
+        STK_STATIC_ASSERT_N(sizeof(STK_C_KERNEL_TYPE_CPU_##X) % sizeof(Word) == 0, "Kernel memory size must be multiple of Word"); \
+        alignas(alignof(STK_C_KERNEL_TYPE_CPU_##X)) static Word kernel_##X##_mem[sizeof(STK_C_KERNEL_TYPE_CPU_##X) / sizeof(Word)]; \
         IKernel *kernel = new (kernel_##X##_mem) STK_C_KERNEL_TYPE_CPU_##X(); \
+        RegisterKernel(kernel, X); \
         return reinterpret_cast<stk_kernel_t *>(kernel); \
     }
 
 stk_kernel_t *stk_kernel_create(uint8_t core_nr)
 {
+    STK_STATIC_ASSERT(STK_C_CPU_COUNT <= 8); // switch (core_nr) below handles cases 0..7; STK_C_KERNEL_TYPE_CPU_N is only defined up to N=7
+    STK_ASSERT(core_nr < STK_C_CPU_COUNT);
+
     switch (core_nr)
     {
 #ifdef STK_C_KERNEL_TYPE_CPU_0
@@ -188,6 +289,11 @@ void stk_kernel_destroy(stk_kernel_t *k)
 {
     STK_ASSERT(k != nullptr);
 
+    // Detach the event overrider and clear the registry entry BEFORE calling
+    // the destructor: the platform teardown inside ~IKernel() may still invoke
+    // GetPlatform() paths, and we must not leave a dangling overrider pointer
+    // registered at that point.
+    UnregisterKernel(reinterpret_cast<IKernel *>(k));
     reinterpret_cast<IKernel *>(k)->~IKernel();
 }
 
@@ -198,14 +304,14 @@ void stk_kernel_init(stk_kernel_t *k, uint32_t tick_period_us)
 {
     STK_ASSERT(k != nullptr);
 
-    reinterpret_cast<stk::IKernel *>(k)->Initialize(tick_period_us);
+    reinterpret_cast<IKernel *>(k)->Initialize(tick_period_us);
 }
 
 void stk_kernel_start(stk_kernel_t *k)
 {
     STK_ASSERT(k != nullptr);
 
-    reinterpret_cast<stk::IKernel *>(k)->Start();
+    reinterpret_cast<IKernel *>(k)->Start();
 }
 
 EKernelState stk_kernel_get_state(const stk_kernel_t *k)
@@ -228,7 +334,7 @@ void stk_kernel_add_task(stk_kernel_t *k, stk_task_t *task)
     STK_ASSERT(k != nullptr);
     STK_ASSERT(task != nullptr);
 
-    reinterpret_cast<stk::IKernel *>(k)->AddTask(&task->handle);
+    reinterpret_cast<IKernel *>(k)->AddTask(&task->handle);
 }
 
 void stk_kernel_remove_task(stk_kernel_t *k, stk_task_t *task)
@@ -236,19 +342,15 @@ void stk_kernel_remove_task(stk_kernel_t *k, stk_task_t *task)
     STK_ASSERT(k != nullptr);
     STK_ASSERT(task != nullptr);
 
-    reinterpret_cast<stk::IKernel *>(k)->RemoveTask(&task->handle);
+    reinterpret_cast<IKernel *>(k)->RemoveTask(&task->handle);
 }
 
 bool stk_kernel_is_started(const stk_kernel_t *k)
 {
     STK_ASSERT(k != nullptr);
 
-    // IKernel::IsStarted() is non-virtual (defined only on the concrete Kernel<>
-    // template). Use GetState() via the virtual IKernel interface instead: the
-    // kernel is "started" whenever it has advanced past STATE_READY (i.e. it is
-    // STATE_RUNNING or STATE_SUSPENDED).
     const stk::IKernel::EState st = reinterpret_cast<const stk::IKernel *>(k)->GetState();
-    return (st == stk::IKernel::STATE_RUNNING || st == stk::IKernel::STATE_SUSPENDED);
+    return ((st == stk::IKernel::STATE_RUNNING) || (st == stk::IKernel::STATE_SUSPENDED));
 }
 
 void stk_kernel_schedule_task_removal(stk_kernel_t *k, stk_task_t *task)
@@ -256,7 +358,7 @@ void stk_kernel_schedule_task_removal(stk_kernel_t *k, stk_task_t *task)
     STK_ASSERT(k != nullptr);
     STK_ASSERT(task != nullptr);
 
-    reinterpret_cast<stk::IKernel *>(k)->ScheduleTaskRemoval(&task->handle);
+    reinterpret_cast<IKernel *>(k)->ScheduleTaskRemoval(&task->handle);
 }
 
 void stk_kernel_suspend_task(stk_kernel_t *k, stk_task_t *task, bool *suspended)
@@ -265,7 +367,7 @@ void stk_kernel_suspend_task(stk_kernel_t *k, stk_task_t *task, bool *suspended)
     STK_ASSERT(task != nullptr);
     STK_ASSERT(suspended != nullptr);
 
-    reinterpret_cast<stk::IKernel *>(k)->SuspendTask(&task->handle, *suspended);
+    reinterpret_cast<IKernel *>(k)->SuspendTask(&task->handle, *suspended);
 }
 
 void stk_kernel_resume_task(stk_kernel_t *k, stk_task_t *task)
@@ -273,7 +375,7 @@ void stk_kernel_resume_task(stk_kernel_t *k, stk_task_t *task)
     STK_ASSERT(k != nullptr);
     STK_ASSERT(task != nullptr);
 
-    reinterpret_cast<stk::IKernel *>(k)->ResumeTask(&task->handle);
+    reinterpret_cast<IKernel *>(k)->ResumeTask(&task->handle);
 }
 
 size_t stk_kernel_enumerate_tasks(stk_kernel_t *k, stk_task_t **tasks, size_t max_count)
@@ -283,8 +385,8 @@ size_t stk_kernel_enumerate_tasks(stk_kernel_t *k, stk_task_t **tasks, size_t ma
 
     // Collect ITask* pointers from the kernel, then map each back to stk_task_t*.
     // TaskWrapper is the first member of stk_task_t, so ITask* == stk_task_t*.
-    stk::ITask *itasks[STK_C_TASKS_MAX];
-    size_t n = reinterpret_cast<stk::IKernel *>(k)->EnumerateTasks(
+    stk::ITask *itasks[STK_C_TASKS_MAX] = {};
+    size_t n = reinterpret_cast<IKernel *>(k)->EnumerateTasks(
         itasks, (max_count < STK_C_TASKS_MAX ? max_count : STK_C_TASKS_MAX));
 
     for (size_t i = 0; i < n; ++i)
@@ -293,20 +395,19 @@ size_t stk_kernel_enumerate_tasks(stk_kernel_t *k, stk_task_t **tasks, size_t ma
     return n;
 }
 
-int32_t stk_kernel_suspend(stk_kernel_t *k)
+stk_timeout_t stk_kernel_suspend(stk_kernel_t *k)
 {
     STK_ASSERT(k != nullptr);
 
-    return static_cast<int32_t>(
-        reinterpret_cast<stk::IKernel *>(k)->GetPlatform()->Suspend());
+    return static_cast<stk_timeout_t>(
+        reinterpret_cast<IKernel *>(k)->GetPlatform()->Suspend());
 }
 
-void stk_kernel_resume(stk_kernel_t *k, int32_t elapsed_ticks)
+void stk_kernel_resume(stk_kernel_t *k, stk_timeout_t elapsed_ticks)
 {
     STK_ASSERT(k != nullptr);
-    STK_ASSERT(elapsed_ticks >= 0);
 
-    reinterpret_cast<stk::IKernel *>(k)->GetPlatform()->Resume(
+    reinterpret_cast<IKernel *>(k)->GetPlatform()->Resume(
         static_cast<stk::Timeout>(elapsed_ticks));
 }
 
@@ -314,14 +415,21 @@ void stk_kernel_process_tick(stk_kernel_t *k)
 {
     STK_ASSERT(k != nullptr);
 
-    reinterpret_cast<stk::IKernel *>(k)->GetPlatform()->ProcessTick();
+    reinterpret_cast<IKernel *>(k)->GetPlatform()->ProcessTick();
 }
 
 void stk_kernel_process_hard_fault(stk_kernel_t *k)
 {
     STK_ASSERT(k != nullptr);
 
-    reinterpret_cast<stk::IKernel *>(k)->GetPlatform()->ProcessHardFault();
+    reinterpret_cast<IKernel *>(k)->GetPlatform()->ProcessHardFault();
+}
+
+void stk_kernel_set_event_overrider(stk_kernel_t *k, stk_event_overrider_t *overrider)
+{
+    STK_ASSERT(k != nullptr);
+
+    SetEventOverrider(reinterpret_cast<IKernel *>(k), overrider);
 }
 
 void stk_kernel_add_task_hrt(stk_kernel_t *k,
@@ -333,7 +441,7 @@ void stk_kernel_add_task_hrt(stk_kernel_t *k,
     STK_ASSERT(k != nullptr);
     STK_ASSERT(task != nullptr);
 
-    reinterpret_cast<stk::IKernel *>(k)->AddTask(
+    reinterpret_cast<IKernel *>(k)->AddTask(
         &task->handle,
         periodicity_ticks,
         deadline_ticks,

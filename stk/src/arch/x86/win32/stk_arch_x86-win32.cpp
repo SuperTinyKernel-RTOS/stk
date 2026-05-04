@@ -141,7 +141,7 @@ public:
 };
 
 //! Internal context.
-static struct Context : public PlatformContext
+static struct Context final : public PlatformContext
 {
     Context()
     : m_overrider(nullptr),
@@ -153,17 +153,20 @@ static struct Context : public PlatformContext
         m_tasks(),
         m_task_threads(),
         m_timer_tid(0),
+    #if STK_TICKLESS_IDLE
+        m_sleep_ticks(0),
+    #endif
         m_cs(),
         m_csu_nesting(0),
         m_started(false),
         m_stop_signal(false)
     {}
 
-    void Initialize(IPlatform::IEventHandler *handler, IKernelService *service, Stack *exit_trap, int32_t resolution_us)
+    void Initialize(IPlatform::IEventHandler *handler, IKernelService *service, Stack *exit_trap,
+        uint32_t resolution_us) override
     {
         PlatformContext::Initialize(handler, service, exit_trap, resolution_us);
 
-        m_overrider    = nullptr;
         m_sleep_trap   = nullptr; // set by Context::InitStack
         m_exit_trap    = nullptr; // set by Context::InitStack
         m_winmm_dll    = nullptr;
@@ -498,7 +501,7 @@ void Context::ProcessTick()
 
     if (m_handler->OnTick(m_stack_idle, m_stack_active
     #if STK_TICKLESS_IDLE
-            , ticks
+        , ticks
     #endif
     ))
     {
@@ -524,7 +527,13 @@ void Context::SwitchContext()
     // resume Active thread
     if (m_stack_active == m_sleep_trap)
     {
-        if ((m_overrider == nullptr) || !m_overrider->OnSleep())
+    #if STK_TICKLESS_IDLE
+        const Timeout sleep_ticks = m_sleep_ticks;
+    #else
+        const Timeout sleep_ticks = 1;
+    #endif
+
+        if ((m_overrider == nullptr) || !m_overrider->OnSleep(sleep_ticks))
         {
             // pass
         }
