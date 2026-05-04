@@ -221,6 +221,65 @@ There is a dual-core example for Raspberry Pico 2 W board with RSP2350 MCU in `b
 
 ---
 
+### Ultra-Low Power Scheduling
+
+STK provides a first-class ultra-low power scheduling mode that goes beyond simple tickless idle. By combining `KERNEL_TICKLESS` with a custom `stk::IPlatform::IEventOverrider`, the application can select the deepest appropriate hardware sleep state on each idle entry with full kernel suspension and graceful resume support.
+
+#### How It Works
+
+When all tasks are sleeping, the kernel calls `IEventOverrider::OnSleep(sleep_ticks)` instead of spinning. The application overrides this hook to drive the MCU into the most power-efficient state that still guarantees a wake-up within the required deadline.
+
+```cpp
+bool OnSleep(stk::Timeout sleep_ticks) override
+{
+    if (sleep_ticks >= TICKS_DEEP_SLEEP)
+    {
+        stk::IKernelService *kernel = stk::IKernelService::GetInstance();
+
+        Board::RtcWakeupArm(sleep_ticks);   // 1. arm RTC wakeup timer
+        kernel->Suspend();                  // 2. stop SysTick / task switching
+        Board::AdcSuspend();                // 3. cut ADC quiescent current
+        Board::CpuEnterDeepSleepMode();     // 4+5. STOP + restore HSE/PLL
+        Board::RtcWakeupDisarm();           // 6. clear RTC & EXTI flags
+        Board::AdcResume();                 // 7. re-enable ADC
+        kernel->Resume(sleep_ticks);        // 8. advance kernel clock
+
+        return false; // let the driver re-enter idle; SysTick closes the gap
+    }
+    // ...
+}
+```
+
+#### Graceful Kernel Suspension and Resume
+
+STK supports **ISR-safe** kernel suspension, allowing an interrupt handler to pause and resume all task scheduling without race conditions. This is useful for entering a low-activity state (e.g. user-triggered standby) where tasks should be fully frozen until an external event occurs.
+
+```cpp
+// In an ISR (e.g. button press — EXTI0_IRQHandler):
+stk::IKernelService *kernel = stk::IKernelService::GetInstance();
+
+// Suspend: returns ticks until the nearest scheduled wake-up.
+// All task switching and SysTick firings are frozen.
+kernel->Suspend();
+
+// ... CPU can now enter deep sleep indefinitely (no RTC timer armed) ...
+// ... Only an external IRQ (e.g. button EXTI) will wake the CPU ...
+
+// Resume: pass 0 when the sleep duration is unknown (e.g. waking from
+// indefinite suspension is analogous to restoring from hibernation).
+kernel->Resume(0);
+```
+
+#### Full Example
+
+A complete ultra-low power demo targeting the [STM32F407G-DISC1](https://www.st.com/en/evaluation-tools/stm32f4discovery.html) board is available:
+
+[`STK C++ API low_power`](https://github.com/SuperTinyKernel-RTOS/stk/tree/main/build/example/low_power/README.md)
+
+[`STK C API low_power_c`](https://github.com/SuperTinyKernel-RTOS/stk/tree/main/build/example/low_power_c/README.md)
+
+---
+
 ## Hardware Support
 
 ### CPU Architectures
