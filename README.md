@@ -6,6 +6,7 @@
 ---
 
 [![MIT License](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/SuperTinyKernel-RTOS/stk/blob/main/LICENSE)
+[![Version](https://img.shields.io/badge/version-1.06.0-blue.svg)](https://github.com/SuperTinyKernel-RTOS/stk/releases)
 [![Build Status](https://img.shields.io/github/actions/workflow/status/SuperTinyKernel-RTOS/stk/cmake-test-generic-stm32.yml)](https://github.com/SuperTinyKernel-RTOS/stk/actions)
 [![Test Coverage](https://img.shields.io/badge/coverage-100%25-brightgreen)](https://github.com/SuperTinyKernel-RTOS/stk)
 [![Platform: Arm Cortex-M](https://img.shields.io/badge/Platform-Arm%20Cortex--M-blue.svg)](https://developer.arm.com/ip-products/processors/cortex-m)
@@ -13,8 +14,6 @@
 [![membrowse](https://membrowse.com/badge.svg)](https://membrowse.com/public/supertinykernel-rtos/stk)
 
 ---
-
-## Overview
 
 ## Overview
 
@@ -33,7 +32,7 @@ STK combines the control and transparency of bare-metal development with the str
 ### For Technical Leads and Product Teams
 
 - **Reduced hardware requirements** — the compact kernel footprint can enable the use of lower-RAM or lower-cost MCU variants.
-- **Higher CPU availability for applications** — benchmarks show up to **~8% more application CPU time** compared to FreeRTOS under comparable workloads.
+- **Higher CPU availability for applications** — benchmarks show up to **~12% more application CPU time** compared to FreeRTOS under comparable workloads (see [Benchmark](#benchmark)).
 - **Lower power potential** — reduced scheduling overhead can help meet timing requirements at lower MCU clock frequencies.
 - **Simplified migration** — compatibility layers for FreeRTOS and CMSIS-RTOS2 allow existing projects to migrate with minimal application changes.
 - **Predictable system behavior** — static allocation and deterministic scheduling simplify validation, debugging, and long-term maintenance.
@@ -63,7 +62,7 @@ STK is an open-source project developed at https://github.com/SuperTinyKernel-RT
 | **Memory API**                            | Deterministic, fragmentation-free allocator in `stk::memory` namespace                                                                                                                                                       |
 | **Thread-Local Storage (TLS)**            | Per-task TLS via a dedicated CPU register via inline zero-overhead helpers                                                                                                                                                   |
 | **Tiny footprint**                        | Minimal code unrelated to scheduling                                                                                                                                                                                         |
-| **Safety-critical systems ready**         | No dynamic heap memory allocation                                                                                                                                                                                            |
+| **Safety-critical systems ready**         | No dynamic heap memory allocation — a required baseline for IEC 61508 / ISO 26262 / DO-178C certification. See [Professional Services](#-professional-services--commercial-licensing) for certification support. |
 | **C++ and C API**                         | Can be used easily in C++ and C projects                                                                                                                                                                                     |
 | **CMSIS-RTOS2 compatible**                | Full CMSIS-RTOS2 wrapper (`cmsis_os2_stk.cpp`) maps the standard ARM CMSIS-RTOS2 C API onto STK, enabling drop-in compatibility with STM32CubeMX, MCUXpresso, and other CMSIS-aware middleware                               |
 | **FreeRTOS compatible**                   | Full FreeRTOS wrapper (`freertos_stk.cpp`) maps the standard FreeRTOS C API onto STK, enabling drop-in migration of existing FreeRTOS codebases with minimal or no application changes                                       |
@@ -140,7 +139,7 @@ There are several tickless examples:
 ---
 
 ### Built-in Scheduling Strategies
-STK is the only known RTOS that offers all popular switching strategies to match any usage scenario, see [stk/strategy](https://github.com/SuperTinyKernel-RTOS/stk/tree/main/stk/include/strategy) for more details.
+STK is one of the few lightweight RTOSes that offers all popular switching strategies to match any usage scenario, see [stk/strategy](https://github.com/SuperTinyKernel-RTOS/stk/tree/main/stk/include/strategy) for more details.
 
 | Strategy Name                            | Mode       | Description                                                                                                                                                                                                                                                                                                                                                                |
 |------------------------------------------|------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
@@ -328,7 +327,30 @@ A complete ultra-low power demo targeting the [STM32F407G-DISC1](https://www.st.
 
 ## Dedicated C interface
 
-For a seamless integration with C projects STK provides a dedicated, fully-featured STK C interface. See [interop/c](https://github.com/SuperTinyKernel-RTOS/stk/tree/main/interop/c) for more details and example.
+For seamless integration with C projects, STK provides a dedicated, fully-featured C API. See [interop/c](https://github.com/SuperTinyKernel-RTOS/stk/tree/main/interop/c) for the full reference and examples.
+
+**Quick example:**
+
+```c
+#include "stk_c.h"
+
+// Define task function
+void my_task(void *arg)
+{
+    while (1)
+    {
+        // task work here
+        stk_sleep(100); // sleep 100 ticks
+    }
+}
+
+int main(void)
+{
+    stk_kernel_init();
+    stk_task_add(my_task, /*stack_size=*/256, /*arg=*/NULL);
+    stk_kernel_start(); // never returns
+}
+```
 
 ---
 
@@ -549,6 +571,10 @@ The benchmark suite uses CRC32 hash calculations as the task payload. The score 
 ---
 
 ## Quick Start (1 minute)
+
+The fastest way to evaluate STK is to build and run one of the bundled examples on your local machine — **no hardware required**.
+
+**Prerequisites:** Git, CMake 3.15+, and either Visual Studio (Windows) or GCC via Eclipse CDT (Windows/Linux/macOS).
 
 ### 1. Clone repository
 
@@ -866,7 +892,7 @@ Example (GCC, ARM Cortex-M MCU):
 SRCS += libs/stk/src/arch/arm/cortex-m/stk_arch_arm-cortex-m.cpp
 ```
 
-#### 5. Build
+#### 6. Build
 
 Build your project normally — STK will now be compiled together with it.
 
