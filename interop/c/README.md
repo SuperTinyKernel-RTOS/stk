@@ -87,12 +87,7 @@ The most important configuration step is declaring the kernel type. See
 A minimal two-task program on a single-core target:
 
 ```c
-#include <stk_config.h>
 #include <stk_c.h>
-
-/* Kernel type for core 0: static task list, round-robin scheduling */
-#define STK_C_KERNEL_TYPE_CPU_0 \
-    Kernel<KERNEL_STATIC, STK_C_KERNEL_MAX_TASKS, SwitchStrategyRR, PlatformDefault>
 
 #define STACK_WORDS 256
 static stk_word_t g_stack0[STACK_WORDS];
@@ -137,7 +132,7 @@ A working example for x86 (MinGW) is in:
 
 ### 1. Configure the Kernel Type
 
-Define `STK_C_KERNEL_TYPE_CPU_0` (and `_CPU_1` … `_CPU_7` for multi-core) in
+Define `STK_C_KERNEL_TYPE_CPU_0` (and `_CPU_1` … `_CPU_7` for multicore) in
 your `stk_config.h` **before** any STK header is included:
 
 ```c
@@ -316,11 +311,11 @@ Prefer `stk_sleep_ms()` in normal tasks; use `stk_yield()` in HRT tasks.
 ### Time Conversion Helpers
 
 ```c
-int32_t res = stk_tick_resolution();        /* µs per tick */
+int32_t res   = stk_tick_resolution();     /* µs per tick */
 int64_t ticks = stk_ticks_from_ms(250);    /* 250 ms → ticks */
 int64_t ms    = stk_ms_from_ticks(ticks);  /* ticks → ms */
 int64_t now   = stk_time_now_ms();         /* ms since kernel start */
-int64_t t     = stk_ticks();              /* raw tick counter */
+int64_t t     = stk_ticks();               /* raw tick counter */
 ```
 
 ### High-Resolution Clock
@@ -411,9 +406,9 @@ static stk_event_mem_t ev_mem;
 stk_event_t *ev = stk_event_create(&ev_mem, sizeof(ev_mem), false);
 
 /* From ISR or another task: */
-stk_event_set(ev);                          /* signal — ISR-safe */
-stk_event_reset(ev);                        /* clear — ISR-safe */
-stk_event_pulse(ev);                        /* signal then immediately reset */
+stk_event_set(ev);                                /* signal — ISR-safe */
+stk_event_reset(ev);                              /* clear — ISR-safe */
+stk_event_pulse(ev);                              /* signal then immediately reset */
 
 /* Waiting task: */
 bool ok = stk_event_wait(ev, STK_WAIT_INFINITE);  /* blocks */
@@ -439,11 +434,11 @@ stk_ef_set(ef, EVT_BUTTON);                 /* ISR-safe */
 
 /* Wait for any of the bits (clears them on return): */
 uint32_t fired = stk_ef_wait(ef, EVT_BUTTON | EVT_UART_RX,
-                              STK_EF_OPT_WAIT_ANY, STK_WAIT_INFINITE);
+                             STK_EF_OPT_WAIT_ANY, STK_WAIT_INFINITE);
 
 /* Wait for ALL bits: */
 uint32_t fired = stk_ef_wait(ef, EVT_BUTTON | EVT_UART_RX,
-                              STK_EF_OPT_WAIT_ALL, STK_WAIT_INFINITE);
+                             STK_EF_OPT_WAIT_ALL, STK_WAIT_INFINITE);
 
 if (stk_ef_is_error(fired)) { /* timeout or invalid flags */ }
 

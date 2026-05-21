@@ -332,23 +332,43 @@ For seamless integration with C projects, STK provides a dedicated, fully-featur
 **Quick example:**
 
 ```c
-#include "stk_c.h"
+#include <stk_c.h>
 
-// Define task function
-void my_task(void *arg)
+#define STACK_WORDS 256
+static stk_word_t g_stack0[STACK_WORDS];
+static stk_word_t g_stack1[STACK_WORDS];
+
+void task_led(void *arg)
 {
     while (1)
     {
-        // task work here
-        stk_sleep(100); // sleep 100 ticks
+        /* toggle LED */
+        stk_sleep_ms(500);
+    }
+}
+
+void task_sensor(void *arg)
+{
+    while (1)
+    {
+        /* read sensor */
+        stk_sleep_ms(100);
     }
 }
 
 int main(void)
 {
-    stk_kernel_init();
-    stk_task_add(my_task, /*stack_size=*/256, /*arg=*/NULL);
-    stk_kernel_start(); // never returns
+    stk_kernel_t *k = stk_kernel_create(0);       /* core 0 */
+    stk_kernel_init(k, STK_PERIODICITY_DEFAULT);  /* 1 ms tick */
+
+    stk_task_t *t0 = stk_task_create_privileged(task_led,    NULL, g_stack0, STACK_WORDS);
+    stk_task_t *t1 = stk_task_create_privileged(task_sensor, NULL, g_stack1, STACK_WORDS);
+
+    stk_kernel_add_task(k, t0);
+    stk_kernel_add_task(k, t1);
+
+    stk_kernel_start(k);                          /* never returns for KERNEL_STATIC */
+    STK_C_ASSERT(false);                          /* should not reach here */
 }
 ```
 
