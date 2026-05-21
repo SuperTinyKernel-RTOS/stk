@@ -6,7 +6,7 @@
 ---
 
 [![MIT License](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/SuperTinyKernel-RTOS/stk/blob/main/LICENSE)
-[![Version](https://img.shields.io/badge/version-1.06.0-blue.svg)](https://github.com/SuperTinyKernel-RTOS/stk/releases)
+[![Version](https://img.shields.io/badge/version-1.06.x-red.svg)](https://github.com/SuperTinyKernel-RTOS/stk/releases)
 [![Build Status](https://img.shields.io/github/actions/workflow/status/SuperTinyKernel-RTOS/stk/cmake-test-generic-stm32.yml)](https://github.com/SuperTinyKernel-RTOS/stk/actions)
 [![Test Coverage](https://img.shields.io/badge/coverage-100%25-brightgreen)](https://github.com/SuperTinyKernel-RTOS/stk)
 [![Platform: Arm Cortex-M](https://img.shields.io/badge/Platform-Arm%20Cortex--M-blue.svg)](https://developer.arm.com/ip-products/processors/cortex-m)
