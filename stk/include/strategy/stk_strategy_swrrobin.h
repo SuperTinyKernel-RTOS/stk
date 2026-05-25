@@ -176,9 +176,9 @@ public:
         STK_ASSERT(GetSize() != 0U);
 
         if (!m_tasks.IsEmpty())
-            return (*m_tasks.GetFirst());
+            return (*const_cast<IKernelTask::ListEntryType *>(m_tasks.GetFirst()));
         else
-            return (*m_sleep.GetFirst());
+            return (*const_cast<IKernelTask::ListEntryType *>(m_sleep.GetFirst()));
     }
 
     /*! \brief  Get the total number of tasks managed by this strategy.

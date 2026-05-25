@@ -312,7 +312,7 @@ A complete ultra-low power demo targeting the [STM32F407G-DISC1](https://www.st.
 ## Dependencies
 
 * CMSIS (ARM platforms only)
-* MCU vendor BSP (NXP, STM, RPI, etc.)
+* MCU vendor BSP (RPI only)
 
 > **Note:** A minimal set of CMSIS/BSP API is used by STK.
 
@@ -322,6 +322,7 @@ A complete ultra-low power demo targeting the [STM32F407G-DISC1](https://www.st.
 
 * GCC
 * Clang/ARMCC 6 and higher
+* IAR EWARM 8.0 and higher (ARM only)
 
 ---
 

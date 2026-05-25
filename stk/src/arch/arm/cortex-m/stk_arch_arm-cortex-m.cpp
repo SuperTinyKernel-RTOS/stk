@@ -13,15 +13,40 @@
 
 #ifdef _STK_ARCH_ARM_CORTEX_M
 
-//#define STK_CORTEX_M_TRUSTZONE
-
-#ifdef STK_CORTEX_M_TRUSTZONE
+#ifdef _STK_CORTEX_M_TRUSTZONE
 #include <arm_cmse.h>
 #endif
 
 #include "stk.h"
 #include "stk_arch.h"
 #include "arch/stk_arch_common.h"
+
+#ifdef __ICCARM__
+    #include <atomic>
+
+    #define __ATOMIC_RELAXED std::memory_order_relaxed
+    #define __ATOMIC_CONSUME std::memory_order_consume
+    #define __ATOMIC_ACQUIRE std::memory_order_acquire
+    #define __ATOMIC_RELEASE std::memory_order_release
+    #define __ATOMIC_ACQ_REL std::memory_order_acq_rel
+    #define __ATOMIC_SEQ_CST std::memory_order_seq_cst
+
+    #define __atomic_test_and_set(ptr, memorder) \
+        (reinterpret_cast<volatile std::atomic_flag *>(ptr)->test_and_set(memorder))
+
+    #define __atomic_clear(ptr, memorder) \
+        (reinterpret_cast<volatile std::atomic_flag *>(ptr)->clear(memorder))
+#endif
+          
+#ifdef __ICCARM__
+    #define STK_ASM_SYNTAX_UNIFIED      /* IAR: not needed, unified is default */
+    #define STK_ASM_POOL                /* IAR: not needed, handled automatically */
+    #define STK_ASM_ALIGN_2             /* IAR: not needed */
+#else
+    #define STK_ASM_SYNTAX_UNIFIED      ".syntax unified             \n"
+    #define STK_ASM_POOL                ".pool                       \n"
+    #define STK_ASM_ALIGN_2             ".align 2                    \n"
+#endif
 
 using namespace stk;
 
@@ -46,9 +71,22 @@ using namespace stk;
 //! If (1), manage Link Register (LR) per task.
 #define STK_CORTEX_M_MANAGE_LR (__CORTEX_M >= 3U)
 
-#define STK_CORTEX_M_EXC_RETURN_HANDLR_MSP 0xFFFFFFF1 // Handler mode, MSP stack (non-secure)
-#define STK_CORTEX_M_EXC_RETURN_THREAD_MSP 0xFFFFFFF9 // Thread mode, MSP stack (non-secure)
-#define STK_CORTEX_M_EXC_RETURN_THREAD_PSP 0xFFFFFFFD // Thread mode, PSP stack (non-secure)
+// Non-Secure (and pre-ARMv8-M) EXC_RETURN values -- S bit (bit 6) = 0.
+#define STK_CORTEX_M_EXC_RETURN_HANDLR_MSP 0xFFFFFFF1U // Handler mode, MSP stack (Non-Secure)
+#define STK_CORTEX_M_EXC_RETURN_THREAD_MSP 0xFFFFFFF9U // Thread mode, MSP stack (Non-Secure)
+#define STK_CORTEX_M_EXC_RETURN_THREAD_PSP 0xFFFFFFFDU // Thread mode, PSP stack (Non-Secure)
+
+// ARMv8-M TrustZone Secure EXC_RETURN values -- S bit (bit 6) = 1.
+// These are only meaningful when _STK_CORTEX_M_TRUSTZONE is defined on M23/M33+.
+// Reference: ARMv8-M Architecture Reference Manual, section B1.5.8.
+#define STK_CORTEX_M_EXC_RETURN_S_HANDLR_MSP  0xFFFFFFE1U // Secure, Handler mode, MSP
+#define STK_CORTEX_M_EXC_RETURN_S_THREAD_MSP  0xFFFFFFE9U // Secure, Thread mode, MSP
+#define STK_CORTEX_M_EXC_RETURN_S_THREAD_PSP  0xFFFFFFEDU // Secure, Thread mode, PSP
+// Non-Secure return with Non-Secure FPU state saved (used for NS tasks on M33 with FPU).
+#define STK_CORTEX_M_EXC_RETURN_NS_THREAD_PSP 0xFFFFFFBCU // Non-Secure, Thread, PSP, NS-FPU
+
+//! Bit 6 of EXC_RETURN: 1 = Secure stack, 0 = Non-Secure stack (ARMv8-M only).
+#define STK_CORTEX_M_EXC_RETURN_S_BIT         0x00000040U
 
 #define STK_CORTEX_M_ISR_PRIORITY_HIGHEST  0
 #define STK_CORTEX_M_ISR_PRIORITY_LOWEST   0xFF
@@ -59,6 +97,17 @@ using namespace stk;
 #else
     #define STK_CORTEX_M_REGISTER_COUNT 16
 #endif
+
+//! Additional words pushed onto the stack when TrustZone is active (PSPLIM + PSPLIM_NS).
+#if 0//defined(_STK_CORTEX_M_TRUSTZONE) && (__CORTEX_M >= 33U)
+    #define STK_CORTEX_M_TZ_REGISTER_COUNT 2
+#else
+    #define STK_CORTEX_M_TZ_REGISTER_COUNT 0
+#endif
+
+//! Total words reserved at the top of each task stack.
+#define STK_CORTEX_M_TOTAL_REGISTER_COUNT \
+    (STK_CORTEX_M_REGISTER_COUNT + STK_CORTEX_M_TZ_REGISTER_COUNT)
 
 //! SysTick_Handler
 #ifndef STK_SYSTICK_HANDLER
@@ -84,6 +133,31 @@ enum ESvcCommandId : uint8_t
     //SVC_FORCE_SWITCH
 };
 
+/*! \struct TrustZoneFrame
+    \brief  ARMv8-M stack-limit registers saved per-task when TrustZone is active.
+
+    On ARMv8-M (Cortex-M33 and later) each world has its own Process Stack
+    Pointer Limit register.  These must be saved and restored on every context
+    switch so that stack overflow detection remains correct regardless of which
+    task is running.
+
+    Members:
+    - \c PSPLIM    – Secure Process Stack Pointer Limit (secure tasks only).
+    - \c PSPLIM_NS – Non-Secure Process Stack Pointer Limit (all tasks).
+
+    \note  Only compiled when \c _STK_CORTEX_M_TRUSTZONE is defined AND the
+           target is Cortex-M33 or later (__CORTEX_M >= 33).
+*/
+#if defined(_STK_CORTEX_M_TRUSTZONE) && (__CORTEX_M >= 33U) && (STK_CORTEX_M_TZ_REGISTER_COUNT != 0U)
+struct TrustZoneFrame
+{
+    Word PSPLIM;    //!< Secure PSPLIM register value.
+    Word PSPLIM_NS; //!< Non-Secure PSPLIM register value.
+};
+#define STK_CORTEX_M_TRUSTZONE_FRAME 1
+#else
+#define STK_CORTEX_M_TRUSTZONE_FRAME 0
+#endif
 
 /*! \struct ExceptionFrame
     \brief  ARMv7-M hardware exception frame (8 words, highest address on the stack).
@@ -110,9 +184,16 @@ struct ExceptionFrame
     Member order is low-to-high address, matching downward stack growth:
     EXC_RETURN (lower) sits one word below exc (higher), exactly where
     OnTaskStart's LDMIA expects it.
+
+    On ARMv8-M TrustZone builds a \c TrustZoneFrame is prepended below
+    EXC_RETURN so that the PSPLIM registers are saved and restored together
+    with the rest of the task state on every context switch.
 */
 struct TaskFrame
 {
+#if STK_CORTEX_M_TRUSTZONE_FRAME
+    TrustZoneFrame tz;          //!< ARMv8-M Secure/NS stack-limit registers.
+#endif
 #if STK_CORTEX_M_MANAGE_LR
     Word           EXC_RETURN; //!< Exception return value (LR), loaded by LDMIA in OnTaskStart.
 #endif
@@ -174,6 +255,14 @@ __stk_attr_naked Word HW_SVCEnterCritical()
     : /* output: none */
     : "I"(SVC_ENTER_CRITICAL)
     : "memory" /* protect against compiler reordering */ );
+    
+#ifdef __ICCARM__
+#pragma diag_suppress=Pe940
+    // return value is passed in r0 by the SVC handler per AAPCS;
+    // IAR cannot see this through the naked asm, suppress the warning.
+    return 0;
+#pragma diag_default=Pe940
+#endif
 }
 
 /*! \brief     Exit critical section (unprivileged callers only).
@@ -228,6 +317,7 @@ static __stk_forceinline void HW_EnableInterrupts()
 /*! \brief     Check if interrupts are disabled.
     \return    true if interrupts are disabled (PRIMASK bit 0 is set).
 */
+__stk_attr_unused
 static __stk_forceinline bool HW_InterruptsDisabled()
 {
 #if (defined(__clang__) && defined(__ARMCOMPILER_VERSION)) || defined(__ICCARM__)
@@ -290,6 +380,10 @@ static __stk_forceinline void HW_EnterSleepMode()
 */
 static __stk_forceinline bool HW_SpinLockTryLock(volatile bool &lock)
 {
+#ifdef __ICCARM__
+  STK_STATIC_ASSERT(sizeof(std::atomic_flag) == sizeof(bool));
+#endif
+      
     return !__atomic_test_and_set(&lock, __ATOMIC_ACQUIRE);
 }
 
@@ -306,7 +400,7 @@ static __stk_forceinline bool HW_SpinLockTryLock(volatile bool &lock)
     \see       HW_SpinLockTryLock, HW_SpinLockLock
 */
 static __stk_forceinline void HW_SpinLockUnlock(volatile bool &lock)
-{
+{ 
     if (!lock)
         STK_KERNEL_PANIC(KERNEL_PANIC_SPINLOCK_DEADLOCK); // release attempt of unowned lock
 
@@ -314,7 +408,9 @@ static __stk_forceinline void HW_SpinLockUnlock(volatile bool &lock)
     // __atomic_clear with __ATOMIC_RELEASE provides the required store-release barrier,
     // the explicit dmb ishst is retained for toolchains that do not lower __ATOMIC_RELEASE
     // to a full DMB on ARMv7-M (e.g. older GCC versions with -mcpu=cortex-m4)
+#ifndef __ICCARM__
     __asm volatile("dmb ishst" ::: "memory");
+#endif
 
     __atomic_clear(&lock, __ATOMIC_RELEASE);
 }
@@ -518,7 +614,8 @@ __stk_attr_naked
 int32_t SaveJmp(JmpFrame &/*f*/)
 {
     __asm volatile(
-    ".syntax unified                \n"
+    STK_ASM_SYNTAX_UNIFIED
+      
 #if (__CORTEX_M >= 3U)
     // Cortex-M3/M4/M7: STMIA stores r4-r11 at r0+0 .. r0+28
     "STMIA r0,  {r4-r11}            \n" // store r4-r11 at offsets 0-28, no writeback
@@ -550,6 +647,14 @@ int32_t SaveJmp(JmpFrame &/*f*/)
 #endif
     "MOVS r0,  #0                   \n"
     "BX   lr                        \n");
+    
+#ifdef __ICCARM__
+#pragma diag_suppress=Pe940
+    // return value is passed in r0 by the SVC handler per AAPCS;
+    // IAR cannot see this through the naked asm, suppress the warning.
+    return 0;
+#pragma diag_default=Pe940
+#endif
 }
 
 /*! \brief     Restore callee-saved CPU registers from a JmpFrame and jump back
@@ -570,11 +675,11 @@ int32_t SaveJmp(JmpFrame &/*f*/)
     \see       SaveJmp
 */
 __stk_attr_naked
-__stk_attr_noreturn
 void RestoreJmp(JmpFrame &/*f*/, int32_t /*val*/)
 {
     __asm volatile(
-    ".syntax unified                \n"
+    STK_ASM_SYNTAX_UNIFIED
+      
 #if (__CORTEX_M >= 3U)
     // Cortex-M3/M4/M7: LDMIA loads r4-r11 from offsets 0-28
     "LDR   sp,  [r0, #32]           \n" // restore SP
@@ -717,6 +822,7 @@ static __stk_forceinline void HW_SysTickStop()
 
 /*! \brief  Pause SysTick timer peripheral.
 */
+__stk_attr_unused /* can be unused due to configuration */
 static __stk_forceinline void HW_SysTickDisable()
 {
     SysTick->CTRL &= ~SysTick_CTRL_ENABLE_Msk;
@@ -733,6 +839,7 @@ static __stk_forceinline uint32_t HW_SysTickValue()
 /*! \brief  Get SysTick value after it was disabled.
     \return Value of SysTick->VAL register.
 */
+__stk_attr_unused /* can be unused due to configuration */
 static __stk_forceinline uint32_t HW_SysTickValueAfterDisable()
 {
     // is required for QEMU which then resets SysTick->VAL and thus we can't calculate elapsed time correctly
@@ -749,6 +856,7 @@ static __stk_forceinline uint32_t HW_SysTickValueAfterDisable()
 /*! \brief     Get number of elapsed ticks of the current period of SysTick timer peripheral.
     \param[in] VAL: a value of SysTick->VAL register.
 */
+__stk_attr_unused /* can be unused due to configuration */
 static __stk_forceinline uint32_t HW_SysTickElapsed(uint32_t VAL)
 {
     return SysTick->LOAD - VAL;
@@ -757,6 +865,7 @@ static __stk_forceinline uint32_t HW_SysTickElapsed(uint32_t VAL)
 /*! \brief Rearm SysTick timer peripheral with new period.
     \note  SysTick peripheral becomes enabled.
 */
+__stk_attr_unused /* can be unused due to configuration */
 static __stk_forceinline void HW_SysTickRearm(uint32_t ticks)
 {
     SysTick->LOAD  = ticks - 1U;
@@ -804,6 +913,28 @@ static __stk_forceinline uint32_t HW_DWTGetCounter()
 #endif
 }
 
+#ifdef _STK_CORTEX_M_TRUSTZONE
+void HW_Configure_SAU()
+{
+    // Disable SAU during configuration
+    SAU->CTRL = 0;
+
+    // 1. Define Secure Region (Internal SAU config)
+    SAU->RNR = 0;
+    SAU->RBAR = 0x10000000;
+    SAU->RLAR = (0x101FFFFF) | 1; // Secure Flash (2MB)
+
+    // 2. Define NSC Region (Where SG instructions live)
+    // Note: The SAU marks this as "Secure, Non-Secure Callable"
+    SAU->RNR = 1;
+    SAU->RBAR = 0x10200000;
+    SAU->RLAR = (0x10200FFF) | (1U << 1) | 1U;  // NSC bit + enable in one write
+
+    // Enable SAU (All memory not defined here defaults to Secure)
+    SAU->CTRL = 1;
+}
+#endif
+
 //! Global lock to synchronize critical sections of multiple cores.
 static volatile bool s_StkCortexmCsuLock = false;
 
@@ -831,7 +962,13 @@ static struct Context final : public PlatformContext
         STK_STATIC_ASSERT_DESC_N(SP, offsetof(Stack, SP) == 0U,
             "expect Stack::mode member at offset of 0 (first member)");
         STK_STATIC_ASSERT_DESC_N(mode, offsetof(Stack, mode) == 4U,
-            "expect Stack::mode member at offset of 4 (second member)");
+            "expect Stack::mode member at offset of 4 (second member)");        
+    #ifdef __ICCARM__
+        STK_STATIC_ASSERT_DESC_N(AFS, sizeof(std::atomic_flag) == sizeof(bool),
+            "IAR spinlock: atomic_flag size mismatch");
+        STK_STATIC_ASSERT_DESC_N(AFA, alignof(std::atomic_flag) <= alignof(bool),
+            "IAR spinlock: atomic_flag alignment stricter than bool");
+    #endif
 
         m_csu         = 0U;
         m_csu_nesting = 0U;
@@ -852,6 +989,10 @@ static struct Context final : public PlatformContext
                 HW_CoreClockFrequency(),
                 nullptr,
                 SendSysDesc);
+    #endif
+
+    #ifdef _STK_CORTEX_M_TRUSTZONE
+        HW_Configure_SAU();
     #endif
     }
 
@@ -1258,8 +1399,17 @@ extern "C" void STK_SYSTICK_HANDLER()
     else
         __set_CONTROL(__get_CONTROL() | CONTROL_nPRIV_Msk)
 */
+
+#ifdef __ICCARM__
+    #define STK_ASM_BLOCK_PRIVILEGE_MODE_LOAD_ACTIVE_STACK\
+    "MOV        r1, %[st_active]\n" /* r1 = Stack* (already in register) */
+#else
+    #define STK_ASM_BLOCK_PRIVILEGE_MODE_LOAD_ACTIVE_STACK\
+    "LDR        r1, %[st_active]\n" /* r1 = Stack* (m_stack_active) */      
+#endif
+
 #define STK_ASM_BLOCK_PRIVILEGE_MODE\
-    "LDR        r1, %[st_active]\n" /* r1 = Stack* (m_stack_active) */ \
+    STK_ASM_BLOCK_PRIVILEGE_MODE_LOAD_ACTIVE_STACK\
     "LDR        r1, [r1, #4]    \n" /* r1 = m_stack_active->mode (offset 4), reuse r1 */ \
     "CMP        r1, %[priv_val] \n" /* compare with ACCESS_PRIVILEGED */ \
     "BEQ        1f              \n" /* if equal, privileged mode */\
@@ -1276,9 +1426,9 @@ extern "C" void STK_SYSTICK_HANDLER()
     "2:                         \n"
 
 extern "C" __stk_attr_naked void STK_PENDSV_HANDLER()
-{
+{ 
     __asm volatile(
-    ".syntax unified             \n"
+    STK_ASM_SYNTAX_UNIFIED
 
     STK_ASM_DISABLE_INTERRUPTS " \n"
 
@@ -1311,8 +1461,28 @@ extern "C" __stk_attr_naked void STK_PENDSV_HANDLER()
 #endif
 
     // store in GetContext().m_stack_idle
+#ifdef __ICCARM__
+    "STR        r0, [%[st_idle]] \n" /* store the first member (SP) from r0 */
+#else
     "LDR        r1, %[st_idle]   \n"
     "STR        r0, [r1]         \n" /* store the first member (SP) from r0 */
+#endif
+
+    // ARMv8-M TrustZone: save PSPLIM (Secure) and PSPLIM_NS (Non-Secure) stack
+    // limit registers into the idle stack frame so overflow detection stays
+    // correct after the switch.  The two words are pushed BELOW the callee-saved
+    // registers (r0 already points past them), matching TrustZoneFrame layout.
+    // Reference: ARMv8-M ARM B3.29 / B3.30.
+#if STK_CORTEX_M_TRUSTZONE_FRAME
+    "MRS        r2, PSPLIM       \n" /* Secure PSPLIM */
+    "MRS        r3, PSPLIM_NS    \n" /* Non-Secure PSPLIM */
+    "STMDB      r0!, {r2, r3}    \n" /* push below saved general regs */
+  #ifdef __ICCARM__
+    "STR        r0, [%[st_idle]] \n" /* update idle stack SP to include TZ words */
+  #else
+    "STR        r0, [r1]         \n" /* update idle stack SP to include TZ words */
+  #endif
+#endif
 
     // set privileged/unprivileged mode for the active stack
 #ifdef CONTROL_nPRIV_Msk
@@ -1320,8 +1490,22 @@ extern "C" __stk_attr_naked void STK_PENDSV_HANDLER()
 #endif
 
     // load stack of the active task from GetContext().m_stack_active (note: keep in sync with OnTaskStart)
+#ifdef __ICCARM__
+    "LDR        r0, [%[st_active]]\n" /* load the first member of Stack (Stack::SP) into r0 */
+#else
     "LDR        r1, %[st_active] \n"
-    "LDR        r0, [r1]         \n" /* load the first member of Stack (Stack::SP) into r0 */
+    "LDR        r0, [r1]         \n"  /* load the first member of Stack (Stack::SP) into r0 */
+#endif
+
+    // ARMv8-M TrustZone: restore PSPLIM (Secure) and PSPLIM_NS (Non-Secure)
+    // stack limit registers from the active task frame.  The two words were
+    // pushed beneath the callee-saved registers by the save path above.
+    // They are popped first so that r0 advances to the callee-saved region.
+#if STK_CORTEX_M_TRUSTZONE_FRAME
+    "LDMIA      r0!, {r2, r3}    \n" /* pop PSPLIM, PSPLIM_NS */
+    "MSR        PSPLIM, r2       \n" /* restore Secure PSPLIM */
+    "MSR        PSPLIM_NS, r3    \n" /* restore Non-Secure PSPLIM */
+#endif
 
     // restore general registers
 #if STK_CORTEX_M_MANAGE_LR
@@ -1351,18 +1535,30 @@ extern "C" __stk_attr_naked void STK_PENDSV_HANDLER()
     STK_ASM_EXIT_FROM_HANDLER " \n"
 
     : /* output: none */
+#ifdef __ICCARM__
+    : [st_idle]   "r" (GetContext().m_stack_idle),
+      [st_active] "r" (GetContext().m_stack_active),
+#else
     : [st_idle]   "m" (GetContext().m_stack_idle),
       [st_active] "m" (GetContext().m_stack_active),
+#endif
       [priv_val]  "i" (ACCESS_PRIVILEGED)
-    : "r0", "r1" /* only r0, r1 are used as a scratchpad */ );
+    : "r0", "r1" /* used as a scratchpad */
+#if STK_CORTEX_M_TRUSTZONE_FRAME
+     , "r2", "r3"
+#endif
+#if defined(__ICCARM__)
+     , "memory"
+#endif
+     );
 }
 
 __stk_attr_naked void OnTaskStart()
 {
     // note: HW_DisableInterrupts() must be called prior calling this function
-
+  
     __asm volatile(
-    ".syntax unified             \n"
+    STK_ASM_SYNTAX_UNIFIED
 
     // set privileged/unprivileged mode for the active stack
 #ifdef CONTROL_nPRIV_Msk
@@ -1370,8 +1566,22 @@ __stk_attr_naked void OnTaskStart()
 #endif
 
     // load stack of the active task from GetContext().m_stack_active (note: keep in sync with OnTaskStart)
+#ifdef __ICCARM__
+    "LDR        r0, [%[st_active]]\n" /* load the first member of Stack (Stack::SP) into r0 */
+#else
     "LDR        r1, %[st_active] \n"
-    "LDR        r0, [r1]         \n" /* load the first member of Stack (Stack::SP) into r0 */
+    "LDR        r0, [r1]         \n"  /* load the first member of Stack (Stack::SP) into r0 */
+#endif
+
+    // ARMv8-M TrustZone: restore PSPLIM (Secure) and PSPLIM_NS (Non-Secure)
+    // stack limit registers from the active task frame.  The two words were
+    // pushed beneath the callee-saved registers by the save path above.
+    // They are popped first so that r0 advances to the callee-saved region.
+#if STK_CORTEX_M_TRUSTZONE_FRAME
+    "LDMIA      r0!, {r2, r3}    \n" /* pop PSPLIM, PSPLIM_NS */
+    "MSR        PSPLIM, r2       \n" /* restore Secure PSPLIM */
+    "MSR        PSPLIM_NS, r3    \n" /* restore Non-Secure PSPLIM */
+#endif
 
     // restore general registers
 #if STK_CORTEX_M_MANAGE_LR
@@ -1408,10 +1618,21 @@ __stk_attr_naked void OnTaskStart()
     STK_ASM_EXIT_FROM_HANDLER " \n"
 
     : /* output: none */
+#ifdef __ICCARM__
+    : [st_active] "r" (GetContext().m_stack_active),
+#else
     : [st_active] "m" (GetContext().m_stack_active),
+#endif
       [priv_val]  "i" (ACCESS_PRIVILEGED),
       [exc_ret]   "i" (STK_CORTEX_M_EXC_RETURN_THREAD_PSP)
-    : "r0", "r1" /* only r0, r1 are used as a scratchpad */ );
+    : "r0", "r1" /* used as a scratchpad */
+#if STK_CORTEX_M_TRUSTZONE_FRAME
+    , "r2", "r3"
+#endif
+#if defined(__ICCARM__)
+     , "memory"
+#endif
+     );
 }
 
 void Context::Start()
@@ -1585,50 +1806,67 @@ extern "C" __stk_attr_used void SVC_Handler_Main(Word *svc_args)
 extern "C" __stk_attr_naked void STK_SVC_HANDLER()
 {
     __asm volatile(
-    ".syntax unified            \n"
+    STK_ASM_SYNTAX_UNIFIED
+#ifndef __ICCARM__
     ".global SVC_Handler_Main   \n"
-    ".align 2                   \n" // ensure the entry point is aligned
+#endif
+    STK_ASM_ALIGN_2 // ensure the entry point is aligned
 
-#ifdef STK_CORTEX_M_TRUSTZONE
-    // ARMv8-M TrustZone (Cortex-M33)
+#ifdef _STK_CORTEX_M_TRUSTZONE
+    // ARMv8-M TrustZone (Cortex-M33 / Mainline)
+    // EXC_RETURN bit layout (ARMv8-M ARM B1.5.8):
+    //   bit 6 (0x40): 1 = Secure stack, 0 = Non-Secure stack.  <-- S-bit
+    //   bit 2 (0x04): 1 = PSP,          0 = MSP.
+    // We test bit 6 first to select the correct world's stack pointer,
+    // then bit 2 to choose MSP vs PSP within that world.
     #if (__CORTEX_M >= 33U)
-    "TST    LR, #4              \n" // bit 2: 0 = Main Stack (MSP), 1 = Process Stack (PSP)
+    // -----------------------------------------------------------------
+    // Cortex-M33 and later (ARMv8-M Mainline) -- IT/ITE available.
+    // -----------------------------------------------------------------
+    "TST    LR, #4              \n" // bit 2: 0 = MSP, 1 = PSP
     "BNE    .use_psp            \n"
-    "TST    LR, #1              \n" // check CONTROL.SFPA (secure state), bit 0: 0 = Secure, 1 = Non-Secure
-    "ITE    EQ                  \n"
-    "MRSEQ  r0, MSP             \n" // r0 = secure MSP
-    "MRSNE  r0, MSP_NS          \n" // r0 = non-secure MSP
+    // --- MSP branch ---
+    "TST    LR, #64             \n" // bit 6 (S-bit): 1 = Secure, 0 = Non-Secure
+    "ITE    NE                  \n"
+    "MRSNE  r0, MSP             \n" // r0 = Secure MSP
+    "MRSEQ  r0, MSP_NS          \n" // r0 = Non-Secure MSP
     "B      .call_main          \n"
 
     ".use_psp:                  \n"
-    "TST    LR, #1              \n"
-    "ITE    EQ                  \n"
-    "MRSEQ  r0, PSP             \n" // r0 = secure PSP
-    "MRSNE  r0, PSP_NS          \n" // r0 = non-secure MSP
+    "TST    LR, #64             \n" // bit 6 (S-bit): 1 = Secure, 0 = Non-Secure
+    "ITE    NE                  \n"
+    "MRSNE  r0, PSP             \n" // r0 = Secure PSP
+    "MRSEQ  r0, PSP_NS          \n" // r0 = Non-Secure PSP
     #else
-    // ARMv8-M Baseline (Cortex-M23) - no IT instructions
+    // -----------------------------------------------------------------
+    // Cortex-M23 (ARMv8-M Baseline) -- no IT instructions, limited ISA.
+    // Shift bits into the sign position and use BMI (Branch if Minus).
+    //   bit 2 -> sign: LSLS r1, #29  (32 - 3 = 29)
+    //   bit 6 -> sign: LSLS r1, #25  (32 - 7 = 25)
+    // -----------------------------------------------------------------
     "MOV    r1, LR              \n"
-    "LSLS   r1, r1, #29         \n" // bit 2: 0 = Main Stack (MSP), 1 = Process Stack (PSP)
-    "BMI    .use_psp_v8m_b      \n"
+    "LSLS   r1, r1, #29         \n" // shift bit 2 into sign
+    "BMI    .use_psp_v8m_b      \n" // bit 2 set  -> PSP branch
+    // --- MSP branch ---
     "MOV    r1, LR              \n"
-    "LSLS   r1, r1, #31         \n" // check CONTROL.SFPA (secure state), bit 0: 0 = Secure, 1 = Non-Secure
-    "BMI    .use_msp_ns         \n"
-    "MRS    r0, MSP             \n" // r0 = secure MSP
+    "LSLS   r1, r1, #25         \n" // shift bit 6 (S-bit) into sign
+    "BMI    .use_msp_s          \n" // S=1 -> Secure MSP
+    "MRS    r0, MSP_NS          \n" // S=0 -> Non-Secure MSP
     "B      .call_main          \n"
 
-    ".use_msp_ns:               \n"
-    "MRS    r0, MSP_NS          \n" // r0 = non-secure MSP
+    ".use_msp_s:                \n"
+    "MRS    r0, MSP             \n" // r0 = Secure MSP
     "B      .call_main          \n"
 
     ".use_psp_v8m_b:            \n"
     "MOV    r1, LR              \n"
-    "LSLS   r1, r1, #31         \n"
-    "BMI    .use_psp_ns         \n"
-    "MRS    r0, PSP             \n" // r0 = secure PSP
+    "LSLS   r1, r1, #25         \n" // shift bit 6 (S-bit) into sign
+    "BMI    .use_psp_s          \n" // S=1 -> Secure PSP
+    "MRS    r0, PSP_NS          \n" // S=0 -> Non-Secure PSP
     "B      .call_main          \n"
 
-    ".use_psp_ns:               \n"
-    "MRS    r0, PSP_NS          \n" // r0 = non-secure MSP
+    ".use_psp_s:                \n"
+    "MRS    r0, PSP             \n" // r0 = Secure PSP
     #endif
 
     ".call_main:                \n"
@@ -1656,8 +1894,9 @@ extern "C" __stk_attr_naked void STK_SVC_HANDLER()
     "LDR    r1, =SVC_Handler_Main \n"
     "BX     r1                  \n"
 
-    ".align 2                   \n"   // ensure literal pool is aligned
-    ".pool                      \n"); // ensure literal pool is reachable
+    STK_ASM_ALIGN_2  // ensure literal pool is aligned
+    STK_ASM_POOL     // ensure literal pool is reachable
+    );
 }
 
 static void OnTaskRun(ITask *task)
@@ -1740,22 +1979,29 @@ void PlatformArmCortexM::Start()
 
 bool PlatformArmCortexM::InitStack(EStackType stack_type, Stack *stack, IStackMemory *stack_memory, ITask *user_task)
 {
+    // Precondition (TrustZone builds): stack->mode must be set by the caller
+    // before this function is invoked.  On TZ builds the EXC_RETURN selection
+    // below reads stack->mode to decide between Secure (0xED) and Non-Secure
+    // (0xBC) EXC_RETURN values.  In the Kernel class, KernelTask::Bind() sets
+    // stack->mode from user_task->GetAccessMode() immediately before calling
+    // InitStack(), satisfying this requirement.
     STK_STATIC_ASSERT_DESC_N(ExceptionFrame, (sizeof(ExceptionFrame) == (8 * sizeof(Word))),
         "ExceptionFrame layout must match the ARMv7-M hardware exception frame exactly");
-    STK_STATIC_ASSERT_DESC_N(TaskFrame, sizeof(TaskFrame) == (8 + STK_CORTEX_M_MANAGE_LR) * sizeof(Word),
-        "TaskFrame size must equal ExceptionFrame plus optional EXC_RETURN word");
+    STK_STATIC_ASSERT_DESC_N(TaskFrame, sizeof(TaskFrame) == (8 + STK_CORTEX_M_MANAGE_LR + STK_CORTEX_M_TZ_REGISTER_COUNT) * sizeof(Word),
+        "TaskFrame size must equal ExceptionFrame plus optional EXC_RETURN word plus optional TrustZone words");
 
-    STK_ASSERT(stack_memory->GetStackSize() > STK_CORTEX_M_REGISTER_COUNT);
+    STK_ASSERT(stack_memory->GetStackSize() > STK_CORTEX_M_TOTAL_REGISTER_COUNT);
 
     // initialize stack memory
     Word *stack_top = Context::InitStackMemory(stack_memory);
 
     // initialize Stack Pointer (SP)
-    stack->SP = hw::PtrToWord(stack_top - STK_CORTEX_M_REGISTER_COUNT);
+    stack->SP = hw::PtrToWord(stack_top - STK_CORTEX_M_TOTAL_REGISTER_COUNT);
 
     // place the initial task frame flush against the top of the stack:
     // TaskFrame::exc (ExceptionFrame) occupies the top 8 words, TaskFrame::EXC_RETURN
-    // (when present) sits immediately below it
+    // (when present) sits immediately below it, and TrustZoneFrame (when present) sits
+    // below that.
     TaskFrame * const task_frame = reinterpret_cast<TaskFrame *>(stack_top) - 1;
 
     // initialize registers for the user task's first start
@@ -1792,11 +2038,159 @@ bool PlatformArmCortexM::InitStack(EStackType stack_type, Stack *stack, IStackMe
     task_frame->exc.PSR = static_cast<Word>(1U) << 24;
 
 #if STK_CORTEX_M_MANAGE_LR
+    // Choose the correct EXC_RETURN for the new task.
+    //
+    // ARMv8-M TrustZone (Cortex-M33+):
+    //   - Secure tasks must use 0xFFFFFFED (S-bit = 1, Thread, PSP).
+    //   - Non-Secure tasks (and all tasks on plain ARMv7-M) use 0xFFFFFFFD.
+    //
+    // The Secure/Non-Secure classification is derived from the stack's
+    // access mode. ACCESS_PRIVILEGED tasks running in the Secure partition
+    // are given the Secure EXC_RETURN; all others get the Non-Secure value.
+    //
+    // Reference: ARMv8-M Architecture Reference Manual B1.5.8.
+    //
+#if defined(_STK_CORTEX_M_TRUSTZONE) && (__CORTEX_M >= 33U)
+    if ((stack_type == STACK_USER_TASK) && (stack->mode == ACCESS_PRIVILEGED))
+        task_frame->EXC_RETURN = STK_CORTEX_M_EXC_RETURN_S_THREAD_PSP;
+    else
+        task_frame->EXC_RETURN = STK_CORTEX_M_EXC_RETURN_NS_THREAD_PSP;
+#else
     task_frame->EXC_RETURN = STK_CORTEX_M_EXC_RETURN_THREAD_PSP;
+#endif
+#endif // STK_CORTEX_M_MANAGE_LR
+
+#if STK_CORTEX_M_TRUSTZONE_FRAME
+    // Initialize PSPLIM registers to 0 (no limit enforced until the application
+    // sets them explicitly via CMSE APIs).  They will be saved/restored per-task
+    // by the PendSV handler from this point forward.
+    task_frame->tz.PSPLIM    = 0U;
+    task_frame->tz.PSPLIM_NS = 0U;
 #endif
 
     return true;
 }
+
+// ---------------------------------------------------------------------------
+// ARMv8-M TrustZone Non-Secure callable (NSC) gateway veneers.
+//
+// These functions are placed in the NSC-attributed linker section.  The
+// compiler inserts an SG (Secure Gateway) instruction and a BXNS return so
+// that Non-Secure code can call into Secure-world kernel services through a
+// hardened, auditable entry point.
+//
+// Calling convention: the Non-Secure caller passes arguments in r0-r3 per
+// AAPCS.  CMSE clears all other registers on entry to prevent information
+// leakage from the Secure side.
+//
+// To use: declare the matching cmse_nonsecure_call function pointer in the
+// Non-Secure image (see ITaskNonSecure_t in stk_arch_arm-cortex-m.h) and
+// place these symbols in a region mapped as NSC in the SAU/IDAU configuration.
+//
+// ---------------------------------------------------------------------------
+#if defined(_STK_CORTEX_M_TRUSTZONE) && (__CORTEX_M >= 33U)
+
+/*! \brief  NSC gateway: schedule a context switch from Non-Secure thread mode.
+    \note   Non-Secure callers map to PlatformArmCortexM::SwitchToNext().
+    \note   ISR-unsafe: silently returns if called from Non-Secure Handler mode.
+            Mirrors the hw::IsInsideISR() guard in stk_helper.h::Yield().
+*/
+__stk_tz_nsc_entry void NSC_SwitchToNext()
+{
+    // Non-Secure Handler mode passes MSP_NS as the caller SP, which the
+    // scheduler cannot use to locate a task context.  Guard and return safely.
+    if (HW_IsHandlerMode())
+        return;
+
+    GetContext().m_handler->OnTaskSwitch(HW_GetCallerSP());
+}
+
+/*! \brief  NSC gateway: put the calling Non-Secure task to sleep.
+    \param[in] ticks: Number of kernel ticks to sleep.
+    \note   Non-Secure callers map to PlatformArmCortexM::Sleep().
+    \note   ISR-unsafe: silently returns if called from Non-Secure Handler mode.
+            Mirrors the hw::IsInsideISR() guard in stk_helper.h::Sleep().
+*/
+__stk_tz_nsc_entry void NSC_Sleep(Timeout ticks)
+{
+    if (HW_IsHandlerMode())
+        return;
+
+    GetContext().m_handler->OnTaskSleep(HW_GetCallerSP(), ticks);
+}
+
+/*! \brief  NSC gateway: wait on a synchronisation object from Non-Secure context.
+    \param[in] sync_obj: Pointer to the synchronisation object (must be in Non-Secure memory).
+    \param[in] mutex:    Optional associated mutex (may be nullptr; must be in Non-Secure memory if provided).
+    \param[in] timeout:  Maximum number of ticks to wait.
+    \return Pointer to the wait object on success.
+    \retval nullptr if called from Non-Secure Handler mode, or if either pointer
+            fails the CMSE Non-Secure accessibility check (cmse_check_pointed_object).
+    \note   Unlike IKernelService::Wait() (which guarantees a non-null return),
+            this gateway may return nullptr — callers must check before use.
+    \note   ISR-unsafe: returns nullptr immediately if called from Handler mode.
+    \note   Pointer validation prevents confused-deputy attacks from Non-Secure code.
+*/
+__stk_tz_nsc_entry IWaitObject *NSC_Wait(ISyncObject *sync_obj, IMutex *mutex, Timeout timeout)
+{
+    // Handler-mode guard: Non-Secure ISRs pass MSP_NS which cannot locate a task context.
+    if (HW_IsHandlerMode())
+        return nullptr;
+
+    // Validate that the pointers supplied by the Non-Secure caller actually
+    // refer to Non-Secure accessible memory.  If either check fails the call
+    // is treated as an invalid request and we return nullptr immediately.
+    if (sync_obj != nullptr &&
+        cmse_check_pointed_object(sync_obj, CMSE_NONSECURE) == nullptr)
+    {
+        return nullptr;
+    }
+    if (mutex != nullptr &&
+        cmse_check_pointed_object(mutex, CMSE_NONSECURE) == nullptr)
+    {
+        return nullptr;
+    }
+
+    return GetContext().m_handler->OnTaskWait(HW_GetCallerSP(), sync_obj, mutex, timeout);
+}
+
+/*! \brief  NSC gateway: retrieve the task ID of the calling Non-Secure task.
+    \return Task ID of the currently running Non-Secure task.
+    \retval TID_ISR if called from Non-Secure Handler mode, matching the
+            IKernelService convention for ISR callers (see stk_common.h).
+    \note   Non-Secure callers map to PlatformArmCortexM::GetTid().
+    \note   ISR-unsafe: returns TID_ISR immediately if called from Handler mode.
+            Mirrors the hw::IsInsideISR() guard in stk_helper.h::GetTid().
+*/
+__stk_tz_nsc_entry TId NSC_GetTid()
+{
+    Word isr = HW_GetCurrentException();
+
+    // return special TId which denotes ISR
+    if (isr != 0U)
+    {
+        TId isr_tid = TID_ISR_N | isr;
+        STK_ASSERT(IsIsrTid(isr_tid));
+        return isr_tid;
+    }
+
+    return GetContext().m_handler->OnGetTid(HW_GetCallerSP());
+}
+
+/*! \brief  NSC gateway: get the kernel tick resolution in microseconds.
+    \return Number of microseconds per kernel tick.
+    \note   ISR-safe: reads a constant set at kernel initialisation time.
+    \note   Provided so Non-Secure helpers (e.g. NSC_SleepMs in stk_nsc_api.h)
+            can convert between milliseconds and ticks without hardcoding the
+            resolution.  Equivalent to IKernelService::GetTickResolution().
+*/
+__stk_tz_nsc_entry int32_t NSC_GetTickResolution()
+{
+    return static_cast<int32_t>(GetContext().m_tick_resolution);
+}
+
+#endif // _STK_CORTEX_M_TRUSTZONE && __CORTEX_M >= 33U
+// ---------------------------------------------------------------------------
 
 void Context::OnStop()
 {

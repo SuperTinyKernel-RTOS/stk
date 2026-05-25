@@ -465,9 +465,9 @@ struct HiResClock
     static inline Ticks GetTimeUs()
     {
         uint32_t freq = GetFrequency();
-        STK_ASSERT(freq != 0); // guaranteed non-zero
+        STK_ASSERT(freq != 0);
 
-        return static_cast<Ticks>((GetCycles() * 1000000ULL) / freq);
+        return ((freq != 0) ? static_cast<Ticks>((GetCycles() * 1000000ULL) / freq) : 0 );
     }
 };
 
