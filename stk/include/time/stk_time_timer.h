@@ -701,7 +701,6 @@ inline void TimerHost::UpdateTime()
                 if (!one_shot)
                 {
                     Timeout next_deadline = static_cast<Timeout>(timer->m_deadline - now);
-                    STK_ASSERT(next_deadline > 0);
 
                     if ((next_deadline > 0) && (next_deadline < next_sleep))
                         next_sleep = next_deadline;
