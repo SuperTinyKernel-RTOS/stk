@@ -187,10 +187,10 @@ public:
         STK_ASSERT(GetSize() != 0U);
 
         if (m_ready_bitmap == 0U)
-            return (*m_sleep.GetFirst());
+            return (*const_cast<IKernelTask::ListEntryType *>(m_sleep.GetFirst()));
 
         const Priority prio = GetHighestReadyPriority(m_ready_bitmap);
-        return (*m_tasks[prio].GetFirst());
+        return (*const_cast<IKernelTask::ListEntryType *>(m_tasks[prio].GetFirst()));
     }
 
     /*! \brief  Get the total number of tasks managed by this strategy.

@@ -107,4 +107,10 @@ __stk_forceinline void SetTls(Word tp)
 */
 #define __stk_dmb() __asm volatile("dmb sy" ::: "memory")
 
+/*! \def   __stk_tz_nsc_entry
+    \brief TrustZone: attribute for Non-Secure callable gateway functions.
+    \note  Places the function in the .nsc_entry section mapped to the NSC region.
+*/
+#define __stk_tz_nsc_entry __attribute__((cmse_nonsecure_entry))
+
 #endif /* STK_ARCH_ARM_CORTEX_M_H_ */

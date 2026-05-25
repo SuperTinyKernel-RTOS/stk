@@ -12,6 +12,12 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#ifdef __ICCARM__
+    #include <intrinsics.h>
+    #if (__IAR_SYSTEMS_ICC__ < 8)
+        #error "Only IAR EWARM 8.0 and higher is supported by STK."
+    #endif
+#endif
 
 /*! \file  stk_defs.h
     \brief Compiler and platform low-level definitions for STK.
@@ -143,12 +149,12 @@
            overhead would be unacceptable or would unpredictably affect real-time timing.
     \note  On compilers not listed below the attribute expands to nothing (inlining becomes a hint only).
 */
-#ifdef __GNUC__
+#if defined(__GNUC__) || defined(__ICCARM__)
     #define __stk_forceinline __attribute__((always_inline)) inline
-#elif defined(__ICCARM__) || defined(_MSC_VER)
+#elif defined(_MSC_VER)
     #define __stk_forceinline __forceinline
 #else
-    #define __stk_forceinline
+    #define __stk_forceinline inline
 #endif
 
 /*! \def       __stk_aligned
@@ -157,9 +163,7 @@
     \note      On compilers not listed below the attribute expands to nothing and alignment is not enforced.
                Verify alignment-sensitive data on new toolchains.
 */
-#ifdef __GNUC__
-    #define __stk_aligned(x) __attribute__((aligned(x)))
-#elif defined(__ICCARM__)
+#if defined(__GNUC__) || defined(__ICCARM__)
     #define __stk_aligned(x) __attribute__((aligned(x)))
 #else
     #define __stk_aligned(x)
@@ -170,11 +174,7 @@
     \note  On compilers not listed below the attribute expands to nothing.
            If not supported, multiple definition errors may occur during linking.
 */
-#if defined(__GNUC__) || defined(__clang__)
-    #define __stk_weak __attribute__((weak))
-#elif defined(__ICCARM__)
-    #define __stk_weak __weak
-#elif defined(__CC_ARM) || defined(__ARMCC_VERSION)
+#if defined(__GNUC__) || defined(__clang__) || defined(__ICCARM__) || defined(__CC_ARM) || defined(__ARMCC_VERSION)
     #define __stk_weak __attribute__((weak))
 #else
     #define __stk_weak
@@ -187,9 +187,7 @@
            undefined behaviour. Used for context-switch stubs and ISR entry points where the
            register save/restore sequence must be precisely hand-written.
 */
-#ifdef __GNUC__
-    #define __stk_attr_naked __attribute__((naked))
-#elif defined(__ICCARM__)
+#if defined(__GNUC__) || defined(__ICCARM__)
     #define __stk_attr_naked __attribute__((naked))
 #else
     #define __stk_attr_naked
@@ -200,10 +198,8 @@
     \note  Enables compiler to omit return-path code and dead-store warnings after the call site.
     \warning Applying this attribute to a function that does return produces undefined behaviour.
 */
-#ifdef __GNUC__
+#if defined(__GNUC__) || defined(__ICCARM__)
     #define __stk_attr_noreturn __attribute__((__noreturn__))
-#elif defined(__ICCARM__)
-    #define __stk_attr_noreturn __attribute__((noreturn))
 #else
     #define __stk_attr_noreturn
 #endif
@@ -213,9 +209,7 @@
     \note  Does not prevent the linker from discarding the symbol. Use __stk_attr_used when the symbol
            must be retained regardless of whether it appears to be referenced.
 */
-#ifdef __GNUC__
-    #define __stk_attr_unused __attribute__((unused))
-#elif defined(__ICCARM__)
+#if defined(__GNUC__) || defined(__ICCARM__)
     #define __stk_attr_unused __attribute__((unused))
 #else
     #define __stk_attr_unused
@@ -226,9 +220,7 @@
     \note  Commonly applied to ISR vector table entries, trap stubs, and objects placed in special
            linker sections that are referenced only from assembly or linker scripts.
 */
-#ifdef __GNUC__
-    #define __stk_attr_used __attribute__((used))
-#elif defined(__ICCARM__)
+#if defined(__GNUC__) || defined(__ICCARM__)
     #define __stk_attr_used __attribute__((used))
 #else
     #define __stk_attr_used
@@ -239,9 +231,7 @@
     \note  Used where inlining would obscure stack-depth analysis, produce unpredictable code size,
            or make profiling and tracing results misleading.
 */
-#ifdef __GNUC__
-    #define __stk_attr_noinline __attribute__((noinline))
-#elif defined(__ICCARM__)
+#if defined(__GNUC__) || defined(__ICCARM__)
     #define __stk_attr_noinline __attribute__((noinline))
 #else
     #define __stk_attr_noinline
@@ -252,9 +242,7 @@
     \note  The compiler will emit a warning at every call site or use of the decorated symbol,
            prompting callers to migrate to the replacement API.
 */
-#ifdef __GNUC__
-    #define __stk_attr_deprecated __attribute__((deprecated))
-#elif defined(__ICCARM__)
+#if defined(__GNUC__) || defined(__ICCARM__)
     #define __stk_attr_deprecated __attribute__((deprecated))
 #elif defined(_MSC_VER)
     #define __stk_attr_deprecated __declspec(deprecated)
@@ -270,6 +258,8 @@
 */
 #if defined(__GNUC__) || defined(__clang__)
     #define __stk_full_memfence() __sync_synchronize()
+#elif defined(__ICCARM__)
+    #define __stk_full_memfence() __DMB()
 #elif defined(_MSC_VER)
     #define __stk_full_memfence() __stk_dmb()
 #else
@@ -285,7 +275,7 @@
            no hardware instruction emitted, deprecated in favour of volatile but
            still the correct lightweight barrier for this purpose.
 */
-#if defined(__GNUC__) || defined(__clang__)
+#if defined(__GNUC__) || defined(__clang__) || defined(__ICCARM__)
     #define __stk_compiler_barrier() __asm volatile("" ::: "memory")
 #elif defined(_MSC_VER)
     #define __stk_compiler_barrier() _ReadWriteBarrier()
@@ -300,8 +290,8 @@
            - x86/x64 (GCC/Clang/MSVC): the \c PAUSE instruction via \c __builtin_ia32_pause() or \c _mm_pause().
            - RISC-V with Zihintpause (GCC/Clang): the \c PAUSE hint via \c __builtin_riscv_pause().
            - RISC-V without Zihintpause (GCC/Clang): falls back to \c __stk_full_memfence().
+           - ARM Cortex-M (GCC/Clang/IAR): the \c YIELD instruction via inline asm; valid Thumb on all M0-M33 variants.
            - ARM Cortex-M (MSVC): the \c YIELD instruction via \c __yield().
-           - ARM Cortex-M (GCC/Clang): falls back to \c __stk_full_memfence() (no dedicated hint).
            - Other/unknown targets: falls back to \c __stk_full_memfence().
     \note  Can be redefined externally (e.g. in test harnesses) to intercept control inside kernel
            waiting loops without modifying kernel source.
@@ -314,18 +304,20 @@
         #ifdef __riscv_zihintpause
             #define __stk_relax_cpu() __builtin_riscv_pause()
         #else
-            #define __stk_relax_cpu() __stk_full_memfence() 
+            #define __stk_relax_cpu() __stk_full_memfence()
         #endif
+    #elif defined(__ARM_ARCH) || defined(_STK_ARCH_ARM_CORTEX_M)
+        #define __stk_relax_cpu() __asm volatile("yield")
     #else
         #define __stk_relax_cpu() __stk_full_memfence()
     #endif
+#elif defined(__ICCARM__)
+    #define __stk_relax_cpu() __asm volatile("YIELD")
 #elif defined(_MSC_VER)
     #include <intrin.h>
     #if defined(_M_IX86) || defined(_M_X64)
-        // Maps to the PAUSE instruction
         #define __stk_relax_cpu() _mm_pause()
     #elif defined(_M_ARM) || defined(_M_ARM64)
-        // Maps to the YIELD instruction on ARM
         #define __stk_relax_cpu() __yield()
     #else
         #define __stk_relax_cpu() __stk_full_memfence()
@@ -532,16 +524,16 @@
 /*! \def   STK_ALLOCATE_COUNT
     \brief Selects a static array element count at compile time based on a mode flag.
     \note  On GCC/Clang: expands to ONTRUE if (MODE & FLAG) is non-zero, otherwise ONFALSE.
-           On MSVC: always expands to max(ONTRUE, ONFALSE) because MSVC does not support
-           zero-sized arrays. This means MSVC builds may over-allocate when the flag is not set,
-           but avoids a compile error. Configuration mistakes that would result in ONFALSE on
-           other compilers will be silently masked on MSVC.
+           On MSVC/IAR: always expands to max(ONTRUE, ONFALSE) because these compilers do not support
+           zero-sized arrays. This means MSVC and IAR builds may over-allocate when the flag is not set,
+           but avoids a compile error. Configuration mistakes that would result in ONFALSE on other 
+           compilers will be silently masked.
     \param[in] MODE: Bitmask of active kernel modes (e.g. EKernelMode flags).
     \param[in] FLAG: The specific mode bit to test.
     \param[in] ONTRUE: Array count to use when FLAG is active.
     \param[in] ONFALSE: Array count to use when FLAG is inactive (may be 0 on GCC/Clang).
 */
-#ifdef _MSC_VER
+#if defined(_MSC_VER) || defined(__ICCARM__)
     #define STK_ALLOCATE_COUNT(MODE, FLAG, ONTRUE, ONFALSE) ((ONTRUE) > (ONFALSE) ? (ONTRUE) : (ONFALSE))
 #else
     #define STK_ALLOCATE_COUNT(MODE, FLAG, ONTRUE, ONFALSE) ((((MODE) & (FLAG)) != 0U) ? (ONTRUE) : (ONFALSE))

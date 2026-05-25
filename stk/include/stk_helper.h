@@ -211,8 +211,8 @@ inline Weight ISyncObject::FindWeightHigherThan(Weight comp) const
 {
     Weight max_weight = NO_WEIGHT;
 
-    for (const IWaitObject *itr = static_cast<IWaitObject *>(m_wait_list.GetFirst()); (itr != nullptr);
-            itr = static_cast<IWaitObject *>(itr->GetNext()))
+    for (const IWaitObject *itr = static_cast<const IWaitObject *>(m_wait_list.GetFirst()); (itr != nullptr);
+            itr = static_cast<const IWaitObject *>(itr->GetNext()))
     {
         Weight w = GetUserTaskFromTid(itr->GetTid())->GetWeight();
         if (w > max_weight)
@@ -256,7 +256,7 @@ __stk_forceinline Time GetMsFromTicks(Ticks ticks, int32_t resolution)
 */
 __stk_forceinline Ticks GetTicksFromMs(Time ms, int32_t resolution)
 {
-    return ms * 1000 / resolution;
+    return ((resolution != 0) ? (ms * 1000 / resolution) : 0);
 }
 
 /*! \brief     Get number of ticks elapsed since kernel start.

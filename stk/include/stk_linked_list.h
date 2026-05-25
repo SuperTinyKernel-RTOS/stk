@@ -77,7 +77,12 @@ public:
     /*! \brief  Get the list head this entry currently belongs to.
         \return Pointer to the owning DListHead, or \c NULL if the entry is not linked.
     */
-    DLHeadType *GetHead() const { return m_head; }
+    DLHeadType *GetHead() { return m_head; }
+    
+    /*! \brief  Get the list head this entry currently belongs to.
+        \return Pointer to the owning DListHead, or \c NULL if the entry is not linked.
+    */
+    const DLHeadType *GetHead() const { return m_head; }
 
     /*! \brief  Get the next entry in the list.
         \return Pointer to the next DListEntry, or \c NULL if this is the last entry
@@ -85,7 +90,15 @@ public:
         \note   In a closed loop (\c _ClosedLoop == true) this pointer is never \c NULL
                 when the entry is linked.
     */
-    DLEntryType *GetNext() const { return m_next; }
+    DLEntryType *GetNext() { return m_next; }
+    
+    /*! \brief  Get the next entry in the list.
+        \return Pointer to the next DListEntry, or \c NULL if this is the last entry
+                (open list) or the first entry (closed loop, where next wraps to first).
+        \note   In a closed loop (\c _ClosedLoop == true) this pointer is never \c NULL
+                when the entry is linked.
+    */
+    const DLEntryType *GetNext() const { return m_next; }
 
     /*! \brief  Get the previous entry in the list.
         \return Pointer to the previous DListEntry, or \c NULL if this is the first entry
@@ -93,7 +106,15 @@ public:
         \note   In a closed loop (\c _ClosedLoop == true) this pointer is never \c NULL
                 when the entry is linked.
     */
-    DLEntryType *GetPrev() const { return m_prev; }
+    DLEntryType *GetPrev() { return m_prev; }
+    
+    /*! \brief  Get the previous entry in the list.
+        \return Pointer to the previous DListEntry, or \c NULL if this is the first entry
+                (open list) or the last entry (closed loop, where prev wraps to last).
+        \note   In a closed loop (\c _ClosedLoop == true) this pointer is never \c NULL
+                when the entry is linked.
+    */
+    const DLEntryType *GetPrev() const { return m_prev; }
 
     /*! \brief  Check whether this entry is currently a member of any list.
         \return \c true if linked (m_head != NULL); \c false otherwise.
@@ -220,12 +241,22 @@ public:
     /*! \brief  Get the first (front) entry without removing it.
         \return Pointer to the first DListEntry, or \c NULL if the list is empty.
     */
-    DLEntryType *GetFirst() const { return m_first; }
+    DLEntryType *GetFirst() { return m_first; }
 
+    /*! \brief  Get the first (front) entry without removing it.
+        \return Pointer to the first DListEntry, or \c NULL if the list is empty.
+    */
+    const DLEntryType *GetFirst() const { return m_first; }
+    
     /*! \brief  Get the last (back) entry without removing it.
         \return Pointer to the last DListEntry, or \c NULL if the list is empty.
     */
-    DLEntryType *GetLast() const { return m_last; }
+    DLEntryType *GetLast() { return m_last; }
+    
+    /*! \brief  Get the last (back) entry without removing it.
+        \return Pointer to the last DListEntry, or \c NULL if the list is empty.
+    */
+    const DLEntryType *GetLast() const { return m_last; }
 
     /*! \brief  Remove and unlink all entries. After this call the list is empty.
         \note   Runs in O(n). Each entry is individually unlinked so its pointers are

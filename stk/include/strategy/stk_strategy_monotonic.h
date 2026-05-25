@@ -219,7 +219,7 @@ public:
     {
         STK_ASSERT(m_tasks.GetSize() != 0U);
 
-        return (*m_tasks.GetFirst());
+        return (*const_cast<IKernelTask::ListEntryType *>(m_tasks.GetFirst()));
     }
 
     /*! \brief     Get the total number of tasks managed by this strategy.
@@ -363,7 +363,7 @@ public:
         TaskTiming tasks[_TaskCount];
 
         // fill tasks timing
-        IKernelTask *itr = (*ktasks->GetFirst()), * const start = itr;
+        const IKernelTask *itr = (*ktasks->GetFirst()), * const start = itr;
         uint32_t idx = 0U;
         do
         {
@@ -477,7 +477,7 @@ private:
     //! Reference: http://stackoverflow.com/questions/2745074/fast-ceiling-of-an-integer-division-in-c-c
     static __stk_forceinline int32_t idiv_ceil(uint32_t x, uint32_t y)
     {
-        return x / y + (x % y > 0);
+        return ((y != 0) ? (x / y + (x % y > 0)) : 0);
     }
 };
 
