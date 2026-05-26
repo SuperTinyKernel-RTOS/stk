@@ -100,8 +100,7 @@ public:
     /*! \brief Destructor.
         \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
     */
-    ~SwitchStrategyFixedPriority()
-    {}
+    ~SwitchStrategyFixedPriority() = default;
 
     /*! \brief     Add task to the runnable set at its fixed priority level.
         \param[in] task: Task to add. Must not be \c NULL and must not already be in any list.

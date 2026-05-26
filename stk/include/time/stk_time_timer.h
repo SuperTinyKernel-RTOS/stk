@@ -25,21 +25,21 @@ namespace time {
     \brief Number of threads handling timers in TimerHost (default: 1).
 */
 #ifndef STK_TIMER_THREADS_COUNT
-    #define STK_TIMER_THREADS_COUNT 1
+    #define STK_TIMER_THREADS_COUNT 1U
 #endif
 
 /*! \def   STK_TIMER_HANDLER_STACK_SIZE
     \brief Stack size of the timer handler, increase if your timers consume more (default: 256).
 */
 #ifndef STK_TIMER_HANDLER_STACK_SIZE
-    #define STK_TIMER_HANDLER_STACK_SIZE 256
+    #define STK_TIMER_HANDLER_STACK_SIZE 256U
 #endif
 
 /*! \def   STK_TIMER_COUNT_MAX
     \brief Max number of timers handled by TimerHost (default: 32).
 */
 #ifndef STK_TIMER_COUNT_MAX
-    #define STK_TIMER_COUNT_MAX 32
+    #define STK_TIMER_COUNT_MAX 32U
 #endif
 
 /*! \class TimerHost
@@ -111,10 +111,10 @@ namespace time {
 class TimerHost
 {
 public:
-    enum EConsts
+    enum EConsts : size_t
     {
         //!< total number of tasks serving this instance
-        TASK_COUNT = (1 + STK_TIMER_THREADS_COUNT),
+        TASK_COUNT = (1U + STK_TIMER_THREADS_COUNT),
 
         //!< stack memory size of the tick task
         TASK_TICK_MEMORY_SIZE = Max<size_t>(256U, STK_STACK_SIZE_MIN),
@@ -141,14 +141,13 @@ public:
     public:
         /*! \brief     Default constructor.
         */
-        explicit Timer() : m_deadline(0), m_timestamp(0), m_period(0), m_active(false), m_pending(false)
+        explicit Timer() : m_deadline(0), m_timestamp(0), m_period(0U), m_active(false), m_pending(false), m_rearming(false)
         {}
 
         /*! \brief     Destructor.
             \note      MISRA deviation: [STK-DEV-005] Rule 10-3-2.
         */
-        ~Timer()
-        {}
+        ~Timer() = default;
 
         /*! \brief     Callback invoked by the handler task when this timer expires.
             \param[in] host: Pointer to the TimerHost that fired this timer.
@@ -199,6 +198,12 @@ public:
         uint32_t      m_period;    //!< reload period in ticks (0 = one-shot)
         volatile bool m_active;    //!< true if active
         volatile bool m_pending;   //!< true if pending to be handled
+        volatile bool m_rearming;  //!< true while a CMD_RESTART / CMD_START_OR_RESET is already in the command queue.
+                                   //!< Written by ISR/caller in PushCommand; cleared by tick task in ProcessCommands
+                                   //!< before executing the command so that a subsequent ISR edge can queue exactly
+                                   //!< one more coalesced command. Prevents unbounded queue growth when a noisy
+                                   //!< source (e.g. a bouncing button) fires the ISR faster than the tick task drains
+                                   //!< the command queue.
     };
 
     /*! \brief Default constructor. Zero-initializes all internal state.
@@ -211,8 +216,7 @@ public:
     /*! \brief Destructor.
         \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
     */
-    ~TimerHost()
-    {}
+    ~TimerHost() = default;
 
     /*! \brief     Initialize timer host instance.
         \param[in] kernel: Kernel to which instance will be bound.
@@ -417,7 +421,7 @@ private:
 
     /*! \brief     Drain the command queue and execute each pending command.
         \param[in] next_sleep: Maximum ticks to block waiting for the first command when the
-                               active list is non-empty. Overridden to WAIT_INFINITE when empty.
+                   active list is non-empty. Overridden to WAIT_INFINITE when empty.
         \return    True to continue the tick loop; false when CMD_SHUTDOWN is processed.
         \note      Called exclusively from the tick task (UpdateTime()).
     */
@@ -467,14 +471,18 @@ private:
 
 inline uint32_t TimerHost::Timer::GetRemainingTicks() const
 {
-    if (!m_active)
+    if (m_active)
+    {
+        // if deadline has passed but not yet been processed by the tick task,
+        // remaining would be negative, result fits in uint32_t because delay and
+        // period are uint32_t, so remaining time is bounded by uint32_t max
+        const Ticks remaining = m_deadline - GetTicks();
+        return (remaining > 0 ? static_cast<uint32_t>(remaining) : 0);
+    }
+    else
+    {
         return 0;
-
-    // if deadline has passed but not yet been processed by the tick task,
-    // remaining would be negative, result fits in uint32_t because delay and
-    // period are uint32_t, so remaining time is bounded by uint32_t max
-    Ticks remaining = m_deadline - GetTicks();
-    return (remaining > 0 ? static_cast<uint32_t>(remaining) : 0);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -483,15 +491,17 @@ inline uint32_t TimerHost::Timer::GetRemainingTicks() const
 
 inline void TimerHost::Initialize(IKernel *kernel, EAccessMode mode)
 {
-    for (int32_t i = 0; i < STK_TIMER_THREADS_COUNT; ++i)
+    for (size_t i = 0U; i < STK_TIMER_THREADS_COUNT; ++i)
     {
-        m_task_process[i].Initialize(this, m_task_handler_memory[i], TASK_HANDLER_STACK_SIZE, mode, [](TimerHost *host) {
+        m_task_process[i].Initialize(this, m_task_handler_memory[i], TASK_HANDLER_STACK_SIZE, mode, [](TimerHost *host)
+        {
             host->ProcessTimers();
         });
         kernel->AddTask(&m_task_process[i]);
     }
 
-    m_task_tick.Initialize(this, m_task_tick_memory, TASK_TICK_MEMORY_SIZE, ACCESS_USER, [](TimerHost *host) {
+    m_task_tick.Initialize(this, m_task_tick_memory, TASK_TICK_MEMORY_SIZE, ACCESS_USER, [](TimerHost *host)
+    {
         host->UpdateTime();
     });
     kernel->AddTask(&m_task_tick);
@@ -507,16 +517,21 @@ inline bool TimerHost::Start(Timer &timer, uint32_t delay, uint32_t period)
     STK_ASSERT((period == 0U) || (period <= static_cast<uint32_t>(WAIT_INFINITE)));
 
     // timer must not already be active
-    if (timer.m_active)
-        return false;
-
-    return PushCommand({
-        .cmd       = TimerCommand::CMD_START,
-        .timer     = &timer,
-        .timestamp = GetTicks(),
-        .delay     = delay,
-        .period    = period
-    });
+    if (!timer.m_active)
+    {
+        return PushCommand({
+            .cmd       = TimerCommand::CMD_START,
+            .timer     = &timer,
+            .timestamp = GetTicks(),
+            .delay     = delay,
+            .period    = period
+        });
+    }
+    else
+    {
+        // duplicate attempt to start already started timer is not an error (ignore)
+        return true;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -526,16 +541,21 @@ inline bool TimerHost::Start(Timer &timer, uint32_t delay, uint32_t period)
 inline bool TimerHost::Stop(Timer &timer)
 {
     // timer must be active
-    if (!timer.m_active)
-        return false;
-
-    return PushCommand({
-        .cmd       = TimerCommand::CMD_STOP,
-        .timer     = &timer,
-        .timestamp = 0,
-        .delay     = 0U,
-        .period    = 0U
-    });
+    if (timer.m_active)
+    {
+        return PushCommand({
+            .cmd       = TimerCommand::CMD_STOP,
+            .timer     = &timer,
+            .timestamp = 0,
+            .delay     = 0U,
+            .period    = 0U
+        });
+    }
+    else
+    {
+        // duplicate attempt to stop already stopped timer is not an error (ignore)
+        return true;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -545,16 +565,21 @@ inline bool TimerHost::Stop(Timer &timer)
 inline bool TimerHost::Reset(Timer &timer)
 {
     // timer must be active and periodic
-    if (!timer.m_active || (timer.m_period == 0))
+    if (timer.m_active && (timer.m_period != 0U))
+    {
+        return PushCommand({
+            .cmd       = TimerCommand::CMD_RESET,
+            .timer     = &timer,
+            .timestamp = GetTicks(),
+            .delay     = 0U,
+            .period    = 0U
+        });
+    }
+    else
+    {
+        // unexpected reset command
         return false;
-
-    return PushCommand({
-        .cmd      = TimerCommand::CMD_RESET,
-        .timer     = &timer,
-        .timestamp = GetTicks(),
-        .delay     = 0U,
-        .period    = 0U
-    });
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -601,19 +626,21 @@ inline bool TimerHost::SetPeriod(Timer &timer, uint32_t period)
 {
     // period == 0 is rejected: it would silently convert a periodic timer
     // to one-shot semantics, which is better expressed via Stop() + Start()
-    if (!timer.m_active || (timer.m_period == 0U) || (period == 0U) ||
-        (period > static_cast<uint32_t>(WAIT_INFINITE)))
+    if (timer.m_active && (timer.m_period != 0U) && (period != 0U) &&
+        (period <= static_cast<uint32_t>(WAIT_INFINITE)))
+    {
+        return PushCommand({
+            .cmd       = TimerCommand::CMD_SET_PERIOD,
+            .timer     = &timer,
+            .timestamp = 0,
+            .delay     = 0U,
+            .period    = period
+        });
+    }
+    else
     {
         return false;
     }
-
-    return PushCommand({
-        .cmd       = TimerCommand::CMD_SET_PERIOD,
-        .timer     = &timer,
-        .timestamp = 0,
-        .delay     = 0U,
-        .period    = period
-    });
 }
 
 // ---------------------------------------------------------------------------
@@ -643,7 +670,7 @@ inline void TimerHost::UpdateTime()
     {
         next_sleep = WAIT_INFINITE;
 
-        Ticks now = GetTicks();
+        const Ticks now = GetTicks();
 
         // using WriteVolatile64() to guarantee correct lockless reading order by ReadVolatile64
         hw::WriteVolatile64(&m_now, now);
@@ -656,55 +683,54 @@ inline void TimerHost::UpdateTime()
             if (timer->m_active)
             {
                 // check if still pending to be handled
-                if (timer->m_pending)
+                if (!timer->m_pending)
                 {
-                    timer = next;
-                    continue;
-                }
+                    bool one_shot = false;
+                    const Ticks diff = now - timer->m_deadline;
 
-                bool one_shot = false;
-                Ticks diff = now - timer->m_deadline;
-
-                if (diff >= 0)
-                {
-                    // set timestamp at which timer expired
-                    timer->m_timestamp = now;
-
-                    // avoid updating timer again before it was handled
-                    timer->m_pending = true;
-
-                    // periodic
-                    if (timer->m_period != 0)
+                    if (diff >= 0)
                     {
-                        // reload (use now to avoid drift accumulation)
-                        timer->m_deadline = now + static_cast<Ticks>(timer->m_period) - diff;
+                        // set timestamp at which timer expired
+                        timer->m_timestamp = now;
+
+                        // avoid updating timer again before it was handled
+                        timer->m_pending = true;
+
+                        // periodic
+                        if (timer->m_period != 0U)
+                        {
+                            // reload (use now to avoid drift accumulation)
+                            timer->m_deadline = now + static_cast<Ticks>(timer->m_period) - diff;
+                        }
+                        // one-shot
+                        else
+                        {
+                            one_shot = true;
+
+                            // remove from active timers
+                            m_active.Unlink(timer);
+
+                            // mark as inactive (must follow Unlink)
+                            timer->m_active = false;
+                        }
+
+                        __stk_full_memfence();
+
+                        // push to the handling queue
+                        m_queue.Write(timer);
                     }
-                    // one-shot
-                    else
+
+                    // one-shot timer does not affect next_sleep
+                    if (!one_shot)
                     {
-                        one_shot = true;
+                        Timeout next_deadline = static_cast<Timeout>(timer->m_deadline - now);
+                        STK_ASSERT(next_deadline > 0);
 
-                        // remove from active timers
-                        m_active.Unlink(timer);
-
-                        // mark as inactive (must follow Unlink)
-                        timer->m_active = false;
+                        if ((next_deadline > 0) && (next_deadline < next_sleep))
+                        {
+                            next_sleep = next_deadline;
+                        }
                     }
-
-                    __stk_full_memfence();
-
-                    // push to the handling queue
-                    m_queue.Write(timer);
-                }
-
-                // one-shot timer does not affect next_sleep
-                if (!one_shot)
-                {
-                    Timeout next_deadline = static_cast<Timeout>(timer->m_deadline - now);
-                    STK_ASSERT(next_deadline > 0);
-
-                    if ((next_deadline > 0) && (next_deadline < next_sleep))
-                        next_sleep = next_deadline;
                 }
             }
             else
@@ -719,7 +745,9 @@ inline void TimerHost::UpdateTime()
 
     // unlink all timers on shutdown
     while (Timer::DLEntryType *timer = m_active.GetFirst())
+    {
         m_active.Unlink(timer);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -728,14 +756,17 @@ inline void TimerHost::UpdateTime()
 
 inline void TimerHost::ProcessTimers()
 {
-    Timer *timer;
-    while (m_queue.Read(timer))
+    Timer *timer = nullptr;
+    bool keep_running = true;
+
+    while (keep_running && m_queue.Read(timer))
     {
         // nullptr is the shutdown sentinel pushed by CMD_SHUTDOWN
         if (timer == nullptr)
-            break;
-
-        if (timer->m_pending)
+        {
+            keep_running = false;
+        }
+        else if (timer->m_pending)
         {
             timer->m_pending = false;
             timer->OnExpired(this);
@@ -749,34 +780,38 @@ inline void TimerHost::ProcessTimers()
 
 inline bool TimerHost::ProcessCommands(Timeout next_sleep)
 {
+    TimerCommand cmd = {};
+
     // if nothing is active, sleep indefinitely until a command arrives
     next_sleep = (m_active.IsEmpty() ? WAIT_INFINITE : next_sleep);
 
-    TimerCommand cmd;
     while (m_commands.Read(cmd, next_sleep))
     {
         switch (cmd.cmd)
         {
-        case TimerCommand::CMD_START: {
+        case TimerCommand::CMD_START:
+        {
             Timer *timer = cmd.timer;
             STK_ASSERT(timer != nullptr);
 
             // reject if already active or linked (double-start)
-            if (timer->m_active)
-                continue;
+            if (!timer->m_active)
+            {
+                STK_ASSERT(!timer->IsLinked());
 
-            STK_ASSERT(!timer->IsLinked());
+                timer->m_deadline = cmd.timestamp + cmd.delay;
+                timer->m_period   = cmd.period;
+                timer->m_active   = true;
+                timer->m_pending  = false;
 
-            timer->m_deadline = cmd.timestamp + cmd.delay;
-            timer->m_period   = cmd.period;
-            timer->m_active   = true;
-            timer->m_pending  = false;
+                m_active.LinkBack(timer);
+                next_sleep = NO_WAIT;
+            }
+        }
+        break;
 
-            m_active.LinkBack(timer);
-            next_sleep = NO_WAIT;
-            break; }
-
-        case TimerCommand::CMD_STOP: {
+        case TimerCommand::CMD_STOP:
+        {
             Timer *timer = cmd.timer;
             STK_ASSERT(timer != nullptr);
 
@@ -785,46 +820,57 @@ inline bool TimerHost::ProcessCommands(Timeout next_sleep)
 
             // allow possibly duplicate CMD_STOP as it is harmless for the logic
             if (timer->IsLinked())
+            {
                 m_active.Unlink(timer);
-            break; }
+            }
+        }
+        break;
 
-        case TimerCommand::CMD_RESET: {
+        case TimerCommand::CMD_RESET:
+        {
             Timer *timer = cmd.timer;
             STK_ASSERT(timer != nullptr);
 
             // only reset if still active and periodic
-            if (!timer->m_active || (timer->m_period == 0))
-                continue;
+            if (timer->m_active && (timer->m_period != 0U))
+            {
+                STK_ASSERT(timer->GetHead() == &m_active);
 
-            STK_ASSERT(timer->GetHead() == &m_active);
+                timer->m_deadline = cmd.timestamp + timer->m_period;
+                timer->m_pending  = false;
 
-            timer->m_deadline = cmd.timestamp + timer->m_period;
-            timer->m_pending  = false;
+                next_sleep = NO_WAIT;
+            }
+        }
+        break;
 
-            next_sleep = NO_WAIT;
-            break; }
-
-        case TimerCommand::CMD_RESTART: {
+        case TimerCommand::CMD_RESTART:
+        {
             // atomic stop + re-start: no precondition on current timer state
             Timer *timer = cmd.timer;
             STK_ASSERT(timer != nullptr);
 
             // unlink if currently in the active list
             if (timer->IsLinked())
+            {
                 m_active.Unlink(timer);
+            }
 
             // re-arm with fresh parameters
             timer->m_deadline = cmd.timestamp + cmd.delay;
             timer->m_period   = cmd.period;
             timer->m_active   = true;
             timer->m_pending  = false;
+            timer->m_rearming = false;
 
             // re-link to the back of the list
             m_active.LinkBack(timer);
             next_sleep = NO_WAIT;
-            break; }
+        }
+        break;
 
-        case TimerCommand::CMD_START_OR_RESET: {
+        case TimerCommand::CMD_START_OR_RESET:
+        {
             Timer *timer = cmd.timer;
             STK_ASSERT(timer != nullptr);
 
@@ -837,12 +883,12 @@ inline bool TimerHost::ProcessCommands(Timeout next_sleep)
                 timer->m_period   = cmd.period;
                 timer->m_active   = true;
                 timer->m_pending  = false;
+                timer->m_rearming = false;
 
                 m_active.LinkBack(timer);
             }
-            else
             // active and periodic: reset deadline anchored to call-site timestamp
-            if (timer->m_period != 0)
+            else if (timer->m_period != 0U)
             {
                 STK_ASSERT(timer->GetHead() == &m_active);
 
@@ -851,40 +897,49 @@ inline bool TimerHost::ProcessCommands(Timeout next_sleep)
             }
 
             // active one-shot: no action — cannot reset a one-shot mid-flight,
-            // caller should use Restart() if unconditional re-arm is needed.
+            // caller should use Restart() if unconditional re-arm is needed
 
             next_sleep = NO_WAIT;
-            break; }
+        }
+        break;
 
-        case TimerCommand::CMD_SET_PERIOD: {
+        case TimerCommand::CMD_SET_PERIOD:
+        {
             Timer *timer = cmd.timer;
             STK_ASSERT(timer != nullptr);
             STK_ASSERT(cmd.period != 0U);
 
             // guard: only apply if still active and periodic
-            if (!timer->m_active || (timer->m_period == 0U))
-                continue;
+            if (timer->m_active && (timer->m_period != 0U))
+            {
+                STK_ASSERT(timer->GetHead() == &m_active);
 
-            STK_ASSERT(timer->GetHead() == &m_active);
+                // new period takes effect on the next reload, current deadline is
+                // intentionally left unchanged so the in-flight interval is not
+                // truncated or extended, caller can follow up with Reset() if
+                // immediate application is required
+                timer->m_period = cmd.period;
+            }
+        }
+        break;
 
-            // new period takes effect on the next reload, current deadline is
-            // intentionally left unchanged so the in-flight interval is not
-            // truncated or extended, caller can follow up with Reset() if
-            // immediate application is required
-            timer->m_period = cmd.period;
-            break; }
-
-        case TimerCommand::CMD_SHUTDOWN: {
+        case TimerCommand::CMD_SHUTDOWN:
+        {
             // wake all handler tasks with shutdown sentinels
-            for (int32_t i = 0; i < STK_TIMER_THREADS_COUNT; ++i)
+            for (size_t i = 0U; i < STK_TIMER_THREADS_COUNT; ++i)
+            {
                 m_queue.Write(nullptr, NO_WAIT);
+            }
 
             // signal UpdateTime() to exit its loop
-            return false; }
+            return false;
+        }
 
-        default: {
+        default:
+        {
             STK_ASSERT(false);
-            break; }
+            break;
+        }
         }
     }
 
@@ -897,16 +952,49 @@ inline bool TimerHost::ProcessCommands(Timeout next_sleep)
 
 inline bool TimerHost::PushCommand(TimerCommand cmd)
 {
-    if (!m_commands.Write(cmd, NO_WAIT))
+    bool success = true;
+    bool proceed_to_write = true;
+
+    const bool is_rearm = (cmd.cmd == TimerCommand::CMD_RESTART) ||
+                          (cmd.cmd == TimerCommand::CMD_START_OR_RESET);
+
+    // rearm coalescing (CMD_RESTART and CMD_START_OR_RESET only)
+    if (is_rearm && (cmd.timer != nullptr))
     {
-        // queue full: this indicates a usage error — more commands are being
-        // issued than the tick task can drain. Loud in debug, recoverable in
-        // release (caller receives false and can retry or escalate).
-        STK_ASSERT(false);
-        return false;
+        if (cmd.timer->m_rearming)
+        {
+            // already rearming - successfully coalesced, no need to write to queue
+            proceed_to_write = false;
+        }
+        else
+        {
+            cmd.timer->m_rearming = true;
+
+            // prevent compiler from sinking the flag write past Write()
+            __stk_full_memfence();
+        }
     }
 
-    return true;
+    // write to command queue
+    if (proceed_to_write)
+    {
+        if (!m_commands.Write(cmd, NO_WAIT))
+        {
+            // revert the flag if this was a failed rearm attempt
+            if (is_rearm && (cmd.timer != nullptr))
+            {
+                cmd.timer->m_rearming = false;
+            }
+
+            // queue full: this indicates a usage error - more commands are being
+            // issued than the tick task can drain (recoverable in
+            // release, caller receives false and can retry or escalate)
+            STK_ASSERT(false);
+            success = false;
+        }
+    }
+
+    return success;
 }
 
 } // namespace time

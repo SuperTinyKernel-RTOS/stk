@@ -334,7 +334,7 @@ inline bool MessageQueue::Put(const void *msg_ptr, Timeout timeout)
             return false;
     }
 
-    memcpy(Slot(m_head), msg_ptr, m_msg_size);
+    STK_MEMCPY(Slot(m_head), msg_ptr, m_msg_size);
     m_head = Next(m_head);
     m_count++;
 
@@ -364,7 +364,7 @@ inline bool MessageQueue::PutFront(const void *msg_ptr, Timeout timeout)
     // then write the message there.  This makes the new message the head of
     // the logical sequence without touching m_head at all.
     m_tail = Prev(m_tail);
-    memcpy(Slot(m_tail), msg_ptr, m_msg_size);
+    STK_MEMCPY(Slot(m_tail), msg_ptr, m_msg_size);
     m_count++;
 
     m_cv_not_empty.NotifyOne_CS();
@@ -415,7 +415,7 @@ inline bool MessageQueue::Peek(void *msg_ptr, Timeout timeout)
 
     // Copy from the tail slot without advancing the index or decrementing
     // the count, so the message remains available for the next Get().
-    memcpy(msg_ptr, Slot(m_tail), m_msg_size);
+    STK_MEMCPY(msg_ptr, Slot(m_tail), m_msg_size);
 
     return true;
 }
@@ -439,7 +439,7 @@ inline bool MessageQueue::PeekFront(void *msg_ptr, Timeout timeout)
     // The front-inserted message is at m_tail (PutFront retreats m_tail then
     // writes, so the newly placed message is always at the current m_tail).
     // For a pure-Put queue this is equally correct: m_tail is the oldest slot.
-    memcpy(msg_ptr, Slot(m_tail), m_msg_size);
+    STK_MEMCPY(msg_ptr, Slot(m_tail), m_msg_size);
 
     return true;
 }

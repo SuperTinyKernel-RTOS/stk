@@ -521,23 +521,28 @@
     #define STK_SLEEP_TRAP_STACK_SIZE (STK_STACK_SIZE_MIN)
 #endif
 
-/*! \def   STK_ALLOCATE_COUNT
-    \brief Selects a static array element count at compile time based on a mode flag.
-    \note  On GCC/Clang: expands to ONTRUE if (MODE & FLAG) is non-zero, otherwise ONFALSE.
-           On MSVC/IAR: always expands to max(ONTRUE, ONFALSE) because these compilers do not support
-           zero-sized arrays. This means MSVC and IAR builds may over-allocate when the flag is not set,
-           but avoids a compile error. Configuration mistakes that would result in ONFALSE on other 
-           compilers will be silently masked.
-    \param[in] MODE: Bitmask of active kernel modes (e.g. EKernelMode flags).
-    \param[in] FLAG: The specific mode bit to test.
-    \param[in] ONTRUE: Array count to use when FLAG is active.
-    \param[in] ONFALSE: Array count to use when FLAG is inactive (may be 0 on GCC/Clang).
+/*! \struct STK_ALLOCATE_COUNT
+    \brief  Selects a static array element count at compile time based on a mode flag.
+    \note   On GCC/Clang: evaluates to ONTRUE if (MODE & FLAG) is non-zero, otherwise ONFALSE.
+            On MSVC/IAR: always evaluates to the maximum of ONTRUE and ONFALSE because these
+            compilers do not support zero-sized arrays.
+
+    \tparam MODE    Bitmask of active kernel modes (e.g., EKernelMode flags).
+    \tparam FLAG    The specific mode bit to test.
+    \tparam ONTRUE  Array count to use when FLAG is active.
+    \tparam ONFALSE Array count to use when FLAG is inactive (may be 0 on GCC/Clang).
 */
+template <size_t MODE, size_t FLAG, size_t ONTRUE, size_t ONFALSE>
+struct STK_ALLOCATE_COUNT
+{
 #if defined(_MSC_VER) || defined(__ICCARM__)
-    #define STK_ALLOCATE_COUNT(MODE, FLAG, ONTRUE, ONFALSE) ((ONTRUE) > (ONFALSE) ? (ONTRUE) : (ONFALSE))
+    /* MSVC and IAR builds may over-allocate when the flag is not set to avoid compile errors. */
+    static constexpr size_t Value = ((ONTRUE > ONFALSE) ? ONTRUE : ONFALSE);
 #else
-    #define STK_ALLOCATE_COUNT(MODE, FLAG, ONTRUE, ONFALSE) ((((MODE) & (FLAG)) != 0U) ? (ONTRUE) : (ONFALSE))
+    /* GCC and Clang support zero-sized array extensions natively. */
+    static constexpr size_t Value = (((MODE & FLAG) != 0U) ? ONTRUE : ONFALSE);
 #endif
+};
 
 /*! \def   STK_ENDIAN_IDX_HI
     \brief Array index of the high 32-bit word when a 64-bit value is viewed as \c uint32_t[2].
@@ -576,6 +581,18 @@
     \brief     Explicitly marks a variable as unused to suppress compiler warnings.
 */
 #define STK_UNUSED(X) static_cast<void>(X)
+
+/*! \brief     A wrapper for a built-in memcpy, redefine to your own if required.
+    \note      Can be overridden by defining _STK_CUSTOM_MEMCPY in system configuration.
+*/
+#ifndef _STK_CUSTOM_MEMCPY
+#include <string.h>
+static __stk_forceinline void STK_MEMCPY(void *const dest, const void *const src, const size_t size)
+{
+    /* MISRA-compliant explicitly-typed call to underlying implementation */
+    static_cast<void>(memcpy(dest, src, size));
+}
+#endif
 
 /*! \namespace stk
     \brief     Namespace of STK package.

@@ -10,7 +10,7 @@
 #ifndef STK_SYNC_SPINLOCK_H_
 #define STK_SYNC_SPINLOCK_H_
 
-#include "stk_common.h"
+#include "stk_helper.h"
 
 /*! \file  stk_sync_spinlock.h
     \brief Implementation of synchronization primitive: stk::sync::SpinLock.
