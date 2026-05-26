@@ -10,8 +10,6 @@
 #ifndef STK_SYNC_RWMUTEX_H_
 #define STK_SYNC_RWMUTEX_H_
 
-#include "stk_common.h"
-#include "stk_sync_cs.h"
 #include "stk_sync_cv.h"
 
 /*! \file  stk_sync_rwmutex.h

@@ -648,10 +648,10 @@ protected:
         Stack             m_stack;      //!< Stack descriptor (SP register value + access mode + optional tid).
         volatile uint32_t m_state;      //!< Bitmask of EStateFlags. Written by task thread, read/cleared by kernel tick.
         volatile Timeout  m_time_sleep; //!< Sleep countdown: negative while sleeping (absolute value = ticks remaining), zero when awake.
-        SrtInfo           m_srt[STK_ALLOCATE_COUNT(TMode, KERNEL_HRT, 0, 1)];       //!< SRT metadata. Zero-size (no memory) in KERNEL_HRT mode.
-        HrtInfo           m_hrt[STK_ALLOCATE_COUNT(TMode, KERNEL_HRT, 1, 0)];       //!< HRT metadata. Zero-size (no memory) in non-HRT mode.
-        Weight            m_rt_weight[STK_ALLOCATE_COUNT(TStrategy::WEIGHT_API, 1, 1, 0)]; //!< Run-time weight for weighted-round-robin scheduling. Zero-size for unweighted strategies.
-        WaitObject        m_wait_obj[STK_ALLOCATE_COUNT(TMode, KERNEL_SYNC, 1, 0)]; //!< Embedded wait object for synchronization. Zero-size (no memory) if KERNEL_SYNC is not set.
+        SrtInfo           m_srt[STK_ALLOCATE_COUNT<TMode, KERNEL_HRT, 0U, 1U>::Value];       //!< SRT metadata. Zero-size (no memory) in KERNEL_HRT mode.
+        HrtInfo           m_hrt[STK_ALLOCATE_COUNT<TMode, KERNEL_HRT, 1U, 0U>::Value];       //!< HRT metadata. Zero-size (no memory) in non-HRT mode.
+        Weight            m_rt_weight[STK_ALLOCATE_COUNT<TStrategy::WEIGHT_API, 1U, 1U, 0U>::Value]; //!< Run-time weight for weighted-round-robin scheduling. Zero-size for unweighted strategies.
+        WaitObject        m_wait_obj[STK_ALLOCATE_COUNT<TMode, KERNEL_SYNC, 1U, 0U>::Value]; //!< Embedded wait object for synchronization. Zero-size (no memory) if KERNEL_SYNC is not set.
     };
 
     /*! \class KernelService
@@ -2226,11 +2226,11 @@ protected:
     KernelTask      *m_task_now;        //!< Currently executing task, or \c nullptr before Start() or after all tasks exit.
     TaskStorageType  m_task_storage;    //!< Static pool of TSize KernelTask slots (free slots have m_user == nullptr).
     SleepTrapStack   m_sleep_trap[1];   //!< Sleep trap (always present): executed when all tasks are sleeping.
-    ExitTrapStack    m_exit_trap[STK_ALLOCATE_COUNT(TMode, KERNEL_DYNAMIC, 1, 0)]; //!< Exit trap: zero-size in KERNEL_STATIC mode; one entry in KERNEL_DYNAMIC mode.
+    ExitTrapStack    m_exit_trap[STK_ALLOCATE_COUNT<TMode, KERNEL_DYNAMIC, 1U, 0U>::Value]; //!< Exit trap: zero-size in KERNEL_STATIC mode; one entry in KERNEL_DYNAMIC mode.
     EFsmState        m_fsm_state;       //!< Current FSM state. Drives context-switch decision on every tick.
     volatile uint8_t m_request;         //!< Bitmask of pending ERequest flags from running tasks. Written by tasks, read/cleared by UpdateTaskRequest() in tick context.
     volatile EState  m_state;           //!< Current kernel state.
-    SyncObjectList   m_sync_list[STK_ALLOCATE_COUNT(TMode, KERNEL_SYNC, 1, 0)]; //!< List of active sync objects. Zero-size (no memory) if KERNEL_SYNC is not set.
+    SyncObjectList   m_sync_list[STK_ALLOCATE_COUNT<TMode, KERNEL_SYNC, 1U, 0U>::Value]; //!< List of active sync objects. Zero-size (no memory) if KERNEL_SYNC is not set.
 
     const EFsmState  m_fsm[FSM_STATE_MAX][FSM_EVENT_MAX] = {
     //    FSM_EVENT_SWITCH     FSM_EVENT_SLEEP     FSM_EVENT_WAKE    FSM_EVENT_EXIT

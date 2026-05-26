@@ -81,8 +81,7 @@ public:
     /*! \brief Destructor.
         \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
     */
-    ~SwitchStrategySmoothWeightedRoundRobin()
-    {}
+    ~SwitchStrategySmoothWeightedRoundRobin() = default;
 
     /*! \brief     Add task to the runnable set.
         \param[in] task: Task to add. Must not be \c nullptr.
