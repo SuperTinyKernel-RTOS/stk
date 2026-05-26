@@ -10,8 +10,7 @@
 #ifndef DRIVER_LED_H_
 #define DRIVER_LED_H_
 
-#include <stdbool.h>
-#include <stdint.h>
+#include "defs.h"
 
 typedef enum LedId
 {
@@ -53,13 +52,11 @@ struct Led
 
 } // namespace bsp
 
-#else // __cplusplus
+#endif // __cplusplus
 
-void Led_Init(LedId led, bool init_state);
-void Led_InitAll(bool init_state);
-void Led_Set(LedId led, bool state);
-void Led_SwitchOnExclusive(LedId led);
-
-#endif
+STK_EXTERN void Led_Init(LedId led, bool init_state);
+STK_EXTERN void Led_InitAll(bool init_state);
+STK_EXTERN void Led_Set(LedId led, bool state);
+STK_EXTERN void Led_SwitchOnExclusive(LedId led);
 
 #endif /* DRIVER_LED_H_ */

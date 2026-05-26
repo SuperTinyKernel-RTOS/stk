@@ -118,8 +118,9 @@ TEST(UserTask, GetStackSpace)
     CHECK_EQUAL(TaskMock<ACCESS_USER>::STACK_SIZE, space);
 
     // write something to bottom
-    task.GetStack()[task.GetStackSize() - 1] = 0x12345678;
-    task.GetStack()[task.GetStackSize() - 2] = 0x12345678;
+    Word *stack_mem = const_cast<Word *>(task.GetStack());
+    stack_mem[task.GetStackSize() - 1] = 0x12345678;
+    stack_mem[task.GetStackSize() - 2] = 0x12345678;
 
     space = task.GetStackSpace();
 

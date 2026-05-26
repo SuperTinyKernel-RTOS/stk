@@ -715,7 +715,7 @@ stk_rwmutex_t *stk_rwmutex_create(stk_rwmutex_mem_t *memory, uint32_t memory_siz
     if (memory_size < sizeof(stk_rwmutex_t))
         return nullptr;
 
-    return (stk_rwmutex_t *)new (memory->data) stk_rwmutex_t{};
+    return (stk_rwmutex_t *)new (memory->data) stk_rwmutex_t();
 }
 
 void stk_rwmutex_destroy(stk_rwmutex_t *rw)

@@ -51,9 +51,9 @@ class Task : public ITask
 public:
     enum { STACK_SIZE = _StackSize }; //!< Stack size in elements of Word, mirrors the _StackSize template parameter.
 
-    Word *GetStack() const override { return const_cast<Word *>(m_stack); }
-    size_t GetStackSize() const override { return _StackSize; }
-    size_t GetStackSizeBytes() const override { return _StackSize * sizeof(Word); }
+    const Word *GetStack()      const override { return const_cast<Word *>(m_stack); }
+    size_t GetStackSize()       const override { return _StackSize; }
+    size_t GetStackSizeBytes()  const override { return _StackSize * sizeof(Word); }
     EAccessMode GetAccessMode() const override { return _AccessMode; }
 
 protected:
@@ -72,8 +72,7 @@ protected:
     /*! \brief Destructor.
         \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
     */
-    ~Task()
-    {}
+    ~Task() = default;
 
 private:
     typename StackMemoryDef<_StackSize>::Type m_stack; //!< Stack memory region, 16-byte aligned.
@@ -99,11 +98,11 @@ class TaskW : public ITask
 public:
     enum { STACK_SIZE = _StackSize }; //!< Stack size in elements of Word, mirrors the _StackSize template parameter.
 
-    Word *GetStack() const override { return const_cast<Word *>(m_stack); }
-    size_t GetStackSize() const override { return _StackSize; }
-    size_t GetStackSizeBytes() const override { return _StackSize * sizeof(Word); }
+    const Word *GetStack()      const override { return const_cast<Word *>(m_stack); }
+    size_t GetStackSize()       const override { return _StackSize; }
+    size_t GetStackSizeBytes()  const override { return _StackSize * sizeof(Word); }
     EAccessMode GetAccessMode() const override { return _AccessMode; }
-    Weight GetWeight() const override { return _Weight; }
+    Weight GetWeight()          const override { return _Weight; }
 
 protected:
     STK_NONCOPYABLE_CLASS(TaskW);
@@ -120,8 +119,7 @@ protected:
     /*! \brief Destructor.
         \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
     */
-    ~TaskW()
-    {}
+    ~TaskW() = default;
 
 private:
     typename StackMemoryDef<_StackSize>::Type m_stack; //!< Stack memory region, 16-byte aligned.
@@ -156,12 +154,11 @@ public:
     /*! \brief Destructor.
         \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
     */
-    ~StackMemoryWrapper()
-    {}
+    ~StackMemoryWrapper() = default;
 
     /*! \brief Get pointer to the first element of the wrapped stack array.
     */
-    Word *GetStack() const override { return (*m_stack); }
+    const Word *GetStack() const override { return (*m_stack); }
 
     /*! \brief Get number of elements in the wrapped stack array.
     */
@@ -243,9 +240,9 @@ __stk_forceinline TId GetTid()
     \return    Equivalent time in milliseconds.
     \note      ISR-safe (performs only arithmetic, no kernel calls).
 */
-__stk_forceinline Time GetMsFromTicks(Ticks ticks, int32_t resolution)
+__stk_forceinline Time GetMsFromTicks(Ticks ticks, uint32_t resolution)
 {
-    return (ticks * resolution) / 1000;
+    return static_cast<Time>((ticks * static_cast<Ticks>(resolution)) / 1000LL);
 }
 
 /*! \brief     Convert milliseconds to ticks.
@@ -254,9 +251,9 @@ __stk_forceinline Time GetMsFromTicks(Ticks ticks, int32_t resolution)
     \return    Equivalent tick count.
     \note      ISR-safe (performs only arithmetic, no kernel calls).
 */
-__stk_forceinline Ticks GetTicksFromMs(Time ms, int32_t resolution)
+__stk_forceinline Ticks GetTicksFromMs(Time ms, uint32_t resolution)
 {
-    return ((resolution != 0) ? (ms * 1000 / resolution) : 0);
+    return static_cast<Ticks>(((resolution != 0U) ? (ms * 1000LL / static_cast<Time>(resolution)) : 0LL));
 }
 
 /*! \brief     Get number of ticks elapsed since kernel start.

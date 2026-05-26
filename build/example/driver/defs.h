@@ -7,24 +7,16 @@
  * License: MIT License, see LICENSE for a full text.
  */
 
-#ifndef DRIVER_CPU_H_
-#define DRIVER_CPU_H_
+#ifndef DRIVER_DEFS_H_
+#define DRIVER_DEFS_H_
 
-#include "defs.h"
+#include <stdbool.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
+    #define STK_EXTERN extern "C"
+#else
+    #define STK_EXTERN extern
+#endif
 
-namespace bsp {
-
-struct Cpu
-{
-    static void Start(uint8_t cpu_id, void (*entry_func)(void));
-};
-
-} // namespace bsp
-
-#endif // __cplusplus
-
-STK_EXTERN void Cpu_Start(uint8_t cpu_id, void (*entry_func)(void));
-
-#endif /* DRIVER_CPU_H_ */
+#endif /* DRIVER_DEFS_H_ */

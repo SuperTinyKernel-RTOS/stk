@@ -377,9 +377,10 @@ __stk_forceinline T ReadVolatile64(volatile const T *addr)
     {
         // 32-bit arch: split the 64-bit address into two 32-bit halves.
         // Writer always updates hi before lo (see WriteVolatile64), so if hi is
-        // the same before and after reading lo, no write straddled the two reads.
-        volatile const uint32_t *plo = &((volatile const uint32_t *)addr)[STK_ENDIAN_IDX_LO];
-        volatile const uint32_t *phi = &((volatile const uint32_t *)addr)[STK_ENDIAN_IDX_HI];
+        // the same before and after reading lo, no write straddled the two reads.        
+        volatile const uint32_t *const p_base = reinterpret_cast<volatile const uint32_t *>(addr);
+        volatile const uint32_t *const plo = &p_base[STK_ENDIAN_IDX_LO];
+        volatile const uint32_t *const phi = &p_base[STK_ENDIAN_IDX_HI];
 
         uint32_t hi, lo;
         do
@@ -392,7 +393,7 @@ __stk_forceinline T ReadVolatile64(volatile const T *addr)
         }
         while (hi != (*phi)); // hi changed: a write occurred during the read; retry
 
-        return ((uint64_t)hi << 32) | lo;
+        return (static_cast<uint64_t>(hi) << 32) | lo;
     }
 }
 
@@ -429,15 +430,16 @@ __stk_forceinline void WriteVolatile64(volatile T *addr, T value)
     }
     else
     {
-        volatile uint32_t *plo = &((volatile uint32_t *)addr)[STK_ENDIAN_IDX_LO];
-        volatile uint32_t *phi = &((volatile uint32_t *)addr)[STK_ENDIAN_IDX_HI];
+        volatile uint32_t *const p_base = reinterpret_cast<volatile uint32_t *>(addr);
+        volatile uint32_t *const plo = &p_base[STK_ENDIAN_IDX_LO];
+        volatile uint32_t *const phi = &p_base[STK_ENDIAN_IDX_HI];
 
         // Write hi first: ReadVolatile64 reads hi twice and retries if it changed,
         // so writing hi before lo ensures readers can detect a torn write.
-        (*phi) = (uint32_t)(value >> 32);
+        (*phi) = static_cast<uint32_t>(static_cast<uint64_t>(value) >> 32);
         __stk_full_memfence();
 
-        (*plo) = (uint32_t)value;
+        (*plo) = static_cast<uint32_t>(value);
     }
 }
 

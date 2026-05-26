@@ -609,7 +609,9 @@ bool Context::InitStack(EStackType stack_type, Stack *stack, IStackMemory *stack
 {
     InitStackMemory(stack_memory);
 
-    TaskContext *ctx = reinterpret_cast<TaskContext *>(STK_X86_WIN32_GET_SP(stack_memory->GetStack()));
+    Word * const stack_mem = const_cast<Word *>(stack_memory->GetStack());
+
+    TaskContext * const ctx = reinterpret_cast<TaskContext *>(STK_X86_WIN32_GET_SP(stack_mem));
 
     switch (stack_type)
     {
