@@ -27,8 +27,7 @@ public:
     /*! \brief Destructor.
         \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
     */
-    ~PlatformArmCortexM()
-    {}
+    ~PlatformArmCortexM() = default;
 
     void Initialize(IEventHandler *event_handler, IKernelService *service, uint32_t resolution_us, Stack *exit_trap) override;
     void Start() override;

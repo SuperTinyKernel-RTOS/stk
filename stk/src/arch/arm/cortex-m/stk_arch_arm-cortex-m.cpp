@@ -951,8 +951,7 @@ static struct Context final : public PlatformContext
     /*! \brief Destructor.
         \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
     */
-    ~Context()
-    {}
+    ~Context() = default;
 
     void Initialize(IPlatform::IEventHandler *handler, IKernelService *service, Stack *exit_trap,
         uint32_t resolution_us) override
@@ -1306,7 +1305,12 @@ Timeout Context::ReloadTickPeriod(Timeout ticks_requested)
 {
     const uint32_t SYSTICK_MAX_LOAD = 0x00FFFFFFu; // SysTick LOAD register is 24-bit
     const uint32_t reload = static_cast<uint32_t>(ConvertTimeUsToClockCycles(HW_CoreClockFrequency(), m_tick_resolution));
-
+    if (reload == 0U)
+    {
+        STK_ASSERT(false);
+        return NO_WAIT;
+    }
+        
     // guard against uint32_t overflow in the reload calculation
     STK_ASSERT(static_cast<uint64_t>(ticks_requested) * reload <= UINT32_MAX);
 
@@ -1682,7 +1686,11 @@ void Context::OnStart()
 Timeout Context::Suspend()
 {
     const uint32_t resolution = static_cast<uint32_t>(ConvertTimeUsToClockCycles(HW_CoreClockFrequency(), m_tick_resolution));
-    STK_ASSERT(resolution != 0);
+    if (resolution == 0U)
+    {
+        STK_ASSERT(false);
+        return NO_WAIT;
+    }
 
     HW_DisableInterrupts();
 

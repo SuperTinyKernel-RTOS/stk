@@ -59,9 +59,9 @@ public:
         m_host_handle = nullptr;
     }
 
-    stk_timer_callback_t GetCallback() const { return m_callback; }
-    void *GetUserData() const { return m_user_data; }
-    stk_timerhost_t *GetHostHandle() const { return m_host_handle; }
+    stk_timer_callback_t GetCallback() { return m_callback; }
+    void *GetUserData() { return m_user_data; }
+    stk_timerhost_t *GetHostHandle() { return m_host_handle; }
 
     void OnExpired(TimerHost */*host*/) override
     {

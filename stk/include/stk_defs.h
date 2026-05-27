@@ -428,7 +428,7 @@
            Can be overridden by defining STK_STACK_MEMORY_FILLER before including this header or in stk_config.h.
 */
 #ifndef STK_STACK_MEMORY_FILLER
-    #define STK_STACK_MEMORY_FILLER ((stk::Word)((sizeof(stk::Word) <= 4U) ? 0xdeadbeef : 0xdeadbeefdeadbeef))
+    #define STK_STACK_MEMORY_FILLER ((stk::Word)((sizeof(stk::Word) <= 4U) ? 0xdeadbeefu : 0xdeadbeefdeadbeefull))
 #endif
 
 /*! \def   STK_STACK_MEMORY_ALIGN

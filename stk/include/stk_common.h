@@ -256,7 +256,7 @@ class IStackMemory
 public:
     /*! \brief   Get pointer to the stack memory.
     */
-    virtual Word *GetStack() const = 0;
+    virtual const Word *GetStack() const = 0;
 
     /*! \brief   Get number of elements of the stack memory array.
     */
@@ -383,8 +383,7 @@ public:
     /*! \brief Destructor.
         \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
     */
-    ~ISyncObject()
-    {}
+    ~ISyncObject() = default;
 
     /*! \typedef   ListHeadType
         \brief     List head type for ISyncObject elements.
@@ -575,7 +574,8 @@ public:
                    IKernelTask::GetWeight, IKernelService::InheritWeight, IKernelService::RestoreWeight
     */
     virtual Weight GetWeight() const { return DEFAULT_WEIGHT; }
-    /*! \brief     Get task Id set by application.
+
+    /*! \brief     Get task Id set by application.
         \return    Application-defined task identifier. Return 0 if unused.
         \note      Used for debugging and tracing only. The kernel does not interpret this value.
     */

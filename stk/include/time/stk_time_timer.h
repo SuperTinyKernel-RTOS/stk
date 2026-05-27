@@ -339,7 +339,7 @@ private:
         const char *GetTraceName()  const override { return nullptr; }
 
         // IStackMemory
-        Word *GetStack()            const override { return m_stack; }
+        const Word *GetStack()      const override { return m_stack; }
         size_t GetStackSize()       const override { return m_stack_size; }
         size_t GetStackSizeBytes()  const override { return (m_stack_size * sizeof(Word)); }
 

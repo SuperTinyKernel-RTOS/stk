@@ -21,6 +21,17 @@
 #define STK_TIMER_COUNT_MAX (STK_C_TIMER_MAX)
 #include "time/stk_time.h"
 
+// Check correctness of stk_config.h
+#ifndef STK_C_KERNEL_TYPE_CPU_0
+#error "Missing STK_C_KERNEL_TYPE_CPU_0: Kernel type for CPU0 must be defined via stk_config.h or compiler flags."
+#endif
+#ifndef STK_C_CPU_COUNT
+#error "Missing STK_C_CPU_COUNT: CPU count must be defined via stk_config.h or compiler flags."
+#endif
+#ifndef STK_C_KERNEL_MAX_TASKS
+#error "Missing STK_C_KERNEL_MAX_TASKS: max task count must be defined via stk_config.h or compiler flags."
+#endif
+
 using namespace stk;
 
 #define STK_C_TASKS_MAX (STK_C_KERNEL_MAX_TASKS)
@@ -33,35 +44,43 @@ struct stk_task_t;
 class TaskWrapper final : public ITask
 {
 public:
+    explicit TaskWrapper() : m_func(nullptr), m_user_data(nullptr), m_stack(nullptr), 
+        m_stack_size(0U), m_mode(ACCESS_USER), m_weight(DEFAULT_WEIGHT), m_tname(nullptr)
+    {}
+    
+    /*! \brief Destructor.
+        \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
+    */
+    ~TaskWrapper() = default;
+  
     // ITask
-    EAccessMode GetAccessMode() const override { return m_mode; }
-    void OnDeadlineMissed(uint32_t duration) override { (void)duration; }
-    int32_t GetWeight() const override { return m_weight; }
-    const char *GetTraceName() const override { return m_tname; }
+    EAccessMode GetAccessMode()              const override { return m_mode; }
+    void OnDeadlineMissed(uint32_t duration)       override { (void)duration; }
+    int32_t GetWeight()                      const override { return m_weight; }
+    const char *GetTraceName()               const override { return m_tname; }
 
     // IStackMemory
-    stk_word_t *GetStack() const override { return m_stack; }
-    size_t GetStackSize() const override { return m_stack_size; }
+    const Word *GetStack()     const override { return m_stack; }
+    size_t GetStackSize()      const override { return m_stack_size; }
     size_t GetStackSizeBytes() const override { return m_stack_size * sizeof(stk_word_t); }
 
-    void Initialize(stk_task_entry_t func,
-                    void       *user_data,
-                    stk_word_t  *stack,
-                    size_t      stack_size,
-                    EAccessMode mode)
+    void Initialize(stk_task_entry_t func, void *user_data, stk_word_t *stack,
+        size_t stack_size, EAccessMode mode)
     {
         m_func       = func;
         m_user_data  = user_data;
         m_stack      = stack;
         m_stack_size = stack_size;
         m_mode       = mode;
-        m_weight     = 1;
+        m_weight     = DEFAULT_WEIGHT;
     }
 
-    void SetWeight(int32_t weight) { m_weight = weight; }
+    void SetWeight(Weight weight) { m_weight = weight; }
     void SetName(const char *tname) { m_tname = tname; }
 
 private:
+    STK_NONCOPYABLE_CLASS(TaskWrapper);
+  
     void Run() override { m_func(m_user_data); }
     void OnExit() override { FreeTask(ToStkTask()); }
 
@@ -73,7 +92,7 @@ private:
     stk_word_t      *m_stack;
     size_t           m_stack_size;
     EAccessMode      m_mode;
-    int32_t          m_weight;
+    Weight           m_weight;
     const char      *m_tname;
 };
 
@@ -239,12 +258,19 @@ extern "C" {
 // -----------------------------------------------------------------------------
 // Kernel create/destroy wrappers
 // -----------------------------------------------------------------------------
+#define STK_PP_CAT(A, B)        A##B
+#define STK_PP_CAT_EXPAND(A, B) STK_PP_CAT(A, B)
+#define STK_KERNEL_TYPE(X)      STK_PP_CAT(STK_C_KERNEL_TYPE_CPU_, X)
+#define STK_KERNEL_MEM(X)       STK_PP_CAT_EXPAND(kernel_, STK_PP_CAT_EXPAND(X, _mem))
 #define STK_KERNEL_CASE(X) \
     case X: \
     { \
-        STK_STATIC_ASSERT_N(sizeof(STK_C_KERNEL_TYPE_CPU_##X) % sizeof(Word) == 0, "Kernel memory size must be multiple of Word"); \
-        alignas(alignof(STK_C_KERNEL_TYPE_CPU_##X)) static Word kernel_##X##_mem[sizeof(STK_C_KERNEL_TYPE_CPU_##X) / sizeof(Word)]; \
-        IKernel *kernel = new (kernel_##X##_mem) STK_C_KERNEL_TYPE_CPU_##X(); \
+        using KernelType_ = STK_KERNEL_TYPE(X); \
+        STK_STATIC_ASSERT_N(((sizeof(KernelType_) % sizeof(Word)) == 0U), \
+                            "Kernel memory size must be multiple of Word"); \
+        alignas(alignof(KernelType_)) \
+        static Word STK_KERNEL_MEM(X)[sizeof(KernelType_) / sizeof(Word)]; \
+        IKernel *kernel = new (STK_KERNEL_MEM(X)) KernelType_(); \
         RegisterKernel(kernel, X); \
         return reinterpret_cast<stk_kernel_t *>(kernel); \
     }

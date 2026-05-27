@@ -31,8 +31,7 @@ public:
     /*! \brief Destructor.
         \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
     */
-    ~PlatformContext()
-    {}
+    ~PlatformContext() = default;
 
     /*! \brief     Initialize context.
         \param[in] handler: Event handler.
@@ -56,15 +55,17 @@ public:
     */
     static inline Word *InitStackMemory(IStackMemory *memory)
     {
-        size_t stack_size = memory->GetStackSize();
-        Word *itr = memory->GetStack();
-        Word *stack_top = itr + stack_size;
+        const size_t stack_size = memory->GetStackSize();
+        Word *itr = const_cast<Word *>(memory->GetStack());
+        Word *const stack_top = itr + stack_size;
 
         STK_ASSERT(stack_size >= STACK_SIZE_MIN);
 
         // initialization of the stack memory satisfies stack integrity check in Kernel::StateSwitch
         while (itr < stack_top)
+        {
             *itr++ = STK_STACK_MEMORY_FILLER;
+        }
 
         // expecting STK_STACK_MEMORY_ALIGN-byte aligned memory for a stack
         STK_ASSERT((hw::PtrToWord(stack_top) & (STK_STACK_MEMORY_ALIGN - 1)) == 0U);

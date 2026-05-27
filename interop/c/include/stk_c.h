@@ -586,9 +586,9 @@ stk_tick_t stk_ticks_from_ms(stk_time_t msec);
                Use this overload when the resolution is already cached to avoid
                a repeated call to stk_tick_resolution().
 */
-static inline stk_tick_t stk_ticks_from_ms_r(stk_time_t msec, int32_t resolution)
+static inline stk_tick_t stk_ticks_from_ms_r(stk_time_t msec, uint32_t resolution)
 {
-    return msec * 1000 / resolution;
+    return ((resolution != 0U) ? (msec * 1000LL / (stk_time_t)resolution) : 0LL);
 }
 
 /*! \brief     Returns current time in milliseconds since kernel start.
@@ -602,9 +602,9 @@ stk_time_t stk_time_now_ms(void);
     \return    Equivalent time in milliseconds.
     \note      ISR-safe (arithmetic only).
 */
-static inline stk_time_t stk_ms_from_ticks_r(stk_tick_t ticks, int32_t resolution)
+static inline stk_time_t stk_ms_from_ticks_r(stk_tick_t ticks, uint32_t resolution)
 {
-    return (ticks * resolution) / 1000;
+    return (stk_time_t)((ticks * (stk_tick_t)resolution) / 1000LL);
 }
 
 /*! \brief     Convert ticks to milliseconds using the current kernel tick resolution.

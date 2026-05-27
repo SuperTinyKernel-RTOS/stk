@@ -125,7 +125,7 @@ protected:
             \brief Bitmask of transient state flags. Set by the task or the kernel and
                    consumed (cleared) during UpdateTaskState() on the next tick.
         */
-        enum EStateFlags
+        enum EStateFlags : uint32_t
         {
             STATE_NONE           = 0,        //!< No pending state flags.
             STATE_REMOVE_PENDING = (1 << 0), //!< Task returned from its Run function; slot will be freed on the next tick (KERNEL_DYNAMIC only).
@@ -528,8 +528,8 @@ protected:
         */
         bool IsMemoryOfSP(Word SP) const
         {
-            Word *start = m_user->GetStack();
-            Word *end   = start + m_user->GetStackSize();
+            const Word *const start = m_user->GetStack();
+            const Word *const end   = start + m_user->GetStackSize();
 
             return (SP >= hw::PtrToWord(start)) && (SP <= hw::PtrToWord(end));
         }
