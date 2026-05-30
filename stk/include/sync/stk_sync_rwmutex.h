@@ -72,7 +72,7 @@ public:
                 An assertion is triggered in debug builds.
         \note   MISRA deviation: [STK-DEV-005] Rule 10-3-2.
     */
-    ~RWMutex()
+    STK_VIRT_DTOR ~RWMutex()
     {
         // API contract: must not be destroyed while readers are active, writers are waiting,
         // or a writer holds the lock
@@ -87,10 +87,10 @@ public:
     public:
         /*! \brief     Constructs the guard and attempts to acquire the write lock.
             \param[in] rw: Reference to the RWMutex.
-            \param[in] timeout: Maximum time to wait (ticks). Use NO_WAIT for non-blocking (TryLock).
+            \param[in] timeout_ticks: Maximum time to wait (ticks). Use NO_WAIT for non-blocking (TryLock).
         */
-        explicit ScopedTimedLock(RWMutex &rw, Timeout timeout = WAIT_INFINITE)
-            : m_rw(rw), m_locked(rw.TimedLock(timeout))
+        explicit ScopedTimedLock(RWMutex &rw, Timeout timeout_ticks = WAIT_INFINITE)
+            : m_rw(rw), m_locked(rw.TimedLock(timeout_ticks))
         {}
 
         ~ScopedTimedLock() { if (m_locked) { m_rw.Unlock(); } }
@@ -112,10 +112,10 @@ public:
     public:
         /*! \brief     Constructs the guard and attempts to acquire the read lock.
             \param[in] rw: Reference to the RWMutex.
-            \param[in] timeout: Maximum time to wait (ticks). Use NO_WAIT for non-blocking (TryReadLock).
+            \param[in] timeout_ticks: Maximum time to wait (ticks). Use NO_WAIT for non-blocking (TryReadLock).
         */
-        explicit ScopedTimedReadMutex(RWMutex &rw, Timeout timeout = WAIT_INFINITE)
-            : m_rw(rw), m_locked(rw.TimedReadLock(timeout))
+        explicit ScopedTimedReadMutex(RWMutex &rw, Timeout timeout_ticks = WAIT_INFINITE)
+            : m_rw(rw), m_locked(rw.TimedReadLock(timeout_ticks))
         {}
 
         ~ScopedTimedReadMutex() { if (m_locked) { m_rw.ReadUnlock(); } }
@@ -130,12 +130,12 @@ public:
     };
 
     /*! \brief     Acquire the lock for shared reading with a timeout.
-        \param[in] timeout: Maximum time to wait (ticks).
+        \param[in] timeout_ticks: Maximum time to wait (ticks).
         \note      Non-recursive.
         \return    True if lock acquired, false if timeout occurred.
-        \warning   ISR-safe only with \a timeout = \c NO_WAIT, ISR-unsafe otherwise.
+        \warning   ISR-safe only with \a timeout_ticks = \c NO_WAIT, ISR-unsafe otherwise.
     */
-    bool TimedReadLock(Timeout timeout);
+    bool TimedReadLock(Timeout timeout_ticks);
 
     /*! \brief     Acquire the lock for shared reading.
         \details   Blocks the calling task if a writer is currently active or if there
@@ -162,12 +162,12 @@ public:
     void ReadUnlock();
 
     /*! \brief     Acquire the lock for exclusive writing with a timeout.
-        \param[in] timeout: Maximum time to wait (ticks).
+        \param[in] timeout_ticks: Maximum time to wait (ticks).
         \return    True if lock acquired, false if timeout occurred.
         \note      Non-recursive.
-        \warning   ISR-safe only with \a timeout = \c NO_WAIT, ISR-unsafe otherwise.
+        \warning   ISR-safe only with \a timeout_ticks = \c NO_WAIT, ISR-unsafe otherwise.
     */
-    bool TimedLock(Timeout timeout);
+    bool TimedLock(Timeout timeout_ticks);
 
     /*! \brief     Acquire the lock for exclusive writing (IMutex interface).
         \details   Blocks the calling task until all active readers have released their
@@ -209,23 +209,32 @@ private:
 // TimedReadLock
 // ---------------------------------------------------------------------------
 
-inline bool RWMutex::TimedReadLock(Timeout timeout)
+inline bool RWMutex::TimedReadLock(Timeout timeout_ticks)
 {
+    bool success = true;
     ScopedCriticalSection cs_;
 
     // wait if there is an active writer or if writers are waiting (Writer Preference)
     while (m_writer_active || (m_writers_waiting != 0U))
     {
-        if (!m_cv_readers.Wait(cs_, timeout))
-            return false; // timeout
+        if (!m_cv_readers.Wait(cs_, timeout_ticks))
+        {
+            success = false; // timeout
+            break;
+        }
 
         // re-check on wake: another writer may have queued up while this task was sleeping
     }
 
-    STK_ASSERT(m_readers < READERS_MAX); // API contract: reader count must not exceed maximum
+    // only increment reader count if the lock was successfully acquired without timing out
+    if (success)
+    {
+        STK_ASSERT(m_readers < READERS_MAX); // API contract: reader count must not exceed maximum
 
-    m_readers = static_cast<uint16_t>(m_readers + 1U);
-    return true;
+        m_readers = static_cast<uint16_t>(m_readers + 1U);
+    }
+
+    return success;
 }
 
 // ---------------------------------------------------------------------------
@@ -234,7 +243,7 @@ inline bool RWMutex::TimedReadLock(Timeout timeout)
 
 inline void RWMutex::ReadUnlock()
 {
-    ScopedCriticalSection cs_;
+    const ScopedCriticalSection cs_;
 
     STK_ASSERT(m_readers != 0U); // API contract: must have a matching ReadLock()
 
@@ -242,15 +251,18 @@ inline void RWMutex::ReadUnlock()
 
     // wake a waiting writer when the last reader exits
     if (m_readers == 0U)
+    {
         m_cv_writers.NotifyOne_CS();
+    }
 }
 
 // ---------------------------------------------------------------------------
 // TimedLock
 // ---------------------------------------------------------------------------
 
-inline bool RWMutex::TimedLock(Timeout timeout)
+inline bool RWMutex::TimedLock(Timeout timeout_ticks)
 {
+    bool success = true;
     ScopedCriticalSection cs_;
 
     STK_ASSERT(m_writers_waiting < WRITERS_MAX); // API contract: waiting writer count must not exceed maximum
@@ -260,22 +272,30 @@ inline bool RWMutex::TimedLock(Timeout timeout)
     // wait until there are no active readers and no active writer
     while (m_writer_active || (m_readers != 0U))
     {
-        if (!m_cv_writers.Wait(cs_, timeout))
+        if (!m_cv_writers.Wait(cs_, timeout_ticks))
         {
             // timed out: withdraw from the waiting writers queue
             m_writers_waiting = static_cast<uint16_t>(m_writers_waiting - 1U);
-            return false;
+            success = false;
+            break;
         }
     }
 
-    m_writers_waiting = static_cast<uint16_t>(m_writers_waiting - 1U);
+    // only finalize state if the wait didn't time out
+    if (success)
+    {
+        m_writers_waiting = static_cast<uint16_t>(m_writers_waiting - 1U);
 
-    // kernel invariant: no readers and no active writer when lock is granted
-    if ((m_readers != 0U) || m_writer_active)
-        STK_KERNEL_PANIC(KERNEL_PANIC_ASSERT);
+        // kernel invariant: no readers and no active writer when lock is granted
+        if ((m_readers != 0U) || m_writer_active)
+        {
+            STK_KERNEL_PANIC(KERNEL_PANIC_ASSERT);
+        }
 
-    m_writer_active = true;
-    return true;
+        m_writer_active = true;
+    }
+
+    return success;
 }
 
 // ---------------------------------------------------------------------------
@@ -284,7 +304,7 @@ inline bool RWMutex::TimedLock(Timeout timeout)
 
 inline void RWMutex::Unlock()
 {
-    ScopedCriticalSection cs_;
+    const ScopedCriticalSection cs_;
 
     STK_ASSERT(m_writer_active); // API contract: caller must hold the write lock
 
@@ -293,9 +313,13 @@ inline void RWMutex::Unlock()
     // prioritize waking waiting writers to prevent writer starvation;
     // only wake readers if no writers are queued
     if (m_writers_waiting != 0U)
+    {
         m_cv_writers.NotifyOne_CS();
+    }
     else
+    {
         m_cv_readers.NotifyAll_CS();
+    }
 }
 
 } // namespace sync

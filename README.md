@@ -21,23 +21,24 @@
 
 STK combines the control and transparency of bare-metal development with the structure and maintainability of modern, type-safe C++.
 
-### For Embedded Developers
+You get:
 
-- **Deterministic execution** — no dynamic memory allocation (`malloc/free`) and no heap fragmentation. Memory usage is fully predictable at compile time.
-- **Lightweight C++ architecture** — clean object-oriented design without STL dependencies, exceptions, RTTI, or heavy runtime abstractions.
-- **Native C interoperability** — fully featured C API available for pure C projects and mixed C/C++ codebases.
-- **Transparent implementation** — minimal wrapper macros and readable scheduler internals simplify debugging and tracing.
-- **Portable design** — minimal BSP surface and straightforward architecture porting.
+- **C++ native RTOS** — Built so the C++ compiler can efficiently optimize your STK-based application for maximum speed and ultra-low overhead.
+- **Safe code from day one** — Thoughtful OOP design enforces strict encapsulation and type safety to deliver secure, robust, and high-performance firmware.
+- **Full-featured RTOS** — A comprehensive suite of thread synchronization, memory, and time management primitives. You only need to bring your own HAL.
+- **Safety-critical ready** — Built for strict compliance with MISRA standards. Looking for a safe C++ RTOS for your certified device? Explore our [Services](#services). 
+- **Deterministic execution** — Zero dynamic memory allocation (`malloc`/`free`) and zero heap fragmentation. Memory usage is fully predictable at compile time.
+- **Clean C++ design** — No STL dependencies, exceptions, RTTI, or heavy runtime abstractions. Readable internals simplify debugging and tracing.
+- **Verbose-free code** — A clean C++ API makes your implementation highly concise, making it significantly easier to maintain, refactor, and debug than standard C-only APIs.
+- **Portable design** — Minimal BSP (Board Support Package) footprint with complete independence from specific board and MCU peripherals.
+- **Reduced hardware requirements** — Compact kernel footprint that allows you to deploy on lower-RAM, lower-cost MCU variants.
+- **Higher CPU availability** — More time for your application logic. Benchmarks show up to **~12% more application CPU time** compared to FreeRTOS under comparable workloads (see [Benchmark](#benchmark)).
+- **Lower power consumption** — Features ultra-low power, tickless scheduling paired with reduced overhead, enabling the use of lower-frequency MCUs to save battery of your portable design.
+- **Native C support** — Includes a fully featured C API wrapper, allowing you to seamlessly use STK in pure C projects.
+- **Simplified migration** — Drop-in compatibility layers for FreeRTOS and CMSIS-RTOS2 to help you migrate legacy codebases with minimal application changes.
+- **B2B professional support** — Engineered for seamless integration into commercial projects. Explore our [Services](#services) for enterprise-grade support and custom engineering.
 
-### For Technical Leads and Product Teams
-
-- **Reduced hardware requirements** — the compact kernel footprint can enable the use of lower-RAM or lower-cost MCU variants.
-- **Higher CPU availability for applications** — benchmarks show up to **~12% more application CPU time** compared to FreeRTOS under comparable workloads (see [Benchmark](#benchmark)).
-- **Lower power potential** — reduced scheduling overhead can help meet timing requirements at lower MCU clock frequencies.
-- **Simplified migration** — compatibility layers for FreeRTOS and CMSIS-RTOS2 allow existing projects to migrate with minimal application changes.
-- **Predictable system behavior** — static allocation and deterministic scheduling simplify validation, debugging, and long-term maintenance.
-
-> STK does not attempt to abstract or manage MCU peripherals. Its purpose is to provide a fast, predictable, and memory-efficient scheduling core for embedded applications.
+> STK does not attempt to abstract or manage MCU peripherals, similarly to FreeRTOS or CMSIS-RTOS2.
 
 STK is an open-source project developed at https://github.com/SuperTinyKernel-RTOS.
 
@@ -323,6 +324,13 @@ A complete ultra-low power demo targeting the [STM32F407G-DISC1](https://www.st.
 * GCC
 * Clang/ARMCC 6 and higher
 * IAR EWARM 8.0 and higher (ARM only)
+
+---
+
+## Language
+
+* Minimal: C++11
+* Recommended: C++17 and higher
 
 ---
 
@@ -963,7 +971,7 @@ You may freely use it in projects of any type:
 
 ---
 
-## 🔒 Professional Services & Commercial Licensing
+## Services
 
 While **SuperTinyKernel™ RTOS** is provided under the permissive MIT license, we offer dedicated professional services for organizations integrating STK into production-grade, mission-critical, or regulated environments.
 

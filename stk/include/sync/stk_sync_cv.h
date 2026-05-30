@@ -75,7 +75,7 @@ public:
                    (dangling waiters). An assertion is triggered in debug builds.
         \note      MISRA deviation: [STK-DEV-005] Rule 10-3-2.
     */
-    ~ConditionVariable()
+    STK_VIRT_DTOR  ~ConditionVariable()
     {
         STK_ASSERT(m_wait_list.IsEmpty()); // API contract: must not be destroyed with waiting tasks
     }
@@ -87,12 +87,12 @@ public:
         \param[in] mutex: An \a IMutex-compatible lock that must be held by the calling task
                    before Wait() is called. The kernel releases it atomically during suspension
                    and re-acquires it on wake.
-        \param[in] timeout: Maximum time to wait (ticks). Use \a WAIT_INFINITE to block
+        \param[in] timeout_ticks: Maximum time to wait (ticks). Use \a WAIT_INFINITE to block
                    indefinitely, \a NO_WAIT to return immediately without blocking.
         \return    \c true if signaled, \c false if timeout occurred or \a NO_WAIT was passed.
-        \warning   ISR-safe only with timeout=NO_WAIT, ISR-unsafe otherwise.
+        \warning   ISR-safe only with timeout_ticks=NO_WAIT, ISR-unsafe otherwise.
     */
-    bool Wait(IMutex &mutex, Timeout timeout = WAIT_INFINITE);
+    bool Wait(IMutex &mutex, Timeout timeout_ticks = WAIT_INFINITE);
 
     /*! \brief     Wake one waiting task.
         \note      ISR-safe.
@@ -124,17 +124,20 @@ private:
 // Wait
 // ---------------------------------------------------------------------------
 
-inline bool ConditionVariable::Wait(IMutex &mutex, Timeout timeout)
+inline bool ConditionVariable::Wait(IMutex &mutex, Timeout timeout_ticks)
 {
     // API contract: mutex must be locked by the calling task before Wait() is called.
     // The kernel releases it atomically during suspension and re-acquires it on wake.
+    bool success = false;
 
-    if (timeout == NO_WAIT)
-        return false;
+    if (timeout_ticks != NO_WAIT)
+    {
+        STK_ASSERT(!hw::IsInsideISR()); // API contract: caller must not be in ISR if timeout_ticks!=NO_WAIT
+        
+        success = !IKernelService::GetInstance()->Wait(this, &mutex, timeout_ticks)->IsTimeout();
+    }
 
-    STK_ASSERT(!hw::IsInsideISR()); // API contract: caller must not be in ISR if timeout!=NO_WAIT
-
-    return !IKernelService::GetInstance()->Wait(this, &mutex, timeout)->IsTimeout();
+    return success;
 }
 
 // ---------------------------------------------------------------------------
@@ -143,7 +146,7 @@ inline bool ConditionVariable::Wait(IMutex &mutex, Timeout timeout)
 
 inline void ConditionVariable::NotifyOne()
 {
-    ScopedCriticalSection cs_;
+    const ScopedCriticalSection cs_;
     NotifyOne_CS();
 }
 
@@ -162,7 +165,7 @@ inline void ConditionVariable::NotifyOne_CS()
 
 inline void ConditionVariable::NotifyAll()
 {
-    ScopedCriticalSection cs_;
+    const ScopedCriticalSection cs_;
     NotifyAll_CS(); // wakes all tasks in the wait list simultaneously
 }
 

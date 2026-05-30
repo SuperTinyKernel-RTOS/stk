@@ -132,11 +132,7 @@ public:
                    (dangling waiters). An assertion is triggered in debug builds.
         \note      MISRA deviation: [STK-DEV-005] Rule 10-3-2.
     */
-    ~EventFlags()
-    {
-        // API contract: must not be destroyed while tasks are waiting
-        // (checked inside Mutex/ConditionVariable destructors via their own assertions)
-    }
+    STK_VIRT_DTOR ~EventFlags() = default;
 
     // -----------------------------------------------------------------------
     // Flag manipulation
@@ -185,7 +181,7 @@ public:
                    not have bit 31 set.
         \param[in] options: Combination of \c WAIT_ANY / \c WAIT_ALL and optionally
                    \c NO_CLEAR. Default: \c WAIT_ANY (clear on success).
-        \param[in] timeout: Maximum time to wait (ticks).
+        \param[in] timeout_ticks: Maximum time to wait (ticks).
                    Use \c WAIT_INFINITE to block indefinitely,
                    \c NO_WAIT for a non-blocking poll.
         \return    Bitmask of the flags that caused the wakeup (the matched subset),
@@ -194,9 +190,9 @@ public:
         \note      If the predicate becomes satisfied in the same tick that the deadline
                    expires, the wait succeeds and returns the matched flags. The timeout
                    is only reported when the condition is not met at deadline time.
-        \warning   ISR-safe only with \a timeout = \c NO_WAIT, ISR-unsafe otherwise.
+        \warning   ISR-safe only with \a timeout_ticks = \c NO_WAIT, ISR-unsafe otherwise.
     */
-    uint32_t Wait(uint32_t flags, uint32_t options = OPT_WAIT_ANY, Timeout timeout = WAIT_INFINITE);
+    uint32_t Wait(uint32_t flags, uint32_t options = OPT_WAIT_ANY, Timeout timeout_ticks = WAIT_INFINITE);
 
     /*! \brief     Non-blocking flag poll.
         \details   Checks immediately whether the flag condition is satisfied.
@@ -218,10 +214,8 @@ private:
     // Must be called with m_mutex held.
     bool IsSatisfied(uint32_t flags, uint32_t options) const
     {
-        if (options & OPT_WAIT_ALL)
-            return ((m_flags & flags) == flags);
-        else
-            return ((m_flags & flags) != 0U);
+        return ((options & OPT_WAIT_ALL) == OPT_WAIT_ALL) ? ((m_flags & flags) == flags) :
+            ((m_flags & flags) != 0U);
     }
 
     volatile uint32_t m_flags; //!< 32-bit flags word (bit 31 is reserved for errors)
@@ -234,18 +228,20 @@ private:
 
 inline uint32_t EventFlags::Set(uint32_t flags)
 {
-    if ((flags == 0U) || ((flags & ERROR_MASK) != 0U))
-        return ERROR_PARAMETER;
+    uint32_t final_result = ERROR_PARAMETER;
 
-    ScopedCriticalSection cs_;
+    if ((flags != 0U) && ((flags & ERROR_MASK) == 0U))
+    {
+        const ScopedCriticalSection cs_;
 
-    m_flags |= flags;
-    const uint32_t result = m_flags;
+        m_flags |= flags;
+        final_result = m_flags;
 
-    // wake all waiters: each task will re-evaluate its own predicate
-    m_cv.NotifyAll();
+        // wake all waiters: each task will re-evaluate its own predicate
+        m_cv.NotifyAll();
+    }
 
-    return result;
+    return final_result;
 }
 
 // ---------------------------------------------------------------------------
@@ -254,15 +250,17 @@ inline uint32_t EventFlags::Set(uint32_t flags)
 
 inline uint32_t EventFlags::Clear(uint32_t flags)
 {
-    if ((flags == 0U) || ((flags & ERROR_MASK) != 0U))
-        return ERROR_PARAMETER;
+    uint32_t result = ERROR_PARAMETER;
 
-    ScopedCriticalSection cs_;
+    if ((flags != 0U) && ((flags & ERROR_MASK) == 0U))
+    {
+        const ScopedCriticalSection cs_;
 
-    const uint32_t prev = m_flags;
-    m_flags &= ~flags;
+        result = m_flags;
+        m_flags &= ~flags;
+    }
 
-    return prev;
+    return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -280,50 +278,65 @@ inline uint32_t EventFlags::Get() const
 // Wait
 // ---------------------------------------------------------------------------
 
-inline uint32_t EventFlags::Wait(uint32_t flags, uint32_t options, Timeout timeout)
+inline uint32_t EventFlags::Wait(uint32_t flags, uint32_t options, Timeout timeout_ticks)
 {
+    uint32_t final_result = 0U;
+
     // validate: flags must be non-zero and must not have the error sentinel bit set
     if ((flags == 0U) || ((flags & ERROR_MASK) != 0U))
-        return ERROR_PARAMETER;
-
-    // ISR check: only NO_WAIT is permitted inside an ISR
-    if (hw::IsInsideISR() && (timeout != NO_WAIT))
-        return ERROR_ISR;
-
-    const bool timed_wait = (timeout != WAIT_INFINITE) && (timeout != NO_WAIT);
-
-    // capture an absolute deadline once, before entering the wait loop,
-    // this prevents the timeout from being silently restarted on each
-    // spurious wakeup (e.g. a partial Set() that does not satisfy WAIT_ALL)
-    const Timeout deadline = (timed_wait ? static_cast<Timeout>(GetTicks() + timeout) : timeout);
-
-    ScopedCriticalSection cs_;
-
-    // spin (with blocking) until the predicate is satisfied or we time out
-    while (!IsSatisfied(flags, options))
     {
-        Timeout remaining = deadline;
-        if (timed_wait)
+        final_result = ERROR_PARAMETER;
+    }
+    // ISR check: only NO_WAIT is permitted inside an ISR
+    else if (hw::IsInsideISR() && (timeout_ticks != NO_WAIT))
+    {
+        final_result = ERROR_ISR;
+    }
+    else
+    {
+        const bool timed_wait = (timeout_ticks != WAIT_INFINITE) && (timeout_ticks != NO_WAIT);
+
+        // capture an absolute deadline once, before entering the wait loop,
+        // this prevents the timeout from being silently restarted on each
+        // spurious wakeup (e.g. a partial Set() that does not satisfy WAIT_ALL)
+        const Timeout deadline = (timed_wait ? 
+            static_cast<Timeout>(GetTicks() + timeout_ticks) : timeout_ticks);
+
+        ScopedCriticalSection cs_;
+
+        // spin (with blocking) until the predicate is satisfied or we time out
+        while (!IsSatisfied(flags, options))
         {
-            const Timeout now = static_cast<Timeout>(GetTicks());
-            remaining = (now >= deadline ? NO_WAIT : (deadline - now));
+            Timeout remaining = deadline;
+            if (timed_wait)
+            {
+                const Timeout now = static_cast<Timeout>(GetTicks());
+                remaining = (now >= deadline ? NO_WAIT : (deadline - now));
+            }
+
+            if (!m_cv.Wait(cs_, remaining))
+            {
+                // timeout: mark failure and flag the loop to terminate
+                final_result = ERROR_TIMEOUT;
+                break;
+            }
         }
 
-        if (!m_cv.Wait(cs_, remaining))
+        // If we didn't time out, the predicate was satisfied successfully
+        if (final_result != ERROR_TIMEOUT)
         {
-            // timeout: release the mutex and report failure
-            return ERROR_TIMEOUT;
+            // predicate satisfied: determine which flags matched
+            final_result = (((options & OPT_WAIT_ALL) == OPT_WAIT_ALL) ? flags : (m_flags & flags));
+
+            // atomically clear the matched flags unless the caller opted out
+            if ((options & OPT_NO_CLEAR) == 0U)
+            {
+                m_flags &= ~final_result;
+            }
         }
     }
 
-    // predicate satisfied: determine which flags matched
-    const uint32_t matched = (options & OPT_WAIT_ALL ? flags : (m_flags & flags));
-
-    // atomically clear the matched flags unless the caller opted out
-    if ((options & OPT_NO_CLEAR) == 0U)
-        m_flags &= ~matched;
-
-    return matched;
+    return final_result;
 }
 
 } // namespace sync

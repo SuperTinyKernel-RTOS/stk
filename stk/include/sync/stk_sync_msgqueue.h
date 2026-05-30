@@ -10,8 +10,6 @@
 #ifndef STK_SYNC_MSGQUEUE_H_
 #define STK_SYNC_MSGQUEUE_H_
 
-#include <cstring> // for memcpy
-
 #include "stk_sync_cv.h"
 
 /*! \file  stk_sync_msgqueue.h
@@ -75,7 +73,7 @@ public:
                    ConditionVariable destructors.
         \note      MISRA deviation: [STK-DEV-005] Rule 10-3-2.
     */
-    ~MessageQueue() = default;
+    STK_VIRT_DTOR ~MessageQueue() = default;
 
     /*! \brief     Put a message into the back of the queue (FIFO order).
         \details   Copies \a msg_size bytes from \a msg_ptr into the next available
@@ -83,14 +81,14 @@ public:
                    is suspended until space becomes available or the timeout
                    expires.
         \param[in] msg_ptr: Pointer to the message payload (must be at least \a msg_size bytes).
-        \param[in] timeout: Maximum time to wait for a free slot (ticks).
+        \param[in] timeout_ticks: Maximum time to wait for a free slot (ticks).
                    Use \c WAIT_INFINITE to block indefinitely, \c NO_WAIT for a
                    non-blocking attempt.
-        \warning   ISR-safe only with \a timeout = \c NO_WAIT, ISR-unsafe otherwise.
+        \warning   ISR-safe only with \a timeout_ticks = \c NO_WAIT, ISR-unsafe otherwise.
         \return    \c true if the message was successfully enqueued,
                    \c false if the timeout expired before space became available.
     */
-    bool Put(const void *msg_ptr, Timeout timeout = WAIT_INFINITE);
+    bool Put(const void *msg_ptr, Timeout timeout_ticks = WAIT_INFINITE);
 
     /*! \brief     Attempt to put a message into the back of the queue without blocking.
         \details   Enqueues the message only if a free slot is immediately
@@ -108,15 +106,15 @@ public:
                    \c Get() will return. If the queue is full the calling task is
                    suspended until space becomes available or the timeout expires.
         \param[in] msg_ptr: Pointer to the message payload (must be at least \a msg_size bytes).
-        \param[in] timeout: Maximum time to wait for a free slot (ticks).
+        \param[in] timeout_ticks: Maximum time to wait for a free slot (ticks).
                    Use \c WAIT_INFINITE to block indefinitely, \c NO_WAIT for a
                    non-blocking attempt.
-        \warning   ISR-safe only with \a timeout = \c NO_WAIT, ISR-unsafe otherwise.
+        \warning   ISR-safe only with \a timeout_ticks = \c NO_WAIT, ISR-unsafe otherwise.
         \return    \c true if the message was successfully enqueued at the front,
                    \c false if the timeout expired before space became available.
         \see       Put, TryPutFront
     */
-    bool PutFront(const void *msg_ptr, Timeout timeout = WAIT_INFINITE);
+    bool PutFront(const void *msg_ptr, Timeout timeout_ticks = WAIT_INFINITE);
 
     /*! \brief     Attempt to put a message into the front of the queue without blocking.
         \details   Enqueues the message at the front only if a free slot is immediately
@@ -136,14 +134,14 @@ public:
                    produced or the timeout expires.
         \param[out] msg_ptr: Destination buffer for the retrieved message
                     (must be at least \a msg_size bytes).
-        \param[in]  timeout: Maximum time to wait for a message (ticks).
+        \param[in]  timeout_ticks: Maximum time to wait for a message (ticks).
                     Use \c WAIT_INFINITE to block indefinitely, \c NO_WAIT for a
                     non-blocking attempt.
-        \warning    ISR-safe only with \a timeout = \c NO_WAIT, ISR-unsafe otherwise.
+        \warning    ISR-safe only with \a timeout_ticks = \c NO_WAIT, ISR-unsafe otherwise.
         \return     \c true if a message was successfully retrieved,
                     \c false if the timeout expired before a message was available.
     */
-    bool Get(void *msg_ptr, Timeout timeout = WAIT_INFINITE);
+    bool Get(void *msg_ptr, Timeout timeout_ticks = WAIT_INFINITE);
 
     /*! \brief     Attempt to get a message from the queue without blocking.
         \details   Dequeues a message only if one is immediately available.
@@ -163,15 +161,15 @@ public:
                    is produced or the timeout expires.
         \param[out] msg_ptr: Destination buffer for the peeked message
                     (must be at least \a msg_size bytes).
-        \param[in]  timeout: Maximum time to wait for a message (ticks).
+        \param[in]  timeout_ticks: Maximum time to wait for a message (ticks).
                     Use \c WAIT_INFINITE to block indefinitely, \c NO_WAIT for a
                     non-blocking attempt.
-        \warning    ISR-safe only with \a timeout = \c NO_WAIT, ISR-unsafe otherwise.
+        \warning    ISR-safe only with \a timeout_ticks = \c NO_WAIT, ISR-unsafe otherwise.
         \return     \c true if a message was successfully peeked,
                     \c false if the timeout expired before a message was available.
         \see        Get, TryPeek, PeekFront
     */
-    bool Peek(void *msg_ptr, Timeout timeout = WAIT_INFINITE);
+    bool Peek(void *msg_ptr, Timeout timeout_ticks = WAIT_INFINITE);
 
     /*! \brief     Attempt to peek at the next message without blocking.
         \details   Copies the oldest message into \a msg_ptr only if one is
@@ -192,15 +190,15 @@ public:
                    suspended until a message is produced or the timeout expires.
         \param[out] msg_ptr: Destination buffer for the peeked message
                     (must be at least \a msg_size bytes).
-        \param[in]  timeout: Maximum time to wait for a message (ticks).
+        \param[in]  timeout_ticks: Maximum time to wait for a message (ticks).
                     Use \c WAIT_INFINITE to block indefinitely, \c NO_WAIT for a
                     non-blocking attempt.
-        \warning    ISR-safe only with \a timeout = \c NO_WAIT, ISR-unsafe otherwise.
+        \warning    ISR-safe only with \a timeout_ticks= \c NO_WAIT, ISR-unsafe otherwise.
         \return     \c true if a message was successfully peeked,
                     \c false if the timeout expired before a message was available.
         \see        PutFront, TryPeekFront, Peek
     */
-    bool PeekFront(void *msg_ptr, Timeout timeout = WAIT_INFINITE);
+    bool PeekFront(void *msg_ptr, Timeout timeout_ticks = WAIT_INFINITE);
 
     /*! \brief     Attempt to peek at the front message without blocking.
         \details   Copies the most recently front-inserted message into \a msg_ptr
@@ -321,127 +319,162 @@ inline MessageQueue::MessageQueue(uint8_t *buf, size_t capacity, size_t msg_size
 // Put
 // ---------------------------------------------------------------------------
 
-inline bool MessageQueue::Put(const void *msg_ptr, Timeout timeout)
+inline bool MessageQueue::Put(const void *msg_ptr, Timeout timeout_ticks)
 {
     STK_ASSERT(msg_ptr != nullptr);             // API contract: msg_ptr must not be null
     STK_ASSERT(m_count <= (CAPACITY_MAX - 1U)); // API contract: must not exceed capacity
 
     ScopedCriticalSection cs_;
+    bool success = true;
 
     while (m_count == m_capacity)
     {
-        if (!m_cv_not_full.Wait(cs_, timeout))
-            return false;
+        if (!m_cv_not_full.Wait(cs_, timeout_ticks))
+        {
+            success = false;
+            break;
+        }
     }
 
-    STK_MEMCPY(Slot(m_head), msg_ptr, m_msg_size);
-    m_head = Next(m_head);
-    m_count++;
+    if (success)
+    {
+        STK_MEMCPY(Slot(m_head), msg_ptr, m_msg_size);
+        m_head = Next(m_head);
+        m_count++;
 
-    m_cv_not_empty.NotifyOne_CS();
+        m_cv_not_empty.NotifyOne_CS();
+    }
 
-    return true;
+    return success;
 }
 
 // ---------------------------------------------------------------------------
 // PutFront
 // ---------------------------------------------------------------------------
 
-inline bool MessageQueue::PutFront(const void *msg_ptr, Timeout timeout)
+inline bool MessageQueue::PutFront(const void *msg_ptr, Timeout timeout_ticks)
 {
     STK_ASSERT(msg_ptr != nullptr);             // API contract: msg_ptr must not be null
     STK_ASSERT(m_count <= (CAPACITY_MAX - 1U)); // API contract: must not exceed capacity
 
     ScopedCriticalSection cs_;
+    bool success = true;
 
     while (m_count == m_capacity)
     {
-        if (!m_cv_not_full.Wait(cs_, timeout))
-            return false;
+        if (!m_cv_not_full.Wait(cs_, timeout_ticks))
+        {
+            success = false;
+            break;
+        }
     }
 
-    // Retreat the tail pointer to claim the slot that Get() would read next,
-    // then write the message there.  This makes the new message the head of
-    // the logical sequence without touching m_head at all.
-    m_tail = Prev(m_tail);
-    STK_MEMCPY(Slot(m_tail), msg_ptr, m_msg_size);
-    m_count++;
+    if (success)
+    {
+        // retreat the tail pointer to claim the slot that Get() would read next,
+        // then write the message there; this makes the new message the head of
+        // the logical sequence without touching m_head at all
+        m_tail = Prev(m_tail);
+        STK_MEMCPY(Slot(m_tail), msg_ptr, m_msg_size);
+        m_count++;
 
-    m_cv_not_empty.NotifyOne_CS();
+        m_cv_not_empty.NotifyOne_CS();
+    }
 
-    return true;
+    return success;
 }
 
 // ---------------------------------------------------------------------------
 // Get
 // ---------------------------------------------------------------------------
 
-inline bool MessageQueue::Get(void *msg_ptr, Timeout timeout)
+inline bool MessageQueue::Get(void *msg_ptr, Timeout timeout_ticks)
 {
     STK_ASSERT(msg_ptr != nullptr); // API contract: msg_ptr must not be null
 
     ScopedCriticalSection cs_;
+    bool success = true;
 
     while (m_count == 0U)
     {
-        if (!m_cv_not_empty.Wait(cs_, timeout))
-            return false;
+        if (!m_cv_not_empty.Wait(cs_, timeout_ticks))
+        {
+            success = false;
+            break;
+        }
     }
 
-    memcpy(msg_ptr, Slot(m_tail), m_msg_size);
-    m_tail = Next(m_tail);
-    m_count--;
+    if (success)
+    {
+        STK_MEMCPY(msg_ptr, Slot(m_tail), m_msg_size);
+        m_tail = Next(m_tail);
+        m_count--;
 
-    m_cv_not_full.NotifyOne_CS();
+        m_cv_not_full.NotifyOne_CS();
+    }
 
-    return true;
+    return success;
 }
 
 // ---------------------------------------------------------------------------
 // Peek
 // ---------------------------------------------------------------------------
 
-inline bool MessageQueue::Peek(void *msg_ptr, Timeout timeout)
+inline bool MessageQueue::Peek(void *msg_ptr, Timeout timeout_ticks)
 {
     STK_ASSERT(msg_ptr != nullptr); // API contract: msg_ptr must not be null
 
     ScopedCriticalSection cs_;
+    bool success = true;
 
     while (m_count == 0U)
     {
-        if (!m_cv_not_empty.Wait(cs_, timeout))
-            return false;
+        if (!m_cv_not_empty.Wait(cs_, timeout_ticks))
+        {
+            success = false;
+            break;
+        }
     }
 
-    // Copy from the tail slot without advancing the index or decrementing
-    // the count, so the message remains available for the next Get().
-    STK_MEMCPY(msg_ptr, Slot(m_tail), m_msg_size);
+    if (success)
+    {
+        // copy from the tail slot without advancing the index or decrementing
+        // the count, so the message remains available for the next Get()
+        STK_MEMCPY(msg_ptr, Slot(m_tail), m_msg_size);
+    }
 
-    return true;
+    return success;
 }
 
 // ---------------------------------------------------------------------------
 // PeekFront
 // ---------------------------------------------------------------------------
 
-inline bool MessageQueue::PeekFront(void *msg_ptr, Timeout timeout)
+inline bool MessageQueue::PeekFront(void *msg_ptr, Timeout timeout_ticks)
 {
     STK_ASSERT(msg_ptr != nullptr); // API contract: msg_ptr must not be null
 
     ScopedCriticalSection cs_;
+    bool success = true;
 
     while (m_count == 0U)
     {
-        if (!m_cv_not_empty.Wait(cs_, timeout))
-            return false;
+        if (!m_cv_not_empty.Wait(cs_, timeout_ticks))
+        {
+            success = false;
+            break;
+        }
     }
 
-    // The front-inserted message is at m_tail (PutFront retreats m_tail then
-    // writes, so the newly placed message is always at the current m_tail).
-    // For a pure-Put queue this is equally correct: m_tail is the oldest slot.
-    STK_MEMCPY(msg_ptr, Slot(m_tail), m_msg_size);
+    if (success)
+    {
+        // the front-inserted message is at m_tail (PutFront retreats m_tail then
+        // writes, so the newly placed message is always at the current m_tail);
+        // for a pure-Put queue this is equally correct: m_tail is the oldest slot
+        STK_MEMCPY(msg_ptr, Slot(m_tail), m_msg_size);
+    }
 
-    return true;
+    return success;
 }
 
 // ---------------------------------------------------------------------------
@@ -450,13 +483,13 @@ inline bool MessageQueue::PeekFront(void *msg_ptr, Timeout timeout)
 
 inline void MessageQueue::Reset()
 {
-    ScopedCriticalSection cs_;
+    const ScopedCriticalSection cs_;
 
     m_count = 0U;
     m_head  = 0U;
     m_tail  = 0U;
 
-    // Wake all blocked producers: the queue is now entirely empty.
+    // wake all blocked producers: the queue is now entirely empty
     m_cv_not_full.NotifyAll_CS();
 }
 
@@ -517,7 +550,7 @@ public:
                    ConditionVariable destructors.
         \note      MISRA deviation: [STK-DEV-005] Rule 10-3-2.
     */
-    ~MessageQueueT() = default;
+    STK_VIRT_DTOR ~MessageQueueT() = default;
 
 private:
     STK_NONCOPYABLE_CLASS(MessageQueueT);

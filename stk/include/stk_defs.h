@@ -39,7 +39,15 @@
     \see   KERNEL_TICKLESS, STK_TICKLESS_USE_ARM_DWT, STK_TICKLESS_TICKS_MAX
 */
 #ifndef STK_TICKLESS_IDLE
-    #define STK_TICKLESS_IDLE 0
+    #define STK_TICKLESS_IDLE (0)
+#endif
+      
+/*! \def   STK_STRICT_COMPLIANCY
+    \brief Allow the use of workarounds to make binary smaller and faster.
+    \note  Applied workarounds will break safety-critical rules (MISRA, etc).
+*/
+#ifndef STK_STRICT_COMPLIANCY
+    #define STK_STRICT_COMPLIANCY (0)
 #endif
 
 /*! \def   STK_TICKLESS_USE_ARM_DWT
@@ -51,7 +59,7 @@
            timer rearm and does not require rearm-error compensation.
 */
 #ifndef STK_TICKLESS_USE_ARM_DWT
-    #define STK_TICKLESS_USE_ARM_DWT 1
+    #define STK_TICKLESS_USE_ARM_DWT (1)
 #endif
 
 /*! \def   STK_TICKLESS_TICKS_MAX
@@ -65,7 +73,7 @@
     \see   STK_TICKLESS_IDLE, KERNEL_TICKLESS
 */
 #ifndef STK_TICKLESS_TICKS_MAX
-    #define STK_TICKLESS_TICKS_MAX 1000
+    #define STK_TICKLESS_TICKS_MAX (1000)
 #endif
 #if STK_TICKLESS_TICKS_MAX > 100000
     #error "STK_TICKLESS_TICKS_MAX is too large: cpu_ticks_requested may overflow uint32_t."
@@ -87,7 +95,7 @@
     \see   STK_TLS_PREFER_REGISTER, stk::hw::GetTlsPtr, stk::hw::SetTlsPtr
 */
 #ifndef STK_TLS
-    #define STK_TLS 0
+    #define STK_TLS (0)
 #endif
 
 /*! \def   STK_TLS_PREFER_REGISTER
@@ -115,7 +123,7 @@
     \see   STK_TLS, stk::hw::GetTlsPtr, stk::hw::SetTlsPtr
 */
 #ifndef STK_TLS_PREFER_REGISTER
-    #define STK_TLS_PREFER_REGISTER 0
+    #define STK_TLS_PREFER_REGISTER (0)
 #endif
 
 /*! \def   STK_NEED_TASK_ID
@@ -127,7 +135,7 @@
     \see   STK_SEGGER_SYSVIEW, stk::Stack
 */
 #if STK_SEGGER_SYSVIEW
-    #define STK_STACK_NEEDS_TASK_ID 1
+    #define STK_STACK_NEEDS_TASK_ID (1)
 #endif
 
 /*! \def   STK_SYNC_DEBUG_NAMES
@@ -138,9 +146,18 @@
     \note  Default: 0 (disabled) unless STK_SEGGER_SYSVIEW is active.
 */
 #if !defined(STK_SYNC_DEBUG_NAMES) && STK_SEGGER_SYSVIEW
-    #define STK_SYNC_DEBUG_NAMES 1
+    #define STK_SYNC_DEBUG_NAMES (1)
 #elif !defined(STK_SYNC_DEBUG_NAMES)
-    #define STK_SYNC_DEBUG_NAMES 0
+    #define STK_SYNC_DEBUG_NAMES (0)
+#endif
+
+/*! \def   STK_VIRT_DTOR
+    \brief Makes destructors virtual and compliant to strict rules if STK_STRICT_COMPLIANCY=0.
+*/
+#if !STK_STRICT_COMPLIANCY
+    #define STK_VIRT_DTOR
+#else
+    #define STK_VIRT_DTOR virtual
 #endif
 
 /*! \def   __stk_forceinline
@@ -357,6 +374,16 @@
     #define __stk_debug_break()
 #endif
 
+/*! \def   __stk_constexpr_cpp17
+    \brief constexpr definition for C++17 and above.
+    \note  Can be used as 'if __stk_constexpr_cpp17 (x) {}' with C++11 without a warning.
+*/
+#if (__cplusplus >= 201703L) || (defined(_MSVC_LANG) && (_MSVC_LANG >= 201703L))
+    #define __stk_constexpr_cpp17 constexpr
+#else
+    #define __stk_constexpr_cpp17
+#endif
+
 /*! \def   STK_ASSERT
     \brief Runtime assertion. Halts execution if the expression \a e evaluates to false.
     \note  Behaviour depends on build configuration:
@@ -428,7 +455,7 @@
            Can be overridden by defining STK_STACK_MEMORY_FILLER before including this header or in stk_config.h.
 */
 #ifndef STK_STACK_MEMORY_FILLER
-    #define STK_STACK_MEMORY_FILLER ((stk::Word)((sizeof(stk::Word) <= 4U) ? 0xdeadbeefu : 0xdeadbeefdeadbeefull))
+    #define STK_STACK_MEMORY_FILLER (static_cast<stk::Word>((sizeof(stk::Word) <= 4U) ? 0xDEADBEEFU : 0xDEADBEEFDEADBEEFULL))
 #endif
 
 /*! \def   STK_STACK_MEMORY_ALIGN
@@ -436,11 +463,11 @@
 */
 #ifndef STK_STACK_MEMORY_ALIGN
     #if defined(__riscv)
-        #define STK_STACK_MEMORY_ALIGN 16U
+        #define STK_STACK_MEMORY_ALIGN (16U)
     #elif defined(__i386__) || defined(__x86_64__) || defined(_M_IX86) || defined(_M_X64)
-        #define STK_STACK_MEMORY_ALIGN 8U
+        #define STK_STACK_MEMORY_ALIGN (8U)
     #else // ARM, others
-        #define STK_STACK_MEMORY_ALIGN 4U
+        #define STK_STACK_MEMORY_ALIGN (4U)
     #endif
 #endif
 
@@ -455,7 +482,7 @@
            Can be overridden in stk_config.h based on Worst-Case Stack Usage (WCSU) analysis.
 */
 #ifndef STK_CRITICAL_SECTION_NESTINGS_MAX
-    #define STK_CRITICAL_SECTION_NESTINGS_MAX 16U
+    #define STK_CRITICAL_SECTION_NESTINGS_MAX (16U)
 #endif
 
 /*! \def   STK_ARCH_CPU_COUNT
@@ -465,7 +492,7 @@
            targets. Can be defined in the architecture header or stk_config.h.
 */
 #ifndef STK_ARCH_CPU_COUNT
-    #define STK_ARCH_CPU_COUNT 1U
+    #define STK_ARCH_CPU_COUNT (1U)
 #endif
 
 /*! \def   STK_STACK_SIZE_MIN
@@ -488,7 +515,7 @@
         #if defined(__riscv_32e) && (__riscv_32e == 1)
             // RISC-V RV32E (Embedded): Small 16-register file
             #if !defined(__riscv_flen) || (__riscv_flen == 0)
-                #define STK_STACK_SIZE_MIN 32U
+                #define STK_STACK_SIZE_MIN (32U)
             #else
                 // FPU present: Requires additional space for 32 FP registers
                 #define STK_STACK_SIZE_MIN (32U + (__riscv_flen * 2))
@@ -497,7 +524,7 @@
             // Standard RISC-V (RV32I/RV64I): Large 32-register file
             // Higher minimum to prevent memory corruption on platforms like RP2350
             #if !defined(__riscv_flen) || (__riscv_flen == 0)
-                #define STK_STACK_SIZE_MIN 256U
+                #define STK_STACK_SIZE_MIN (256U)
             #else
                 // Standard RISC-V with FPU: Maximum frame allocation
                 #define STK_STACK_SIZE_MIN (512U + (__riscv_flen * 2))
@@ -505,7 +532,7 @@
         #endif
     #else
         // ARM Cortex-M and other architectures
-        #define STK_STACK_SIZE_MIN 32U
+        #define STK_STACK_SIZE_MIN (32U)
     #endif
 #endif
 
@@ -580,13 +607,13 @@ struct STK_ALLOCATE_COUNT
 /*! \def       STK_UNUSED
     \brief     Explicitly marks a variable as unused to suppress compiler warnings.
 */
-#define STK_UNUSED(X) static_cast<void>(X)
+#define STK_UNUSED(X) static_cast<void>((X))
 
 /*! \brief     A wrapper for a built-in memcpy, redefine to your own if required.
     \note      Can be overridden by defining _STK_CUSTOM_MEMCPY in system configuration.
 */
 #ifndef _STK_CUSTOM_MEMCPY
-#include <string.h>
+#include <cstring>
 static __stk_forceinline void STK_MEMCPY(void *const dest, const void *const src, const size_t size)
 {
     /* MISRA-compliant explicitly-typed call to underlying implementation */

@@ -68,7 +68,7 @@ public:
     /*! \brief Exits critical section.
         \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
     */
-    ~ScopedCriticalSection() { Unlock(); }
+    STK_VIRT_DTOR ~ScopedCriticalSection() { Unlock(); }
 
 private:
     STK_NONCOPYABLE_CLASS(ScopedCriticalSection);

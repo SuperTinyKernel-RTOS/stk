@@ -14,14 +14,14 @@
     \brief Intrusive doubly-linked list implementation used internally by the kernel.
 
     Provides two class templates:
-     - DListEntry<T, _ClosedLoop>: the node embedded inside a host object (T).
-     - DListHead<T, _ClosedLoop>:  the list container that owns and traverses the nodes.
+     - DListEntry<T, TClosedLoop>: the node embedded inside a host object (T).
+     - DListHead<T, TClosedLoop>:  the list container that owns and traverses the nodes.
 
     The list is \e intrusive: the link pointers live inside the host object itself,
     so no separate heap allocation is required for list membership.
     A single host object may belong to at most one list at a time.
 
-    The \c _ClosedLoop template parameter selects between two structural variants:
+    The \c TClosedLoop template parameter selects between two structural variants:
      - \c false: open (linear) list — first->prev and last->next are \c NULL.
      - \c true:  closed (circular) list — first->prev points to last and
                  last->next points to first, enabling O(1) wrap-around traversal.
@@ -32,18 +32,18 @@ namespace util {
 
 // Forward declaration required so DListEntry can reference DListHead as a friend
 // and store a back-pointer to the owning list head.
-template <class T, bool _ClosedLoop> class DListHead;
+template <class T, bool TClosedLoop> class DListHead;
 
 /*! \class DListEntry
     \brief Intrusive doubly-linked list node. Embed this as a base class in any object (T)
            that needs to participate in a DListHead list.
 
-    \tparam T:         The host class that derives from DListEntry. Used by the implicit
+    \tparam T:           The host class that derives from DListEntry. Used by the implicit
                          conversion operators to safely downcast the node pointer back to the
                          host object pointer without a dynamic_cast.
-    \tparam _ClosedLoop: When \c true the list is kept circular (last->next == first and
+    \tparam TClosedLoop: When \c true the list is kept circular (last->next == first and
                          first->prev == last). When \c false the list is linear (boundary
-                         pointers are \c NULL). Must match the \c _ClosedLoop of the
+                         pointers are \c NULL). Must match the \c TClosedLoop of the
                          DListHead this entry will be inserted into.
 
     \note  An entry that is not currently in any list has \c m_head == \c NULL.
@@ -54,9 +54,9 @@ template <class T, bool _ClosedLoop> class DListHead;
     \note  Not thread-safe. The caller is responsible for protecting list operations
            with a hw::CriticalSection or equivalent.
 */
-template <class T, bool _ClosedLoop> class DListEntry
+template <class T, bool TClosedLoop> class DListEntry
 {
-    friend class DListHead<T, _ClosedLoop>;
+    friend class DListHead<T, TClosedLoop>;
 
 public:
     /*! \brief Construct an unlinked entry. All pointers initialized to NULL.
@@ -67,12 +67,12 @@ public:
     /*! \typedef DLEntryType
         \brief   Convenience alias for this entry type. Used to avoid repeating the full template spelling.
     */
-    typedef DListEntry<T, _ClosedLoop> DLEntryType;
+    typedef DListEntry<T, TClosedLoop> DLEntryType;
 
     /*! \typedef DLHeadType
         \brief   Convenience alias for the corresponding list head type.
     */
-    typedef DListHead<T, _ClosedLoop>  DLHeadType;
+    typedef DListHead<T, TClosedLoop>  DLHeadType;
 
     /*! \brief  Get the list head this entry currently belongs to.
         \return Pointer to the owning DListHead, or \c NULL if the entry is not linked.
@@ -87,7 +87,7 @@ public:
     /*! \brief  Get the next entry in the list.
         \return Pointer to the next DListEntry, or \c NULL if this is the last entry
                 (open list) or the first entry (closed loop, where next wraps to first).
-        \note   In a closed loop (\c _ClosedLoop == true) this pointer is never \c NULL
+        \note   In a closed loop (\c TClosedLoop == true) this pointer is never \c NULL
                 when the entry is linked.
     */
     DLEntryType *GetNext() { return m_next; }
@@ -95,7 +95,7 @@ public:
     /*! \brief  Get the next entry in the list.
         \return Pointer to the next DListEntry, or \c NULL if this is the last entry
                 (open list) or the first entry (closed loop, where next wraps to first).
-        \note   In a closed loop (\c _ClosedLoop == true) this pointer is never \c NULL
+        \note   In a closed loop (\c TClosedLoop == true) this pointer is never \c NULL
                 when the entry is linked.
     */
     const DLEntryType *GetNext() const { return m_next; }
@@ -103,7 +103,7 @@ public:
     /*! \brief  Get the previous entry in the list.
         \return Pointer to the previous DListEntry, or \c NULL if this is the first entry
                 (open list) or the last entry (closed loop, where prev wraps to last).
-        \note   In a closed loop (\c _ClosedLoop == true) this pointer is never \c NULL
+        \note   In a closed loop (\c TClosedLoop == true) this pointer is never \c NULL
                 when the entry is linked.
     */
     DLEntryType *GetPrev() { return m_prev; }
@@ -111,7 +111,7 @@ public:
     /*! \brief  Get the previous entry in the list.
         \return Pointer to the previous DListEntry, or \c NULL if this is the first entry
                 (open list) or the last entry (closed loop, where prev wraps to last).
-        \note   In a closed loop (\c _ClosedLoop == true) this pointer is never \c NULL
+        \note   In a closed loop (\c TClosedLoop == true) this pointer is never \c NULL
                 when the entry is linked.
     */
     const DLEntryType *GetPrev() const { return m_prev; }
@@ -122,14 +122,14 @@ public:
     bool IsLinked() const { return (GetHead() != nullptr); }
 
     /*! \brief Implicit conversion to a mutable pointer to the host object (T).
-        \note  Safe because T must derive from DListEntry<T, _ClosedLoop>.
+        \note  Safe because T must derive from DListEntry<T, TClosedLoop>.
                Eliminates the need for explicit static_cast at call sites.
         \note  MISRA deviation: [STK-DEV-004] Rule 5-2-x.
     */
     operator T *() { return static_cast<T *>(this); }
 
     /*! \brief Implicit conversion to a const pointer to the host object (T).
-        \note  Safe because T must derive from DListEntry<T, _ClosedLoop>.
+        \note  Safe because T must derive from DListEntry<T, TClosedLoop>.
                Eliminates the need for explicit static_cast at call sites.
         \note  MISRA deviation: [STK-DEV-004] Rule 5-2-x.
     */
@@ -144,8 +144,7 @@ protected:
         \note      An entry should be removed from its list (via DListHead::Unlink) before the
                    host object is destroyed, to keep the list's neighbour pointers consistent.
     */
-    ~DListEntry()
-    {}
+    ~DListEntry() = default;
 
 private:
     /*! \brief     Wire this entry into a list between \a prev and \a next.
@@ -162,10 +161,14 @@ private:
         m_prev = prev;
 
         if (m_prev != nullptr)
+        {
             m_prev->m_next = this;
+        }
 
         if (m_next != nullptr)
+        {
             m_next->m_prev = this;
+        }
     }
 
     /*! \brief  Remove this entry from its current list.
@@ -178,10 +181,14 @@ private:
     void Unlink()
     {
         if (m_prev != nullptr)
+        {
             m_prev->m_next = m_next;
+        }
 
         if (m_next != nullptr)
+        {
             m_next->m_prev = m_prev;
+        }
 
         m_head = nullptr;
         m_next = nullptr;
@@ -198,8 +205,8 @@ private:
            embedded in host objects of type T.
 
     \tparam T:         The host class whose instances are stored in this list. Each T must
-                         derive from DListEntry<T, _ClosedLoop>.
-    \tparam _ClosedLoop: When \c true the list is maintained as a circular ring: after every
+                         derive from DListEntry<T, TClosedLoop>.
+    \tparam TClosedLoop: When \c true the list is maintained as a circular ring: after every
                          insertion or removal, last->next is set to first and first->prev is
                          set to last. This allows scheduler algorithms to wrap around the end
                          of the list in O(1) without a branch. When \c false the boundary
@@ -213,19 +220,19 @@ private:
     \note  Not thread-safe. The caller is responsible for protecting concurrent access with
            a hw::CriticalSection or equivalent.
 */
-template <class T, bool _ClosedLoop> class DListHead
+template <class T, bool TClosedLoop> class DListHead
 {
-    friend class DListEntry<T, _ClosedLoop>;
+    friend class DListEntry<T, TClosedLoop>;
 
 public:
     /*! \typedef DLEntryType
         \brief   Convenience alias for the node type stored in this list.
     */
-    typedef DListEntry<T, _ClosedLoop> DLEntryType;
+    typedef DListEntry<T, TClosedLoop> DLEntryType;
 
     /*! \brief Construct an empty list head (count = 0, first = last = NULL).
     */
-    explicit DListHead(): m_count(0), m_first(nullptr), m_last(nullptr)
+    explicit DListHead(): m_count(0U), m_first(nullptr), m_last(nullptr)
     {}
 
     /*! \brief  Get the number of entries currently in the list.
@@ -236,7 +243,7 @@ public:
     /*! \brief  Check whether the list contains no entries.
         \return \c true if empty; \c false otherwise.
     */
-    bool IsEmpty() const { return (m_count == 0); }
+    bool IsEmpty() const { return (m_count == 0U); }
 
     /*! \brief  Get the first (front) entry without removing it.
         \return Pointer to the first DListEntry, or \c NULL if the list is empty.
@@ -322,10 +329,14 @@ public:
         STK_ASSERT(entry->GetHead() == this);
 
         if (m_first == entry)
+        {
             m_first = entry->GetNext();
+        }
 
         if (m_last == entry)
+        {
             m_last = entry->GetPrev();
+        }
 
         entry->Unlink();
         --m_count;
@@ -364,19 +375,43 @@ public:
         STK_ASSERT(!entry->IsLinked());
 
         if (prev == nullptr)
+        {
             next = m_first;
+        }
 
         ++m_count;
         entry->Link(this, next, prev);
-
-        if ((m_first == nullptr) || (m_first == entry->GetNext()))
+        
+        if (m_first == nullptr)
+        {
             m_first = entry;
+        }
+        else if (m_first == entry->GetNext())
+        {
+            m_first = entry;
+        }        
+        else
+        {
+            // noop
+        }
 
-        if ((m_last == nullptr) || (m_last == entry->GetPrev()))
+        if (m_last == nullptr)
+        {
             m_last = entry;
+        }
+        else if (m_last == entry->GetPrev())
+        {
+            m_last = entry;
+        }
+        else
+        {
+            // noop
+        }
 
-        if (_ClosedLoop)
+        if __stk_constexpr_cpp17 (TClosedLoop)
+        {
             UpdateEnds();
+        }
     }
 
 private:
@@ -384,10 +419,10 @@ private:
         \note   Called after every insertion and removal. Two responsibilities:
                 1. If the list is now empty, resets m_first and m_last to \c NULL so
                    the head is in a canonical empty state.
-                2. If \c _ClosedLoop is \c true and the list is non-empty, sets
+                2. If \c TClosedLoop is \c true and the list is non-empty, sets
                    \c m_last->m_next = m_first and \c m_first->m_prev = m_last to
                    maintain the circular invariant.
-        \note   For open lists (\c _ClosedLoop == false) only the empty-list reset runs;
+        \note   For open lists (\c TClosedLoop == false) only the empty-list reset runs;
                 the branch is eliminated at compile time by the constant template parameter.
     */
     void UpdateEnds()
@@ -397,11 +432,13 @@ private:
             m_first = nullptr;
             m_last  = nullptr;
         }
-        else
-        if (_ClosedLoop)
+        else 
         {
-            m_first->m_prev = m_last;
-            m_last->m_next = m_first;
+            if __stk_constexpr_cpp17 (TClosedLoop)
+            {
+                m_first->m_prev = m_last;
+                m_last->m_next  = m_first;
+            }
         }
     }
 

@@ -39,14 +39,18 @@ struct Led
     static void Init(Id led, bool init_state);
     static inline void InitAll(bool init_state)
     {
-        for (uint8_t led = 0; led < LED_MAX; ++led)
+        for (uint8_t led = 0U; led < LED_MAX; ++led)
+        {
             Led::Init(static_cast<LedId>(led), init_state);
+        }
     }
     static void Set(Id led, bool state);
     static void SwitchOnExclusive(Id led)
     {
-        for (uint8_t i = 0; i < LED_MAX; ++i)
+        for (uint8_t i = 0U; i < LED_MAX; ++i)
+        {
             Led::Set(static_cast<LedId>(i), (i == led));
+        }
     }
 };
 

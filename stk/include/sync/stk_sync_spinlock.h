@@ -63,7 +63,7 @@ public:
                   An assertion is triggered in debug builds.
         \note     MISRA deviation: [STK-DEV-005] Rule 10-3-2.
     */
-    ~SpinLock()
+    STK_VIRT_DTOR ~SpinLock()
     {
         STK_ASSERT(m_owner_tid == TID_NONE); // API contract: lock must not be destroyed while held
     }
@@ -110,7 +110,7 @@ private:
 
 inline void SpinLock::Lock()
 {
-    TId current_tid = GetTid();
+    const TId current_tid = GetTid();
 
     // increase recursion if this thread already owns the lock
     if (!LockRecursively(current_tid))
@@ -126,18 +126,23 @@ inline void SpinLock::Lock()
 
 inline bool SpinLock::TryLock()
 {
-    TId current_tid = GetTid();
+    const TId current_tid = GetTid();
+    bool success = true;
 
     // increase recursion if this thread already owns the lock
     if (!LockRecursively(current_tid))
     {
         if (!m_lock.TryLock())
-            return false;
-
-        MakeLocked(current_tid);
+        {
+            success = false;
+        }
+        else
+        {
+            MakeLocked(current_tid);
+        }
     }
 
-    return true;
+    return success;
 }
 
 // ---------------------------------------------------------------------------
@@ -165,15 +170,17 @@ inline void SpinLock::Unlock()
 
 inline bool SpinLock::LockRecursively(TId locking_tid)
 {
+    bool success = false;
+  
     if ((m_owner_tid == locking_tid) && (m_recursion_count != 0U))
     {
         STK_ASSERT(m_recursion_count < RECURSION_MAX); // API contract: caller must not exceed max recursion depth
 
         ++m_recursion_count;
-        return true;
+        success = true;
     }
 
-    return false;
+    return success;
 }
 
 // ---------------------------------------------------------------------------
@@ -185,7 +192,9 @@ inline void SpinLock::MakeLocked(TId locking_tid)
     // kernel invariant: if either condition is false, the low-level lock and the
     // recursion counter are out of sync, this is an internal defect, not a caller error
     if ((m_owner_tid != TID_NONE) || (m_recursion_count != 0U))
+    {
         STK_KERNEL_PANIC(KERNEL_PANIC_ASSERT);
+    }
 
     m_owner_tid       = locking_tid;
     m_recursion_count = 1U;

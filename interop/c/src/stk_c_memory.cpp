@@ -34,7 +34,7 @@ static_assert(
 // Returns a size of memory in stk::Word elements required for object allocation.
 template <typename T> static constexpr size_t StkGetWordCountForType()
 {
-    return ((sizeof(T) + sizeof(stk::Word) - 1) / sizeof(stk::Word));
+    return ((sizeof(T) + sizeof(stk::Word) - 1U) / sizeof(stk::Word));
 }
 
 // Private memory allocators (we define malloc, free here to overcome absence of declaration in
@@ -92,18 +92,22 @@ s_BlockPools[STK_C_BLOCKPOOL_MAX];
 // Find the slot that owns 'pool'; returns nullptr if not found.
 static BlockPoolSlot *FindSlot(const stk_blockpool_t *pool)
 {
-    for (uint32_t i = 0; i < STK_C_BLOCKPOOL_MAX; ++i)
+    for (size_t i = 0U; i < STK_C_BLOCKPOOL_MAX; ++i)
     {
-        if (s_BlockPools[i].busy && (s_BlockPools[i].pool() == pool))
-            return &s_BlockPools[i];
+        if (s_BlockPools[i].busy)
+        {
+            if (s_BlockPools[i].pool() == pool)
+                return &s_BlockPools[i];
+        }
     }
+    
     return nullptr;
 }
 
 // Acquire a free slot; returns nullptr when the pool is exhausted.
 static BlockPoolSlot *AcquireSlot()
 {
-    for (uint32_t i = 0; i < STK_C_BLOCKPOOL_MAX; ++i)
+    for (size_t i = 0U; i < STK_C_BLOCKPOOL_MAX; ++i)
     {
         if (!s_BlockPools[i].busy)
         {
@@ -111,6 +115,7 @@ static BlockPoolSlot *AcquireSlot()
             return &s_BlockPools[i];
         }
     }
+    
     return nullptr;
 }
 
@@ -128,7 +133,7 @@ stk_blockpool_t *stk_blockpool_create(size_t capacity, size_t raw_block_size, co
     STK_ASSERT(capacity > 0U);
     STK_ASSERT(raw_block_size > 0U);
 
-    sync::ScopedCriticalSection __cs;
+    const sync::ScopedCriticalSection cs_;
 
     BlockPoolSlot *slot = AcquireSlot();
     if (slot == nullptr)
@@ -152,7 +157,7 @@ stk_blockpool_t *stk_blockpool_create_static(size_t      capacity,
     STK_ASSERT(storage != nullptr);
     STK_ASSERT(storage_size >= (capacity * BlockMemoryPool::AlignBlockSize(raw_block_size)));
 
-    sync::ScopedCriticalSection __cs;
+    sync::ScopedCriticalSection cs_;
 
     BlockPoolSlot *slot = AcquireSlot();
     if (slot == nullptr)
@@ -170,7 +175,7 @@ void stk_blockpool_destroy(stk_blockpool_t *pool)
 {
     STK_ASSERT(pool != nullptr);
 
-    sync::ScopedCriticalSection __cs;
+    sync::ScopedCriticalSection cs_;
 
     BlockPoolSlot *slot = FindSlot(pool);
 

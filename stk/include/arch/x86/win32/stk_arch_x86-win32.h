@@ -65,13 +65,13 @@ typedef PlatformX86Win32 PlatformDefault;
     #include <intrin.h>
     #if defined(_M_IX86) || defined(_M_X64)
         // x86/x64: full hardware serializing fence
-        #define __stk_dmb() _mm_mfence()
+        static __stk_forceinline void __stk_dmb() { _mm_mfence(); }
     #elif defined(_M_ARM) || defined(_M_ARM64)
         // ARM/ARM64: Data Memory Barrier (Inner Shareable)
-        #define __stk_dmb() __dmb(_ARM_BARRIER_ISH)
+        static __stk_forceinline void __stk_dmb() { __dmb(_ARM_BARRIER_ISH); }
     #endif
 #elif defined(__GNUC__) || defined(__clang__)
-    #define __stk_dmb() __sync_synchronize()
+    static __stk_forceinline void __stk_dmb() { __sync_synchronize(); }
 #else
     #error "__stk_dmb() is not implemented for this compiler."
 #endif

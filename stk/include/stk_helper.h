@@ -172,6 +172,11 @@ private:
     MemoryType *m_stack; //!< Pointer to the externally-owned stack memory array.
 };
 
+// Helper function for Kernel::UpdateTaskState.
+template <bool TicklessMode> inline Timeout GetInitialSleepTicks();
+template <> inline Timeout GetInitialSleepTicks<true>()  { return STK_TICKLESS_TICKS_MAX; }
+template <> inline Timeout GetInitialSleepTicks<false>() { return 1; }
+
 //! Implementation of ISyncObject::Tick, see \a ISyncObject. Placed here as it depends on hw namespace.
 inline bool ISyncObject::Tick(Timeout elapsed_ticks)
 {
@@ -192,10 +197,12 @@ inline bool ISyncObject::Tick(Timeout elapsed_ticks)
 
     while (itr != nullptr)
     {
-        IWaitObject *next = static_cast<IWaitObject *>(itr->GetNext());
+        IWaitObject *const next = static_cast<IWaitObject *>(itr->GetNext());
 
         if (!itr->Tick(elapsed_ticks))
+        {
             itr->Wake(true);
+        }
 
         itr = next;
     }
@@ -207,13 +214,17 @@ inline bool ISyncObject::Tick(Timeout elapsed_ticks)
 inline Weight ISyncObject::FindWeightHigherThan(Weight comp) const
 {
     Weight max_weight = NO_WEIGHT;
+    const IWaitObject *itr = static_cast<const IWaitObject *>(m_wait_list.GetFirst());     
 
-    for (const IWaitObject *itr = static_cast<const IWaitObject *>(m_wait_list.GetFirst()); (itr != nullptr);
-            itr = static_cast<const IWaitObject *>(itr->GetNext()))
+    while (itr != nullptr)
     {
-        Weight w = GetUserTaskFromTid(itr->GetTid())->GetWeight();
+        const Weight w = GetUserTaskFromTid(itr->GetTid())->GetWeight();
         if (w > max_weight)
+        {
             max_weight = w;
+        }
+            
+        itr = static_cast<const IWaitObject *>(itr->GetNext());
     }
 
     return ((max_weight > comp) ? max_weight : NO_WEIGHT);
@@ -235,14 +246,14 @@ __stk_forceinline TId GetTid()
 }
 
 /*! \brief     Convert ticks to milliseconds.
-    \param[in] ticks: Tick count to convert.
+    \param[in] tick_count: Tick count to convert.
     \param[in] resolution: Microseconds per tick, as returned by IKernelService::GetTickResolution().
     \return    Equivalent time in milliseconds.
     \note      ISR-safe (performs only arithmetic, no kernel calls).
 */
-__stk_forceinline Time GetMsFromTicks(Ticks ticks, uint32_t resolution)
+__stk_forceinline Time GetMsFromTicks(Ticks tick_count, uint32_t resolution)
 {
-    return static_cast<Time>((ticks * static_cast<Ticks>(resolution)) / 1000LL);
+    return static_cast<Time>((tick_count * static_cast<Time>(resolution)) / 1000LL);
 }
 
 /*! \brief     Convert milliseconds to ticks.
@@ -270,7 +281,7 @@ __stk_forceinline Ticks GetTicks()
     \note      ISR-safe.
     \return    Microseconds in one tick.
 */
-__stk_forceinline int32_t GetTickResolution()
+__stk_forceinline uint32_t GetTickResolution()
 {
     return IKernelService::GetInstance()->GetTickResolution();
 }
@@ -295,11 +306,12 @@ __stk_forceinline Ticks GetTicksFromMs(Time ms)
 */
 static inline Time GetTimeNowMs()
 {
-    IKernelService *service = IKernelService::GetInstance();
-    int32_t resolution = service->GetTickResolution();
-    Ticks ticks = service->GetTicks();
+    const IKernelService *const service = IKernelService::GetInstance();
+    const uint32_t resolution = service->GetTickResolution();
+    const Ticks tick_count = service->GetTicks();
 
-    return ((resolution == 1000) ? ticks : ((ticks * resolution) / 1000));
+    return ((resolution == 1000U) ? tick_count : 
+        ((tick_count * static_cast<Ticks>(resolution)) / static_cast<Ticks>(1000)));
 }
 
 /*! \brief     Get system timer count value.
@@ -323,12 +335,12 @@ __stk_forceinline uint32_t GetSysTimerFrequency()
 /*! \brief     Put calling process into a sleep state.
     \note      Unlike Delay this function does not waste CPU cycles and allows kernel to put CPU into a low-power state.
     \note      Unsupported in HRT mode (see stk::KERNEL_HRT); in HRT mode tasks sleep automatically according to their periodicity and workload.
-    \param[in] ticks: Sleep time (ticks). 0 does not cause yield, use Yield instead. Negative will cause an assertion.
+    \param[in] tick_count: Sleep time (in ticks). 0 does not cause yield, use Yield instead. Negative will cause an assertion.
     \warning   ISR-unsafe. Calling from an ISR context is not permitted and will trigger an assertion.
 */
-__stk_forceinline void Sleep(Timeout ticks)
+__stk_forceinline void Sleep(Timeout tick_count)
 {
-    IKernelService::GetInstance()->Sleep(ticks);
+    IKernelService::GetInstance()->Sleep(tick_count);
 }
 
 /*! \brief     Put calling process into a sleep state.
@@ -341,7 +353,8 @@ __stk_forceinline void Sleep(Timeout ticks)
 */
 static inline void SleepMs(Timeout ms)
 {
-    Sleep(static_cast<Timeout>(GetTicksFromMs(ms)));
+    const Ticks tick_count = GetTicksFromMs(static_cast<Time>(ms));
+    Sleep(static_cast<Timeout>(tick_count < WAIT_INFINITE ? tick_count : WAIT_INFINITE));
 }
 
 /*! \brief     Put calling process into a sleep state until the specified timestamp.
@@ -378,12 +391,12 @@ __stk_forceinline void Yield()
 /*! \brief     Delay calling process by busy-waiting until the deadline expires.
     \note      Unlike Sleep this function delays code execution by spinning in a loop until deadline expiry.
     \note      Use with care in HRT mode to avoid missed deadline (see stk::KERNEL_HRT, ITask::OnDeadlineMissed).
-    \param[in] ticks: Delay time (ticks). Negative will cause an assertion.
+    \param[in] tick_count: Delay time (in ticks). Negative will cause an assertion.
     \warning   ISR-unsafe. Calling from an ISR context is not permitted and will trigger an assertion.
 */
-__stk_forceinline void Delay(Timeout ticks)
+__stk_forceinline void Delay(Timeout tick_count)
 {
-    IKernelService::GetInstance()->Delay(ticks);
+    IKernelService::GetInstance()->Delay(tick_count);
 }
 
 /*! \brief     Delay calling process by busy-waiting until the deadline expires.
@@ -394,7 +407,8 @@ __stk_forceinline void Delay(Timeout ticks)
 */
 static inline void DelayMs(Timeout ms)
 {
-    Delay(static_cast<Timeout>(GetTicksFromMs(ms)));
+    const Ticks tick_count = GetTicksFromMs(static_cast<Time>(ms));
+    Delay(static_cast<Timeout>(tick_count < WAIT_INFINITE ? tick_count : WAIT_INFINITE));
 }
 
 } // namespace stk

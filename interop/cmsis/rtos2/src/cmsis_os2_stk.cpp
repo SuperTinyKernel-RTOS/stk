@@ -179,7 +179,7 @@ struct StkThread final : public stk::ITask
     }
 
     // ---- IStackMemory ----
-    stk::Word *GetStack()            const override { return m_stack; }
+    const stk::Word *GetStack()      const override { return m_stack; }
     size_t GetStackSize()            const override { return m_stack_size; }
     size_t GetStackSizeBytes()       const override { return m_stack_size * sizeof(stk::Word); }
 
@@ -510,11 +510,11 @@ osKernelState_t osKernelGetState(void)
 
     switch (g_StkKernel.GetState())
     {
-    case stk::IKernel::STATE_INACTIVE:  return osKernelInactive;
-    case stk::IKernel::STATE_READY:     return osKernelReady;
-    case stk::IKernel::STATE_RUNNING:   return osKernelRunning;
-    case stk::IKernel::STATE_SUSPENDED: return osKernelSuspended;
-    default:                            return osKernelError;
+    case stk::IKernel::KSTATE_INACTIVE:  return osKernelInactive;
+    case stk::IKernel::KSTATE_READY:     return osKernelReady;
+    case stk::IKernel::KSTATE_RUNNING:   return osKernelRunning;
+    case stk::IKernel::KSTATE_SUSPENDED: return osKernelSuspended;
+    default:                             return osKernelError;
     }
 }
 
@@ -959,13 +959,24 @@ uint32_t osThreadGetCount(void)
 
 uint32_t osThreadEnumerate(osThreadId_t *thread_array, uint32_t array_items)
 {
-    if (osKernelGetState() == osKernelInactive)
-        return 0U;
+    uint32_t result_count = 0U;
+    const osKernelState_t kstate = osKernelGetState();
 
-    // osThreadId_t maps directly to stk::ITask (see StkThread)
-    return g_StkKernel.EnumerateTasks(reinterpret_cast<stk::ITask **>(thread_array), array_items);
+    // kernel must be active and buffer must be valid
+    if ((kstate != osKernelInactive) && (thread_array != nullptr) && (array_items != 0U))
+    {
+        // cast the raw pointer array to the expected ITask* destination type
+        stk::ITask **tasks_destination = reinterpret_cast<stk::ITask **>(thread_array);
+
+        // bind raw destination buffer into a temporary ArrayView object
+        const size_t count = g_StkKernel.EnumerateTasks(
+            stk::ArrayView<stk::ITask *>(tasks_destination, static_cast<size_t>(array_items)));
+
+        result_count = static_cast<uint32_t>(count);
+    }
+
+    return result_count;
 }
-
 
 // ===========================================================================
 // ==== Thread Flags Functions ====

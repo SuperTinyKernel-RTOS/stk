@@ -27,7 +27,7 @@ public:
     /*! \brief Destructor.
         \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
     */
-    ~PlatformArmCortexM() = default;
+    STK_VIRT_DTOR ~PlatformArmCortexM() = default;
 
     void Initialize(IEventHandler *event_handler, IKernelService *service, uint32_t resolution_us, Stack *exit_trap) override;
     void Start() override;
@@ -104,7 +104,7 @@ __stk_forceinline void SetTls(Word tp)
 /*! \def   __stk_dmb
     \brief Hardware memory barrier: ensures visibility across cores and bus masters.
 */
-#define __stk_dmb() __asm volatile("dmb sy" ::: "memory")
+static __stk_forceinline void __stk_dmb() { __asm volatile("dmb sy" ::: "memory"); }
 
 /*! \def   __stk_tz_nsc_entry
     \brief TrustZone: attribute for Non-Secure callable gateway functions.

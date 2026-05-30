@@ -51,7 +51,7 @@ namespace sync {
     \note Only available when kernel is compiled with \a KERNEL_SYNC mode enabled.
     \see  ISyncObject, IWaitObject, IKernelService::Wait
 */
-class Mutex final : public IMutex, public ITraceable, private ISyncObject
+class Mutex final : private ISyncObject, public IMutex, public ITraceable
 {
 public:
     /*! \brief     Constructor.
@@ -64,18 +64,18 @@ public:
                    An assertion is triggered in debug builds.
         \note      MISRA deviation: [STK-DEV-005] Rule 10-3-2.
     */
-    ~Mutex()
+    STK_VIRT_DTOR ~Mutex()
     {
         STK_ASSERT(m_wait_list.IsEmpty()); // API contract: must not be destroyed with waiting tasks
     }
 
     /*! \brief     Acquire lock.
-        \param[in] timeout: Maximum time to wait (ticks).
+        \param[in] timeout_ticks: Maximum time to wait (ticks).
         \note      Maximum number of recursive locks must not exceed 0xFFFEU.
-        \warning   ISR-safe only with \a timeout = \c NO_WAIT, ISR-unsafe otherwise.
+        \warning   ISR-safe only with \a timeout_ticks = \c NO_WAIT, ISR-unsafe otherwise.
         \return    True if lock acquired, false if timeout occurred.
     */
-    bool TimedLock(Timeout timeout);
+    bool TimedLock(Timeout timeout_ticks);
 
     /*! \brief     Acquire lock.
         \warning   ISR-unsafe.
@@ -111,66 +111,80 @@ private:
 // TimedLock
 // ---------------------------------------------------------------------------
 
-inline bool Mutex::TimedLock(Timeout timeout)
+inline bool Mutex::TimedLock(Timeout timeout_ticks)
 {
-    IKernelService *svc = IKernelService::GetInstance();
-    TId current_tid = svc->GetTid();
+    IKernelService *const svc = IKernelService::GetInstance();
+    const TId current_tid = svc->GetTid();
 
     ScopedCriticalSection cs_;
 
     const TId owner_tid = m_owner_tid;
+    bool success = false;
 
-    // already owned by the calling thread (recursive path)
+    // recursive path: already owned by the calling thread
     if ((m_recursion_count != 0U) && (owner_tid == current_tid))
     {
         STK_ASSERT(m_recursion_count < RECURSION_MAX); // API contract: caller must not exceed max recursion depth
 
         m_recursion_count = static_cast<uint16_t>(m_recursion_count + 1U);
-        return true;
+        success = true;
     }
-
-    // mutex is free (fast path)
-    if (m_recursion_count == 0U)
+    // fast path: mutex is free
+    else if (m_recursion_count == 0U)
     {
         // kernel invariant: counter is zero so owner must be TID_NONE
         if (owner_tid != TID_NONE)
+        {
             STK_KERNEL_PANIC(KERNEL_PANIC_ASSERT);
+        }
 
         m_recursion_count = 1U;
         m_owner_tid       = current_tid;
         __stk_full_memfence();
 
-        return true;
+        success = true;
     }
-
-    // try lock behavior
-    if (timeout == NO_WAIT)
-        return false;
-
-    STK_ASSERT(!hw::IsInsideISR()); // API contract: caller must not be in ISR for a blocking call
-
-    // boost priority of the owner to avoid priority inversion (in case of SwitchStrategyFixedPriority,
-    // otherwise ignored by the kernel), noop if ISwitchStrategy::PRIORITY_INHERITANCE_API = 0
-    svc->InheritWeight(owner_tid, GetUserTaskFromTid(current_tid)->GetWeight());
-
-    // mutex owned by another thread (slow path/blocking)
-    if (svc->Wait(this, &cs_, timeout)->IsTimeout())
+    // slow path: block until available or timeout expires
+    else if (timeout_ticks != NO_WAIT)
     {
-        // if owner did not change, undo priority boost to avoid stuck elevated priority: lookup for a
-        // higher weight within existing wait objects, noop if ISwitchStrategy::PRIORITY_INHERITANCE_API = 0
-        if (owner_tid == m_owner_tid)
-            svc->RestoreWeight(owner_tid, this);
+        STK_ASSERT(!hw::IsInsideISR()); // API contract: caller must not be in ISR for a blocking call
 
-        return false;
+        // boost priority of the owner to avoid priority inversion (in case of SwitchStrategyFixedPriority,
+        // otherwise ignored by the kernel), noop if ISwitchStrategy::PRIORITY_INHERITANCE_API = 0
+        svc->InheritWeight(owner_tid, GetUserTaskFromTid(current_tid)->GetWeight());
+
+        // mutex owned by another thread (slow path/blocking)
+        if (svc->Wait(this, &cs_, timeout_ticks)->IsTimeout())
+        {
+            // if owner did not change, undo priority boost to avoid stuck elevated priority: lookup for a
+            // higher weight within existing wait objects, noop if ISwitchStrategy::PRIORITY_INHERITANCE_API = 0
+            if (owner_tid == m_owner_tid)
+            {
+                svc->RestoreWeight(owner_tid, this);
+            }
+
+            success = false;
+        }
+        else
+        {
+            // kernel invariant: if either condition is false, the low-level lock and the
+            // recursion counter are out of sync, this is an internal defect, not a caller error
+            if ((m_owner_tid != current_tid) || (m_recursion_count != 1U))
+            {
+                STK_KERNEL_PANIC(KERNEL_PANIC_ASSERT);
+            }
+
+            success = true;
+        }
+    }
+    // try-lock variant: owned by someone else, but no-wait requested
+    else
+    {
+        // success is false already, noop
     }
 
-    // kernel invariant: if either condition is false, the low-level lock and the
-    // recursion counter are out of sync, this is an internal defect, not a caller error
-    if ((m_owner_tid != current_tid) || (m_recursion_count != 1U))
-        STK_KERNEL_PANIC(KERNEL_PANIC_ASSERT);
-
-    return true;
-}
+    return success;
+}    
 
 // ---------------------------------------------------------------------------
 // Unlock
@@ -178,7 +192,7 @@ inline bool Mutex::TimedLock(Timeout timeout)
 
 inline void Mutex::Unlock()
 {
-    ScopedCriticalSection cs_;
+    const ScopedCriticalSection cs_;
 
     STK_ASSERT(m_owner_tid == GetTid()); // API contract: caller must own the lock
     STK_ASSERT(m_recursion_count != 0U); // API contract: must have matching Lock()
@@ -187,7 +201,7 @@ inline void Mutex::Unlock()
 
     if (m_recursion_count == 0U)
     {
-        IKernelService *svc = IKernelService::GetInstance();
+        IKernelService *const svc = IKernelService::GetInstance();
 
         // restore priority of the owner, noop if ISwitchStrategy::PRIORITY_INHERITANCE_API = 0
         svc->RestoreWeight(m_owner_tid);
@@ -195,7 +209,7 @@ inline void Mutex::Unlock()
         if (!m_wait_list.IsEmpty())
         {
             // pass ownership directly to the first waiter (FIFO order)
-            IWaitObject *waiter = static_cast<IWaitObject *>(m_wait_list.GetFirst());
+            IWaitObject *const waiter = static_cast<IWaitObject *>(m_wait_list.GetFirst());
 
             // transfer ownership to the waiter
             m_recursion_count = 1U;

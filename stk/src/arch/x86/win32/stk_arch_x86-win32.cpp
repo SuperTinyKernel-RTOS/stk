@@ -192,10 +192,7 @@ static struct Context final : public PlatformContext
         LoadWindowsAPI();
     }
 
-    /*! \brief Destructor.
-        \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
-    */
-    ~Context()
+    virtual ~Context()
     {
     #if STK_TLS
         if (m_tls != TLS_OUT_OF_INDEXES)
@@ -245,7 +242,7 @@ static struct Context final : public PlatformContext
         void InitThread()
         {
             // simulate stack size limitation
-            size_t stack_size = m_task->GetStackSize() * sizeof(Word);
+            const size_t stack_size = m_task->GetStackSize() * sizeof(Word);
 
             m_thread = CreateThread(nullptr, stack_size, &OnTaskRun, this, CREATE_SUSPENDED, &m_thread_id);
         }
@@ -297,7 +294,9 @@ static struct Context final : public PlatformContext
         {
             // avoid suspending self
             if (GetCurrentThreadId() != m_timer_tid)
+            {
                 SuspendThread(m_timer_thread);
+            }
         }
 
         // increase nesting count within a limit
@@ -318,7 +317,9 @@ static struct Context final : public PlatformContext
         {
             // suspending self is not supported
             if (GetCurrentThreadId() != m_timer_tid)
+            {
                 ResumeThread(m_timer_thread);
+            }
         }
 
         STK_X86_WIN32_CRITICAL_SECTION_END(&m_cs);
@@ -359,9 +360,9 @@ void STK_PANIC_HANDLER_DEFAULT(EKernelPanicId id)
     }
 }
 
-static __stk_forceinline DWORD TicksToMs(uint32_t ticks)
+static __stk_forceinline DWORD TicksToMs(uint64_t ticks)
 {
-    return (ticks * GetContext().m_tick_resolution) / 1000U;
+    return static_cast<DWORD>((ticks * GetContext().m_tick_resolution) / 1000U);
 }
 
 static DWORD WINAPI TimerThread(LPVOID param)
@@ -374,7 +375,9 @@ static DWORD WINAPI TimerThread(LPVOID param)
     while (WaitForSingleObject(GetContext().m_timer_thread, wait_ms) == WAIT_TIMEOUT)
     {
         if (GetContext().m_stop_signal)
+        {
             break;
+        }
 
         GetContext().ProcessTick();
 
@@ -390,7 +393,9 @@ void Context::ConfigureTime()
 {
     // Windows timers are jittery, so make resolution more coarse
     if (m_tick_resolution < STK_X86_WIN32_MIN_RESOLUTION)
+    {
         m_tick_resolution = STK_X86_WIN32_MIN_RESOLUTION;
+    }
 
     // increase precision of ticks to at least 1 ms (although Windows timers will still be quite coarse and have jitter of +1 ms)
     timeBeginPeriod(1);
@@ -448,7 +453,9 @@ void Context::CreateTimerThreadAndJoin()
                 STK_ASSERT(exiting_task != nullptr);
 
                 if (exiting_task != nullptr)
+                {
                     m_handler->OnTaskExit(exiting_task->m_stack);
+                }
 
                 m_task_threads.erase(itr);
                 break;
@@ -461,7 +468,9 @@ void Context::CreateTimerThreadAndJoin()
     // join (never returns to the caller from here unless thread is terminated, see KERNEL_DYNAMIC),
     // a stop signal is sent by IPlatform::Stop() by the last exiting task
     if (m_timer_thread != nullptr)
+    {
         WaitForSingleObject(m_timer_thread, INFINITE);
+    }
 }
 
 void Context::Cleanup()
@@ -609,9 +618,8 @@ bool Context::InitStack(EStackType stack_type, Stack *stack, IStackMemory *stack
 {
     InitStackMemory(stack_memory);
 
-    Word * const stack_mem = const_cast<Word *>(stack_memory->GetStack());
-
-    TaskContext * const ctx = reinterpret_cast<TaskContext *>(STK_X86_WIN32_GET_SP(stack_mem));
+    Word *const stack_mem = const_cast<Word *>(stack_memory->GetStack());
+    TaskContext *const ctx = reinterpret_cast<TaskContext *>(STK_X86_WIN32_GET_SP(stack_mem));
 
     switch (stack_type)
     {
@@ -628,6 +636,10 @@ bool Context::InitStack(EStackType stack_type, Stack *stack, IStackMemory *stack
 
     case STACK_EXIT_TRAP: {
         GetContext().m_exit_trap = stack;
+        break; }
+
+    default: {
+        STK_ASSERT(false);
         break; }
     }
 

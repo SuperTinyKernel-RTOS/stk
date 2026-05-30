@@ -79,7 +79,7 @@ public:
     /*! \brief Destructor.
         \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
     */
-    ~SwitchStrategyEDF() = default;
+    STK_VIRT_DTOR ~SwitchStrategyEDF() = default;
 
     /*! \brief     Add task to the runnable set.
         \param[in] task: Task to add. Must not be \c NULL and must not already be in any list.
@@ -110,9 +110,13 @@ public:
         STK_ASSERT((task->GetHead() == &m_tasks) || (task->GetHead() == &m_sleep));
 
         if (task->GetHead() == &m_tasks)
+        {
             m_tasks.Unlink(task);
+        }
         else
+        {
             m_sleep.Unlink(task);
+        }
     }
 
     /*! \brief     Select and return the task with the earliest (minimum) relative deadline.
@@ -133,20 +137,28 @@ public:
     */
     IKernelTask *GetNext() override
     {
-        if (m_tasks.IsEmpty())
-            return nullptr; // idle
+        IKernelTask *next = nullptr;
 
-        IKernelTask *itr = (*m_tasks.GetFirst()), * const start = itr;
-        IKernelTask *earliest = itr;
-
-        do
+        if (!m_tasks.IsEmpty())
         {
-            if (itr->GetHrtRelativeDeadline() < earliest->GetHrtRelativeDeadline())
-                earliest = itr;
-        }
-        while ((itr = (*itr->GetNext())) != start);
+            IKernelTask *itr = (*m_tasks.GetFirst());
+            IKernelTask *const start = itr;
+            
+            next = itr; // initialize earliest found task to the first one
 
-        return earliest;
+            do
+            {
+                if (itr->GetHrtRelativeDeadline() < next->GetHrtRelativeDeadline())
+                {
+                    next = itr;
+                }
+                  
+                itr = (*itr->GetNext());
+            }
+            while (itr != start);
+        }
+
+        return next;
     }
 
     /*! \brief     Get first task in the managed set (used by the kernel for initial scheduling).
@@ -160,10 +172,9 @@ public:
     {
         STK_ASSERT(GetSize() != 0U);
 
-        if (!m_tasks.IsEmpty())
-            return (*const_cast<IKernelTask::ListEntryType *>(m_tasks.GetFirst()));
-        else
-            return (*const_cast<IKernelTask::ListEntryType *>(m_sleep.GetFirst()));
+        return (!m_tasks.IsEmpty() ?
+            (*const_cast<IKernelTask::ListEntryType *>(m_tasks.GetFirst())) :
+            (*const_cast<IKernelTask::ListEntryType *>(m_sleep.GetFirst())));
     }
 
     /*! \brief  Get total number of tasks managed by this strategy.

@@ -58,7 +58,7 @@ namespace sync {
     \see  ISyncObject, IWaitObject, IKernelService::Wait
     \note Only available when kernel is compiled with \a KERNEL_SYNC mode enabled.
 */
-class Event final : public ITraceable, private ISyncObject
+class Event final : private ISyncObject, public ITraceable
 {
 public:
     /*! \brief     Constructor.
@@ -75,7 +75,7 @@ public:
                    (dangling waiters). An assertion is triggered in debug builds.
         \note      MISRA deviation: [STK-DEV-005] Rule 10-3-2.
     */
-    ~Event()
+    STK_VIRT_DTOR ~Event()
     {
         STK_ASSERT(m_wait_list.IsEmpty()); // API contract: must not be destroyed with waiting tasks
     }
@@ -103,12 +103,12 @@ public:
     bool Reset();
 
     /*! \brief     Wait until event becomes signaled or the timeout expires.
-        \param[in] timeout: Maximum time to wait (ticks). Use \a WAIT_INFINITE for no timeout (wait forever).
-        \warning   ISR-safe only with \a timeout = \c NO_WAIT, ISR-unsafe otherwise.
+        \param[in] timeout_ticks: Maximum time to wait (ticks). Use \a WAIT_INFINITE for no timeout (wait forever).
+        \warning   ISR-safe only with \a timeout_ticks = \c NO_WAIT, ISR-unsafe otherwise.
         \return    \c true if event was signaled (wait succeeded),
                    \c false if timeout occurred before the event was signaled.
     */
-    bool Wait(Timeout timeout = WAIT_INFINITE);
+    bool Wait(Timeout timeout_ticks = WAIT_INFINITE);
 
     /*! \brief    Poll event state without blocking.
         \details  Checks if the event is currently signaled. If signaled, performs the auto-reset
@@ -146,20 +146,29 @@ private:
 
 inline bool Event::Set()
 {
-    ScopedCriticalSection cs_;
+    const ScopedCriticalSection cs_;
+    bool status = true;
 
     if (m_signaled)
-        return false;
-
-    m_signaled = true;
-    __stk_full_memfence();
-
-    if (m_manual_reset)
-        WakeAll();
+    {
+        status = false;
+    }
     else
-        WakeOne(); // auto-reset is applied in RemoveWaitObject when the waiter is removed
+    {
+        m_signaled = true;
+        __stk_full_memfence();
 
-    return true;
+        if (m_manual_reset)
+        {
+            WakeAll();
+        }
+        else
+        {
+            WakeOne(); // auto-reset is applied in RemoveWaitObject when the waiter is removed
+        }
+    }
+
+    return status;
 }
 
 // ---------------------------------------------------------------------------
@@ -168,9 +177,9 @@ inline bool Event::Set()
 
 inline bool Event::Reset()
 {
-    ScopedCriticalSection cs_;
+    const ScopedCriticalSection cs_;
 
-    bool prev = m_signaled;
+    const bool prev = m_signaled;
 
     m_signaled = false;
     __stk_full_memfence();
@@ -184,7 +193,7 @@ inline bool Event::Reset()
 
 inline void Event::Pulse()
 {
-    ScopedCriticalSection cs_;
+    const ScopedCriticalSection cs_;
 
     // transition to signaled so that WakeOne/WakeAll can release waiters:
     // m_signaled is only visible as true while this critical section is held —
@@ -196,9 +205,13 @@ inline void Event::Pulse()
     if (!m_wait_list.IsEmpty())
     {
         if (m_manual_reset)
+        {
             WakeAll();
+        }
         else
+        {
             WakeOne(); // auto-reset applied in RemoveWaitObject
+        }
     }
 
     // force return to non-signaled regardless of whether anyone was waiting
@@ -210,11 +223,12 @@ inline void Event::Pulse()
 // Wait
 // ---------------------------------------------------------------------------
 
-inline bool Event::Wait(Timeout timeout)
+inline bool Event::Wait(Timeout timeout_ticks)
 {
     STK_ASSERT(!hw::IsInsideISR()); // API contract: caller must not be in ISR
 
     ScopedCriticalSection cs_;
+    bool success = false;
 
     // fast path: already signaled
     if (m_signaled)
@@ -225,15 +239,20 @@ inline bool Event::Wait(Timeout timeout)
             __stk_full_memfence();
         }
 
-        return true;
+        success = true;
+    }
+    // slow path: block until Set() signals the event or timeout expires
+    else if (timeout_ticks != NO_WAIT)
+    {
+        success = !IKernelService::GetInstance()->Wait(this, &cs_, timeout_ticks)->IsTimeout();
+    }
+    else
+    {
+        // non-blocking poll: event not signaled, return immediately
+        // success is already false, so noop
     }
 
-    // non-blocking poll: event not signaled, return immediately
-    if (timeout == NO_WAIT)
-        return false;
-
-    // slow path: block until Set() signals the event or timeout expires
-    return !IKernelService::GetInstance()->Wait(this, &cs_, timeout)->IsTimeout();
+    return success;
 }
 
 // ---------------------------------------------------------------------------
@@ -242,7 +261,8 @@ inline bool Event::Wait(Timeout timeout)
 
 inline bool Event::TryWait()
 {
-    ScopedCriticalSection cs_;
+    const ScopedCriticalSection cs_;
+    bool result = false;
 
     if (m_signaled)
     {
@@ -252,10 +272,10 @@ inline bool Event::TryWait()
             __stk_full_memfence();
         }
 
-        return true;
+        result = true;
     }
 
-    return false;
+    return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -269,10 +289,13 @@ inline void Event::RemoveWaitObject(IWaitObject *wobj)
     // kernel invariant: auto-reset is applied here, not at the Set()/Pulse() call site,
     // when a task wakes due to a signal (not a timeout), the event transitions back to
     // non-signaled so that subsequent Wait() calls block until the next Set().
-    if (!m_manual_reset && m_signaled && !wobj->IsTimeout())
+    if (!m_manual_reset && m_signaled)
     {
-        m_signaled = false;
-        __stk_full_memfence();
+        if (!wobj->IsTimeout())
+        {
+            m_signaled = false;
+            __stk_full_memfence();
+        }
     }
 }
 

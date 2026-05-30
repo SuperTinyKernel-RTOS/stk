@@ -81,7 +81,7 @@ public:
     /*! \brief Destructor.
         \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
     */
-    ~SwitchStrategySmoothWeightedRoundRobin() = default;
+    STK_VIRT_DTOR ~SwitchStrategySmoothWeightedRoundRobin() = default;
 
     /*! \brief     Add task to the runnable set.
         \param[in] task: Task to add. Must not be \c nullptr.
@@ -118,9 +118,13 @@ public:
         STK_ASSERT((task->GetHead() == &m_tasks) || (task->GetHead() == &m_sleep));
 
         if (task->GetHead() == &m_tasks)
+        {
             RemoveActive(task);
+        }
         else
+        {
             m_sleep.Unlink(task);
+        }
     }
 
     /*! \brief     Select and return the next task to run, applying one step of the SWRR algorithm.
@@ -137,31 +141,35 @@ public:
     */
     IKernelTask *GetNext() override
     {
-        if (m_tasks.IsEmpty())
-            return nullptr; // idle
+        IKernelTask *next = nullptr;
 
-        IKernelTask *selected = nullptr;
-        int32_t max_weight = INT32_MIN;
-        IKernelTask *itr = (*m_tasks.GetFirst()), * const start = itr;
-
-        do
+        if (!m_tasks.IsEmpty())
         {
-            const int32_t candidate_weight = itr->GetCurrentWeight() + itr->GetWeight();
-            itr->SetCurrentWeight(candidate_weight);
+            int32_t max_weight = INT32_MIN;
+            IKernelTask *itr = (*m_tasks.GetFirst());
+            IKernelTask *const start = itr;
 
-            if (candidate_weight > max_weight)
+            do
             {
-                max_weight = candidate_weight;
-                selected = itr;
+                const int32_t candidate_weight = itr->GetCurrentWeight() + itr->GetWeight();
+                itr->SetCurrentWeight(candidate_weight);
+
+                if (candidate_weight > max_weight)
+                {
+                    max_weight = candidate_weight;
+                    next = itr;
+                }
+                
+                itr = (*itr->GetNext());
             }
+            while (itr != start);
+
+            STK_ASSERT(next != nullptr);
+
+            next->SetCurrentWeight(max_weight - m_total_weight);
         }
-        while ((itr = (*itr->GetNext())) != start);
 
-        STK_ASSERT(selected != nullptr);
-
-        selected->SetCurrentWeight(max_weight - m_total_weight);
-
-        return selected;
+        return next;
     }
 
     /*! \brief     Get first task in the managed set (used by the kernel for initial scheduling).
@@ -174,10 +182,9 @@ public:
     {
         STK_ASSERT(GetSize() != 0U);
 
-        if (!m_tasks.IsEmpty())
-            return (*const_cast<IKernelTask::ListEntryType *>(m_tasks.GetFirst()));
-        else
-            return (*const_cast<IKernelTask::ListEntryType *>(m_sleep.GetFirst()));
+        return (!m_tasks.IsEmpty() ?
+            (*const_cast<IKernelTask::ListEntryType *>(m_tasks.GetFirst())) :
+            (*const_cast<IKernelTask::ListEntryType *>(m_sleep.GetFirst())));
     }
 
     /*! \brief  Get the total number of tasks managed by this strategy.
