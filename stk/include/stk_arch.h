@@ -44,10 +44,22 @@
 #define _STK_ARCH_DEFINED
 #endif
 
+#ifndef STK_PANIC_HANDLER
+    /*! \brief Default panic handler: disable interrupts, record the id,
+               and spin in a tight loop — a defined, detectable safe state.
+        \note  On a system with a watchdog enabled this will trigger a watchdog
+               reset after the watchdog period, which is the desired behaviour.
+        \note  Replace with a platform-specific handler (e.g. one that writes a
+               fault log to non-volatile memory and calls NVIC_SystemReset()) by
+               defining STK_PANIC_HANDLER in stk_config.h.
+    */
+    extern void STK_PANIC_HANDLER_DEFAULT(stk::EKernelPanicId id);
+    #define STK_PANIC_HANDLER(id) STK_PANIC_HANDLER_DEFAULT(id)
+#endif
+
 namespace stk {
 
-/*! \def   STK_KERNEL_PANIC
-    \brief Called when the kernel detects an unrecoverable internal fault.
+/*! \brief Called when the kernel detects an unrecoverable internal fault.
     \note  Unlike STK_ASSERT (which checks preconditions) this macro is reached only
            when a runtime invariant has been irreversibly violated — the kernel
            cannot continue operating correctly from this point.
@@ -60,11 +72,11 @@ namespace stk {
            and must never return. A minimal safe default is provided below.
     \param[in] id: EKernelPanicId value identifying the fault.
 */
-#define STK_KERNEL_PANIC(id)                         \
-    do {                                             \
-        __stk_debug_break();   /* debug aid */       \
-        STK_PANIC_HANDLER(id); /* must not return */ \
-    } while (0)
+static __stk_forceinline void STK_KERNEL_PANIC(stk::EKernelPanicId id)
+{
+    __stk_debug_break();   // debug aid
+    STK_PANIC_HANDLER(id); // must not return
+}
 
 /*! \namespace stk::hw
     \brief     Hardware Abstraction Layer (HAL) for architecture-specific operations.
@@ -91,7 +103,7 @@ namespace hw {
     \see       WordToPtr
 */
 template <typename T>
-static constexpr Word PtrToWord(T *ptr) noexcept
+static constexpr Word PtrToWord(T *const ptr) noexcept
 {
     STK_STATIC_ASSERT(sizeof(Word) == sizeof(T *));
     return reinterpret_cast<Word>(ptr);
@@ -466,10 +478,11 @@ struct HiResClock
     */
     static inline Ticks GetTimeUs()
     {
-        uint32_t freq = GetFrequency();
-        STK_ASSERT(freq != 0);
+        const uint32_t freq = GetFrequency();
+        STK_ASSERT(freq != 0U);
 
-        return ((freq != 0) ? static_cast<Ticks>((GetCycles() * 1000000ULL) / freq) : 0 );
+        return ((freq != 0U) ? 
+            static_cast<Ticks>((GetCycles() * 1000000ULL) / freq) : static_cast<Ticks>(0));
     }
 };
 
@@ -488,18 +501,5 @@ static constexpr TId GetTidFromUserTask(const ITask *task) noexcept { return hw:
 static constexpr ITask *GetUserTaskFromTid(TId task_id) noexcept { return hw::WordToPtr<ITask>(task_id); }
 
 } // namespace stk
-
-#ifndef STK_PANIC_HANDLER
-    /*! \brief Default panic handler: disable interrupts, record the id,
-               and spin in a tight loop — a defined, detectable safe state.
-        \note  On a system with a watchdog enabled this will trigger a watchdog
-               reset after the watchdog period, which is the desired behaviour.
-        \note  Replace with a platform-specific handler (e.g. one that writes a
-               fault log to non-volatile memory and calls NVIC_SystemReset()) by
-               defining STK_PANIC_HANDLER in stk_config.h.
-    */
-    extern void STK_PANIC_HANDLER_DEFAULT(stk::EKernelPanicId id);
-    #define STK_PANIC_HANDLER(id) STK_PANIC_HANDLER_DEFAULT(id)
-#endif
 
 #endif /* STK_ARCH_H_ */

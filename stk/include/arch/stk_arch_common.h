@@ -31,7 +31,7 @@ public:
     /*! \brief Destructor.
         \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
     */
-    ~PlatformContext() = default;
+    STK_VIRT_DTOR ~PlatformContext() = default;
 
     /*! \brief     Initialize context.
         \param[in] handler: Event handler.
@@ -51,24 +51,26 @@ public:
     /*! \brief     Initialize stack memory by filling it with STK_STACK_MEMORY_FILLER.
         \note      Returned pointer is for a stack growing from top to down.
         \param[in] memory: Stack memory to initialize.
-        \return    Pointer to initialized stack memory.
+        \return    Top of the stack memory (valid memory region is (stack_top - sizeof(Word))).
     */
-    static inline Word *InitStackMemory(IStackMemory *memory)
+    static inline Word InitStackMemory(IStackMemory *const memory)
     {
-        const size_t stack_size = memory->GetStackSize();
-        Word *itr = const_cast<Word *>(memory->GetStack());
-        Word *const stack_top = itr + stack_size;
-
-        STK_ASSERT(stack_size >= STACK_SIZE_MIN);
-
-        // initialization of the stack memory satisfies stack integrity check in Kernel::StateSwitch
-        while (itr < stack_top)
+        STK_ASSERT(memory != nullptr);
+              
+        ArrayView<Word> stack(const_cast<Word *>(memory->GetStack()), memory->GetStackSize());
+        STK_ASSERT(stack.GetSize() >= STACK_SIZE_MIN);
+        
+        // initialize stack memory to satisfy stack integrity check in Kernel::StateSwitch
+        for (size_t i = 0U; i < stack.GetSize(); ++i)
         {
-            *itr++ = STK_STACK_MEMORY_FILLER;
+            stack[i] = STK_STACK_MEMORY_FILLER;
         }
+        
+        // get address of the last valid item and step forward by 1 Word size
+        const Word stack_top = hw::PtrToWord(memory->GetStack()) + (stack.GetSize() * sizeof(Word));
 
         // expecting STK_STACK_MEMORY_ALIGN-byte aligned memory for a stack
-        STK_ASSERT((hw::PtrToWord(stack_top) & (STK_STACK_MEMORY_ALIGN - 1)) == 0U);
+        STK_ASSERT((stack_top & (STK_STACK_MEMORY_ALIGN - 1U)) == 0U);
 
         return stack_top;
     }
@@ -102,9 +104,9 @@ protected:
     \param[in] time_us: Time (microseconds).
     \return    Clock cycles.
 */
-static __stk_forceinline Cycles ConvertTimeUsToClockCycles(Cycles clock_freq, Ticks time_us)
+static __stk_forceinline Cycles ConvertTimeUsToClockCycles(uint32_t clock_freq, Ticks time_us)
 {
-    return ((clock_freq * static_cast<Cycles>(time_us)) / 1000000ULL);
+    return ((static_cast<Cycles>(time_us) * clock_freq) / 1000000ULL);
 }
 
 } // namespace stk

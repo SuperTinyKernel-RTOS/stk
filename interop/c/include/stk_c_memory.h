@@ -71,7 +71,7 @@ extern "C" {
     \note    Increase if your application needs more simultaneous pools.
 */
 #ifndef STK_C_BLOCKPOOL_MAX
-    #define STK_C_BLOCKPOOL_MAX 8
+    #define STK_C_BLOCKPOOL_MAX 8U
 #endif
 
 // =============================================================================

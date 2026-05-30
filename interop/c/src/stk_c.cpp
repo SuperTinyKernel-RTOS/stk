@@ -139,17 +139,25 @@ public:
     // IPlatform::IEventOverrider
     bool OnSleep(Timeout sleep_ticks) override
     {
+        bool is_handled = false;
+      
         if ((m_cb != nullptr) && (m_cb->on_sleep != nullptr))
-            return m_cb->on_sleep(static_cast<stk_timeout_t>(sleep_ticks), m_cb->user_data);
+        {
+            is_handled = m_cb->on_sleep(static_cast<stk_timeout_t>(sleep_ticks), m_cb->user_data);
+        }
 
-        return false;
+        return is_handled;
     }
     bool OnHardFault() override
     {
+        bool is_handled = false;
+      
         if ((m_cb != nullptr) && (m_cb->on_hard_fault != nullptr))
-            return m_cb->on_hard_fault(m_cb->user_data);
+        {
+            is_handled = m_cb->on_hard_fault(m_cb->user_data);
+        }
 
-        return false;
+        return is_handled;
     }
 
 private:
@@ -320,7 +328,6 @@ void stk_kernel_destroy(stk_kernel_t *k)
     // GetPlatform() paths, and we must not leave a dangling overrider pointer
     // registered at that point.
     UnregisterKernel(reinterpret_cast<IKernel *>(k));
-    reinterpret_cast<IKernel *>(k)->~IKernel();
 }
 
 // -----------------------------------------------------------------------------
@@ -340,11 +347,11 @@ void stk_kernel_start(stk_kernel_t *k)
     reinterpret_cast<IKernel *>(k)->Start();
 }
 
-EKernelState stk_kernel_get_state(const stk_kernel_t *k)
+stk_kernel_state_t stk_kernel_get_state(const stk_kernel_t *k)
 {
     STK_ASSERT(k != nullptr);
 
-    return static_cast<EKernelState>(reinterpret_cast<const stk::IKernel *>(k)->GetState());
+    return static_cast<stk_kernel_state_t>(reinterpret_cast<const stk::IKernel *>(k)->GetState());
 }
 
 bool stk_kernel_is_schedulable(const stk_kernel_t *k)
@@ -375,8 +382,8 @@ bool stk_kernel_is_started(const stk_kernel_t *k)
 {
     STK_ASSERT(k != nullptr);
 
-    const stk::IKernel::EState st = reinterpret_cast<const stk::IKernel *>(k)->GetState();
-    return ((st == stk::IKernel::STATE_RUNNING) || (st == stk::IKernel::STATE_SUSPENDED));
+    const stk::IKernel::EKernelState st = reinterpret_cast<const stk::IKernel *>(k)->GetState();
+    return ((st == stk::IKernel::KSTATE_RUNNING) || (st == stk::IKernel::KSTATE_SUSPENDED));
 }
 
 void stk_kernel_schedule_task_removal(stk_kernel_t *k, stk_task_t *task)
@@ -409,16 +416,23 @@ size_t stk_kernel_enumerate_tasks(stk_kernel_t *k, stk_task_t **tasks, size_t ma
     STK_ASSERT(k != nullptr);
     STK_ASSERT(tasks != nullptr);
 
-    // Collect ITask* pointers from the kernel, then map each back to stk_task_t*.
-    // TaskWrapper is the first member of stk_task_t, so ITask* == stk_task_t*.
     stk::ITask *itasks[STK_C_TASKS_MAX] = {};
-    size_t n = reinterpret_cast<IKernel *>(k)->EnumerateTasks(
-        itasks, (max_count < STK_C_TASKS_MAX ? max_count : STK_C_TASKS_MAX));
+    
+    // Determine the safe upper bound for the temporary buffer
+    const size_t requested_size = (max_count < static_cast<size_t>(STK_C_TASKS_MAX)) ? max_count : 
+        static_cast<size_t>(STK_C_TASKS_MAX);
 
-    for (size_t i = 0; i < n; ++i)
-        tasks[i] = reinterpret_cast<stk_task_t *>(itasks[i]);
+    // Pass via ArrayView temporary object
+    const size_t ret_count = reinterpret_cast<IKernel *>(k)->EnumerateTasks(
+        ArrayView<stk::ITask*>(itasks, requested_size));
 
-    return n;
+    ArrayView<stk_task_t *> output_view(tasks, max_count);
+    for (size_t i = 0U; i < ret_count; ++i)
+    {
+        output_view[i] = reinterpret_cast<stk_task_t *>(itasks[i]);
+    }
+
+    return ret_count;
 }
 
 stk_timeout_t stk_kernel_suspend(stk_kernel_t *k)
@@ -549,7 +563,7 @@ void stk_task_destroy(stk_task_t *task)
 // -----------------------------------------------------------------------------
 stk_tid_t   stk_tid(void)                      { return stk::GetTid(); }
 stk_tick_t  stk_ticks(void)                    { return stk::GetTicks(); }
-int32_t     stk_tick_resolution(void)          { return stk::GetTickResolution(); }
+uint32_t    stk_tick_resolution(void)          { return stk::GetTickResolution(); }
 stk_time_t  stk_time_now_ms(void)              { return stk::GetTimeNowMs(); }
 stk_tick_t  stk_ticks_from_ms(stk_time_t msec) { return stk_ticks_from_ms_r(msec, stk::GetTickResolution()); }
 stk_cycle_t stk_sys_timer_count(void)          { return stk::GetSysTimerCount(); }

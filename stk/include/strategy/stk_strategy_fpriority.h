@@ -100,7 +100,7 @@ public:
     /*! \brief Destructor.
         \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
     */
-    ~SwitchStrategyFixedPriority() = default;
+    STK_VIRT_DTOR ~SwitchStrategyFixedPriority() = default;
 
     /*! \brief     Add task to the runnable set at its fixed priority level.
         \param[in] task: Task to add. Must not be \c NULL and must not already be in any list.
@@ -121,14 +121,15 @@ public:
         STK_ASSERT(GetTaskPriority(task) < MAX_PRIORITIES);
 
         const Priority prio = GetTaskPriority(task);
-
-        bool is_tail = (m_prev[prio] == m_tasks[prio].GetLast());
+        const bool is_tail = (m_prev[prio] == m_tasks[prio].GetLast());
 
         AddActive(task);
 
         // if pointer was pointing to the tail, become a tail
         if (is_tail)
+        {
             m_prev[prio] = task;
+        }
     }
 
     /*! \brief     Remove task from whichever list it currently occupies.
@@ -146,9 +147,13 @@ public:
         STK_ASSERT((task->GetHead() == &m_tasks[GetTaskPriority(task)]) || (task->GetHead() == &m_sleep));
 
         if (task->GetHead() == &m_sleep)
+        {
             m_sleep.Unlink(task);
+        }
         else
+        {
             RemoveActive(task, GetTaskPriority(task));
+        }
     }
 
     /*! \brief     Select and return the next task to run.
@@ -162,15 +167,17 @@ public:
     */
     IKernelTask *GetNext() override
     {
-        if (m_ready_bitmap == 0U)
-            return nullptr; // idle
+        IKernelTask *next = nullptr;
 
-        const Priority prio = GetHighestReadyPriority(m_ready_bitmap);
+        if (m_ready_bitmap != 0U)
+        {
+            const Priority prio = GetHighestReadyPriority(m_ready_bitmap);
 
-        IKernelTask *ret = (*m_prev[prio]->GetNext());
-        m_prev[prio] = ret;
+            next = (*m_prev[prio]->GetNext());
+            m_prev[prio] = next;
+        }
 
-        return ret;
+        return next;
     }
 
     /*! \brief     Get the first task in the managed set (used by the kernel for initial scheduling).
@@ -185,11 +192,19 @@ public:
     {
         STK_ASSERT(GetSize() != 0U);
 
-        if (m_ready_bitmap == 0U)
-            return (*const_cast<IKernelTask::ListEntryType *>(m_sleep.GetFirst()));
+        IKernelTask *first_task = nullptr;
 
-        const Priority prio = GetHighestReadyPriority(m_ready_bitmap);
-        return (*const_cast<IKernelTask::ListEntryType *>(m_tasks[prio].GetFirst()));
+        if (m_ready_bitmap == 0U)
+        {
+            first_task = (*const_cast<IKernelTask::ListEntryType *>(m_sleep.GetFirst()));
+        }
+        else
+        {
+            const Priority prio = GetHighestReadyPriority(m_ready_bitmap);
+            first_task = (*const_cast<IKernelTask::ListEntryType *>(m_tasks[prio].GetFirst()));
+        }
+
+        return first_task;
     }
 
     /*! \brief  Get the total number of tasks managed by this strategy.
@@ -200,8 +215,10 @@ public:
     size_t GetSize() const override
     {
         size_t total = m_sleep.GetSize();
-        for (Priority i = 0U; i < MAX_PRIORITIES; i += 1U)
+        for (Priority i = 0U; i < MAX_PRIORITIES; ++i)
+        {
             total += m_tasks[i].GetSize();
+        }
 
         return total;
     }
@@ -365,7 +382,9 @@ protected:
         for (int8_t i = 31; i >= 0; --i)
         {
             if (bitmap & (1U << i))
+            {
                 return GetTaskPriorityFromWeight(i);
+            }
         }
         return 0;
     #endif

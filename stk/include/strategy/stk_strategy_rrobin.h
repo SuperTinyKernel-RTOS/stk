@@ -60,7 +60,7 @@ public:
     /*! \brief Destructor.
         \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
     */
-    ~SwitchStrategyRoundRobin() = default;
+    STK_VIRT_DTOR ~SwitchStrategyRoundRobin() = default;
 
     /*! \brief     Add task to the runnable set.
         \param[in] task: Task to add. Must not be \c nullptr and must not already be in any list.
@@ -74,13 +74,15 @@ public:
         STK_ASSERT(task != nullptr);
         STK_ASSERT(task->GetHead() == nullptr);
 
-        bool tail = (m_prev == m_tasks.GetLast());
+        const bool tail = (m_prev == m_tasks.GetLast());
 
         m_tasks.LinkBack(task);
 
         // if pointer was pointing to the tail, become a tail
         if (tail)
+        {
             m_prev = task;
+        }
     }
 
     /*! \brief     Remove task from whichever list it currently occupies.
@@ -96,9 +98,13 @@ public:
         STK_ASSERT((task->GetHead() == &m_tasks) || (task->GetHead() == &m_sleep));
 
         if (task->GetHead() == &m_tasks)
+        {
             RemoveActive(task);
+        }
         else
+        {
             m_sleep.Unlink(task);
+        }
     }
 
     /*! \brief     Advance cursor and return the next runnable task.
@@ -112,15 +118,15 @@ public:
     */
     IKernelTask *GetNext() override
     {
-        IKernelTask *ret = m_prev;
+        IKernelTask *next = m_prev;
 
-        if (ret != nullptr)
+        if (next != nullptr)
         {
-            ret    = (*ret->GetNext());
-            m_prev = ret;
+            next    = (*next->GetNext());
+            m_prev = next;
         }
 
-        return ret;
+        return next;
     }
 
     /*! \brief     Get first task in the managed set (used by the kernel for initial scheduling).
@@ -133,10 +139,9 @@ public:
     {
         STK_ASSERT(GetSize() != 0U);
 
-        if (!m_tasks.IsEmpty())
-            return (*const_cast<IKernelTask::ListEntryType *>(m_tasks.GetFirst()));
-        else
-            return (*const_cast<IKernelTask::ListEntryType *>(m_sleep.GetFirst()));
+        return (!m_tasks.IsEmpty() ?
+            (*const_cast<IKernelTask::ListEntryType *>(m_tasks.GetFirst())) :
+            (*const_cast<IKernelTask::ListEntryType *>(m_sleep.GetFirst())));
     }
 
     /*! \brief  Get total number of tasks managed by this strategy.
@@ -194,7 +199,9 @@ protected:
         // update pointer: if all tasks were sleeping, this task will change state
         // of the kernel to active
         if (m_prev == nullptr)
+        {
             m_prev = task;
+        }
     }
 
     /*! \brief     Remove a task from \c m_tasks and update the cursor.
@@ -211,7 +218,7 @@ protected:
     */
     void RemoveActive(IKernelTask *task)
     {
-        IKernelTask *next = (*task->GetNext());
+        IKernelTask *const next = (*task->GetNext());
 
         m_tasks.Unlink(task);
 
@@ -219,9 +226,13 @@ protected:
         // if there are no tasks left GetNext() will return nullptr causing a sleep
         // state for the kernel
         if (next != task)
+        {
             m_prev = (*next->GetPrev());
+        }
         else
+        {
             m_prev = nullptr;
+        }
     }
 
     IKernelTask::ListHeadType m_tasks; //!< Runnable tasks eligible for scheduling.

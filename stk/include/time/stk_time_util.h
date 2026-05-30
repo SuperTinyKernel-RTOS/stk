@@ -59,10 +59,12 @@ public:
                    The first Poll() firing will occur no earlier than \a period ticks
                    after construction.
     */
-    PeriodicTrigger(uint32_t period, bool start = false) : m_next(0U), m_period(period)
+    PeriodicTrigger(uint32_t period, bool start = false) : m_next(0), m_period(period)
     {
         if (start)
+        {
             Restart();
+        }
     }
 
     /*! \brief  Get currently configured trigger period.
@@ -90,7 +92,7 @@ public:
     */
     void Restart()
     {
-        m_next = GetTicks() + m_period;
+        m_next = GetTicks() + static_cast<Ticks>(m_period);
     }
 
     /*! \brief   Check whether the scheduled trigger time has been reached.
@@ -107,14 +109,16 @@ public:
     {
         STK_ASSERT(m_next > 0);
 
-        Ticks diff = GetTicks() - m_next;
+        bool triggered = false;
+        const Ticks diff = GetTicks() - m_next;
+
         if (diff >= 0)
         {
-            m_next += m_period;
-            return true;
+            m_next += static_cast<Ticks>(m_period);
+            triggered = true;
         }
 
-        return false;
+        return triggered;
     }
 
 protected:

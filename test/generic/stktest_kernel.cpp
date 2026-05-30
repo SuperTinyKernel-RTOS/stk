@@ -37,7 +37,7 @@ public:
     {
         m_fsm_state_mock = KernelMock::FSM_STATE_MAX + (max_val ? 0 : 1);
 
-        Stack *idle = nullptr, *active = this->m_task_now->GetUserStack();
+        Stack *idle = nullptr, *active = nullptr;
         KernelMock::UpdateFsmState(idle, active);
     }
 };
@@ -72,11 +72,11 @@ TEST(Kernel, State)
 
     CHECK_TRUE(platform != NULL);
 
-    CHECK_TRUE(kernel.GetState() == IKernel::STATE_INACTIVE);
+    CHECK_TRUE(kernel.GetState() == IKernel::KSTATE_INACTIVE);
 
     kernel.Initialize();
 
-    CHECK_TRUE(kernel.GetState() == IKernel::STATE_READY);
+    CHECK_TRUE(kernel.GetState() == IKernel::KSTATE_READY);
 
     CHECK_TRUE(IKernelService::GetInstance() != NULL);
     CHECK_TRUE(IKernelService::GetInstance() == platform->m_service);
@@ -84,7 +84,7 @@ TEST(Kernel, State)
     kernel.AddTask(&task);
     kernel.Start();
 
-    CHECK_TRUE(kernel.GetState() == IKernel::STATE_RUNNING);
+    CHECK_TRUE(kernel.GetState() == IKernel::KSTATE_RUNNING);
 }
 
 TEST(Kernel, InitDoubleFail)
@@ -128,19 +128,24 @@ TEST(Kernel, AddTask)
     Kernel<KERNEL_STATIC, 1, SwitchStrategyRR, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task;
     const ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
+    PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
 
     kernel.Initialize();
 
-    CHECK_EQUAL_TEXT(0, strategy->GetSize(), "Expecting none kernel tasks");
+    CHECK_EQUAL(0, strategy->GetSize()); // Expecting none kernel tasks
 
     kernel.AddTask(&task);
 
-    CHECK_EQUAL_TEXT(1, strategy->GetSize(), "Expecting 1 kernel task");
+    CHECK_EQUAL(1, strategy->GetSize()); // Expecting 1 kernel task
 
     IKernelTask *ktask = strategy->GetFirst();
-    CHECK_TRUE_TEXT(ktask != NULL, "Expecting one kernel task");
+    CHECK_TRUE(ktask != NULL); // Expecting added kernel task
 
-    CHECK_TRUE_TEXT(ktask->GetUserTask() == &task, "Expecting just added user task");
+    CHECK_EQUAL(&task, ktask->GetUserTask()); // Expecting just added user task
+
+    // stack info must belong to this task
+    CHECK_EQUAL(platform->m_stack_info[STACK_USER_TASK].stack->SP, ktask->GetUserStack().SP);
+    CHECK_EQUAL(ACCESS_USER, ktask->GetUserStack().access_mode);
 }
 
 TEST(Kernel, AddTaskInitStack)
@@ -477,7 +482,7 @@ TEST(Kernel, StartBeginISR)
     kernel.Start();
 
     // expect that first task's access mode is requested by kernel
-    CHECK_EQUAL(ACCESS_PRIVILEGED, platform->m_stack_active->mode);
+    CHECK_EQUAL(ACCESS_PRIVILEGED, platform->m_stack_active->access_mode);
 }
 
 TEST(Kernel, ContextSwitchOnSysTickISR)
@@ -540,13 +545,13 @@ TEST(Kernel, ContextSwitchAccessModeChange)
     kernel.Start();
 
     // 1-st task
-    CHECK_EQUAL(ACCESS_USER, platform->m_stack_active->mode);
+    CHECK_EQUAL(ACCESS_USER, platform->m_stack_active->access_mode);
 
     // ISR calls OnSysTick
     platform->ProcessTick();
 
     // 2-st task
-    CHECK_EQUAL(ACCESS_PRIVILEGED, platform->m_stack_active->mode);
+    CHECK_EQUAL(ACCESS_PRIVILEGED, platform->m_stack_active->access_mode);
 }
 
 TEST(Kernel, ContextSwitchCorruptedFsmMode)
@@ -934,6 +939,30 @@ TEST(Kernel, Hrt)
     CHECK_EQUAL(platform->m_stack_active->SP, (Word)task1.GetStack());
 }
 
+TEST(Kernel, HrtApiForNonHrtTask)
+{
+    Kernel<KERNEL_STATIC, 1, SwitchStrategyRR, PlatformTestMock> kernel;
+    TaskMock<ACCESS_USER> task;
+    const ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
+
+    kernel.Initialize();
+    kernel.AddTask(&task);
+    kernel.Start();
+
+    IKernelTask *ktask = strategy->GetFirst();
+    CHECK_TRUE(ktask != NULL); // Expecting added kernel task
+
+    g_TestContext.ExpectAssert(true);
+    g_TestContext.RethrowAssertException(false);
+
+    CHECK_EQUAL(0, ktask->GetHrtPeriodicity());
+    CHECK_EQUAL(0, ktask->GetHrtDeadline());
+    CHECK_EQUAL(0, ktask->GetHrtRelativeDeadline());
+
+    g_TestContext.RethrowAssertException(true);
+    g_TestContext.ExpectAssert(false);
+}
+
 TEST(Kernel, HrtAddNonHrt)
 {
     Kernel<KERNEL_STATIC | KERNEL_HRT, 1, SwitchStrategyRR, PlatformTestMock> kernel;
@@ -1034,7 +1063,7 @@ TEST(Kernel, HrtTaskCompleted)
 
     CHECK_EQUAL(0, strategy->GetSize());
 
-    CHECK_EQUAL(IKernel::STATE_READY, kernel.GetState());
+    CHECK_EQUAL(IKernel::KSTATE_READY, kernel.GetState());
 }
 
 static struct HrtTaskDeadlineMissedRelaxCpuContext
@@ -1432,12 +1461,12 @@ TEST(Kernel, SyncTaskExitAfterWait)
     platform->ProcessTick();
 
     // should be still running here, next tick will result in task exit and kernel stop
-    CHECK_EQUAL(IKernel::STATE_RUNNING, kernel.GetState());
+    CHECK_EQUAL(IKernel::KSTATE_RUNNING, kernel.GetState());
 
     platform->ProcessTick();
 
     // should be stopped here
-    CHECK_EQUAL(IKernel::STATE_READY, kernel.GetState());
+    CHECK_EQUAL(IKernel::KSTATE_READY, kernel.GetState());
 }
 
 static struct SyncWaitRelaxCpuContext
@@ -1551,6 +1580,29 @@ TEST(Kernel, SyncWaitTicklessDuration)
     CHECK_EQUAL(true, mutex.m_locked);
 }
 
+TEST(Kernel, CheckWeightLessApi)
+{
+    Kernel<KERNEL_STATIC, 1, SwitchStrategyRR, PlatformTestMock> kernel;
+    TaskMock<ACCESS_USER> task;
+    const ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
+
+    kernel.Initialize();
+    kernel.AddTask(&task);
+    kernel.Start();
+
+    IKernelTask *ktask = strategy->GetFirst();
+    CHECK_TRUE(ktask != NULL); // Expecting added kernel task
+
+    g_TestContext.ExpectAssert(true);
+    g_TestContext.RethrowAssertException(false);
+
+    CHECK_EQUAL(DEFAULT_WEIGHT, ktask->GetWeight());
+    CHECK_EQUAL(DEFAULT_WEIGHT, ktask->GetCurrentWeight());
+
+    g_TestContext.RethrowAssertException(true);
+    g_TestContext.ExpectAssert(false);
+}
+
 static struct SyncFindWeightHigherThanContext
 {
     SyncFindWeightHigherThanContext()
@@ -1637,7 +1689,8 @@ TEST(Kernel, SyncInheritWeight)
     kernel.Start();
 
     IKernelTask *ktasks[2];
-    kernel.EnumerateKernelTasks(ktasks, 2);
+    ArrayView<IKernelTask *> ktasks_view(ktasks, 2);
+    kernel.EnumerateKernelTasks(ktasks_view);
 
     // current weight is dynamic value used by strategy with PRIORITY_INHERITANCE_API, if not overridden
     // by InheritWeight should be NO_WEIGHT
@@ -1756,7 +1809,7 @@ TEST(Kernel, SuspendResume)
     Timeout ticks = stk::IKernelService::GetInstance()->Suspend();
     CHECK_EQUAL(9, ticks);
 
-    CHECK_EQUAL(IKernel::STATE_SUSPENDED, kernel.GetState());
+    CHECK_EQUAL(IKernel::KSTATE_SUSPENDED, kernel.GetState());
 
     stk::IKernelService::GetInstance()->Resume(ticks);
 }

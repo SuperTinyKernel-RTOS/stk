@@ -51,16 +51,17 @@ enum EKernelMode : uint8_t
 */
 enum EKernelPanicId : uint32_t
 {
-    KERNEL_PANIC_NONE                = 0, //!< Panic is absent (no fault).
-    KERNEL_PANIC_SPINLOCK_DEADLOCK   = 1, //!< Spin-lock timeout expired: lock owner never released.
-    KERNEL_PANIC_STACK_CORRUPT       = 2, //!< Stack integrity check failed.
-    KERNEL_PANIC_ASSERT              = 3, //!< Internal assertion failed (maps from STK_ASSERT).
-    KERNEL_PANIC_HRT_HARD_FAULT      = 4, //!< Kernel running in KERNEL_HRT mode reported deadline failure of the task.
-    KERNEL_PANIC_CPU_EXCEPTION       = 5, //!< CPU reported an exception and halted execution.
-    KERNEL_PANIC_CS_NESTING_OVERFLOW = 6, //!< Critical section nesting limit exceeded: violation of STK_CRITICAL_SECTION_NESTINGS_MAX.
-    KERNEL_PANIC_UNKNOWN_SVC         = 7, //!< Unknown service command received by SVC handler.
-    KERNEL_PANIC_BAD_STATE           = 8, //!< Kernel entered unexpected (bad) state.
-    KERNEL_PANIC_BAD_MODE            = 9  //!< Kernel is in bad/unsupported mode for the current operation.
+    KERNEL_PANIC_NONE                = 0U,  //!< Panic is absent (no fault).
+    KERNEL_PANIC_SPINLOCK_DEADLOCK   = 1U,  //!< Spin-lock timeout expired: lock owner never released.
+    KERNEL_PANIC_STACK_CORRUPT       = 2U,  //!< Stack integrity check failed.
+    KERNEL_PANIC_ASSERT              = 3U,  //!< Internal assertion failed (maps from STK_ASSERT).
+    KERNEL_PANIC_HRT_HARD_FAULT      = 4U,  //!< Kernel running in KERNEL_HRT mode reported deadline failure of the task.
+    KERNEL_PANIC_CPU_EXCEPTION       = 5U,  //!< CPU reported an exception and halted execution.
+    KERNEL_PANIC_CS_NESTING_OVERFLOW = 6U,  //!< Critical section nesting limit exceeded: violation of STK_CRITICAL_SECTION_NESTINGS_MAX.
+    KERNEL_PANIC_UNKNOWN_SVC         = 7U,  //!< Unknown service command received by SVC handler.
+    KERNEL_PANIC_BAD_STATE           = 8U,  //!< Kernel entered unexpected (bad) state.
+    KERNEL_PANIC_BAD_MODE            = 9U,  //!< Kernel is in bad/unsupported mode for the current operation.
+    KERNEL_PANIC_BAD_STACK_TYPE      = 10U  //!< Stack type is unknown.
 };
 
 /*! \enum  EStackType
@@ -208,8 +209,49 @@ static constexpr Weight DEFAULT_WEIGHT = static_cast<Weight>(1);
     \note      ISR-safe (bitmask arithmetic only, no kernel calls).
     \see       TID_ISR_N
 */
-static inline bool IsIsrTid(TId tid) { return ((tid & TID_ISR_N) == TID_ISR_N); }
+static inline bool IsIsrTid(TId id) { return ((id & TID_ISR_N) == TID_ISR_N); }
 
+/*! \class ArrayView
+    \brief Lightweight, non-owning view over a contiguous sequence of elements.
+    \note  This descriptor provides a safe encapsulation over raw pointers without 
+           copying the underlying data.
+
+    Usage example:
+    \code
+    stk::ITask *tasks[TASKS_MAX];
+    ArrayView<stk::ITask *> view(tasks, TASKS_MAX);
+    \endcode
+*/
+template <typename T> class ArrayView
+{
+public:
+/*! \brief   Construct an ArrayView from a raw pointer and size.
+        \param[in] ptr: Pointer to the first element of the contiguous memory block.
+        \param[in] size: Number of elements available in the memory block.
+    */
+    ArrayView(T *ptr, size_t size) : m_ptr(ptr), m_size(size)
+    {}
+
+    /*! \brief   Subscript operator for element access.
+        \param   index Element index to access.
+        \return  Reference to the element at the specified index.
+        \warning Triggers STK_ASSERT if index is out of bounds in a Debug build.
+    */
+    T &operator[](size_t index) const
+    {
+        STK_ASSERT(index < m_size);
+        return m_ptr[index];
+    }
+    
+    /*! \brief   Get number of elements in the view.
+        \return  The size of the array view.
+    */
+    size_t GetSize() const { return m_size; }
+
+private:
+    T     *m_ptr;  //!< Pointer to the underlying memory block.
+    size_t m_size; //!< Total number of elements in the view.
+};
 
 /*! \class StackMemoryDef
     \brief Stack memory type definition.
@@ -236,14 +278,14 @@ template <size_t _StackSize> struct StackMemoryDef
 */
 struct Stack
 {
-    Word        SP;   //!< Stack Pointer (SP) register (note: must be the first entry in this struct).
-    EAccessMode mode; //!< Hardware access mode of the owning task (see \a EAccessMode).
+    Word        SP;          //!< Stack Pointer (SP) register (note: must be the first entry in this struct).
+    EAccessMode access_mode; //!< Hardware access mode of the owning task (see \a EAccessMode).
 #if STK_STACK_NEEDS_TASK_ID
-    TId         tid;  //!< Task id (see \a STK_SEGGER_SYSVIEW).
+    TId         tid;         //!< Task id (see \a STK_SEGGER_SYSVIEW).
 #endif
 #ifdef _STK_ARCH_ARM_CORTEX_M
 #if STK_TLS && !STK_TLS_PREFER_REGISTER
-    Word        tls;  //!< Thread-local storage if not using ARM Cortex-M R9 register for a fast inline access to TLS.
+    Word        tls;        //!< Thread-local storage if not using ARM Cortex-M R9 register for a fast inline access to TLS.
 #endif
 #endif
 };
@@ -275,12 +317,11 @@ public:
     */
     virtual size_t GetStackSpace() const
     {
-        const Word *stack = GetStack();
-        const size_t stack_size = GetStackSize();
-
+        ArrayView<const Word> stack(GetStack(), GetStackSize());
+      
         // count leading Words equal to STK_STACK_MEMORY_FILLER (watermark)
         size_t space = 0U;
-        for ( ; (space < stack_size) && (stack[space] == STK_STACK_MEMORY_FILLER); ++space)
+        for ( ; (space < stack.GetSize()) && (stack[space] == STK_STACK_MEMORY_FILLER); ++space)
         {}
 
         return space;
@@ -327,6 +368,11 @@ public:
         \return    Returns \a true if update caused a timeout of the object, \a false otherwise.
     */
     virtual bool Tick(Timeout elapsed_ticks) = 0;
+    
+protected:
+    /*! \brief Destructor.
+    */
+    ~IWaitObject() = default;
 };
 
 /*! \class ITraceable
@@ -367,6 +413,10 @@ public:
     }
 
 protected:
+    /*! \brief Destructor.
+    */
+    ~ITraceable() = default;
+  
 #if STK_SYNC_DEBUG_NAMES
     const char *m_trace_name; //!< name (debug/tracing only)
 #endif
@@ -380,11 +430,6 @@ class ISyncObject : public util::DListEntry<ISyncObject, false>
     friend class IKernel;
 
 public:
-    /*! \brief Destructor.
-        \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
-    */
-    ~ISyncObject() = default;
-
     /*! \typedef   ListHeadType
         \brief     List head type for ISyncObject elements.
     */
@@ -442,6 +487,11 @@ protected:
     */
     explicit ISyncObject() : m_wait_list()
     {}
+    
+    /*! \brief Destructor.
+        \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
+    */
+    ~ISyncObject() = default;
 
     /*! \brief     Wake the first task in the wait list (FIFO order).
         \note      The woken task is notified with timeout=false, indicating a successful signal
@@ -452,7 +502,9 @@ protected:
     void WakeOne()
     {
         if (!m_wait_list.IsEmpty())
+        {
             static_cast<IWaitObject *>(m_wait_list.GetFirst())->Wake(false);
+        }
     }
 
     /*! \brief     Wake all tasks currently in the wait list.
@@ -464,7 +516,9 @@ protected:
     void WakeAll()
     {
         while (!m_wait_list.IsEmpty())
+        {
             static_cast<IWaitObject *>(m_wait_list.GetFirst())->Wake(false);
+        }
     }
 
     IWaitObject::ListHeadType m_wait_list; //!< tasks blocked on this object
@@ -501,6 +555,11 @@ public:
     /*! \brief Unlock the mutex.
     */
     virtual void Unlock() = 0;
+    
+protected:
+    /*! \brief Destructor.
+    */
+    ~IMutex() = default;
 };
 
 /*! \class ITask
@@ -614,10 +673,11 @@ public:
     /*! \brief     Get user task.
     */
     virtual ITask *GetUserTask() = 0;
-
-    /*! \brief     Get pointer to the user task's stack.
+    
+    /*! \brief      Get user task's Stack info.
+        \param[out] stack: Stack info.
     */
-    virtual Stack *GetUserStack() = 0;
+    virtual Stack GetUserStack() const = 0;
 
     /*! \brief     Get static base weight assigned to the task.
         \return    Static weight value of the task.
@@ -670,6 +730,11 @@ public:
                    will trigger an assertion in the concrete implementation.
     */
     virtual void Wake() = 0;
+    
+protected:
+    /*! \brief Destructor.
+    */
+    ~IKernelTask() = default;
 };
 
 /*! \class IPlatform
@@ -918,6 +983,11 @@ public:
         \note      ISR-safe.
     */
     virtual void Resume(Timeout elapsed_ticks) = 0;
+    
+protected:
+    /*! \brief Destructor.
+    */
+    ~IPlatform() = default;
 };
 
 /*! \class ITaskSwitchStrategy
@@ -1031,6 +1101,11 @@ public:
         STK_UNUSED(task);
         STK_UNUSED(old_weight);
     }
+    
+protected:
+    /*! \brief Destructor.
+    */
+    ~ITaskSwitchStrategy() = default;
 };
 
 /*! \class IKernel
@@ -1044,12 +1119,12 @@ public:
     /*! \enum    EState
         \brief   Kernel state.
     */
-    enum EState : uint8_t
+    enum EKernelState : uint8_t
     {
-        STATE_INACTIVE = 0, //!< Not ready, IKernel::Initialize() must be called.
-        STATE_READY,        //!< Ready to start, IKernel::Start() must be called.
-        STATE_RUNNING,      //!< Initialized and running, IKernel::Start() was called successfully.
-        STATE_SUSPENDED     //!< Scheduling is suspended with IKernelService::Suspend().
+        KSTATE_INACTIVE = 0, //!< Not ready, IKernel::Initialize() must be called.
+        KSTATE_READY,        //!< Ready to start, IKernel::Start() must be called.
+        KSTATE_RUNNING,      //!< Initialized and running, IKernel::Start() was called successfully.
+        KSTATE_SUSPENDED     //!< Scheduling is suspended with IKernelService::Suspend().
     };
 
     /*! \brief     Initialize kernel.
@@ -1114,20 +1189,18 @@ public:
     virtual void ResumeTask(ITask *user_task) = 0;
 
     /*! \brief     Enumerate kernel tasks.
-        \param[in,out] tasks: Pointer to the array for IKernelTask pointers.
-        \param[in] max_size: Max size of the provided array.
+        \param[in] tasks: Reference to the ArrayView of IKernelTask pointers.
         \return    Number of tasks in the array.
         \warning   ISR-safe.
     */
-    virtual size_t EnumerateKernelTasks(IKernelTask **tasks, size_t max_size) = 0;
+    virtual size_t EnumerateKernelTasks(ArrayView<IKernelTask *> tasks) = 0;
 
     /*! \brief     Enumerate user tasks.
-        \param[in,out] user_tasks: Pointer to the array for ITask pointers.
-        \param[in] max_size: Max size of the provided array.
+        \param[in] user_tasks: Reference to the ArrayView of ITask pointers.
         \return    Number of tasks in the array.
         \warning   ISR-safe.
     */
-    virtual size_t EnumerateTasks(ITask **user_tasks, size_t max_size) = 0;
+    virtual size_t EnumerateTasks(ArrayView<ITask *> user_tasks) = 0;
 
     /*! \brief     Enumerate tasks, invoking a callback for each active task.
         \tparam    TMaxCount: Maximum number of tasks to enumerate.
@@ -1152,15 +1225,17 @@ public:
     template <size_t TMaxCount, typename TCallback>
     size_t EnumerateTasksT(TCallback &&callback)
     {
-        STK_STATIC_ASSERT(TMaxCount > 0);
+        STK_STATIC_ASSERT(TMaxCount > 0U);
 
-        ITask *tasks[TMaxCount] = {};
-        size_t i = 0, count = EnumerateTasks(tasks, TMaxCount);
+        ITask *tasks[TMaxCount] = {};        
+        size_t count = EnumerateTasks(ArrayView<ITask *>(tasks, TMaxCount));
+        size_t i = 0U;
+        bool fetch_next = true;
 
-        while (i < count)
+        while ((i < count) && fetch_next)
         {
-            if (!callback(tasks[i++]))
-                break;
+            fetch_next = callback(tasks[i]);
+            ++i;
         }
 
         return i;
@@ -1176,7 +1251,7 @@ public:
         \return    Kernel state.
         \see       EState
     */
-    virtual EState GetState() const = 0;
+    virtual EKernelState GetState() const = 0;
 
     /*! \brief     Get platform driver instance.
         \return    Pointer to the IPlatform concrete class instance.
@@ -1187,6 +1262,11 @@ public:
         \return    Pointer to the ITaskSwitchStrategy concrete class instance.
     */
     virtual ITaskSwitchStrategy *GetSwitchStrategy() = 0;
+    
+protected:
+    /*! \brief Destructor.
+    */
+    ~IKernel() = default;
 };
 
 /*! \class IKernelService
@@ -1327,6 +1407,11 @@ public:
         \note      ISR-safe.
     */
     virtual void RestoreWeight(TId tid, ISyncObject *sobj = nullptr) = 0;
+    
+protected:
+    /*! \brief Destructor.
+    */
+    ~IKernelService() = default;
 };
 
 } // namespace stk

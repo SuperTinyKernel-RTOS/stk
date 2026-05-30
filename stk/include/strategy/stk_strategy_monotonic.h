@@ -33,9 +33,9 @@ enum EMonotonicSwitchStrategyType
 
 /*! \class SwitchStrategyMonotonic
     \brief Monotonic scheduling strategy: Rate-Monotonic (RM) or Deadline-Monotonic (DM),
-           selected at compile time by the \a _Type template parameter.
+           selected at compile time by the \a TStrategyType template parameter.
 
-    \tparam _Type: Policy selector (EMonotonicSwitchStrategyType):
+    \tparam TStrategyType: Policy selector (EMonotonicSwitchStrategyType):
                    - \c MSS_TYPE_RATE     - Rate-Monotonic: tasks with a \e shorter scheduling
                      period receive higher priority. The most frequently activating task always
                      runs first.
@@ -65,7 +65,7 @@ enum EMonotonicSwitchStrategyType
            SchedulabilityCheck::IsSchedulableWCRT().
     \see   SwitchStrategyRM, SwitchStrategyDM, SchedulabilityCheck, ITaskSwitchStrategy
 */
-template <EMonotonicSwitchStrategyType _Type>
+template <EMonotonicSwitchStrategyType TStrategyType>
 class SwitchStrategyMonotonic final : public ITaskSwitchStrategy
 {
 public:
@@ -88,12 +88,12 @@ public:
     /*! \brief Destructor.
         \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
     */
-    ~SwitchStrategyMonotonic() = default;
+    STK_VIRT_DTOR ~SwitchStrategyMonotonic() = default;
 
     /*! \brief     Add a task to the priority-sorted runnable list.
         \param[in] task: Task to add. Must not be \c NULL and must not already be in any list.
         \note      Performs an O(n) insertion sort into \c m_tasks so that higher-priority tasks
-                   appear closer to the head. The sort key depends on \a _Type:
+                   appear closer to the head. The sort key depends on \a TStrategyType:
                    - \c MSS_TYPE_RATE:     key = GetHrtPeriodicity() (smaller -> nearer to head).
                    - \c MSS_TYPE_DEADLINE: key = GetHrtDeadline()    (smaller -> nearer to head).
         \note      Three insertion cases handled:
@@ -117,12 +117,12 @@ public:
         }
         else
         {
-            IKernelTask *itr = (*m_tasks.GetFirst()), * const start = itr;
+            IKernelTask *itr = (*m_tasks.GetFirst()), *const start = itr;
 
             for (;;)
             {
-                bool higher_priority;
-                switch (_Type)
+                bool higher_priority = false;
+                switch (TStrategyType)
                 {
                 case MSS_TYPE_RATE:
                     higher_priority = (task->GetHrtPeriodicity() < itr->GetHrtPeriodicity());
@@ -148,7 +148,8 @@ public:
                 }
 
                 // end of the list
-                if ((itr = (*itr->GetNext())) == start)
+                itr = (*itr->GetNext());
+                if (itr == start)
                 {
                     m_tasks.LinkBack(task);
                     break;
@@ -180,27 +181,29 @@ public:
                    IsSleeping() returns \c false is always the highest-priority runnable task.
                    Complexity is O(k) where k is the number of sleeping tasks at the front of
                    the list (i.e. higher-priority tasks currently between activations).
-        \note      Asserts if \c m_tasks is empty; at least one task must be registered before
-                   GetNext() is called.
     */
     IKernelTask *GetNext() override
     {
-        STK_ASSERT(!m_tasks.IsEmpty());
-
-        IKernelTask *itr = (*m_tasks.GetFirst()), * const start = itr;
         IKernelTask *next = nullptr;
 
-        // Scan from head (highest priority). Skip tasks that are sleeping between
-        // periodic activations; return the first task ready to run.
-        do
+        if (!m_tasks.IsEmpty())
         {
-            if (!itr->IsSleeping())
+            IKernelTask *itr = (*m_tasks.GetFirst()), *const start = itr;
+
+            // scan from head (highest priority); skip tasks that are sleeping between
+            // periodic activations; return the first task ready to run
+            do
             {
-                next = itr;
-                break; // list is sorted by priority; no need to continue
+                if (!itr->IsSleeping())
+                {
+                    next = itr;
+                    break; // list is sorted by priority; no need to continue
+                }
+
+                itr = (*itr->GetNext());
             }
+            while (itr != start);
         }
-        while ((itr = (*itr->GetNext())) != start);
 
         // nullptr means all tasks are sleeping, return idle signal to kernel
         return next;
@@ -311,7 +314,7 @@ public:
     /*! \class SchedulabilityCheckResult
         \brief Result of a WCRT schedulability test: overall verdict plus per-task details.
 
-        The number of tasks is fixed at compile time through the \a _TaskCount template
+        The number of tasks is fixed at compile time through the \a TTaskCount template
         parameter, which must equal the number of tasks registered with the kernel strategy.
         Array indices match the priority-sorted task order: index 0 = highest-priority task.
 
@@ -323,11 +326,11 @@ public:
         STK_ASSERT(result); // assert all tasks meet their deadlines
         \endcode
     */
-    template <uint32_t _TaskCount>
+    template <uint32_t TTaskCount>
     struct SchedulabilityCheckResult
     {
         bool     schedulable;      //!< \c true if every task's WCRT <= its period (T); \c false if any task misses its deadline.
-        TaskInfo info[_TaskCount]; //!< Per-task analysis results, ordered highest priority first (index 0 = highest priority task).
+        TaskInfo info[TTaskCount]; //!< Per-task analysis results, ordered highest priority first (index 0 = highest priority task).
 
         /*! \brief  Check whether the full task set is schedulable.
             \return \c true if all tasks meet their deadlines; \c false otherwise.
@@ -336,49 +339,51 @@ public:
     };
 
     /*! \brief               Perform WCRT schedulability analysis on the task set registered with \a strategy.
-        \tparam _TaskCount:  Number of tasks to analyse. Must equal the number of tasks currently
-                             registered with \a strategy (asserted at runtime: idx == _TaskCount).
+        \tparam TTaskCount:  Number of tasks to analyse. Must equal the number of tasks currently
+                             registered with \a strategy (asserted at runtime: idx == TTaskCount).
         \param[in] strategy: Pointer to the monotonic scheduling strategy whose task list is analysed.
                              Must not be \c nullptr and must have at least one task registered.
-        \return              A SchedulabilityCheckResult<_TaskCount> containing the schedulability
+        \return              A SchedulabilityCheckResult<TTaskCount> containing the schedulability
                              verdict and per-task CPU load and WCRT values.
         \note                Tasks are read from the strategy's sorted \c m_tasks list in priority
                              order (index 0 = highest priority). For each task, \c period is
                              populated from GetHrtPeriodicity() and \c duration from GetHrtDeadline()
                              before invoking GetTaskCpuLoad() and CalculateWCRT().
      */
-    template <uint32_t _TaskCount>
-    static inline SchedulabilityCheckResult<_TaskCount> IsSchedulableWCRT(const ITaskSwitchStrategy *strategy)
+    template <uint32_t TTaskCount>
+    static inline SchedulabilityCheckResult<TTaskCount> IsSchedulableWCRT(const ITaskSwitchStrategy *strategy)
     {
         STK_ASSERT(strategy != nullptr);
         STK_ASSERT(strategy->GetFirst() != nullptr);
 
-        const IKernelTask::ListHeadType *ktasks = strategy->GetFirst()->GetHead();
+        const IKernelTask::ListHeadType *const ktasks = strategy->GetFirst()->GetHead();
 
         STK_ASSERT(ktasks != nullptr);
-        STK_ASSERT(ktasks->GetSize() <= _TaskCount);
+        STK_ASSERT(ktasks->GetSize() <= TTaskCount);
 
-        SchedulabilityCheckResult<_TaskCount> ret;
-        TaskTiming tasks[_TaskCount];
+        SchedulabilityCheckResult<TTaskCount> ret;
+        TaskTiming tasks[TTaskCount];
 
         // fill tasks timing
         const IKernelTask *itr = (*ktasks->GetFirst()), * const start = itr;
         uint32_t idx = 0U;
         do
         {
-            STK_ASSERT(idx < _TaskCount);
+            STK_ASSERT(idx < TTaskCount);
             tasks[idx].period   = static_cast<uint32_t>(itr->GetHrtPeriodicity());
             tasks[idx].duration = static_cast<uint32_t>(itr->GetHrtDeadline());
             idx += 1U;
+            
+            itr = (*itr->GetNext());
         }
-        while ((itr = (*itr->GetNext())) != start);
-        STK_ASSERT(idx == _TaskCount);
+        while (itr != start);
+        STK_ASSERT(idx == TTaskCount);
 
         // calculate CPU load
-        GetTaskCpuLoad(tasks, _TaskCount, ret.info);
+        GetTaskCpuLoad(tasks, TTaskCount, ret.info);
 
         // run the WCRT schedulability analysis
-        ret.schedulable = CalculateWCRT(tasks, _TaskCount, ret.info);
+        ret.schedulable = CalculateWCRT(tasks, TTaskCount, ret.info);
 
         return ret;
     }
@@ -409,29 +414,33 @@ public:
        The highest-priority task (index 0) has no higher-priority interference; its WCRT
        is set directly to its own WCET (\c tasks[0].duration) without iteration.
 
-       \param[in]  tasks: Array of TaskTiming in descending priority order (index 0 = highest).
+       \param[in]  task_array: Array of TaskTiming in descending priority order (index 0 = highest).
        \param[in]  count: Number of tasks in \a tasks.
-       \param[out] info:  Array of TaskInfo of size \a count. \c info[i].wcrt receives the
-                         computed WCRT for task \e i on return.
+       \param[out] info_array: Array of TaskInfo of size \a count. \c info[i].wcrt receives the
+                   computed WCRT for task \e i on return.
        \return     \c true if every task's WCRT <= its period (Tx); \c false if any task misses.
      */
-    static inline bool CalculateWCRT(const TaskTiming *tasks, const uint32_t count, TaskInfo *info)
+    static inline bool CalculateWCRT(const TaskTiming *task_array, const uint32_t count, TaskInfo *info_array)
     {
         bool schedulable = true;
+        ArrayView<const TaskTiming> tasks(task_array, count);
+        ArrayView<TaskInfo> info(info_array, count);
         info[0].wcrt = tasks[0].duration;
 
-        for (uint32_t t = 1; t < count; )
+        for (uint32_t t = 1U; t < tasks.GetSize(); )
         {
-            uint32_t w,
-            Cx = tasks[t].duration,
-            Tx = tasks[t].period,
-            w0 = Cx;
+            uint32_t       w  = 0U;
+            const uint32_t Cx = tasks[t].duration;
+            const uint32_t Tx = tasks[t].period;
+            uint32_t       w0 = Cx;
 
         next_itr:
 
             w = Cx;
-            for (uint32_t i = 0; i < t; ++i)
+            for (uint32_t i = 0U; i < t; ++i)
+            {
                 w += idiv_ceil(w0, tasks[i].period) * tasks[i].duration;
+            }
 
             if ((w != w0) && (w <= Tx))
             {
@@ -458,25 +467,39 @@ public:
     */
     static inline void GetTaskCpuLoad(const TaskTiming *tasks, const uint32_t count, TaskInfo *info)
     {
-        uint16_t total = 0;
+        uint16_t total = 0U;
 
-        for (uint32_t t = 0; t < count; ++t)
+        for (uint32_t i = 0U; i < count; ++i)
         {
-            uint16_t task_load = (uint16_t)(tasks[t].duration * 100 / tasks[t].period);
+            const uint16_t task_load = static_cast<uint16_t>(tasks[i].duration * 100U / tasks[i].period);
             total += task_load;
 
-            info[t].cpu_load.task  = task_load;
-            info[t].cpu_load.total = total;
+            info[i].cpu_load.task  = task_load;
+            info[i].cpu_load.total = total;
         }
     }
 
 private:
-    //! Integer ceiling division: returns ceil(x / y) = x/y + (x%y > 0 ? 1 : 0).
-    //! Equivalent to (int32_t)ceil((float)x / y) but exact and branch-free for integers.
-    //! Reference: http://stackoverflow.com/questions/2745074/fast-ceiling-of-an-integer-division-in-c-c
-    static __stk_forceinline int32_t idiv_ceil(uint32_t x, uint32_t y)
+    /*! \brief      Compute the ceiling of an integer division: ceil(x / y).
+        \param[in]  x: Dividend (numerator).
+        \param[in]  y: Divisor (denominator).
+        \return     The result of the ceiling division, or 0 if \a y is 0.
+    */
+    static inline uint32_t idiv_ceil(uint32_t x, uint32_t y)
     {
-        return ((y != 0) ? (x / y + (x % y > 0)) : 0);
+        uint32_t result = 0U;
+
+        if (y != 0U)
+        {
+            result = x / y;
+            
+            if ((x % y) > 0U)
+            {
+                result++;
+            }
+        }
+
+        return result;
     }
 };
 

@@ -95,17 +95,8 @@ TEST(SwitchStrategyMonotonic, GetNextEmpty)
     kernel.RemoveTask(&task1);
     CHECK_EQUAL(0, strategy->GetSize());
 
-    try
-    {
-        g_TestContext.ExpectAssert(true);
-        strategy->GetNext();
-        CHECK_TEXT(false, "expecting assertion when empty");
-    }
-    catch (TestAssertPassed &pass)
-    {
-        CHECK(true);
-        g_TestContext.ExpectAssert(false);
-    }
+    // expect to return NULL which puts core into a sleep mode, current is ignored by this strategy
+    CHECK_EQUAL(0, strategy->GetNext());
 }
 
 template <class _SwitchStrategy>

@@ -143,7 +143,7 @@ public:
                    is triggered in debug builds inside the \c ConditionVariable destructor.
         \note      MISRA deviation: [STK-DEV-005] Rule 10-3-2.
     */
-    ~BlockMemoryPool();
+    STK_VIRT_DTOR ~BlockMemoryPool();
 
     /*! \brief     Round a raw block size up to the nearest multiple of \c BLOCK_ALIGN.
         \details   Enforces a minimum of \c BLOCK_ALIGN so the free-list link always
@@ -164,24 +164,24 @@ public:
         \details   If the pool is empty the calling task is suspended via the internal
                    \c ConditionVariable and woken by the next \c Free() call. On return the
                    caller owns the block and must eventually return it via \c Free().
-        \param[in] timeout: Maximum time to wait (ticks).
+        \param[in] timeout_ticks: Maximum time to wait (ticks).
                    \c WAIT_INFINITE - block indefinitely (default).
                    \c NO_WAIT       - return \c nullptr immediately if pool is empty
                                       (identical to \c TryAlloc(); ISR-safe).
         \return    Pointer to an uninitialized block of at least \c GetRawBlockSize() bytes,
                    or \c nullptr if the timeout expired before a block became available.
-        \warning   ISR-safe \b only when \a timeout = \c NO_WAIT; ISR-unsafe otherwise.
+        \warning   ISR-safe \b only when \a timeout_ticks = \c NO_WAIT; ISR-unsafe otherwise.
     */
-    void *TimedAlloc(Timeout timeout = WAIT_INFINITE);
+    void *TimedAlloc(Timeout timeout_ticks = WAIT_INFINITE);
 
     /*! \brief     Allocate one typed block, blocking until one becomes available or the timeout expires.
         \details   Thin typed wrapper around \c TimedAlloc(). Asserts that \c sizeof(T) fits
                    within the aligned block size chosen at construction.
-        \param[in] timeout: Maximum time to wait (ticks). Same semantics as \c TimedAlloc().
+        \param[in] timeout_ticks: Maximum time to wait (ticks). Same semantics as \c TimedAlloc().
         \return    Typed pointer, or \c nullptr if the timeout expired.
-        \warning   ISR-safe \b only when \a timeout = \c NO_WAIT; ISR-unsafe otherwise.
+        \warning   ISR-safe \b only when \a timeout_ticks = \c NO_WAIT; ISR-unsafe otherwise.
     */
-    template <typename T> T *TimedAllocT(Timeout timeout = WAIT_INFINITE);
+    template <typename T> T *TimedAllocT(Timeout timeout_ticks = WAIT_INFINITE);
 
     /*! \brief     Allocate one block, blocking indefinitely until one is available.
         \return    Pointer to an uninitialized block. Never returns \c nullptr.
@@ -316,7 +316,7 @@ private:
     sync::ConditionVariable  m_cv;             //!< signalled by Free() to wake one task blocked in TimedAlloc()
     size_t                   m_block_size;     //!< aligned block size in bytes (>= BLOCK_ALIGN)
     size_t                   m_capacity;       //!< total number of blocks
-    uint16_t                 m_used_count;     //!< number of blocks currently allocated (outstanding)
+    size_t                   m_used_count;     //!< number of blocks currently allocated (outstanding)
     bool                     m_storage_owned;  //!< true -> storage is heap-allocated; free in destructor
 };
 
@@ -343,7 +343,9 @@ inline BlockMemoryPool::BlockMemoryPool(size_t capacity, size_t raw_block_size, 
 
     // in Release builds we ensure capacity which fits storage size, in Debug build the assertion above will be hit
     if ((capacity * m_block_size) > storage_size)
+    {
         m_capacity = storage_size / m_block_size;
+    }
 
 #if STK_SYNC_DEBUG_NAMES
     SetTraceName(name);
@@ -374,7 +376,9 @@ inline BlockMemoryPool::BlockMemoryPool(size_t capacity, size_t raw_block_size, 
 #endif
 
     if (m_storage != nullptr)
+    {
         BuildFreeList();
+    }
     // else: m_free_list remains nullptr; caller must check IsStorageValid()
 }
 #endif
@@ -395,33 +399,46 @@ inline BlockMemoryPool::~BlockMemoryPool()
 // Alloc / TimedAlloc / TryAlloc
 // ---------------------------------------------------------------------------
 
-inline void *BlockMemoryPool::TimedAlloc(Timeout timeout)
+inline void *BlockMemoryPool::TimedAlloc(Timeout timeout_ticks)
 {
-    if (hw::IsInsideISR() && (timeout != NO_WAIT))
+    void *block = nullptr;
+  
+    if (!hw::IsInsideISR() || (timeout_ticks == NO_WAIT))
+    {
+        sync::ScopedCriticalSection cs_;
+        bool is_timeout = false;
+
+        while (m_free_list == nullptr)
+        {
+            // Atomically release the critical section, suspend the task, and
+            // re-acquire before returning - no CPU cycles wasted while waiting.
+            if (!m_cv.Wait(cs_, timeout_ticks))
+            {
+                is_timeout = true; // timeout expired
+                break;
+            }
+        }
+
+        // only allocate a block if we didn't time out
+        if (!is_timeout)
+        {
+            block = PopFreeList();
+        }
+    }
+    else
     {
         STK_ASSERT(false); // API contract: ISR callers must pass NO_WAIT / use TryAlloc()
-        return nullptr;
     }
 
-    sync::ScopedCriticalSection cs_;
-
-    while (m_free_list == nullptr)
-    {
-        // Atomically release the critical section, suspend the task, and
-        // re-acquire before returning - no CPU cycles wasted while waiting.
-        if (!m_cv.Wait(cs_, timeout))
-            return nullptr; // timeout expired
-    }
-
-    return PopFreeList();
+    return block;
 }
 
 template <typename T>
-inline T *BlockMemoryPool::TimedAllocT(Timeout timeout)
+inline T *BlockMemoryPool::TimedAllocT(Timeout timeout_ticks)
 {
     STK_ASSERT(sizeof(T) <= m_block_size); // API contract: block size should larger or equal to object's size
 
-    return static_cast<T *>(TimedAlloc(timeout));
+    return static_cast<T *>(TimedAlloc(timeout_ticks));
 }
 
 inline void *BlockMemoryPool::Alloc()
@@ -452,58 +469,68 @@ inline T *BlockMemoryPool::TryAllocT()
 
 inline bool BlockMemoryPool::Free(void *ptr)
 {
-    if (ptr == nullptr)
-        return false;
+    bool success = false;
 
-    // bounds check: ptr must be in range [m_storage, m_storage + capacity * block_size)
-    const uint8_t *p8 = static_cast<uint8_t *>(ptr);
-    const uint8_t *lo = m_storage;
-    const uint8_t *hi = m_storage + (m_capacity * m_block_size);
-
-    if ((p8 < lo) || (p8 >= hi))
+    if (ptr != nullptr)
     {
-        STK_ASSERT(false); // API contract: ptr does not belong to this pool
-        return false;
-    }
+        // bounds check: ptr must be in range [m_storage, m_storage + capacity * block_size)
+        const Word pt = hw::PtrToWord(ptr);
+        const Word lo = hw::PtrToWord(m_storage);
+        const Word hi = lo + (m_capacity * m_block_size);
 
-    // alignment check: ptr must be at the start of a block boundary
-    if ((static_cast<size_t>(p8 - lo) % m_block_size) != 0U)
-    {
-        STK_ASSERT(false); // API contract: ptr is misaligned (not a block start)
-        return false;
-    }
-
-    sync::ScopedCriticalSection cs_;
-
-    if (m_used_count == 0U)
-    {
-        STK_ASSERT(false); // pool is already fully free - definite double-free
-        return false;
-    }
-
-#if defined(_DEBUG) || defined(DEBUG)
-    // O(n) double-free detection: walk the free-list and check if ptr is already on it,
-    // only active in debug builds - compiles away completely in release
-    for (const MemoryBlock *node = m_free_list; (node != nullptr); node = node->next)
-    {
-        if (node == reinterpret_cast<const MemoryBlock *>(ptr))
+        if ((pt < lo) || (pt >= hi))
         {
-            STK_ASSERT(false); // double-free: ptr is already on the free-list
-            return false;
+            STK_ASSERT(false); // API contract: ptr does not belong to this pool
+        }
+        // alignment check: ptr must be at the start of a block boundary
+        else if ((static_cast<size_t>(pt - lo) % m_block_size) != 0U)
+        {
+            STK_ASSERT(false); // API contract: ptr is misaligned (not a block start)
+        }
+        else
+        {
+            const sync::ScopedCriticalSection cs_;
+
+            if (m_used_count == 0U)
+            {
+                STK_ASSERT(false); // pool is already fully free - definite double-free
+            }
+            else
+            {
+            #if defined(_DEBUG) || defined(DEBUG)
+                bool is_double_free = false;
+
+                // O(n) double-free detection: walk the free-list and check if ptr is already on it,
+                // only active in debug builds - compiles away completely in release
+                for (const MemoryBlock *node = m_free_list; (node != nullptr); node = node->next)
+                {
+                    if (node == reinterpret_cast<const MemoryBlock *>(ptr))
+                    {
+                        STK_ASSERT(false); // double-free: ptr is already on the free-list
+                        is_double_free = true;
+                        break;
+                    }
+                }
+
+                if (!is_double_free)
+            #endif
+                {
+                    // push block onto free-list head (O(1))
+                    auto *const blk = reinterpret_cast<MemoryBlock *>(ptr);
+                    blk->next       = m_free_list;
+                    m_free_list     = blk;
+                    m_used_count    = static_cast<uint16_t>(m_used_count - 1U);
+
+                    // wake one blocked allocator - true scheduler wait, no spin-yield
+                    m_cv.NotifyOne_CS();
+                    
+                    success = true;
+                }
+            }
         }
     }
-#endif
 
-    // push block onto free-list head (O(1))
-    auto *blk   = reinterpret_cast<MemoryBlock *>(ptr);
-    blk->next   = m_free_list;
-    m_free_list = blk;
-    m_used_count = static_cast<uint16_t>(m_used_count - 1U);
-
-    // wake one blocked allocator - true scheduler wait, no spin-yield
-    m_cv.NotifyOne_CS();
-
-    return true;
+    return success;
 }
 
 // ---------------------------------------------------------------------------
@@ -521,7 +548,7 @@ inline void BlockMemoryPool::BuildFreeList()
     // (lowest address), giving ascending allocation order.
     for (size_t i = m_capacity; i-- > 0U; )
     {
-        MemoryBlock *blk = reinterpret_cast<MemoryBlock *>(m_storage + (i * m_block_size));
+        MemoryBlock *const blk = reinterpret_cast<MemoryBlock *>(m_storage + (i * m_block_size));
 
         blk->next   = m_free_list;
         m_free_list = blk;
@@ -532,7 +559,7 @@ inline void *BlockMemoryPool::PopFreeList()
 {
     STK_ASSERT(m_used_count < m_capacity);
 
-    MemoryBlock *blk = m_free_list;
+    MemoryBlock *const blk = m_free_list;
 
     m_free_list  = blk->next;
     m_used_count = static_cast<uint16_t>(m_used_count + 1U);

@@ -417,7 +417,7 @@ struct FrtosTask : public stk::ITask
         m_state = State::Deleted;
     }
 
-    stk::Word  *GetStack()           const override { return m_stack; }
+    const stk::Word  *GetStack()     const override { return m_stack; }
     size_t      GetStackSize()       const override { return m_stack_size; }
     size_t      GetStackSizeBytes()  const override { return m_stack_size * sizeof(stk::Word); }
     stk::EAccessMode GetAccessMode() const override { return stk::ACCESS_PRIVILEGED; }
@@ -432,16 +432,16 @@ struct FrtosTask : public stk::ITask
     size_t GetStackHighWaterMark() const { return GetStackSpace(); }
 
     // ---- Members ----
-    TaskFunction_t          m_func;
-    void                   *m_argument;
-    const char             *m_name;
-    volatile int32_t        m_weight;       // STK SWRR weight (priority+1)
-    stk::Word              *m_stack;
-    size_t                  m_stack_size;   // Words
-    bool                    m_stack_owned;
-    bool                    m_cb_owned;     // true -> heap-alloc, delete on removal
-    volatile State          m_state;
-    uint32_t                m_task_number;  // monotonic serial, assigned at construction
+    TaskFunction_t    m_func;
+    void             *m_argument;
+    const char       *m_name;
+    volatile int32_t  m_weight;       // STK SWRR weight (priority+1)
+    stk::Word        *m_stack;
+    size_t            m_stack_size;   // Words
+    bool              m_stack_owned;
+    bool              m_cb_owned;     // true -> heap-alloc, delete on removal
+    volatile State    m_state;
+    uint32_t          m_task_number;  // monotonic serial, assigned at construction
 
     // Monotonic counter incremented once per FrtosTask construction.
     // Stored as a file-scope static so all tasks share a single sequence.
@@ -1030,8 +1030,10 @@ struct FrtosMessageBuffer
 // Ensure kernel is initialized.
 static void EnsureKernelInitialized()
 {
-    if (g_StkKernel.GetState() == stk::IKernel::STATE_INACTIVE)
+    if (g_StkKernel.GetState() == stk::IKernel::KSTATE_INACTIVE)
+    {
         g_StkKernel.Initialize(); // default 1 ms tick resolution
+    }
 }
 
 // ===========================================================================
@@ -1091,9 +1093,9 @@ BaseType_t xTaskGetSchedulerState(void)
     //   STATE_SUSPENDED             -> SUSPENDED
     switch (g_StkKernel.GetState())
     {
-    case stk::IKernel::STATE_RUNNING:   return taskSCHEDULER_RUNNING;
-    case stk::IKernel::STATE_SUSPENDED: return taskSCHEDULER_SUSPENDED;
-    default:                            return taskSCHEDULER_NOT_STARTED;
+    case stk::IKernel::KSTATE_RUNNING:   return taskSCHEDULER_RUNNING;
+    case stk::IKernel::KSTATE_SUSPENDED: return taskSCHEDULER_SUSPENDED;
+    default:                             return taskSCHEDULER_NOT_STARTED;
     }
 }
 

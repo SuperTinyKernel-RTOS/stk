@@ -65,7 +65,8 @@ struct MemoryAllocator
     struct Stats
     {
         Stats(size_t _capacity = CAPACITY_DEFAULT)
-            : capacity(_capacity), allocated(0U), allocate_count(0U), free_count(0U), min_ever_free(_capacity)
+            : capacity(_capacity), allocated(0U), allocate_count(0U), free_count(0U), 
+              min_ever_free(_capacity)
         {}
 
         const size_t    capacity;       //!< Total capacity of the memory pool in bytes.
@@ -137,8 +138,11 @@ struct MemoryAllocator
         TElement *ptr = reinterpret_cast<TElement *>(Allocate(sizeof(TElement)));
         if (ptr != nullptr)
         {
-            if (!std::is_trivially_constructible<TElement, TArgs...>())
-                new (ptr) TElement(static_cast<TArgs &&>(args)...);
+            if __stk_constexpr_cpp17 (!std::is_trivially_constructible<TElement, TArgs...>())
+            {
+                auto const elm = new (ptr) TElement(static_cast<TArgs &&>(args)...);
+                STK_UNUSED(elm);
+            }
         }
 
         return ptr;
@@ -153,18 +157,23 @@ struct MemoryAllocator
     template <typename TElement, typename... TArgs>
     static inline TElement *AllocateArrayT(size_t count, TArgs &&...args)
     {
-        if (count == 0)
-            return nullptr;
-
-        STK_ASSERT(Allocate != nullptr);
-
-        TElement *ptr = reinterpret_cast<TElement *>(Allocate(count * sizeof(TElement)));
-        if (ptr != nullptr)
+        TElement *ptr = nullptr;
+      
+        if (count != 0U)
         {
-            if (!std::is_trivially_constructible<TElement, TArgs...>())
+            STK_ASSERT(Allocate != nullptr);
+
+            ptr = reinterpret_cast<TElement *>(Allocate(count * sizeof(TElement)));
+            if (ptr != nullptr)
             {
-                for (size_t i = 0; i < count; ++i)
-                    new (&ptr[i]) TElement(static_cast<TArgs &&>(args)...);
+                if __stk_constexpr_cpp17 (!std::is_trivially_constructible<TElement, TArgs...>())
+                {
+                    for (size_t i = 0U; i < count; ++i)
+                    {
+                        auto const elm = new (&ptr[i]) TElement(static_cast<TArgs &&>(args)...);
+                        STK_UNUSED(elm);
+                    }
+                }
             }
         }
 
@@ -181,8 +190,10 @@ struct MemoryAllocator
 
         if (ptr != nullptr)
         {
-            if (!std::is_trivially_destructible<TElement>())
+            if __stk_constexpr_cpp17 (!std::is_trivially_destructible<TElement>())
+            {
                 ptr->~TElement();
+            }
 
             Free(ptr);
         }
@@ -199,11 +210,17 @@ struct MemoryAllocator
 
         if (ptr != nullptr)
         {
-            if (!std::is_trivially_destructible<TElement>())
+            if __stk_constexpr_cpp17 (!std::is_trivially_destructible<TElement>())
             {
                 // destroy in reverse order (mirrors stack unwinding)
-                for (size_t i = count; i > 0; --i)
+                for (size_t i = count; i > 0U; --i)
+                {
                     ptr[i - 1].~TElement();
+                }
+            }
+            else
+            {
+                STK_UNUSED(count);
             }
 
             Free(ptr);

@@ -52,12 +52,12 @@ namespace sync {
     \see  ISyncObject, IWaitObject, IKernelService::Wait
     \note Only available when kernel is compiled with \a KERNEL_SYNC mode enabled.
 */
-class Semaphore final : public ITraceable, private ISyncObject
+class Semaphore final : private ISyncObject, public ITraceable
 {
 public:
-    /*! \brief     Max count supported.
+    /*! \brief     Max count value supported.
     */
-    static const size_t COUNT_MAX = 0xFFFEU;
+    static const uint16_t COUNT_MAX = 0xFFFEU;
 
     /*! \brief     Constructor.
         \details   Initializes the semaphore with a specific count and maximum limit.
@@ -80,17 +80,17 @@ public:
                    An assertion is triggered in debug builds.
         \note      MISRA deviation: [STK-DEV-005] Rule 10-3-2.
     */
-    ~Semaphore()
+    STK_VIRT_DTOR ~Semaphore()
     {
         STK_ASSERT(m_wait_list.IsEmpty()); // API contract: must not be destroyed with waiting tasks
     }
 
     /*! \brief     Wait for a signal (decrement counter).
-        \param[in] timeout: Maximum time to wait (ticks).
+        \param[in] timeout_ticks: Maximum time to wait (ticks).
         \warning   ISR-safe only with \a timeout = \c NO_WAIT, ISR-unsafe otherwise.
         \return    True if acquired, false if timeout occurred.
     */
-    bool Wait(Timeout timeout = WAIT_INFINITE);
+    bool Wait(Timeout timeout_ticks = WAIT_INFINITE);
 
     /*! \brief     Poll the semaphore without blocking (decrement counter if available).
         \details   Checks if a resource token is available. If so, decrements the counter
@@ -127,28 +127,34 @@ private:
 // Wait
 // ---------------------------------------------------------------------------
 
-inline bool Semaphore::Wait(Timeout timeout)
+inline bool Semaphore::Wait(Timeout timeout_ticks)
 {
     ScopedCriticalSection cs_;
+    bool success = false;
 
     // fast path: resource is available
     if (m_count != 0U)
     {
         m_count = static_cast<uint16_t>(m_count - 1U);
         __stk_full_memfence();
-        return true;
+        success = true;
+    }
+    // slow path: block until Signal() or timeout
+    else if (timeout_ticks != NO_WAIT)
+    {
+        STK_ASSERT(!hw::IsInsideISR()); // API contract: caller must not be in ISR if timeout_ticks!=NO_WAIT
+
+        // note: after waking, if not a timeout, we effectively own the resource that Signal() produced
+        // but didn't put into m_count (see logic of if (m_wait_list.IsEmpty()) in Signal())
+        success = !IKernelService::GetInstance()->Wait(this, &cs_, timeout_ticks)->IsTimeout();
+    }
+    // try lock behavior (timeout_ticks=NO_WAIT)
+    else
+    {
+        // success is false already, noop
     }
 
-    // try lock behavior (timeout=NO_WAIT)
-    if (timeout == NO_WAIT)
-        return false;
-
-    STK_ASSERT(!hw::IsInsideISR()); // API contract: caller must not be in ISR if timeout!=NO_WAIT
-
-    // slow path: block until Signal() or timeout
-    // note: after waking, if not a timeout, we effectively own the resource that Signal() produced
-    // but didn't put into m_count (see logic of if (m_wait_list.IsEmpty()) in Signal())
-    return !IKernelService::GetInstance()->Wait(this, &cs_, timeout)->IsTimeout();
+    return success;
 }
 
 // ---------------------------------------------------------------------------
@@ -157,7 +163,7 @@ inline bool Semaphore::Wait(Timeout timeout)
 
 inline void Semaphore::Signal()
 {
-    ScopedCriticalSection cs_;
+    const ScopedCriticalSection cs_;
 
     if (m_wait_list.IsEmpty())
     {

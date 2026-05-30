@@ -321,18 +321,18 @@ void stk_kernel_start(stk_kernel_t *k);
     \note      It is a direct match for IKernel::EState enum.
     \see       stk_kernel_get_state()
 */
-typedef enum _EKernelState {
+typedef enum stk_kernel_state_t {
     STK_KERNEL_STATE_INACTIVE  = 0, //!< not ready, stk_kernel_init() must be called
     STK_KERNEL_STATE_READY     = 1, //!< ready to start, stk_kernel_start() must be called
     STK_KERNEL_STATE_RUNNING   = 2, //!< initialized and running, stk_kernel_start() was called successfully
     STK_KERNEL_STATE_SUSPENDED = 3  //!< scheduling suspended via stk_kernel_service_suspend() (tickless idle)
-} EKernelState;
+} stk_kernel_state_t;
 
 /*! \brief     Get state of the scheduler.
     \param[in] k: Kernel handle.
-    \return    State value, see \a EKernelState.
+    \return    State value, see \a stk_kernel_state_t.
 */
-EKernelState stk_kernel_get_state(const stk_kernel_t *k);
+stk_kernel_state_t stk_kernel_get_state(const stk_kernel_t *k);
 
 /*! \brief     Test whether currently configured task set is schedulable.
     \param[in] k: Kernel handle.
@@ -567,7 +567,7 @@ stk_tick_t stk_ticks(void);
 /*! \brief     Returns how many microseconds correspond to one kernel tick.
     \return    Tick resolution in microseconds.
 */
-int32_t stk_tick_resolution(void);
+uint32_t stk_tick_resolution(void);
 
 /*! \brief     Get ticks from milliseconds using current kernel tick resolution.
     \param[in] msec: Milliseconds to convert.
@@ -763,12 +763,12 @@ void stk_tls_set(void *ptr);
 /*! \brief     Typed helper for getting TLS value.
     \note      Expands to ((type *)stk_tls_get())
 */
-#define STK_TLS_GET(type) ((type *)stk_tls_get())
+#define STK_TLS_GET_T(type) ((type *)stk_tls_get())
 
 /*! \brief     Typed helper for setting TLS value.
     \note      Expands to stk_tls_set((void *)(ptr))
 */
-#define STK_TLS_SET(ptr) stk_tls_set((void *)(ptr))
+#define STK_TLS_SET_T(ptr) stk_tls_set((void *)(ptr))
 
 // =============================================================================
 // Synchronization Primitives

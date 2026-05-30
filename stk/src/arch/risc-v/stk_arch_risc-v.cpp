@@ -107,7 +107,7 @@ using namespace stk;
             Defaults to 1.
 */
 #ifndef STK_RISCV_CLINT_MTIMECMP_PER_HART
-    #define STK_RISCV_CLINT_MTIMECMP_PER_HART (1)
+    #define STK_RISCV_CLINT_MTIMECMP_PER_HART 1
 #endif
 
 /*! \brief  Get the hardware thread id (hart) of the calling core.
@@ -155,44 +155,44 @@ using namespace stk;
 
 
 #if (__riscv_32e == 1)
-    #define STK_RISCV_REGISTER_COUNT (15 + (STK_RISCV_FPU != 0 ? 31 : 0))
+    #define STK_RISCV_REGISTER_COUNT (15U + (STK_RISCV_FPU != 0U ? 31U : 0U))
 #else
-    #define STK_RISCV_REGISTER_COUNT (31 + (STK_RISCV_FPU != 0 ? 31 : 0))
+    #define STK_RISCV_REGISTER_COUNT (31U + (STK_RISCV_FPU != 0U ? 31U : 0U))
 #endif
 
-#define STK_SERVICE_SLOTS 2 // (0) mepc, (1) mstatus
+#define STK_SERVICE_SLOTS 2U // (0) mepc, (1) mstatus
 
 #if (__riscv_32e == 1)
     #define FOFFSET XSTR(68) // FP stack offset = (17 * 4)
     #if (STK_RISCV_FPU == 0)
-        #define REGSIZE XSTR(((15 + STK_SERVICE_SLOTS) * 4)) // STK_RISCV_REGISTER_COUNT + 2 for mepc, mstatus
+        #define REGSIZE XSTR(((15U + STK_SERVICE_SLOTS) * 4U)) // STK_RISCV_REGISTER_COUNT + 2 for mepc, mstatus
     #else
         #if (STK_RISCV_FPU == 32)
-        #define REGSIZE XSTR((((15 + STK_SERVICE_SLOTS) * 4) + (31 * 4))) // STK_RISCV_REGISTER_COUNT + 2 for mepc, mstatus + 32 fp registers
+        #define REGSIZE XSTR((((15U + STK_SERVICE_SLOTS) * 4U) + (31U * 4U))) // STK_RISCV_REGISTER_COUNT + 2 for mepc, mstatus + 32 fp registers
         #elif (STK_RISCV_FPU == 64)
-        #define REGSIZE XSTR((((15 + STK_SERVICE_SLOTS) * 4) + (31 * 8))) // STK_RISCV_REGISTER_COUNT + 2 for mepc, mstatus + 32 fp registers
+        #define REGSIZE XSTR((((15U + STK_SERVICE_SLOTS) * 4U) + (31U * 8U))) // STK_RISCV_REGISTER_COUNT + 2 for mepc, mstatus + 32 fp registers
         #endif
     #endif
 #elif (__riscv_xlen == 32)
     #define FOFFSET XSTR(132) // FP stack offset = (33 * 4)
     #if (STK_RISCV_FPU == 0)
-        #define REGSIZE XSTR(((31 + STK_SERVICE_SLOTS) * 4)) // STK_RISCV_REGISTER_COUNT + 2 for mepc, mstatus
+        #define REGSIZE XSTR(((31U + STK_SERVICE_SLOTS) * 4U)) // STK_RISCV_REGISTER_COUNT + 2 for mepc, mstatus
     #else
         #if (STK_RISCV_FPU == 32)
-        #define REGSIZE XSTR((((31 + STK_SERVICE_SLOTS) * 4) + (31 * 4))) // STK_RISCV_REGISTER_COUNT + 2 for mepc, mstatus + 32 fp registers
+        #define REGSIZE XSTR((((31U + STK_SERVICE_SLOTS) * 4U) + (31U * 4U))) // STK_RISCV_REGISTER_COUNT + 2 for mepc, mstatus + 32 fp registers
         #elif (STK_RISCV_FPU == 64)
-        #define REGSIZE XSTR((((31 + STK_SERVICE_SLOTS) * 4) + (31 * 8))) // STK_RISCV_REGISTER_COUNT + 2 for mepc, mstatus + 32 fp registers
+        #define REGSIZE XSTR((((31U + STK_SERVICE_SLOTS) * 4U) + (31U * 8U))) // STK_RISCV_REGISTER_COUNT + 2 for mepc, mstatus + 32 fp registers
         #endif
     #endif
 #elif (__riscv_xlen == 64)
     #define FOFFSET XSTR(264) // FP stack offset = (33 * 8)
     #if (STK_RISCV_FPU == 0)
-        #define REGSIZE XSTR(((31 + STK_SERVICE_SLOTS) * 8)) // STK_RISCV_REGISTER_COUNT + 2 for mepc, mstatus
+        #define REGSIZE XSTR(((31U + STK_SERVICE_SLOTS) * 8U)) // STK_RISCV_REGISTER_COUNT + 2 for mepc, mstatus
     #else
         #if (STK_RISCV_FPU == 32)
-        #define REGSIZE XSTR((((31 + STK_SERVICE_SLOTS) * 8) + (31 * 4))) // STK_RISCV_REGISTER_COUNT + 2 for mepc, mstatus + 32 fp registers
+        #define REGSIZE XSTR((((31U + STK_SERVICE_SLOTS) * 8U) + (31U * 4U))) // STK_RISCV_REGISTER_COUNT + 2 for mepc, mstatus + 32 fp registers
         #elif (STK_RISCV_FPU == 64)
-        #define REGSIZE XSTR((((31 + STK_SERVICE_SLOTS) * 8) + (31 * 8))) // STK_RISCV_REGISTER_COUNT + 2 for mepc, mstatus + 32 fp registers
+        #define REGSIZE XSTR((((31U + STK_SERVICE_SLOTS) * 8U) + (31U * 8U))) // STK_RISCV_REGISTER_COUNT + 2 for mepc, mstatus + 32 fp registers
         #endif
     #endif
 #endif
@@ -439,10 +439,11 @@ static __stk_forceinline uint32_t HW_MtimeClockFrequency()
 static __stk_forceinline uint64_t HW_GetMtime()
 {
 #if ( __riscv_xlen > 32)
-    return *((volatile uint64_t *)STK_RISCV_CLINT_MTIME_ADDR);
+    return *(hw::WordToPtr<volatile uint64_t>(STK_RISCV_CLINT_MTIME_ADDR));
 #else
-    volatile uint32_t *mtime_hi = ((uint32_t *)STK_RISCV_CLINT_MTIME_ADDR) + 1;
-    volatile uint32_t *mtime_lo = ((uint32_t *)STK_RISCV_CLINT_MTIME_ADDR);
+    const Word mtime_base = STK_RISCV_CLINT_MTIME_ADDR;
+    const volatile uint32_t *const mtime_lo = hw::WordToPtr<volatile uint32_t>(mtime_base);
+    const volatile uint32_t *const mtime_hi = hw::WordToPtr<volatile uint32_t>(mtime_base + sizeof(uint32_t));
 
     uint32_t hi, lo;
     do
@@ -452,7 +453,7 @@ static __stk_forceinline uint64_t HW_GetMtime()
     }
     while (hi != (*mtime_hi)); // make sure mtime_hi did not tick when read mtime_lo
 
-    return ((uint64_t)hi << 32) | lo;
+    return (static_cast<uint64_t>(hi) << 32) | lo;
 #endif
 }
 
@@ -464,25 +465,26 @@ static __stk_forceinline void HW_SetMtimecmp(uint64_t time_next)
 #if STK_RISCV_CLINT_MTIMECMP_PER_HART
     const uint8_t hart = HW_GetHartId();
 #else
-    const uint8_t hart = 0;
+    const uint8_t hart = 0U;
 #endif
 
 #if (__riscv_xlen == 64)
-    ((volatile uint64_t *)STK_RISCV_CLINT_MTIMECMP_ADDR)[hart] = next;
+    hw::WordToPtr<volatile uint64_t>(STK_RISCV_CLINT_MTIMECMP_ADDR)[hart] = next;
 #else
-    volatile uint32_t *mtime_lo = (uint32_t *)((uint64_t *)STK_RISCV_CLINT_MTIMECMP_ADDR + hart);
-    volatile uint32_t *mtime_hi = mtime_lo + 1;
+    const Word mtimecmp_base = STK_RISCV_CLINT_MTIMECMP_ADDR + (hart * sizeof(uint64_t));
+    volatile uint32_t *mtimecmp_lo = hw::WordToPtr<volatile uint32_t>(mtimecmp_base);
+    volatile uint32_t *mtimecmp_hi = hw::WordToPtr<volatile uint32_t>(mtimecmp_base + sizeof(uint32_t));
 
     // expecting 4-byte aligned memory
-    STK_ASSERT(((uintptr_t)mtime_lo & (4 - 1)) == 0);
-    STK_ASSERT(((uintptr_t)mtime_hi & (4 - 1)) == 0);
+    STK_ASSERT(((uintptr_t)mtimecmp_lo & (4U - 1U)) == 0U);
+    STK_ASSERT(((uintptr_t)mtimecmp_hi & (4U - 1U)) == 0U);
 
     // prevent unexpected interrupt by setting some very large value to the high part
     // details: https://riscv.org/wp-content/uploads/2017/05/riscv-privileged-v1.10.pdf, page 31
-    (*mtime_hi) = ~0;
+    (*mtimecmp_hi) = ~0U;
 
-    (*mtime_lo) = (uint32_t)(time_next & 0xFFFFFFFF);
-    (*mtime_hi) = (uint32_t)(time_next >> 32);
+    (*mtimecmp_lo) = (uint32_t)(time_next & 0xFFFFFFFFU);
+    (*mtimecmp_hi) = (uint32_t)(time_next >> 32);
 #endif
 }
 
@@ -594,10 +596,10 @@ static __stk_forceinline bool HW_SpinLockTryLock(volatile bool &lock)
 */
 static __stk_forceinline void HW_SpinLockLock(volatile bool &lock)
 {
-    uint32_t timeout = 0xFFFFFF;
+    uint32_t timeout = 0xFFFFFFU;
     while (!HW_SpinLockTryLock(lock))
     {
-        if (--timeout == 0)
+        if (--timeout == 0U)
         {
             // Invariant violated: the lock owner exited without releasing,
             // Kernel state is suspect, enter defined safe state.
@@ -643,7 +645,7 @@ static __stk_forceinline void HW_ScheduleContextSwitch(uint8_t hart)
 #ifdef _STK_RISCV_USE_PENDSV
     // Pend Machine Software Interrupt (MSI) - equivalent of ARM's PENDSVSET
     volatile uint32_t *msip = (volatile uint32_t *)(STK_RISCV_CLINT_BASE_ADDR);
-    msip[hart] = 1; // set pending
+    msip[hart] = 1U; // set pending
     __DSB();
 #else
     (void)hart;
@@ -671,7 +673,7 @@ static volatile bool s_StkRiscvCsuLock = false;
             read by STK_MSI_HANDLER.
 */
 #ifdef _STK_RISCV_USE_PENDSV
-Stack * volatile s_StkRiscvStackIdle[STK_ARCH_CPU_COUNT] = {};
+Stack *volatile s_StkRiscvStackIdle[STK_ARCH_CPU_COUNT] = {};
 
 /*! \brief  Scratch storage for the SP of the task interrupted by STK_SYSTICK_HANDLER, per hart.
     \note   Written and read exclusively by STK_SYSTICK_HANDLER. Never touched by
@@ -684,12 +686,12 @@ volatile Word s_StkRiscvSpIsrInt[STK_ARCH_CPU_COUNT] = {};
 /*! \brief  Pointer to the active task stack, per hart. Written by scheduler,
             read by STK_MSI_HANDLER (PendSV) or STK_SYSTICK_HANDLER (non-PendSV).
 */
-Stack * volatile s_StkRiscvStackActive[STK_ARCH_CPU_COUNT] = {};
+Stack *volatile s_StkRiscvStackActive[STK_ARCH_CPU_COUNT] = {};
 
 /*! \brief  Pointer to the private ISR stack, per hart. Written once by
             Context::OnStart, read by both ISR handlers.
 */
-Stack * volatile s_StkRiscvStackIsr[STK_ARCH_CPU_COUNT] = {};
+Stack *volatile s_StkRiscvStackIsr[STK_ARCH_CPU_COUNT] = {};
 
 //! ----------------------------------------------------------------------------
 
@@ -884,7 +886,7 @@ typedef HiResClockMTIME HiResClockImpl;
 //! Internal context.
 static struct Context final : public PlatformContext
 {
-    Context() : PlatformContext(), m_stack_main(), m_stack_isr(), m_stack_isr_mem(),
+    explicit Context() : PlatformContext(), m_stack_main(), m_stack_isr(), m_stack_isr_mem(),
         m_exit_buf(), m_overrider(nullptr), m_specific(nullptr), m_tick_period(0), m_last_mtime(0ULL),
     #if STK_TICKLESS_IDLE
         m_sleep_ticks(0),
@@ -897,8 +899,7 @@ static struct Context final : public PlatformContext
     /*! \brief Destructor.
         \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
     */
-    ~Context()
-    {}
+    STK_VIRT_DTOR ~Context() = default;
 
     void Initialize(IPlatform::IEventHandler *handler, IKernelService *service, Stack *exit_trap,
         uint32_t resolution_us) override
@@ -908,18 +909,18 @@ static struct Context final : public PlatformContext
         // init ISR's stack
         {
             StackMemoryWrapper<STK_RISCV_ISR_STACK_SIZE> stack_isr_mem(&m_stack_isr_mem);
-            m_stack_isr.SP   = hw::PtrToWord(InitStackMemory(&stack_isr_mem));
-            m_stack_isr.mode = ACCESS_PRIVILEGED;
+            m_stack_isr.SP          = InitStackMemory(&stack_isr_mem);
+            m_stack_isr.access_mode = ACCESS_PRIVILEGED;
         }
 
         // init Main stack
         {
-            m_stack_main.SP   = STK_STACK_MEMORY_FILLER;
-            m_stack_main.mode = ACCESS_PRIVILEGED;
+            m_stack_main.SP          = STK_STACK_MEMORY_FILLER;
+            m_stack_main.access_mode = ACCESS_PRIVILEGED;
         }
 
-        m_csu         = 0;
-        m_csu_nesting = 0;
+        m_csu         = 0U;
+        m_csu_nesting = 0U;
         m_tick_period = ConvertTimeUsToClockCycles(STK_TIMER_CLOCK_FREQUENCY, resolution_us);
         m_last_mtime  = 0ULL;
         m_starting    = false;
@@ -976,7 +977,7 @@ static struct Context final : public PlatformContext
         Word current_ses;
         HW_CriticalSectionStart(current_ses);
 
-        if (m_csu_nesting == 0)
+        if (m_csu_nesting == 0U)
         {
             // ONLY attempt the global spinlock if we aren't already nested
             HW_SpinLockLock(s_StkRiscvCsuLock);
@@ -995,13 +996,13 @@ static struct Context final : public PlatformContext
 
     __stk_forceinline void ExitCriticalSection()
     {
-        STK_ASSERT(m_csu_nesting != 0);
+        STK_ASSERT(m_csu_nesting != 0U);
         --m_csu_nesting;
 
-        if (m_csu_nesting == 0)
+        if (m_csu_nesting == 0U)
         {
             // capture the state before releasing lock
-            Word ses_to_restore = m_csu;
+            const Word ses_to_restore = m_csu;
 
             // release global lock
             HW_SpinLockUnlock(s_StkRiscvCsuLock);
@@ -1014,16 +1015,16 @@ static struct Context final : public PlatformContext
     uint64_t GetSleepTicksPrev()
     {
     #if STK_TICKLESS_IDLE
-        uint64_t ticks = (static_cast<uint64_t>(m_sleep_ticks) * static_cast<uint64_t>(m_tick_period));
+        const uint64_t ticks = (static_cast<uint64_t>(m_sleep_ticks) * static_cast<uint64_t>(m_tick_period));
     #else
-        uint64_t ticks = (1U * static_cast<uint64_t>(m_tick_period));
+        const uint64_t ticks = (1U * static_cast<uint64_t>(m_tick_period));
     #endif
         return ticks;
     }
 
     uint64_t GetTimeNow(uint64_t &error)
     {
-        uint64_t mtime_now = HW_GetMtime();
+        const uint64_t mtime_now = HW_GetMtime();
         error = (mtime_now - m_last_mtime) - GetSleepTicksPrev();
         return mtime_now;
     }
@@ -1046,8 +1047,8 @@ static struct Context final : public PlatformContext
         // capture mtime at ISR entry as the absolute base for the next period;
         // this eliminates drift from time spent inside OnTick regardless of how
         // long the scheduler takes to run
-        uint64_t error = 0;
-        uint64_t mtime_now = GetTimeNow(error);
+        uint64_t error = 0U;
+        const uint64_t mtime_now = GetTimeNow(error);
         __stk_compiler_barrier(); // avoid compiler reordering, we count ticks from this point
 
         // make sure timer is enabled by the Kernel::Start(), disable its start anywhere else
@@ -1429,12 +1430,12 @@ static __stk_forceinline Word HW_GetCurrentException()
 
 static __stk_forceinline bool HW_IsHandlerMode()
 {
-    Word current_sp = HW_GetCallerSP();
+    const Word current_sp = HW_GetCallerSP();
 
     // get the bounds of the ISR stack from our Context
     // note: STK uses StackMemoryWrapper, so we check against that memory block
-    const Word isr_stack_base = (Word)&GetContext().m_stack_isr_mem;
-    const Word isr_stack_top  = isr_stack_base + STK_RISCV_ISR_STACK_SIZE;
+    const Word isr_stack_base = hw::PtrToWord(&GetContext().m_stack_isr_mem);
+    const Word isr_stack_top  = isr_stack_base + (STK_RISCV_ISR_STACK_SIZE * sizeof(Word));
 
     return ((current_sp >= isr_stack_base) && (current_sp < isr_stack_top));
 }
@@ -1713,7 +1714,7 @@ void Context::OnStart()
 
 STK_RISCV_ISR void STK_SVC_HANDLER()
 {
-    Word cause = HW_GetCurrentException();
+    const Word cause = HW_GetCurrentException();
 
     /*if (cause & (1UL << (__riscv_xlen - 1)))
     {
@@ -1841,22 +1842,27 @@ void Context::Start()
     {
         // notify kernel about a full stop
         m_handler->OnStop();
-        return;
     }
+    else
+    {
+        // enable FPU (if available)
+        HW_EnableFullFpuAccess();
 
-    // enable FPU (if available)
-    HW_EnableFullFpuAccess();
-
-    // start
-    m_starting = true;
-    HW_StartScheduler();
+        // start
+        m_starting = true;
+        HW_StartScheduler();
+    }
 }
 
 #if STK_TICKLESS_IDLE
 Timeout Context::Suspend()
 {
     const uint32_t resolution = static_cast<uint32_t>(ConvertTimeUsToClockCycles(HW_CoreClockFrequency(), m_tick_resolution));
-    STK_ASSERT(resolution != 0);
+    if (resolution == 0U)
+    {
+        STK_ASSERT(false);
+        return NO_WAIT;
+    }
 
     HW_DisableInterrupts();
 
@@ -1872,8 +1878,8 @@ Timeout Context::Suspend()
 
     // get already elapsed ticks since the OnTick and a call to Suspend(), we shall account for this
     // period and return only the remainder
-    Timeout elapsed_ticks = static_cast<Timeout>(elapsed / resolution);
-    Timeout sleep_ticks = Max(m_sleep_ticks - elapsed_ticks, static_cast<Timeout>(0));
+    const Timeout elapsed_ticks = static_cast<Timeout>(elapsed / resolution);
+    const Timeout sleep_ticks = Max(m_sleep_ticks - elapsed_ticks, static_cast<Timeout>(0));
 
     // notify core
     m_handler->OnSuspend(true);
@@ -1913,13 +1919,13 @@ bool PlatformRiscV::InitStack(EStackType stack_type, Stack *stack, IStackMemory 
     STK_ASSERT(stack_memory->GetStackSize() > (STK_RISCV_REGISTER_COUNT + STK_SERVICE_SLOTS));
 
     // initialize stack memory (fills all slots with STK_STACK_MEMORY_FILLER)
-    Word *stack_top = PlatformContext::InitStackMemory(stack_memory);
+    const Word stack_top = PlatformContext::InitStackMemory(stack_memory);
 
     // initialize Stack Pointer (SP): frame sits at the bottom of the register window
-    stack->SP = hw::PtrToWord(stack_top - (STK_RISCV_REGISTER_COUNT + STK_SERVICE_SLOTS));
+    stack->SP = stack_top - ((STK_RISCV_REGISTER_COUNT + STK_SERVICE_SLOTS) * sizeof(Word));
 
     // place the task frame at SP directly at the base of the register window
-    TaskFrame * const task_frame = reinterpret_cast<TaskFrame *>(stack->SP);
+    TaskFrame *const task_frame = hw::WordToPtr<TaskFrame>(stack->SP);
 
     // initialize registers for the user task's first start
     switch (stack_type)
@@ -1940,16 +1946,17 @@ bool PlatformRiscV::InitStack(EStackType stack_type, Stack *stack, IStackMemory 
         task_frame->X1_RA = STK_STACK_MEMORY_FILLER; // should not attempt to exit
         break; }
 
-    default:
-        return false;
+    default: {
+        STK_KERNEL_PANIC(KERNEL_PANIC_BAD_STACK_TYPE);
+        break; }
     }
 
     // mstatus: return to M-mode (MPP), interrupts enabled on mret (MPIE),
     // FPU/extension state initial (FS/XS) if FPU present
-    task_frame->MSTATUS = MSTATUS_MPP | MSTATUS_MPIE | (STK_RISCV_FPU != 0 ? (MSTATUS_FS | MSTATUS_XS) : 0);
+    task_frame->MSTATUS = MSTATUS_MPP | MSTATUS_MPIE | (STK_RISCV_FPU != 0U ? (MSTATUS_FS | MSTATUS_XS) : 0U);
 
 #if (STK_RISCV_FPU != 0)
-    task_frame->X3_FSR = 0; // FCSR = 0: round-to-nearest, no accrued exception flags
+    task_frame->X3_FSR = 0U; // FCSR = 0: round-to-nearest, no accrued exception flags
 #endif
 
     return true;
@@ -2017,26 +2024,30 @@ IWaitObject *PlatformRiscV::Wait(ISyncObject *sync_obj, IMutex *mutex, Timeout t
 
 TId PlatformRiscV::GetTid() const
 {
+    TId result;
+  
     if (HW_IsHandlerMode())
     {
         // to avoid the collision with TID_ISR_N mask, extract and fit into available space:
 
         const Word exc = HW_GetCurrentException();
-
-        Word num = (exc & 0x7FFU);
-
+        const Word num = (exc & 0x7FFU);
     #if (__riscv_xlen > 32)
-        Word interrupt_bit = ((exc & (1ULL << (__riscv_xlen - 1))) ? 0x800U : 0);
+        const Word interrupt_bit = ((exc & (1ULL << (__riscv_xlen - 1))) ? 0x800U : 0);
     #else
-        Word interrupt_bit = ((exc & (1U << (__riscv_xlen - 1))) ? 0x800U : 0);
+        const Word interrupt_bit = ((exc & (1U << (__riscv_xlen - 1))) ? 0x800U : 0);
     #endif
 
-        TId isr_tid = TID_ISR_N | num | interrupt_bit;
+        const TId isr_tid = TID_ISR_N | num | interrupt_bit;
         STK_ASSERT(IsIsrTid(isr_tid));
-        return isr_tid;
+        result = isr_tid;
     }
-
-    return GetContext().m_handler->OnGetTid(HW_GetCallerSP());
+    else
+    {
+        result = GetContext().m_handler->OnGetTid(HW_GetCallerSP());
+    }
+    
+    return result;
 }
 
 Timeout PlatformRiscV::Suspend()
@@ -2059,7 +2070,14 @@ void PlatformRiscV::Resume(Timeout elapsed_ticks)
 
 void PlatformRiscV::ProcessHardFault()
 {
-    if ((GetContext().m_overrider == nullptr) || !GetContext().m_overrider->OnHardFault())
+    bool is_handled = false;
+
+    if (GetContext().m_overrider != nullptr)
+    {
+        is_handled = GetContext().m_overrider->OnHardFault();
+    }
+
+    if (!is_handled)
     {
         STK_KERNEL_PANIC(KERNEL_PANIC_HRT_HARD_FAULT);
     }
@@ -2124,8 +2142,8 @@ Cycles stk::hw::HiResClock::GetCycles()
 
 uint32_t stk::hw::HiResClock::GetFrequency()
 {
-    uint32_t freq = HiResClockImpl::GetInstance()->GetFrequency();
-    STK_ASSERT(freq != 0);
+    const uint32_t freq = HiResClockImpl::GetInstance()->GetFrequency();
+    STK_ASSERT(freq != 0U);
     return freq;
 }
 

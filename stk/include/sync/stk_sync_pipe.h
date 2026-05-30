@@ -10,8 +10,7 @@
 #ifndef STK_SYNC_PIPE_H_
 #define STK_SYNC_PIPE_H_
 
-#include <type_traits>
-#include <cstring> // for memcpy
+#include <type_traits> // for std::is_scalar
 
 #include "stk_sync_cv.h"
 
@@ -89,19 +88,19 @@ public:
                    ConditionVariable destructors.
         \note      MISRA deviation: [STK-DEV-005] Rule 10-3-2.
     */
-    ~Pipe() = default;
+    STK_VIRT_DTOR ~Pipe() = default;
 
     /*! \brief     Write a single element to the pipe.
         \details   Copies \a element_size bytes from \a data into the next available
                    slot in the ring buffer. If the pipe is full, the calling task is
                    suspended until space becomes available or the timeout expires.
         \param[in] data: Pointer to the element payload (must be at least \a element_size bytes).
-        \param[in] timeout: Maximum time to wait for space (ticks). Default: \c WAIT_INFINITE.
-        \warning   ISR-safe only with timeout=NO_WAIT, ISR-unsafe otherwise.
+        \param[in] timeout_ticks: Maximum time to wait for space (ticks). Default: \c WAIT_INFINITE.
+        \warning   ISR-safe only with timeout_ticks=NO_WAIT, ISR-unsafe otherwise.
         \return    \c true if data was successfully written, \c false if timeout expired
                    before space became available.
     */
-    bool Write(const void *data, Timeout timeout = WAIT_INFINITE);
+    bool Write(const void *data, Timeout timeout_ticks = WAIT_INFINITE);
 
     /*! \brief     Attempt to write a single element to the pipe without blocking.
         \details   Enqueues the element only if a free slot is immediately available.
@@ -119,8 +118,8 @@ public:
         \param[in] src: Pointer to the source array (must hold at least \a count elements
                    of \a element_size bytes each).
         \param[in] count: Number of elements to write.
-        \param[in] timeout: Maximum time to wait for sufficient space (ticks). Default: \c WAIT_INFINITE.
-        \warning   ISR-safe only with timeout=NO_WAIT, ISR-unsafe otherwise.
+        \param[in] timeout_ticks: Maximum time to wait for sufficient space (ticks). Default: \c WAIT_INFINITE.
+        \warning   ISR-safe only with timeout_ticks=NO_WAIT, ISR-unsafe otherwise.
         \return    Number of elements actually written. Equal to \c count unless a timeout occurred.
         \code
         // Example:
@@ -133,7 +132,7 @@ public:
         }
         \endcode
     */
-    size_t WriteBulk(const void *src, size_t count, Timeout timeout = WAIT_INFINITE);
+    size_t WriteBulk(const void *src, size_t count, Timeout timeout_ticks = WAIT_INFINITE);
 
     /*! \brief     Attempt to write multiple elements to the pipe without blocking.
         \details   Copies as many elements as possible without blocking. Elements that do not
@@ -150,12 +149,12 @@ public:
                    the buffer pointed to by \a data. If the pipe is empty, the calling task is
                    suspended until data is produced or the timeout expires.
         \param[out] data: Destination buffer for the retrieved element (must be at least \a element_size bytes).
-        \param[in] timeout: Maximum time to wait for data (ticks). Default: \c WAIT_INFINITE.
-        \warning   ISR-safe only with timeout=NO_WAIT, ISR-unsafe otherwise.
+        \param[in] timeout_ticks: Maximum time to wait for data (ticks). Default: \c WAIT_INFINITE.
+        \warning   ISR-safe only with timeout_ticks=NO_WAIT, ISR-unsafe otherwise.
         \return    \c true if data was successfully read, \c false if timeout expired before
                    any data became available.
     */
-    bool Read(void *data, Timeout timeout = WAIT_INFINITE);
+    bool Read(void *data, Timeout timeout_ticks = WAIT_INFINITE);
 
     /*! \brief     Attempt to read a single element from the pipe without blocking.
         \details   Dequeues an element only if one is immediately available.
@@ -173,8 +172,8 @@ public:
         \param[out] dst: Pointer to the destination array (must hold at least \a count elements
                    of \a element_size bytes each).
         \param[in] count:   Number of elements to read.
-        \param[in] timeout: Maximum time to wait for data (ticks). Default: \c WAIT_INFINITE.
-        \warning   ISR-safe only with timeout=NO_WAIT, ISR-unsafe otherwise.
+        \param[in] timeout_ticks: Maximum time to wait for data (ticks). Default: \c WAIT_INFINITE.
+        \warning   ISR-safe only with timeout_ticks=NO_WAIT, ISR-unsafe otherwise.
         \return    Number of elements actually read. Equal to \c count unless a timeout occurred.
         \code
         // Example:
@@ -188,7 +187,7 @@ public:
         }
         \endcode
     */
-    size_t ReadBulk(void *dst, size_t count, Timeout timeout = WAIT_INFINITE);
+    size_t ReadBulk(void *dst, size_t count, Timeout timeout_ticks = WAIT_INFINITE);
 
     /*! \brief     Attempt to read multiple elements from the pipe without blocking.
         \details   Reads as many elements as are currently available without blocking.
@@ -210,8 +209,8 @@ public:
         \param[in] trigger: Minimum number of elements that must be available before any
                    data is dequeued. Clamped to [1, max_count] internally.
         \param[in] max_count: Maximum number of elements to return in total.
-        \param[in] timeout: Maximum time to wait for \a trigger elements. Default: \c WAIT_INFINITE.
-        \warning   ISR-safe only with timeout=NO_WAIT, ISR-unsafe otherwise.
+        \param[in] timeout_ticks: Maximum time to wait for \a trigger elements. Default: \c WAIT_INFINITE.
+        \warning   ISR-safe only with timeout_ticks=NO_WAIT, ISR-unsafe otherwise.
         \return    Number of elements actually read.
                    - Equal to zero if timeout fired before a single element arrived.
                    - Greater than zero but less than \a trigger if a partial trigger's worth of
@@ -220,8 +219,8 @@ public:
                    - Greater than or equal to \a trigger if the threshold was satisfied (the
                      caller may then assume the trigger callback condition is met).
     */
-    size_t ReadBulkTriggered(void *dst, size_t trigger, size_t max_count,
-                             Timeout timeout = WAIT_INFINITE);
+    size_t ReadBulkTriggered(void *dst, size_t trigger, size_t max_count, 
+                             Timeout timeout_ticks = WAIT_INFINITE);
 
     /*! \brief     Non-blocking variant of ReadBulkTriggered.
         \details   Returns immediately with however many elements are available, up to
@@ -346,71 +345,103 @@ inline Pipe::Pipe(uint8_t *buf, size_t capacity, size_t element_size)
 // Pipe: Write
 // ---------------------------------------------------------------------------
 
-inline bool Pipe::Write(const void *data, Timeout timeout)
+inline bool Pipe::Write(const void *data, Timeout timeout_ticks)
 {
     STK_ASSERT(data    != nullptr);
     STK_ASSERT(m_count <= (CAPACITY_MAX - 1U));
 
     ScopedCriticalSection cs_;
+    bool success = true;
 
     while (m_count == m_capacity)
     {
-        if (!m_cv_not_full.Wait(cs_, timeout))
-            return false;
+        if (!m_cv_not_full.Wait(cs_, timeout_ticks))
+        {
+            success = false;
+            break;
+        }
     }
 
-    memcpy(Slot(m_head), data, m_element_size);
-    m_head = Next(m_head);
-    m_count++;
+    if (success)
+    {
+        STK_MEMCPY(Slot(m_head), data, m_element_size);
+        m_head = Next(m_head);
+        m_count++;
 
-    // notify consumer that data is ready
-    m_cv_not_empty.NotifyOne_CS();
+        // notify consumer that data is ready
+        m_cv_not_empty.NotifyOne_CS();
+    }
 
-    return true;
+    return success;
 }
 
 // ---------------------------------------------------------------------------
 // Pipe: WriteBulk
 // ---------------------------------------------------------------------------
 
-inline size_t Pipe::WriteBulk(const void *src, size_t count, Timeout timeout)
+inline size_t Pipe::WriteBulk(const void *src, size_t count, Timeout timeout_ticks)
 {
-    if ((src == nullptr) || (count == 0U))
-        return 0U;
-
     size_t written = 0U;
-    const uint8_t *src_bytes = static_cast<const uint8_t *>(src);
 
-    ScopedCriticalSection cs_;
-
-    while (written < count)
+    if ((src != nullptr) && (count != 0U))
     {
-        while (m_count == m_capacity)
+        const uint8_t *const src_bytes = static_cast<const uint8_t *>(src);
+        const bool timed_wait = (timeout_ticks != WAIT_INFINITE) && (timeout_ticks != NO_WAIT);
+        
+        // capture an absolute deadline once, before entering the wait loop,
+        // preventing the timeout from resetting on intermediate partial writes
+        const Timeout deadline = (timed_wait ? 
+            static_cast<Timeout>(GetTicks() + timeout_ticks) : timeout_ticks);
+
+        ScopedCriticalSection cs_;
+
+        while (written < count)
         {
-            if (!m_cv_not_full.Wait(cs_, timeout))
-                return written; // return partial count on timeout
+            bool is_timeout = false;
+
+            while (m_count == m_capacity)
+            {
+                Timeout remaining = deadline;
+                if (timed_wait)
+                {
+                    const Timeout now = static_cast<Timeout>(GetTicks());
+                    remaining = (now >= deadline ? NO_WAIT : (deadline - now));
+                }
+
+                if (!m_cv_not_full.Wait(cs_, remaining))
+                {
+                    is_timeout = true;
+                    break; // break inner condition variable loop
+                }
+            }
+
+            // if a timeout occurred, drop out of the chunk processing loop
+            if (is_timeout)
+            {
+                break;
+            }
+
+            const size_t available  = m_capacity - m_count;
+            const size_t to_write   = ((count - written) < available) ? (count - written) : available;
+            const size_t first_part = m_capacity - m_head;
+
+            if (to_write <= first_part)
+            {
+                STK_MEMCPY(Slot(m_head), src_bytes + (written * m_element_size), to_write * m_element_size);
+            }
+            else
+            {
+                STK_MEMCPY(Slot(m_head), src_bytes + (written                * m_element_size), first_part              * m_element_size);
+                STK_MEMCPY(Slot(0U),     src_bytes + ((written + first_part) * m_element_size), (to_write - first_part) * m_element_size);
+            }
+
+            written += to_write;
+            m_head   = (m_head + to_write) % m_capacity;
+            m_count += to_write;
+
+            // notify consumers that data is ready
+            m_cv_not_empty.NotifyAll_CS();
         }
-
-        size_t available  = m_capacity - m_count;
-        size_t to_write   = (count - written) < available ? (count - written) : available;
-        size_t first_part = m_capacity - m_head;
-
-        if (to_write <= first_part)
-        {
-            memcpy(Slot(m_head), src_bytes + (written * m_element_size), to_write * m_element_size);
-        }
-        else
-        {
-            memcpy(Slot(m_head), src_bytes + (written                * m_element_size), first_part              * m_element_size);
-            memcpy(Slot(0U),     src_bytes + ((written + first_part) * m_element_size), (to_write - first_part) * m_element_size);
-        }
-
-        written += to_write;
-        m_head   = (m_head + to_write) % m_capacity;
-        m_count += to_write;
-
-        // notify consumers that data is ready
-        m_cv_not_empty.NotifyAll_CS();
     }
 
     return written;
@@ -420,45 +451,52 @@ inline size_t Pipe::WriteBulk(const void *src, size_t count, Timeout timeout)
 // Pipe: Read
 // ---------------------------------------------------------------------------
 
-inline bool Pipe::Read(void *data, Timeout timeout)
+inline bool Pipe::Read(void *data, Timeout timeout_ticks)
 {
     STK_ASSERT(data != nullptr);
 
     ScopedCriticalSection cs_;
+    bool success = true;
 
     while (m_count == 0U)
     {
-        if (!m_cv_not_empty.Wait(cs_, timeout))
-            return false;
+        if (!m_cv_not_empty.Wait(cs_, timeout_ticks))
+        {
+            success = false;
+            break;
+        }
     }
 
-    memcpy(data, Slot(m_tail), m_element_size);
-    m_tail = Next(m_tail);
-    m_count--;
+    if (success)
+    {
+        STK_MEMCPY(data, Slot(m_tail), m_element_size);
+        m_tail = Next(m_tail);
+        m_count--;
 
-    // notify producer that space is now available
-    m_cv_not_full.NotifyOne_CS();
+        // notify producer that space is now available
+        m_cv_not_full.NotifyOne_CS();
+    }
 
-    return true;
+    return success;
 }
 
 // ---------------------------------------------------------------------------
-// Pipe: DrainLocked  (private helper — caller must hold the critical section)
+// Pipe: DrainLocked  (private helper, caller must hold the critical section)
 // ---------------------------------------------------------------------------
 
-inline size_t Pipe::DrainLocked(uint8_t *dst_bytes, size_t count)
+inline size_t Pipe::DrainLocked(uint8_t *const dst_bytes, const size_t count)
 {
     const size_t to_read    = Min(count, m_count);
     const size_t first_part = m_capacity - m_tail;
 
     if (to_read <= first_part)
     {
-        memcpy(dst_bytes, Slot(m_tail), to_read * m_element_size);
+        STK_MEMCPY(dst_bytes, Slot(m_tail), to_read * m_element_size);
     }
     else
     {
-        memcpy(dst_bytes,                               Slot(m_tail), first_part             * m_element_size);
-        memcpy(dst_bytes + first_part * m_element_size, Slot(0U),     (to_read - first_part) * m_element_size);
+        STK_MEMCPY(dst_bytes,                                 Slot(m_tail), first_part             * m_element_size);
+        STK_MEMCPY(dst_bytes + (first_part * m_element_size), Slot(0U),     (to_read - first_part) * m_element_size);
     }
 
     m_tail   = (m_tail + to_read) % m_capacity;
@@ -472,25 +510,51 @@ inline size_t Pipe::DrainLocked(uint8_t *dst_bytes, size_t count)
 // Pipe: ReadBulk
 // ---------------------------------------------------------------------------
 
-inline size_t Pipe::ReadBulk(void *dst, size_t count, Timeout timeout)
+inline size_t Pipe::ReadBulk(void *dst, size_t count, Timeout timeout_ticks)
 {
-    if ((dst == nullptr) || (count == 0U))
-        return 0U;
+    size_t read_count = 0U;
 
-    size_t   read_count = 0U;
-    uint8_t *dst_bytes  = static_cast<uint8_t *>(dst);
-
-    ScopedCriticalSection cs_;
-
-    while (read_count < count)
+    if ((dst != nullptr) && (count != 0U))
     {
-        while (m_count == 0U)
-        {
-            if (!m_cv_not_empty.Wait(cs_, timeout))
-                return read_count;
-        }
+        uint8_t *const dst_bytes = static_cast<uint8_t *>(dst);
+        const bool timed_wait = (timeout_ticks != WAIT_INFINITE) && (timeout_ticks != NO_WAIT);
+        
+        // capture an absolute deadline once, before entering the wait loop,
+        // preventing the timeout from resetting on intermediate partial reads
+        const Timeout deadline = (timed_wait ? 
+            static_cast<Timeout>(GetTicks() + timeout_ticks) : timeout_ticks);
 
-        read_count += DrainLocked(dst_bytes + (read_count * m_element_size), count - read_count);
+        ScopedCriticalSection cs_;
+
+        while (read_count < count)
+        {
+            bool is_timeout = false;
+
+            while (m_count == 0U)
+            {
+                Timeout remaining = deadline;
+                if (timed_wait)
+                {
+                    const Timeout now = static_cast<Timeout>(GetTicks());
+                    remaining = (now >= deadline ? NO_WAIT : (deadline - now));
+                }
+
+                if (!m_cv_not_empty.Wait(cs_, remaining))
+                {
+                    is_timeout = true;
+                    break; // break inner condition variable loop
+                }
+            }
+
+            // if a timeout occurred, drop out of the chunk processing loop
+            if (is_timeout)
+            {
+                break;
+            }
+
+            // drain data using the state tracker's relative byte offsets
+            read_count += DrainLocked(dst_bytes + (read_count * m_element_size), count - read_count);
+        }
     }
 
     return read_count;
@@ -500,27 +564,47 @@ inline size_t Pipe::ReadBulk(void *dst, size_t count, Timeout timeout)
 // Pipe: ReadBulkTriggered
 // ---------------------------------------------------------------------------
 
-inline size_t Pipe::ReadBulkTriggered(void *dst, size_t trigger, size_t max_count, Timeout timeout)
+inline size_t Pipe::ReadBulkTriggered(void *dst, size_t trigger, size_t max_count, Timeout timeout_ticks)
 {
-    if ((dst == nullptr) || (max_count == 0U))
-        return 0U;
+    size_t read_count = 0U;
 
-    // trigger must be in [1, max_count]
-    if (trigger == 0U)       trigger = 1U;
-    if (trigger > max_count) trigger = max_count;
-
-    uint8_t *dst_bytes = static_cast<uint8_t *>(dst);
-
-    ScopedCriticalSection cs_;
-
-    while (m_count < trigger)
+    if ((dst != nullptr) && (max_count != 0U))
     {
-        if (!m_cv_not_empty.Wait(cs_, timeout))
-            return DrainLocked(dst_bytes, max_count); // timeout: drain whatever arrived
+        // trigger must be in [1, max_count]
+        if (trigger == 0U)       { trigger = 1U; }
+        if (trigger > max_count) { trigger = max_count; }
+
+        uint8_t *const dst_bytes = static_cast<uint8_t *>(dst);
+        const bool timed_wait = (timeout_ticks != WAIT_INFINITE) && (timeout_ticks != NO_WAIT);
+        
+        // capture an absolute deadline once, before entering the wait loop,
+        // preventing the timeout from resetting on intermediate spurious wakeups
+        const Timeout deadline = (timed_wait ? 
+            static_cast<Timeout>(GetTicks() + timeout_ticks) : timeout_ticks);
+
+        ScopedCriticalSection cs_;
+
+        while (m_count < trigger)
+        {
+            Timeout remaining = deadline;
+            if (timed_wait)
+            {
+                const Timeout now = static_cast<Timeout>(GetTicks());
+                remaining = (now >= deadline ? NO_WAIT : (deadline - now));
+            }
+
+            if (!m_cv_not_empty.Wait(cs_, remaining))
+            {
+                break; // break the waiting loop on timeout
+            }
+        }
+
+        // whether we broke out via satisfying the trigger or hitting a timeout,
+        // we drain whatever is currently available up to max_count
+        read_count = DrainLocked(dst_bytes, max_count);
     }
 
-    // trigger satisfied, drain up to max_count without further blocking
-    return DrainLocked(dst_bytes, max_count);
+    return read_count;
 }
 
 // ---------------------------------------------------------------------------
@@ -529,7 +613,7 @@ inline size_t Pipe::ReadBulkTriggered(void *dst, size_t trigger, size_t max_coun
 
 inline void Pipe::Reset()
 {
-    ScopedCriticalSection cs_;
+    const ScopedCriticalSection cs_;
 
     m_count = 0U;
     m_head  = 0U;
@@ -597,29 +681,36 @@ public:
                    calling task will be suspended until space is made available by a
                    consumer or the timeout expires.
         \param[in] data: Reference to the data element to be copied into the pipe.
-        \param[in] timeout: Maximum time to wait for space (ticks). Default: \c WAIT_INFINITE.
-        \warning   ISR-safe only with timeout=NO_WAIT, ISR-unsafe otherwise.
+        \param[in] timeout_ticks: Maximum time to wait for space (ticks). Default: \c WAIT_INFINITE.
+        \warning   ISR-safe only with timeout_ticks=NO_WAIT, ISR-unsafe otherwise.
         \return    \c true if data was successfully written, \c false if timeout expired
                    before space became available.
     */
-    bool Write(const T &data, Timeout timeout = WAIT_INFINITE)
+    bool Write(const T &data, Timeout timeout_ticks = WAIT_INFINITE)
     {
         ScopedCriticalSection cs_;
+        bool success = true;
 
         while (m_count == N)
         {
-            if (!m_cv_not_full.Wait(cs_, timeout))
-                return false;
+            if (!m_cv_not_full.Wait(cs_, timeout_ticks))
+            {
+                success = false;
+                break;
+            }
         }
 
-        m_buffer[m_head] = data;
-        m_head = (m_head + 1U) % N;
-        m_count += 1U;
+        if (success)
+        {
+            m_buffer[m_head] = data;
+            m_head = (m_head + 1U) % N;
+            m_count += 1U;
 
-        // notify consumer that data is ready
-        m_cv_not_empty.NotifyOne_CS();
+            // notify consumer that data is ready
+            m_cv_not_empty.NotifyOne_CS();
+        }
 
-        return true;
+        return success;
     }
 
     /*! \brief     Attempt to write data to the pipe without blocking.
@@ -637,8 +728,8 @@ public:
                    amount can be written or the timeout expires.
         \param[in] src: Pointer to the source array.
         \param[in] count: Number of elements to write.
-        \param[in] timeout: Maximum time to wait for sufficient space (ticks). Default: \c WAIT_INFINITE.
-        \warning   ISR-safe only with timeout=NO_WAIT, ISR-unsafe otherwise.
+        \param[in] timeout_ticks: Maximum time to wait for sufficient space (ticks). Default: \c WAIT_INFINITE.
+        \warning   ISR-safe only with timeout_ticks=NO_WAIT, ISR-unsafe otherwise.
         \return    Number of elements actually written. Equal to \c count unless a timeout occurred.
         \code
         // Example:
@@ -651,57 +742,85 @@ public:
         }
         \endcode
     */
-    size_t WriteBulk(const T *src, size_t count, Timeout timeout = WAIT_INFINITE)
+    size_t WriteBulk(const T *src, size_t count, Timeout timeout_ticks = WAIT_INFINITE)
     {
-        if ((src == nullptr) || (count == 0U))
-            return 0U;
-
         size_t written = 0U;
-        ScopedCriticalSection cs_;
 
-        while (written < count)
+        if ((src != nullptr) && (count != 0U))
         {
-            while (m_count == N)
-            {
-                if (!m_cv_not_full.Wait(cs_, timeout))
-                    return written; // return partial count on timeout
-            }
+            const bool timed_wait = (timeout_ticks != WAIT_INFINITE) && (timeout_ticks != NO_WAIT);
+            
+            // capture an absolute deadline once, before entering the wait loop,
+            // preventing the timeout from resetting on intermediate partial writes
+            const Timeout deadline = (timed_wait ? 
+                static_cast<Timeout>(GetTicks() + timeout_ticks) : timeout_ticks);
 
-            // calculate how many we can copy in this contiguous stretch
-            size_t available = N - m_count;
-            size_t to_write  = ((count - written) < available) ? (count - written) : available;
+            ScopedCriticalSection cs_;
 
-            // copy from source
-            // note: if value type is not scalar or queue is small we copy with a for loop,
-            //       otherwise using faster memcpy version for large scalar arrays
-            if (!std::is_scalar<T>::value || (N < 8U))
+            while (written < count)
             {
-                for (size_t i = 0U; i < to_write; ++i)
+                bool is_timeout = false;
+
+                while (m_count == N)
                 {
-                    m_buffer[m_head] = src[written++];
-                    m_head = (m_head + 1U) % N;
-                    m_count += 1U;
+                    Timeout remaining = deadline;
+                    if (timed_wait)
+                    {
+                        const Timeout now = static_cast<Timeout>(GetTicks());
+                        remaining = (now >= deadline ? NO_WAIT : (deadline - now));
+                    }
+
+                    if (!m_cv_not_full.Wait(cs_, remaining))
+                    {
+                        is_timeout = true; 
+                        break; // break inner condition variable loop
+                    }
                 }
-            }
-            else
-            {
-                size_t first_part = N - m_head;
-                if (to_write <= first_part)
+
+                // if timeout, drop out of the chunk processing loop
+                if (is_timeout)
                 {
-                    memcpy(&m_buffer[m_head], &src[written], to_write * sizeof(T));
+                    break; 
+                }
+
+                // calculate how many we can copy in this contiguous stretch
+                const size_t available = N - m_count;
+                const size_t to_write  = ((count - written) < available) ? (count - written) : available;
+
+                // copy from source
+                // note: if value type is not scalar or queue is small we copy with a for loop,
+                //       otherwise using faster memcpy version for large scalar arrays
+                if (!std::is_scalar<T>::value || (N < 8U))
+                {
+                    for (size_t i = 0U; i < to_write; ++i)
+                    {
+                        m_buffer[m_head] = src[written++];
+                        m_head           = (m_head + 1U) % N;
+                        m_count         += 1U;
+                    }
                 }
                 else
                 {
-                    memcpy(&m_buffer[m_head], &src[written],              first_part              * sizeof(T));
-                    memcpy(&m_buffer[0U],     &src[written + first_part], (to_write - first_part) * sizeof(T));
+                    const size_t first_part = N - m_head;
+                    
+                    if (to_write <= first_part)
+                    {
+                        STK_MEMCPY(&m_buffer[m_head], &src[written], to_write * sizeof(T));
+                    }
+                    else
+                    {
+                        STK_MEMCPY(&m_buffer[m_head], &src[written],              first_part              * sizeof(T));
+                        STK_MEMCPY(&m_buffer[0U],     &src[written + first_part], (to_write - first_part) * sizeof(T));
+                    }
+                    
+                    written += to_write;
+                    m_head   = (m_head + to_write) % N;
+                    m_count += to_write;
                 }
-                written += to_write;
-                m_head   = (m_head + to_write) % N;
-                m_count += to_write;
-            }
 
-            // notify consumers that data is ready
-            m_cv_not_empty.NotifyAll_CS();
+                // notify consumers that data is ready
+                m_cv_not_empty.NotifyAll_CS();
+            }
         }
 
         return written;
@@ -722,31 +841,38 @@ public:
                    the calling task will be suspended until data is provided by a
                    producer or the timeout expires.
         \param[out] data: Reference to the variable where the retrieved data will be stored.
-        \param[in] timeout: Maximum time to wait for data (ticks). Default: \c WAIT_INFINITE.
-        \warning   ISR-safe only with timeout=NO_WAIT, ISR-unsafe otherwise.
+        \param[in] timeout_ticks: Maximum time to wait for data (ticks). Default: \c WAIT_INFINITE.
+        \warning   ISR-safe only with timeout_ticks=NO_WAIT, ISR-unsafe otherwise.
         \return    \c true if data was successfully read, \c false if timeout expired before
                    any data became available.
     */
-    bool Read(T &data, Timeout timeout = WAIT_INFINITE)
+    bool Read(T &data, Timeout timeout_ticks = WAIT_INFINITE)
     {
         ScopedCriticalSection cs_;
+        bool success = true;
 
         while (m_count == 0U)
         {
-            if (!m_cv_not_empty.Wait(cs_, timeout))
-                return false;
+            if (!m_cv_not_empty.Wait(cs_, timeout_ticks))
+            {
+                success = false;
+                break;
+            }
         }
 
-        data    = m_buffer[m_tail];
-        m_tail  = (m_tail + 1U) % N;
-        m_count -= 1U;
+        if (success)
+        {
+            data     = m_buffer[m_tail];
+            m_tail   = (m_tail + 1U) % N;
+            m_count -= 1U;
 
-        // notify producer that space is available
-        m_cv_not_full.NotifyOne_CS();
+            // notify producer that space is available
+            m_cv_not_full.NotifyOne_CS();
+        }
 
-        return true;
+        return success;
     }
-
+    
     /*! \brief     Attempt to read data from the pipe without blocking.
         \details   Dequeues an element only if one is immediately available.
                    Returns \c false instantly if the pipe is empty.
@@ -762,8 +888,8 @@ public:
                    until the full amount is read or the timeout expires.
         \param[out] dst: Pointer to the destination array.
         \param[in] count: Number of elements to read.
-        \param[in] timeout: Maximum time to wait for data (ticks). Default: \c WAIT_INFINITE.
-        \warning   ISR-safe only with timeout=NO_WAIT, ISR-unsafe otherwise.
+        \param[in] timeout_ticks: Maximum time to wait for data (ticks). Default: \c WAIT_INFINITE.
+        \warning   ISR-safe only with timeout_ticks=NO_WAIT, ISR-unsafe otherwise.
         \return    Number of elements actually read. Equal to \c count unless a timeout occurred.
         \code
         // Example:
@@ -777,56 +903,85 @@ public:
         }
         \endcode
     */
-    size_t ReadBulk(T *dst, size_t count, Timeout timeout = WAIT_INFINITE)
+    size_t ReadBulk(T *dst, size_t count, Timeout timeout_ticks = WAIT_INFINITE)
     {
-        if ((dst == nullptr) || (count == 0U))
-            return 0U;
-
         size_t read_count = 0U;
-        ScopedCriticalSection cs_;
 
-        while (read_count < count)
+        if ((dst != nullptr) && (count != 0U))
         {
-            // wait until there is at least 1 element available
-            while (m_count == 0U)
-            {
-                if (!m_cv_not_empty.Wait(cs_, timeout))
-                    return read_count; // return partial count on timeout
-            }
+            const bool timed_wait = (timeout_ticks != WAIT_INFINITE) && (timeout_ticks != NO_WAIT);
+            
+            // capture an absolute deadline once, before entering the wait loop,
+            // this prevents the timeout from being silently restarted on each
+            // spurious wakeup (e.g. a partial Set() that does not satisfy WAIT_ALL)
+            const Timeout deadline = (timed_wait ? 
+                static_cast<Timeout>(GetTicks() + timeout_ticks) : timeout_ticks);
 
-            // determine how many we can pull in this stretch
-            size_t to_read = (count - read_count) < m_count ? (count - read_count) : m_count;
+            ScopedCriticalSection cs_;
 
-            // note: if value type is not scalar or queue is small we copy with a for loop,
-            //       otherwise using faster memcpy version for large scalar arrays
-            if (!std::is_scalar<T>::value || (N < 8U))
+            while (read_count < count)
             {
-                for (size_t i = 0U; i < to_read; ++i)
+                bool is_timeout = false;
+              
+                // wait until there is at least 1 element available
+                while (m_count == 0U)
                 {
-                    dst[read_count++] = m_buffer[m_tail];
-                    m_tail  = (m_tail + 1U) % N;
-                    m_count -= 1U;
+                    Timeout remaining = deadline;
+                    if (timed_wait)
+                    {
+                        const Timeout now = static_cast<Timeout>(GetTicks());
+                        remaining = (now >= deadline ? NO_WAIT : (deadline - now));
+                    }
+
+                    if (!m_cv_not_empty.Wait(cs_, remaining))
+                    {
+                        is_timeout = true;
+                        break; // break inner condition variable loop
+                    }
                 }
-            }
-            else
-            {
-                size_t first_part = N - m_tail;
-                if (to_read <= first_part)
+
+                // if a timeout, drop out of the chunk processing loop
+                if (is_timeout)
                 {
-                    memcpy(&dst[read_count], &m_buffer[m_tail], to_read * sizeof(T));
+                    break;
+                }
+
+                // determine how many we can pull in this stretch
+                const size_t to_read = (count - read_count) < m_count ? (count - read_count) : m_count;
+
+                // note: if value type is not scalar or queue is small we copy with a for loop,
+                //       otherwise using faster memcpy version for large scalar arrays
+                if (!std::is_scalar<T>::value || (N < 8U))
+                {
+                    for (size_t i = 0U; i < to_read; ++i)
+                    {
+                        dst[read_count++] = m_buffer[m_tail];
+                        m_tail            = (m_tail + 1U) % N;
+                        m_count          -= 1U;
+                    }
                 }
                 else
                 {
-                    memcpy(&dst[read_count],              &m_buffer[m_tail], first_part              * sizeof(T));
-                    memcpy(&dst[read_count + first_part], &m_buffer[0U],     (to_read - first_part)  * sizeof(T));
+                    const size_t first_part = N - m_tail;
+                    
+                    if (to_read <= first_part)
+                    {
+                        STK_MEMCPY(&dst[read_count], &m_buffer[m_tail], to_read * sizeof(T));
+                    }
+                    else
+                    {
+                        STK_MEMCPY(&dst[read_count],              &m_buffer[m_tail], first_part              * sizeof(T));
+                        STK_MEMCPY(&dst[read_count + first_part], &m_buffer[0U],     (to_read - first_part)  * sizeof(T));
+                    }
+                    
+                    read_count += to_read;
+                    m_tail      = (m_tail + to_read) % N;
+                    m_count    -= to_read;
                 }
-                read_count += to_read;
-                m_tail      = (m_tail + to_read) % N;
-                m_count    -= to_read;
-            }
 
-            // notify producers that space is now available
-            m_cv_not_full.NotifyAll_CS();
+                // notify producers that space is now available
+                m_cv_not_full.NotifyAll_CS();
+            }
         }
 
         return read_count;
@@ -850,7 +1005,7 @@ public:
     */
     void Reset()
     {
-        ScopedCriticalSection cs_;
+        const ScopedCriticalSection cs_;
 
         m_count = 0U;
         m_head  = 0U;

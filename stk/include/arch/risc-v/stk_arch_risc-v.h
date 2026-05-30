@@ -101,7 +101,7 @@ __stk_forceinline void SetTls(Word tp)
 /*! \def   __stk_dmb
     \brief Data memory barrier.
 */
-#define __stk_dmb() __asm volatile("fence rw, rw" ::: "memory")
+static __stk_forceinline void __stk_dmb() { __asm volatile("fence rw, rw" ::: "memory"); }
 
 /*! \def   STK_SUBMICORSECOND_PRECISION_TIMER
     \brief Enables sub-microsecond precision timer, see \a hw::HiResClock.
