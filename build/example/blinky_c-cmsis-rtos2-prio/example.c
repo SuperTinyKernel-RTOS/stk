@@ -20,7 +20,7 @@
  *
  *      Scenario:
  *        Three threads compete for a shared mutex:
- *          - LowPrio  (osPriorityBelowNormal): acquires mutex first, holds it 5 s
+ *          - LowPrio  (osPriorityBelowNormal) : acquires mutex first, holds it 5 s
  *          - MidPrio  (osPriorityNormal)      : spins in a busy loop (no RTOS blocking),
  *                                               starving LowPrio when inheritance is OFF
  *          - HighPrio (osPriorityAboveNormal) : waits 1 s, then tries to acquire mutex
@@ -48,9 +48,11 @@
 #include "RTE_Components.h"     // CMSIS_device_header definition, Example driver include
 #include CMSIS_device_header    // STK config
 
-// when 1 the RED led will be periodically blinking because MidPrioThread will cooperate
-// and periodically release time to LowPrioThread when MidPrioThread is sleeping
-#define FIX_COOPERATIVE_BEHAVIOR 0
+// When 1 the RED led will be periodically blinking because MidPrioThread will cooperate
+// and periodically release time to LowPrioThread when MidPrioThread is sleeping.
+// For STK though such cooperation fix is not required as it supports priority inheritance,
+// so it will work just fine with 0 or 1.
+#define FIX_COOPERATIVE_BEHAVIOR (0)
 
 /* --------------------------------------------------------------------------
  *  Mutex
@@ -75,16 +77,25 @@ osThreadId_t tid_mid;
 osThreadId_t tid_low;
 
 /*----------------------------------------------------------------------------
- *      LED helpers (re-use pattern from original example)
+ *      LED helpers
  *---------------------------------------------------------------------------*/
+static LedId to_hw_led (unsigned char led) {
+    switch (led){
+    case 0: return LED_RED;
+    case 1: return LED_GREEN;
+    case 2: return LED_BLUE;
+    default: return LED_ORANGE;
+    }
+}
+
 static void led_on (unsigned char led) {
   //printf("LED On:  #%d\n", led);
-  Led_Set(led, true);
+  Led_Set(to_hw_led(led), true);
 }
 
 static void led_off (unsigned char led) {
   //printf("LED Off: #%d\n", led);
-  Led_Set(led, false);
+  Led_Set(to_hw_led(led), false);
 }
 
 /*----------------------------------------------------------------------------
@@ -217,21 +228,23 @@ void app_main (void *argument) {
 }
 
 /*----------------------------------------------------------------------------
- *      main: system init and kernel start  (unchanged from original)
+ *      main: system init and kernel start
  *---------------------------------------------------------------------------*/
-int main (int, char*[]) {
-
+#ifndef _STK_STANDALONE_EXAMPLE
+void app_run()
+#else
+int main(int argc, char* argv[])
+#endif
+{
   /* System Initialization */
   SystemCoreClockUpdate();
 
-  /* Init LEDs:
+  /* Init LEDs (see to_hw_led):
    *   led 0 = LED_RED   -> LowPrio holds mutex
    *   led 1 = LED_GREEN -> MidPrio busy loop
    *   led 2 = LED_BLUE  -> HighPrio holds mutex
    */
-  Led_Init(LED_RED,   false);
-  Led_Init(LED_GREEN, false);
-  Led_Init(LED_BLUE,  false);
+  Led_InitAll(false);
 
   osKernelInitialize();
   osThreadNew(app_main, NULL, NULL);

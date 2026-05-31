@@ -51,9 +51,9 @@
 			<locationURI>virtual:/virtual</locationURI>
 		</link>
 		<link>
-			<name>src/main.c</name>
+			<name>src/example.c</name>
 			<type>1</type>
-			<locationURI>PARENT-4-PROJECT_LOC/blinky_c-freertos/main.c</locationURI>
+			<locationURI>PARENT-4-PROJECT_LOC/blinky_c-freertos/example.c</locationURI>
 		</link>
 		<link>
 			<name>deps/freertos/include</name>

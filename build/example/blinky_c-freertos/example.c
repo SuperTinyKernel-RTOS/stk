@@ -49,7 +49,7 @@ struct phases_t {
  *---------------------------------------------------------------------------*/
 void Switch_On (unsigned char led) {
   //printf("LED On:  #%d\n", led);
-  Led_Set(led, true);
+  Led_Set((LedId)led, true);
 }
 
 /*----------------------------------------------------------------------------
@@ -57,7 +57,7 @@ void Switch_On (unsigned char led) {
  *---------------------------------------------------------------------------*/
 void Switch_Off (unsigned char led) {
   //printf("LED Off: #%d\n", led);
-  Led_Set(led, false);
+  Led_Set((LedId)led, false);
 }
 
 
@@ -185,16 +185,17 @@ void app_main (void *argument) {
  *        osKernelGetState()    -> (not needed — vTaskStartScheduler asserts internally)
  *        osKernelStart()       -> vTaskStartScheduler()
  *---------------------------------------------------------------------------*/
-int main (int, char*[]) {
-
+#ifndef _STK_STANDALONE_EXAMPLE
+void app_run()
+#else
+int main(int argc, char* argv[])
+#endif
+{
   // System Initialization
   SystemCoreClockUpdate();
 
   // Init LEDs
-  Led_Init(LED_RED, false);
-  Led_Init(LED_ORANGE, false);
-  Led_Init(LED_GREEN, false);
-  Led_Init(LED_BLUE, false);
+  Led_InitAll(false);
 
   // ...
 
