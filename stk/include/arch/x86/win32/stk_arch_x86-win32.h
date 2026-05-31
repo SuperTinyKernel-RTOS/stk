@@ -34,7 +34,7 @@ public:
     void Initialize(IEventHandler *event_handler, IKernelService *service, uint32_t resolution_us, Stack *exit_trap) override;
     void Start() override;
     void Stop() override;
-    bool InitStack(EStackType stack_type, Stack *stack, IStackMemory *stack_memory, ITask *user_task) override;
+    void InitStack(EStackType stack_type, Stack *stack, IStackMemory *stack_memory, ITask *user_task) override;
     uint32_t GetTickResolution() const override;
     Cycles GetSysTimerCount() const override;
     uint32_t GetSysTimerFrequency() const override;

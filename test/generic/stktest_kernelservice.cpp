@@ -104,27 +104,6 @@ TEST(KernelService, DelayMs)
     CHECK_EQUAL(5, (int32_t)g_KernelService->GetTicks());
 }
 
-TEST(KernelService, InitStackFailure)
-{
-    Kernel<KERNEL_STATIC, 2, SwitchStrategyRR, PlatformTestMock> kernel;
-    TaskMock<ACCESS_USER> task;
-    PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
-    platform->m_fail_InitStack = true;
-
-    try
-    {
-        g_TestContext.ExpectAssert(true);
-        kernel.Initialize();
-        kernel.AddTask(&task);
-        CHECK_TEXT(false, "AddTask() did not fail");
-    }
-    catch (TestAssertPassed &pass)
-    {
-        CHECK(true);
-        g_TestContext.ExpectAssert(false);
-    }
-}
-
 TEST(KernelService, GetTid)
 {
     Kernel<KERNEL_STATIC, 2, SwitchStrategyRR, PlatformTestMock> kernel;

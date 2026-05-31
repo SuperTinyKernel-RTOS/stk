@@ -2002,7 +2002,7 @@ void PlatformArmCortexM::Start()
     GetContext().Start();
 }
 
-bool PlatformArmCortexM::InitStack(EStackType stack_type, Stack *stack, IStackMemory *stack_memory, ITask *user_task)
+void PlatformArmCortexM::InitStack(EStackType stack_type, Stack *stack, IStackMemory *stack_memory, ITask *user_task)
 {
     // Precondition (TrustZone builds): stack->mode must be set by the caller
     // before this function is invoked.  On TZ builds the EXC_RETURN selection
@@ -2093,8 +2093,6 @@ bool PlatformArmCortexM::InitStack(EStackType stack_type, Stack *stack, IStackMe
     task_frame->tz.PSPLIM    = 0U;
     task_frame->tz.PSPLIM_NS = 0U;
 #endif
-
-    return true;
 }
 
 // ---------------------------------------------------------------------------

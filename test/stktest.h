@@ -89,7 +89,6 @@ public:
         m_hard_fault        = false;
         m_switch_to_next_nr = 0;
         m_exit_trap         = NULL;
-        m_fail_InitStack    = false;
         m_resolution        = 0;
         m_context_switch_nr = 0;
         m_ticks_count       = 0;
@@ -132,11 +131,8 @@ public:
     	m_event_handler->OnStop();
     }
 
-    bool InitStack(EStackType type, Stack *stack, IStackMemory *stack_memory, ITask *user_task) override
+    void InitStack(EStackType type, Stack *stack, IStackMemory *stack_memory, ITask *user_task) override
     {
-        if (m_fail_InitStack)
-            return false;
-
         // if NULL then it is Exit trap is being initialized
         m_stack_info[type].stack  = stack;
         m_stack_info[type].memory = stack_memory;
@@ -146,7 +142,6 @@ public:
         PlatformContext::InitStackMemory(stack_memory);
 
         stack->SP = (size_t)stack_memory->GetStack();
-        return true;
     }
 
     uint32_t GetTickResolution() const override
@@ -261,7 +256,6 @@ public:
 
     IKernelService  *m_service;
     Stack           *m_exit_trap;
-    bool             m_fail_InitStack;
     int32_t          m_resolution;
     uint32_t         m_context_switch_nr;
     uint32_t         m_ticks_count;

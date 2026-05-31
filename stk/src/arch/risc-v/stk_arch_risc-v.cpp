@@ -1910,7 +1910,7 @@ void PlatformRiscV::Start()
     GetContext().Start();
 }
 
-bool PlatformRiscV::InitStack(EStackType stack_type, Stack *stack, IStackMemory *stack_memory, ITask *user_task)
+void PlatformRiscV::InitStack(EStackType stack_type, Stack *stack, IStackMemory *stack_memory, ITask *user_task)
 {
     // TaskFrame must map exactly onto the slot layout consumed by STK_ASM_SAVE_CONTEXT / STK_ASM_LOAD_CONTEXT - no padding allowed
     STK_STATIC_ASSERT_DESC(sizeof(TaskFrame) == (STK_RISCV_REGISTER_COUNT + STK_SERVICE_SLOTS) * sizeof(Word),
@@ -1958,8 +1958,6 @@ bool PlatformRiscV::InitStack(EStackType stack_type, Stack *stack, IStackMemory 
 #if (STK_RISCV_FPU != 0)
     task_frame->X3_FSR = 0U; // FCSR = 0: round-to-nearest, no accrued exception flags
 #endif
-
-    return true;
 }
 
 void Context::OnStop()

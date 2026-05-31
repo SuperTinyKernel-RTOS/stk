@@ -212,22 +212,36 @@ protected:
         */
         Weight GetWeight() const override
         {
+            Weight static_weight;
+
             if __stk_constexpr_cpp17 (TStrategy::PRIORITY_INHERITANCE_API)
             {
                 if (m_rt_weight[0] != NO_WEIGHT)
                 {
-                    return m_rt_weight[0];
+                    static_weight = m_rt_weight[0];
+                }
+                else                   
+                {
+                    if __stk_constexpr_cpp17 (TStrategy::WEIGHT_API)
+                    {
+                        static_weight = m_user->GetWeight();
+                    }
+                    else
+                    {
+                        static_weight = DEFAULT_WEIGHT;
+                    }
                 }
             }
-            
-            if __stk_constexpr_cpp17 (TStrategy::WEIGHT_API)
+            else if __stk_constexpr_cpp17 (TStrategy::WEIGHT_API)
             {
-                return m_user->GetWeight();
+                static_weight = m_user->GetWeight();
             }
             else
             {
-                return DEFAULT_WEIGHT;
+                static_weight = DEFAULT_WEIGHT;
             }
+
+            return static_weight;
         }
 
         /*! \brief  Get current (run-time) scheduling weight.
@@ -237,14 +251,18 @@ protected:
         */
         Weight GetCurrentWeight() const override
         {
+            Weight cur_weight;
+          
             if __stk_constexpr_cpp17 (TStrategy::WEIGHT_API)
             {
-                return m_rt_weight[0];
+                cur_weight = m_rt_weight[0];
             }
             else
             {
-                return DEFAULT_WEIGHT;
+                cur_weight = DEFAULT_WEIGHT;
             }
+            
+            return cur_weight;
         }
 
         /*! \brief  Get HRT scheduling periodicity.
@@ -255,14 +273,18 @@ protected:
         {
             STK_ASSERT(IsHrtMode());
             
+            Timeout to;
+            
             if __stk_constexpr_cpp17 (IsHrtMode())
             {
-                return m_hrt[0].periodicity;
+                to = m_hrt[0].periodicity;
             }
             else
             {
-                return 0;
+                to = 0;
             }
+            
+            return to;
         }
 
         /*! \brief  Get absolute HRT deadline (ticks elapsed since task was activated).
@@ -273,15 +295,19 @@ protected:
         Timeout GetHrtDeadline() const override
         {
             STK_ASSERT(IsHrtMode());
+            
+            Timeout deadline;
 
             if __stk_constexpr_cpp17 (IsHrtMode())
             {
-                return m_hrt[0].deadline;
+                deadline = m_hrt[0].deadline;
             }
             else
             {
-                return 0;
+                deadline = 0;
             }
+            
+            return deadline;
         }
 
         /*! \brief  Get remaining HRT deadline (ticks left before the deadline expires).
@@ -293,15 +319,19 @@ protected:
         {
             STK_ASSERT(IsHrtMode());
             STK_ASSERT(!IsSleeping());
+            
+            Timeout relative_deadline;
 
             if __stk_constexpr_cpp17 (IsHrtMode())
             {
-                return (m_hrt[0].deadline - m_hrt[0].duration);
+                relative_deadline = (m_hrt[0].deadline - m_hrt[0].duration);
             }
             else
             {
-                return 0;
+                relative_deadline = 0;
             }
+            
+            return relative_deadline;
         }
 
         Timeout GetSleepTicks(Timeout sleep_ticks)
@@ -515,10 +545,7 @@ protected:
         #endif
 
             // init stack of the user task
-            if (!platform->InitStack(STACK_USER_TASK, &m_stack, user_task, user_task))
-            {
-                STK_ASSERT(false);
-            }
+            platform->InitStack(STACK_USER_TASK, &m_stack, user_task, user_task);
 
             // bind user task
             m_user = user_task;
@@ -949,14 +976,14 @@ public:
         m_request   = REQ_NONE;
         
         // exit trap is required only for KERNEL_DYNAMIC mode
-        Stack *exit_trap = nullptr;
+        Stack *exit_trap;
         if __stk_constexpr_cpp17 (IsDynamicMode())
         {
             exit_trap = &m_exit_trap[0].stack;
         }
         else
         {
-            STK_UNUSED(exit_trap);
+            exit_trap = nullptr;
         }
 
         m_service.Initialize(this);
@@ -1907,8 +1934,10 @@ protected:
                     // task is pending removal, wait until it is switched out
                     if (task->IsPendingRemoval())
                     {
+                        const size_t tasks_left = m_strategy.GetSize();
+                      
                         if ((task != m_task_now) ||
-                            ((m_strategy.GetSize() == 1U) && (m_fsm_state == FSM_STATE_SLEEPING)))
+                            ((tasks_left == 1U) && (m_fsm_state == FSM_STATE_SLEEPING)))
                         {
                             RemoveTask(task);
                             continue;

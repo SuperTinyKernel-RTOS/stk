@@ -10,8 +10,13 @@
 #ifndef DRIVER_DEFS_H_
 #define DRIVER_DEFS_H_
 
-#include <stdbool.h>
-#include <stdint.h>
+#ifdef __cplusplus
+    #include <cstdbool>
+    #include <cstdint>
+#else
+    #include <stdbool.h>
+    #include <stdint.h>
+#endif
 
 #ifdef __cplusplus
     #define STK_EXTERN extern "C"

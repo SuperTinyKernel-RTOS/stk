@@ -378,10 +378,10 @@ protected:
 template <typename T>
 __stk_forceinline T ReadVolatile64(volatile const T *addr)
 {
-    STK_STATIC_ASSERT_N(sz, sizeof(T) == 8);  // only 64-bit types permitted
-    STK_STATIC_ASSERT_N(al, alignof(T) >= 4); // type must be at least 4-byte aligned
+    STK_STATIC_ASSERT_N(sz, sizeof(T) == 8U);  // only 64-bit types permitted
+    STK_STATIC_ASSERT_N(al, alignof(T) >= 4U); // type must be at least 4-byte aligned
 
-    if (sizeof(void *) == 8) // 64-bit arch: aligned 64-bit load is inherently atomic
+    if __stk_constexpr_cpp17 (sizeof(void *) == 8U) // 64-bit arch: aligned 64-bit load is inherently atomic
     {
         return (*addr);
     }
@@ -433,10 +433,10 @@ __stk_forceinline T ReadVolatile64(volatile const T *addr)
 template <typename T>
 __stk_forceinline void WriteVolatile64(volatile T *addr, T value)
 {
-    STK_STATIC_ASSERT_N(sz, sizeof(T) == 8);  // only 64-bit types permitted
-    STK_STATIC_ASSERT_N(al, alignof(T) >= 4); // type must be at least 4-byte aligned
+    STK_STATIC_ASSERT_N(sz, sizeof(T) == 8U);  // only 64-bit types permitted
+    STK_STATIC_ASSERT_N(al, alignof(T) >= 4U); // type must be at least 4-byte aligned
 
-    if (sizeof(void *) == 8) // 64-bit arch: aligned 64-bit store is inherently atomic
+    if __stk_constexpr_cpp17 (sizeof(void *) == 8U) // 64-bit arch: aligned 64-bit store is inherently atomic
     {
         (*addr) = value;
     }
@@ -479,8 +479,6 @@ struct HiResClock
     static inline Ticks GetTimeUs()
     {
         const uint32_t freq = GetFrequency();
-        STK_ASSERT(freq != 0U);
-
         return ((freq != 0U) ? 
             static_cast<Ticks>((GetCycles() * 1000000ULL) / freq) : static_cast<Ticks>(0));
     }
@@ -501,5 +499,44 @@ static constexpr TId GetTidFromUserTask(const ITask *task) noexcept { return hw:
 static constexpr ITask *GetUserTaskFromTid(TId task_id) noexcept { return hw::WordToPtr<ITask>(task_id); }
 
 } // namespace stk
+
+/*! \brief     A wrapper for a built-in memcpy, redefine to your own if required.
+    \note      Can be overridden by defining _STK_CUSTOM_MEMCPY in system configuration.
+*/
+#ifndef _STK_CUSTOM_MEMCPY
+static inline void STK_MEMCPY(void *const dest, const void *const src, const size_t size)
+{
+    using namespace stk;
+
+    if ((dest != nullptr) && (src != nullptr) && (size != 0U))
+    {
+        const Word dest_addr = hw::PtrToWord(dest);
+        const Word src_addr  = hw::PtrToWord(src);
+
+        // fast path: check if destination, source, and size are all 4-byte aligned
+        if (((dest_addr & 0x03U) == 0U) && 
+            ((src_addr  & 0x03U) == 0U) && 
+            ((size      & 0x03U) == 0U))
+        {
+            uint32_t *const       p_d32 = static_cast<uint32_t *>(dest);
+            const uint32_t *const p_s32 = static_cast<const uint32_t *>(src);
+            const size_t          words = (size >> 2U);
+
+            for (size_t i = 0U; i < words; ++i)
+            {
+                p_d32[i] = p_s32[i];
+            }
+        }
+        // slow path
+        else
+        {
+            uint8_t *const       p_d = static_cast<uint8_t *>(dest);
+            const uint8_t *const p_s = static_cast<const uint8_t *>(src);
+
+            STK_UNUSED(std::copy_n(p_s, size, p_d));
+        }
+    }
+}
+#endif
 
 #endif /* STK_ARCH_H_ */

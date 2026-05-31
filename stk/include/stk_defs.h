@@ -10,8 +10,9 @@
 #ifndef STK_DEFS_H_
 #define STK_DEFS_H_
 
-#include <stddef.h>
-#include <stdint.h>
+#include <cstddef>
+#include <cstdint>
+#include <algorithm>
 #ifdef __ICCARM__
     #include <intrinsics.h>
     #if (__IAR_SYSTEMS_ICC__ < 8)
@@ -405,7 +406,7 @@
     #define STK_ASSERT(e) ((e) ? (void)0 : STK_ASSERT_HANDLER(#e, __FILE__, __LINE__))
 #else
     #if defined(DEBUG) || defined(_DEBUG)
-        #include <assert.h>
+        #include <cassert>
         #define STK_ASSERT(e) assert(e)
     #else
         #define STK_ASSERT(e)
@@ -608,18 +609,6 @@ struct STK_ALLOCATE_COUNT
     \brief     Explicitly marks a variable as unused to suppress compiler warnings.
 */
 #define STK_UNUSED(X) static_cast<void>((X))
-
-/*! \brief     A wrapper for a built-in memcpy, redefine to your own if required.
-    \note      Can be overridden by defining _STK_CUSTOM_MEMCPY in system configuration.
-*/
-#ifndef _STK_CUSTOM_MEMCPY
-#include <cstring>
-static __stk_forceinline void STK_MEMCPY(void *const dest, const void *const src, const size_t size)
-{
-    /* MISRA-compliant explicitly-typed call to underlying implementation */
-    static_cast<void>(memcpy(dest, src, size));
-}
-#endif
 
 /*! \namespace stk
     \brief     Namespace of STK package.

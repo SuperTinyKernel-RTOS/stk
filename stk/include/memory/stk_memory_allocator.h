@@ -161,7 +161,7 @@ struct MemoryAllocator
       
         if (count != 0U)
         {
-            STK_ASSERT(Allocate != nullptr);
+          STK_ASSERT(hw::PtrToWord(&Allocate) != 0U);
 
             ptr = reinterpret_cast<TElement *>(Allocate(count * sizeof(TElement)));
             if (ptr != nullptr)
@@ -206,7 +206,7 @@ struct MemoryAllocator
     template <typename TElement>
     static inline void FreeArrayT(TElement *ptr, size_t count)
     {
-        STK_ASSERT(Free != nullptr);
+        STK_ASSERT(hw::PtrToWord(&Free) != 0U);
 
         if (ptr != nullptr)
         {
