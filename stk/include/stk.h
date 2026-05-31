@@ -1151,7 +1151,7 @@ public:
    size_t EnumerateKernelTasks(ArrayView<IKernelTask *> tasks) override
    {
        size_t count = 0U;
-       const size_t limit = Min(tasks.GetSize(), static_cast<size_t>(TASKS_MAX));
+       const size_t limit = Min(tasks.GetSize(), TASKS_MAX);
 
        // avoid race with OnTick
        const hw::CriticalSection::ScopedLock cs_;
@@ -1175,7 +1175,7 @@ public:
     size_t EnumerateTasks(ArrayView<ITask *> user_tasks) override
     {
         size_t count = 0U;
-        const size_t limit = Min(user_tasks.GetSize(), static_cast<size_t>(TASKS_MAX));
+        const size_t limit = Min(user_tasks.GetSize(), TASKS_MAX);
 
         // avoid race with OnTick
         const hw::CriticalSection::ScopedLock cs_;
@@ -1578,8 +1578,7 @@ protected:
             if (m_fsm_state == FSM_STATE_SWITCHING)
             {
                 m_task_now = next;
-
-                active = next->GetUserStackPtr();
+                active     = next->GetUserStackPtr();
 
                 if __stk_constexpr_cpp17 (IsHrtMode())
                 {
@@ -1589,11 +1588,8 @@ protected:
             else
             if (m_fsm_state == FSM_STATE_SLEEPING)
             {
-                // MISRA 5-2-3 deviation: GetNext/GetFirst returns IKernelTask*, all objects in
-                // the strategy pool are KernelTask instances - downcast is guaranteed safe.
                 m_task_now = static_cast<KernelTask *>(m_strategy.GetFirst());
-
-                active = &m_sleep_trap[0].stack;
+                active     = &m_sleep_trap[0].stack;
             }
             else
             {
@@ -1661,7 +1657,7 @@ protected:
         ticks = (
     #else
         // notify compiler that we ignore a return value of UpdateTasks
-        static_cast<void>(
+        STK_UNUSED(
     #endif
         UpdateTasks(ticks));
 
@@ -1714,7 +1710,7 @@ protected:
 
             if (delta > 0)
             {
-                task->ScheduleSleep(static_cast<Timeout>(Min(delta, static_cast<Ticks>(INT32_MAX))));
+                task->ScheduleSleep(static_cast<Timeout>(Min(delta, static_cast<Ticks>(WAIT_INFINITE))));
             }
             else
             {

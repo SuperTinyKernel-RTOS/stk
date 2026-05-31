@@ -41,9 +41,19 @@
 			<locationURI>virtual:/virtual</locationURI>
 		</link>
 		<link>
+			<name>src/RTE_Components.h</name>
+			<type>1</type>
+			<locationURI>PARENT-4-PROJECT_LOC/blinky_c-cmsis-rtos2-prio/RTE_Components.h</locationURI>
+		</link>
+		<link>
 			<name>src/driver</name>
 			<type>2</type>
 			<locationURI>virtual:/virtual</locationURI>
+		</link>
+		<link>
+			<name>src/main.c</name>
+			<type>1</type>
+			<locationURI>PARENT-4-PROJECT_LOC/blinky_c-cmsis-rtos2-prio/main.c</locationURI>
 		</link>
 		<link>
 			<name>deps/cmsis/rtos2</name>
