@@ -520,8 +520,7 @@ inline bool TimerHost::Start(Timer &tmr, uint32_t delay, uint32_t period)
     STK_ASSERT(delay <= static_cast<uint32_t>(WAIT_INFINITE));
     STK_ASSERT((period == 0U) || (period <= static_cast<uint32_t>(WAIT_INFINITE)));
     
-    // duplicate attempt to start already started timer is not an error (ignore)
-    bool success = true;
+    bool success;
 
     // timer must not already be active
     if (!tmr.m_active)
@@ -534,6 +533,11 @@ inline bool TimerHost::Start(Timer &tmr, uint32_t delay, uint32_t period)
             .period    = period
         });
     }
+    else
+    {
+        // duplicate attempt to start already started timer is not an error (ignore)
+        success = true;
+    }
 
     return success;
 }
@@ -544,8 +548,7 @@ inline bool TimerHost::Start(Timer &tmr, uint32_t delay, uint32_t period)
 
 inline bool TimerHost::Stop(Timer &tmr)
 {
-    // duplicate attempt to stop already stopped timer is not an error (ignore)
-    bool success = true;
+    bool success;
   
     // timer must be active
     if (tmr.m_active)
@@ -558,6 +561,11 @@ inline bool TimerHost::Stop(Timer &tmr)
             .period    = 0U
         });
     }
+    else
+    {
+        // duplicate attempt to stop already stopped timer is not an error (ignore)
+        success = true;
+    }
 
     return success;
 }
@@ -568,7 +576,7 @@ inline bool TimerHost::Stop(Timer &tmr)
 
 inline bool TimerHost::Reset(Timer &tmr)
 {
-    bool success = false;
+    bool success;
   
     // timer must be active and periodic
     if (tmr.m_active && (tmr.m_period != 0U))
@@ -580,6 +588,10 @@ inline bool TimerHost::Reset(Timer &tmr)
             .delay     = 0U,
             .period    = 0U
         });
+    }
+    else
+    {
+        success = false;
     }
 
     return success;
@@ -627,7 +639,7 @@ inline bool TimerHost::StartOrReset(Timer &tmr, uint32_t delay, uint32_t period)
 
 inline bool TimerHost::SetPeriod(Timer &tmr, uint32_t period)
 {
-    bool success = false;
+    bool success;
   
     // period == 0 is rejected: it would silently convert a periodic timer
     // to one-shot semantics, which is better expressed via Stop() + Start()
@@ -641,6 +653,10 @@ inline bool TimerHost::SetPeriod(Timer &tmr, uint32_t period)
             .delay     = 0U,
             .period    = period
         });
+    }
+    else
+    {
+        success = false;
     }
 
     return success;
@@ -800,8 +816,13 @@ inline bool TimerHost::ProcessCommands(Timeout next_sleep)
         next_sleep = WAIT_INFINITE;
     }
 
-    while (working && m_commands.Read(cmd, next_sleep))
+    while (working)
     {
+        if (!m_commands.Read(cmd, next_sleep))
+        {
+            break;
+        }
+      
         switch (cmd.cmd)
         {
         case TimerCommand::CMD_START: 
@@ -1013,7 +1034,7 @@ inline bool TimerHost::PushCommand(TimerCommand cmd)
             success = false;
         }
     }
-
+    
     return success;
 }
 

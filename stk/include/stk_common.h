@@ -28,7 +28,7 @@ class ITask;
     \brief   Hardware access mode by the user task.
     \warning Type is explicitly 32-bit to be compatible with platform implementations.
 */
-enum EAccessMode : int32_t
+enum EAccessMode : uint32_t
 {
     ACCESS_USER = 0,  //!< Unprivileged access mode (access to some hardware is restricted, see CPU manual for details).
     ACCESS_PRIVILEGED //!< Privileged access mode (access to hardware is fully unrestricted).
@@ -169,34 +169,34 @@ typedef int32_t Weight;
            against this constant directly.
     \see   IsIsrTid()
 */
-static constexpr TId TID_ISR_N = static_cast<TId>(0xFFFFF000U);
+constexpr TId TID_ISR_N = static_cast<TId>(0xFFFFF000U);
 
 /*! \var     TID_NONE
     \brief   Reserved task/thread id representing zero/none thread id.
 */
-static constexpr TId TID_NONE = static_cast<TId>(0U);
+constexpr TId TID_NONE = static_cast<TId>(0U);
 
 /*! \var     WAIT_INFINITE
     \brief   Timeout value: block indefinitely until the synchronization object is signaled.
     \note    Pass as the \a timeout argument to IKernelService::Wait().
 */
-static constexpr Timeout WAIT_INFINITE = INT32_MAX;
+constexpr Timeout WAIT_INFINITE = INT32_MAX;
 
 /*! \var     NO_WAIT
     \brief   Timeout value: return immediately if the synchronization object is not yet signaled (non-blocking poll).
     \note    Pass as the \a timeout argument to IKernelService::Wait().
 */
-static constexpr Timeout NO_WAIT = 0;
+constexpr Timeout NO_WAIT = 0;
 
 /*! \var     NO_WEIGHT
     \brief   Weight value: weight is not set.
 */
-static constexpr Weight NO_WEIGHT = static_cast<Weight>(-1);
+constexpr Weight NO_WEIGHT = -1;
 
 /*! \var     DEFAULT_WEIGHT
     \brief   Weight value: default weight of value (1) (see \c SwitchStrategySmoothWeightedRoundRobin).
 */
-static constexpr Weight DEFAULT_WEIGHT = static_cast<Weight>(1);
+constexpr Weight DEFAULT_WEIGHT = 1;
 
 /*! \brief     Test whether a task identifier represents an ISR context.
 
@@ -209,7 +209,7 @@ static constexpr Weight DEFAULT_WEIGHT = static_cast<Weight>(1);
     \note      ISR-safe (bitmask arithmetic only, no kernel calls).
     \see       TID_ISR_N
 */
-static inline bool IsIsrTid(TId id) { return ((id & TID_ISR_N) == TID_ISR_N); }
+static __stk_forceinline bool IsIsrTid(TId id) { return ((id & TID_ISR_N) == TID_ISR_N); }
 
 /*! \class ArrayView
     \brief Lightweight, non-owning view over a contiguous sequence of elements.
@@ -231,7 +231,7 @@ public:
     */
     ArrayView(T *ptr, size_t size) : m_ptr(ptr), m_size(size)
     {}
-
+    
     /*! \brief   Subscript operator for element access.
         \param   index Element index to access.
         \return  Reference to the element at the specified index.
@@ -240,6 +240,7 @@ public:
     T &operator[](size_t index) const
     {
         STK_ASSERT(index < m_size);
+        //MISRA 5-0-15 deviation: bounds are checked via STK_ASSERT
         return m_ptr[index];
     }
     
@@ -263,14 +264,14 @@ private:
     StackMemoryDef<128>::Type my_memory_array;
     \endcode
 */
-template <size_t _StackSize> struct StackMemoryDef
+template <size_t TStackSize> struct StackMemoryDef
 {
-    enum { SIZE = _StackSize };
+    enum { SIZE = TStackSize };
 
     /*! \typedef Type
         \brief   Stack memory type.
     */
-    typedef __stk_aligned(STK_STACK_MEMORY_ALIGN) Word Type[_StackSize];
+    typedef __stk_aligned(STK_STACK_MEMORY_ALIGN) Word Type[TStackSize];
 };
 
 /*! \class Stack
@@ -317,12 +318,21 @@ public:
     */
     virtual size_t GetStackSpace() const
     {
-        ArrayView<const Word> stack(GetStack(), GetStackSize());
-      
-        // count leading Words equal to STK_STACK_MEMORY_FILLER (watermark)
+        const ArrayView<const Word> stack(GetStack(), GetStackSize());
+        const size_t total_size = stack.GetSize();
         size_t space = 0U;
-        for ( ; (space < stack.GetSize()) && (stack[space] == STK_STACK_MEMORY_FILLER); ++space)
-        {}
+
+        for (size_t i = 0U; i < total_size; ++i)
+        {
+            if (stack[i] == STK_STACK_MEMORY_FILLER)
+            {
+                space = i + 1U;
+            }
+            else
+            {
+                break; // terminate loop as soon as watermark ends
+            }
+        }
 
         return space;
     }
@@ -878,9 +888,8 @@ public:
         \param[in] stack: Stack descriptor.
         \param[in] stack_memory: Stack memory.
         \param[in] user_task: User task to which Stack belongs.
-        \return    \c true on success, \c false if the stack memory is too small, misaligned, or the stack type is unsupported.
     */
-    virtual bool InitStack(EStackType stack_type, Stack *stack, IStackMemory *stack_memory, ITask *user_task) = 0;
+    virtual void InitStack(EStackType stack_type, Stack *stack, IStackMemory *stack_memory, ITask *user_task) = 0;
 
     /*! \brief     Get resolution of the system tick timer in microseconds.
                    Resolution means a number of microseconds between system tick timer ISRs.

@@ -31,21 +31,34 @@
 // Number of task slots in the global kernel instance.
 // Increase if more concurrent threads are needed.
 #ifndef CMSIS_STK_MAX_THREADS
-#define CMSIS_STK_MAX_THREADS 16U
+#define CMSIS_STK_MAX_THREADS (16U)
 #endif
 
 // Default stack size (in Words) when the caller passes stack_size == 0.
 #ifndef CMSIS_STK_DEFAULT_STACK_WORDS
-#define CMSIS_STK_DEFAULT_STACK_WORDS 256U
+#define CMSIS_STK_DEFAULT_STACK_WORDS (256U)
 #endif
 
 // Minimum stack size (in Words) – mirrors STK's own STACK_SIZE_MIN.
-#define CMSIS_STK_MIN_STACK_WORDS STK_STACK_SIZE_MIN
+#define CMSIS_STK_MIN_STACK_WORDS (STK_STACK_SIZE_MIN)
 
 // Returns a size of memory in stk::Word elements required for object allocation.
 template <typename T> static constexpr size_t StkGetWordCountForType()
 {
-    return ((sizeof(T) + sizeof(stk::Word) - 1) / sizeof(stk::Word));
+    return ((sizeof(T) + sizeof(stk::Word) - 1U) / sizeof(stk::Word));
+}
+
+// Custom strlen replacement.
+static size_t CmsisStrlen(const char str[]) // MISRA: declared as array, not pointer to allow indexed access
+{
+    size_t total_len = 0U;
+    
+    while (str[total_len] != '\0')
+    {
+        total_len++;
+    }
+    
+    return total_len;
 }
 
 // Private memory allocators (we define malloc, free here to overcome absence of declaration in
@@ -63,22 +76,36 @@ void stk::memory::MemoryAllocator::Free(void *ptr) { free(ptr); }
 // -----------------------------------------------------------------------------
 static __stk_forceinline int32_t CmsisPrioToStk(osPriority_t p)
 {
-    if (p <= osPriorityIdle)
-        return 0;
-    if (p >= osPriorityISR)
-        return 31;
+    int32_t result;
 
-    return (static_cast<int32_t>(p) * 31) / 56;
+    if (p <= osPriorityIdle)
+    {
+        result = 0;
+    }
+    else if (p >= osPriorityISR)
+    {
+        result = 31;
+    }
+    else
+    {
+        result = ((static_cast<int32_t>(p) * 31) / 56);
+    }
+
+    return result;
 }
 static __stk_forceinline osPriority_t StkPrioToCmsis(int32_t p)
 {
     // Inverse: cmsis_prio = (stk_prio * 56) / 31
     int32_t r = (p * 56) / 31;
     if (r < static_cast<int32_t>(osPriorityIdle))
+    {
         r = static_cast<int32_t>(osPriorityIdle);
+    }
 
     if (r > static_cast<int32_t>(osPriorityISR))
+    {
         r = static_cast<int32_t>(osPriorityISR);
+    }
 
     return static_cast<osPriority_t>(r);
 }
@@ -92,14 +119,23 @@ static __stk_forceinline osPriority_t StkPrioToCmsis(int32_t p)
 // -----------------------------------------------------------------------------
 static __stk_forceinline stk::Timeout CmsisTimeoutToStk(uint32_t ticks)
 {
-    if (ticks > stk::WAIT_INFINITE)
-        return stk::WAIT_INFINITE;
+    stk::Timeout result;
 
-    if (ticks == 0U)
-        return stk::NO_WAIT;
+    if (ticks > static_cast<uint32_t>(stk::WAIT_INFINITE))
+    {
+        result = stk::WAIT_INFINITE;
+    }
+    else if (ticks == 0U)
+    {
+        result = stk::NO_WAIT;
+    }
+    else
+    {
+        // CMSIS ticks are kernel ticks – pass through directly as STK ticks
+        result = static_cast<stk::Timeout>(ticks);
+    }
 
-    // CMSIS ticks are kernel ticks – pass through directly as STK ticks
-    return static_cast<stk::Timeout>(ticks);
+    return result;
 }
 
 // -----------------------------------------------------------------------------
@@ -120,7 +156,7 @@ using StkKernel = stk::Kernel<stk::KERNEL_DYNAMIC | stk::KERNEL_SYNC
     , CMSIS_STK_MAX_THREADS, stk::SwitchStrategyFP32, stk::PlatformDefault>;
 
 static StkKernel g_StkKernel;
-static uint32_t  g_StkKernelLocked = 0;
+static uint32_t  g_StkKernelLocked = 0U;
 
 // -----------------------------------------------------------------------------
 // Thread control block
@@ -136,8 +172,11 @@ static uint32_t  g_StkKernelLocked = 0;
 //   Priority is stored as STK weight (0..31) and returned via GetWeight().
 // -----------------------------------------------------------------------------
 
-struct StkThread final : public stk::ITask
+class StkThread final : public stk::ITask
 {
+    STK_NONCOPYABLE_CLASS(StkThread);
+    
+public:
     // --- Join support ---
     enum class JoinState : uint8_t
     {
@@ -150,7 +189,7 @@ struct StkThread final : public stk::ITask
     explicit StkThread()
         : m_func(nullptr), m_argument(nullptr), m_name(nullptr),
           m_stk_priority(CmsisPrioToStk(osPriorityNormal)),
-          m_stack(nullptr), m_stack_size(0), m_join_state(JoinState::Detached),
+          m_stack(nullptr), m_stack_size(0U), m_join_state(JoinState::Detached),
           m_stack_owned(false), m_suspended(false), m_cb_owned(true)
     {}
 
@@ -188,6 +227,13 @@ struct StkThread final : public stk::ITask
     void OnDeadlineMissed(uint32_t)  override       {}
     int32_t GetWeight()              const override { return m_stk_priority; }
     const char *GetTraceName()       const override { return m_name; }
+    
+    static inline osThreadId_t ConvertTIdToThreadId(const stk::TId tid)
+    {
+        // tid is hw::PtrToWord(this) where 'this' is the StkThread* - cast it back.
+        return reinterpret_cast<osThreadId_t>(static_cast<void *>(
+            reinterpret_cast<StkThread *>(static_cast<uintptr_t>(tid))));
+    }
 
     // ---- Members ----
     osThreadFunc_t               m_func;
@@ -267,28 +313,28 @@ struct StkEventFlags
 static stk::time::TimerHost *g_TimerHost = nullptr;
 static stk::Word             g_TimerHostBuf[StkGetWordCountForType<stk::time::TimerHost>()];
 
-struct StkTimer final : public stk::time::TimerHost::Timer
+class StkTimer final : public stk::time::TimerHost::Timer
 {
-    explicit StkTimer(osTimerFunc_t f, osTimerType_t t, void *arg, const char *n)
-        : m_func(f), m_argument(arg), m_type(t), m_name(n), m_period_ticks(0U), m_cb_owned(true)
+    STK_NONCOPYABLE_CLASS(StkTimer);
+  
+public:
+    explicit StkTimer(osTimerFunc_t const func, osTimerType_t tt, void *arg, const char *name)
+        : m_func(func), m_argument(arg), m_type(tt), m_name(name), m_period_ticks(0U), m_cb_owned(true)
     {}
-    virtual ~StkTimer()
-    {}
+    virtual ~StkTimer() = default;
 
     void OnExpired(stk::time::TimerHost * /*host*/) override
     {
         m_func(m_argument);
     }
 
-    static bool EnsureTimerHostCreated()
+    static void EnsureTimerHostCreated()
     {
         if (g_TimerHost == nullptr)
         {
             g_TimerHost = new (g_TimerHostBuf) stk::time::TimerHost();
             g_TimerHost->Initialize(&g_StkKernel, stk::ACCESS_PRIVILEGED);
         }
-
-        return true;
     }
 
     // ---- Members ----
@@ -308,6 +354,8 @@ struct StkTimer final : public stk::time::TimerHost::Timer
 
 class StkMemPool
 {
+    STK_NONCOPYABLE_CLASS(StkMemPool);
+  
 public:
     // Construct with caller-supplied pool storage (storage_owned = false).
     explicit StkMemPool(uint32_t cap, uint32_t raw_block_size,
@@ -354,8 +402,11 @@ public:
 //        Allocated buffer is freed in the destructor.
 // -----------------------------------------------------------------------------
 
-struct StkMessageQueue
+class StkMessageQueue
 {
+    STK_NONCOPYABLE_CLASS(StkMessageQueue);
+  
+public:
     // Construct with a caller-supplied data buffer.
     explicit StkMessageQueue(uint32_t cap, uint32_t msz, const char *name,uint8_t *ext_buf)
         : m_mq(ext_buf, static_cast<size_t>(cap), static_cast<size_t>(msz)),
@@ -375,14 +426,18 @@ struct StkMessageQueue
     ~StkMessageQueue()
     {
         if (m_bf_owned)
+        {
             delete[] m_mq.GetBuffer();
+        }
     }
 
     static uint8_t *AllocBuffer(uint32_t cap, uint32_t msz)
     {
-        return new (std::nothrow) uint8_t[static_cast<size_t>(cap) * msz];
+        uint8_t *const ret = new (std::nothrow) uint8_t[static_cast<size_t>(cap) * msz];
+        STK_ASSERT(ret != nullptr); // fail in Debug: increase Heap size in linker settings
+        return ret;
     }
-
+    
     // ---- Members ----
     stk::sync::MessageQueue m_mq;       // STK native message queue (owns blocking semantics)
     bool                    m_bf_owned; // true  -> when we heap-allocated the data buffer, false otherwise
@@ -399,20 +454,20 @@ struct StkMessageQueue
 // Sets obj->m_cb_owned = false for caller-supplied, true for heap.
 // Returns nullptr if heap fallback is needed but allocation fails.
 template <typename T, typename... Args>
-static T *PlacementNewOrHeap(void *cb_mem, size_t cb_size, Args &&...args)
+static T *PlacementNewOrHeap(void *mem, size_t size, const Args &... args)
 {
-    T *obj = nullptr;
+    T *obj;
 
-    if ((cb_mem != nullptr) && (cb_size >= sizeof(T)))
+    if ((mem != nullptr) && (size >= sizeof(T)))
     {
-        obj = new (cb_mem) T(static_cast<Args &&>(args)...);
+        obj = new (mem) T(args...); 
         obj->m_cb_owned = false;
-        return obj;
     }
     else
     {
-        obj = new (std::nothrow) T(static_cast<Args &&>(args)...);
+        obj = new (std::nothrow) T(args...);
         // m_cb_owned is already true from the constructor default
+        STK_ASSERT(obj != nullptr); 
     }
 
     return obj;
@@ -424,11 +479,14 @@ static T *PlacementNewOrHeap(void *cb_mem, size_t cb_size, Args &&...args)
 template <typename T>
 static void ObjDestroy(T *obj)
 {
-    if (!obj) return;
     if (obj->m_cb_owned)
+    {
         delete obj;
+    }
     else
+    {
         obj->~T();
+    }
 }
 
 // Helper: map CMSIS flags options -> STK EventFlags options bitmask.
@@ -436,11 +494,15 @@ static __stk_forceinline uint32_t CmsisFlagsOptionsToStk(uint32_t options)
 {
     uint32_t stk_opts = stk::sync::EventFlags::OPT_WAIT_ANY; // default
 
-    if (options & osFlagsWaitAll)
+    if ((options & osFlagsWaitAll) != 0U)
+    {
         stk_opts |= stk::sync::EventFlags::OPT_WAIT_ALL;
+    }
 
-    if (options & osFlagsNoClear)
+    if ((options & osFlagsNoClear) != 0U)
+    {
         stk_opts |= stk::sync::EventFlags::OPT_NO_CLEAR;
+    }
 
     return stk_opts;
 }
@@ -448,19 +510,30 @@ static __stk_forceinline uint32_t CmsisFlagsOptionsToStk(uint32_t options)
 // Helper: map STK EventFlags error sentinel -> CMSIS flags error code.
 static __stk_forceinline uint32_t StkFlagsResultToCmsis(uint32_t result)
 {
+    uint32_t cmsis_result;
+
     if (!stk::sync::EventFlags::IsError(result))
-        return result;
+    {
+        cmsis_result = result;
+    }
+    else if (result == stk::sync::EventFlags::ERROR_TIMEOUT)
+    {
+        cmsis_result = osFlagsErrorTimeout;
+    }
+    else if (result == stk::sync::EventFlags::ERROR_PARAMETER)
+    {
+        cmsis_result = osFlagsErrorParameter;
+    }
+    else if (result == stk::sync::EventFlags::ERROR_ISR)
+    {
+        cmsis_result = osFlagsErrorISR;
+    }
+    else
+    {
+        cmsis_result = osFlagsErrorUnknown;
+    }
 
-    if (result == stk::sync::EventFlags::ERROR_TIMEOUT)
-        return osFlagsErrorTimeout;
-
-    if (result == stk::sync::EventFlags::ERROR_PARAMETER)
-        return osFlagsErrorParameter;
-
-    if (result == stk::sync::EventFlags::ERROR_ISR)
-        return osFlagsErrorISR;
-
-    return osFlagsErrorUnknown;
+    return cmsis_result;
 }
 
 
@@ -470,14 +543,23 @@ static __stk_forceinline uint32_t StkFlagsResultToCmsis(uint32_t result)
 
 osStatus_t osKernelInitialize(void)
 {
+    osStatus_t result;
+
     if (IsIrqContext())
-        return osErrorISR;
+    {
+        result = osErrorISR;
+    }
+    else if (osKernelGetState() != osKernelInactive)
+    {
+        result = osError;
+    }
+    else
+    {
+        g_StkKernel.Initialize(); // default 1 ms tick resolution
+        result = osOK;
+    }
 
-    if (osKernelGetState() != osKernelInactive)
-        return osError;
-
-    g_StkKernel.Initialize(); // default 1 ms tick resolution
-    return osOK;
+    return result;
 }
 
 osStatus_t osKernelGetInfo(osVersion_t *version, char *id_buf, uint32_t id_size)
@@ -490,13 +572,15 @@ osStatus_t osKernelGetInfo(osVersion_t *version, char *id_buf, uint32_t id_size)
 
     if ((id_buf != nullptr) && (id_size > 0U))
     {
-        const char *id = STK_WRAPPER_KERNEL_ID;
-        size_t copy_len = id_size - 1U;
-        size_t id_len   = __builtin_strlen(id);
+        const char *const id = STK_WRAPPER_KERNEL_ID;
+        size_t copy_len      = id_size - 1U;
+        const size_t id_len  = CmsisStrlen(id);
         if (copy_len > id_len)
+        {
             copy_len = id_len;
+        }
 
-        memcpy(id_buf, id, copy_len);
+        STK_MEMCPY(id_buf, id, copy_len);
         id_buf[copy_len] = '\0';
     }
 
@@ -505,95 +589,156 @@ osStatus_t osKernelGetInfo(osVersion_t *version, char *id_buf, uint32_t id_size)
 
 osKernelState_t osKernelGetState(void)
 {
-    if (g_StkKernelLocked != 0U)
-        return osKernelLocked;
+    osKernelState_t state;
 
-    switch (g_StkKernel.GetState())
+    if (g_StkKernelLocked != 0U)
     {
-    case stk::IKernel::KSTATE_INACTIVE:  return osKernelInactive;
-    case stk::IKernel::KSTATE_READY:     return osKernelReady;
-    case stk::IKernel::KSTATE_RUNNING:   return osKernelRunning;
-    case stk::IKernel::KSTATE_SUSPENDED: return osKernelSuspended;
-    default:                             return osKernelError;
+        state = osKernelLocked;
     }
+    else
+    {
+        switch (g_StkKernel.GetState())
+        {
+        case stk::IKernel::KSTATE_INACTIVE:
+            state = osKernelInactive;
+            break;
+        case stk::IKernel::KSTATE_READY:
+            state = osKernelReady;
+            break;
+        case stk::IKernel::KSTATE_RUNNING:
+            state = osKernelRunning;
+            break;
+        case stk::IKernel::KSTATE_SUSPENDED:
+            state = osKernelSuspended;
+            break;
+        default:
+            state = osKernelError;
+            break;
+        }
+    }
+
+    return state;
 }
 
 osStatus_t osKernelStart(void)
 {
+    osStatus_t result;
+
     if (IsIrqContext())
-        return osErrorISR;
+    {
+        result = osErrorISR;
+    }
+    else if (osKernelGetState() != osKernelReady)
+    {
+        result = osError;
+    }
+    else
+    {
+        // Start() does not return for KERNEL_STATIC;
+        // for KERNEL_DYNAMIC it returns when all tasks exit.
+        g_StkKernel.Start();
+        result = osOK;
+    }
 
-    if (osKernelGetState() != osKernelReady)
-        return osError;
-
-    // Start() does not return for KERNEL_STATIC;
-    // for KERNEL_DYNAMIC it returns when all tasks exit.
-    g_StkKernel.Start();
-    return osOK;
+    return result;
 }
 
 int32_t osKernelLock(void)
 {
-    if (IsIrqContext())
-        return static_cast<int32_t>(osErrorISR);
+    int32_t result;
 
-    stk::hw::CriticalSection::Enter();
-    ++g_StkKernelLocked;
-    return 0;
+    if (IsIrqContext())
+    {
+        result = static_cast<int32_t>(osErrorISR);
+    }
+    else
+    {
+        stk::hw::CriticalSection::Enter();
+        ++g_StkKernelLocked;
+        result = 0;
+    }
+
+    return result;
 }
 
 int32_t osKernelUnlock(void)
 {
-    if (IsIrqContext())
-        return static_cast<int32_t>(osErrorISR);
-    if (g_StkKernelLocked == 0U)
-        return osErrorResource;
+    int32_t result;
 
-    --g_StkKernelLocked;
-    stk::hw::CriticalSection::Exit();
-    return 0;
+    if (IsIrqContext())
+    {
+        result = static_cast<int32_t>(osErrorISR);
+    }
+    else if (g_StkKernelLocked == 0U)
+    {
+        result = static_cast<int32_t>(osErrorResource);
+    }
+    else
+    {
+        --g_StkKernelLocked;
+        stk::hw::CriticalSection::Exit();
+        result = 0;
+    }
+
+    return result;
 }
 
 int32_t osKernelRestoreLock(int32_t lock)
 {
-    if (IsIrqContext())
-        return static_cast<int32_t>(osErrorISR);
+    int32_t result;
 
-    if (lock == 1)
+    if (IsIrqContext())
+    {
+        result = static_cast<int32_t>(osErrorISR);
+    }
+    else if (lock == 1)
     {
         stk::hw::CriticalSection::Enter();
         ++g_StkKernelLocked;
+        result = lock;
+    }
+    else if (g_StkKernelLocked == 0U)
+    {
+        result = static_cast<int32_t>(osErrorResource);
     }
     else
     {
-        if (g_StkKernelLocked == 0U)
-            return osErrorResource;
-
         --g_StkKernelLocked;
         stk::hw::CriticalSection::Exit();
+        result = lock;
     }
 
-    return lock;
+    return result;
 }
 
 uint32_t osKernelSuspend(void)
 {
+    uint32_t result;
+
 #if STK_TICKLESS_IDLE
     if (osKernelGetState() == osKernelInactive)
-        return 0U;
-
-    return stk::IKernelService::GetInstance()->Suspend();
+    {
+        result = 0U;
+    }
+    else
+    {
+        result = static_cast<uint32_t>(stk::IKernelService::GetInstance()->Suspend());
+    }
 #else
     // Not supported in non-tickless kernel.
-    return 0U;
+    result = 0U;
 #endif
+
+    return result;
 }
 
 void osKernelResume(uint32_t sleep_ticks)
 {
 #if STK_TICKLESS_IDLE
     if (osKernelGetState() != osKernelInactive)
-        return stk::IKernelService::GetInstance()->Resume(sleep_ticks);
+    {
+        stk::IKernelService::GetInstance()->Resume(sleep_ticks);
+    }
 #else
     // Not supported in non-tickless kernel.
     STK_UNUSED(sleep_ticks);
@@ -602,22 +747,42 @@ void osKernelResume(uint32_t sleep_ticks)
 
 uint32_t osKernelGetTickCount(void)
 {
-    if (osKernelGetState() == osKernelInactive)
-        return 0U;
+    uint32_t result;
 
-    return static_cast<uint32_t>(stk::GetTicks());
+    if (osKernelGetState() == osKernelInactive)
+    {
+        result = 0U;
+    }
+    else
+    {
+        result = static_cast<uint32_t>(stk::GetTicks());
+    }
+
+    return result;
 }
 
 uint32_t osKernelGetTickFreq(void)
 {
+    uint32_t result;
+
     if (osKernelGetState() == osKernelInactive)
-        return 1000U; // default 1 kHz
+    {
+        result = 1000U; // default 1 kHz
+    }
+    else
+    {
+        const int32_t res_us = stk::GetTickResolution(); // us per tick
+        if (res_us <= 0)
+        {
+            result = 1000U;
+        }
+        else
+        {
+            result = (1000000U / static_cast<uint32_t>(res_us));
+        }
+    }
 
-    int32_t res_us = stk::GetTickResolution(); // us per tick
-    if (res_us <= 0)
-        return 1000U;
-
-    return (1000000U / static_cast<uint32_t>(res_us));
+    return result;
 }
 
 uint32_t osKernelGetSysTimerCount(void)
@@ -642,319 +807,480 @@ uint32_t osKernelGetSysTimerFreq(void)
 
 osThreadId_t osThreadNew(osThreadFunc_t func, void *argument, const osThreadAttr_t *attr)
 {
-    if (IsIrqContext() || (func == nullptr) || (osKernelGetState() == osKernelInactive))
-        return nullptr;
+    osThreadId_t result = nullptr;
 
-    bool     joinable = (attr != nullptr) && (attr->attr_bits & osThreadJoinable);
-    void    *cb_mem   = (attr != nullptr ? attr->cb_mem  : nullptr);
-    uint32_t cb_size  = (attr != nullptr ? attr->cb_size : 0U);
+    const bool          is_irq         = IsIrqContext();
+    const osKernelState_t kernel_state = osKernelGetState();
 
-    StkThread *t = PlacementNewOrHeap<StkThread>(cb_mem, cb_size);
-    if (t == nullptr)
-        return nullptr;
+    // validate environment and arguments
+    bool is_valid = (!is_irq && (func != nullptr) && (kernel_state != osKernelInactive));
 
-    t->m_func       = func;
-    t->m_argument   = argument;
-    t->m_name       = nullptr;
-    t->m_join_state = (joinable ? StkThread::JoinState::Joinable : StkThread::JoinState::Detached);
-
+    // validate priority value
     osPriority_t cmsis_prio = osPriorityNormal;
-    size_t stack_words      = CMSIS_STK_DEFAULT_STACK_WORDS;
-
-    if (attr != nullptr)
+    if (is_valid && (attr != nullptr))
     {
-        t->m_name = attr->name;
-
         if (attr->priority != osPriorityNone)
+        {
             cmsis_prio = attr->priority;
+        }
 
         if ((cmsis_prio < osPriorityIdle) || (cmsis_prio > osPriorityISR))
         {
-            ObjDestroy(t);
-            return nullptr;
-        }
-
-        // Stack: prefer caller-provided memory.
-        if ((attr->stack_mem != nullptr) && (attr->stack_size > 0U))
-        {
-            size_t words = attr->stack_size / sizeof(stk::Word);
-            if (words < CMSIS_STK_MIN_STACK_WORDS)
-                words = CMSIS_STK_MIN_STACK_WORDS;
-
-            t->m_stack       = static_cast<stk::Word *>(attr->stack_mem);
-            t->m_stack_size  = words;
-            t->m_stack_owned = false;
-        }
-        else
-        if (attr->stack_size > 0U)
-        {
-            stack_words = attr->stack_size / sizeof(stk::Word);
-            if (stack_words < CMSIS_STK_MIN_STACK_WORDS)
-                stack_words = CMSIS_STK_MIN_STACK_WORDS;
+            is_valid = false; // invalidate object creation
         }
     }
 
-    // Allocate stack if not caller-provided.
-    if (t->m_stack == nullptr)
+    if (is_valid)
     {
-        t->m_stack = new (std::nothrow) stk::Word[stack_words];
-        if (t->m_stack == nullptr)
+        const bool    is_joinable = (attr != nullptr) && ((attr->attr_bits & osThreadJoinable) != 0U);
+        void *const   cb_mem      = ((attr != nullptr) ? attr->cb_mem  : nullptr);
+        const uint32_t cb_size    = ((attr != nullptr) ? attr->cb_size : 0U);
+
+        StkThread *th = PlacementNewOrHeap<StkThread>(cb_mem, cb_size);
+        if (th != nullptr)
         {
-            ObjDestroy(t);
-            return nullptr;
+            th->m_func       = func;
+            th->m_argument   = argument;
+            th->m_name       = (attr != nullptr) ? attr->name : nullptr;
+            th->m_join_state = (is_joinable ? StkThread::JoinState::Joinable : StkThread::JoinState::Detached);
+
+            size_t stack_words = CMSIS_STK_DEFAULT_STACK_WORDS;
+
+            // stack configuration
+            if (attr != nullptr)
+            {
+                stack_words = stk::Max<size_t>(attr->stack_size / sizeof(stk::Word), CMSIS_STK_MIN_STACK_WORDS);
+              
+                if ((attr->stack_mem != nullptr) && (attr->stack_size != 0U))
+                {
+                    th->m_stack       = static_cast<stk::Word *>(attr->stack_mem);
+                    th->m_stack_size  = stack_words;
+                    th->m_stack_owned = false;
+                }
+            }
+
+            // allocate stack memory if not caller-provided
+            if (th->m_stack == nullptr)
+            {
+                th->m_stack = new (std::nothrow) stk::Word[stack_words];
+                STK_ASSERT(th->m_stack != nullptr);
+                
+                if (th->m_stack == nullptr)
+                {
+                    ObjDestroy(th);
+                    th = nullptr;
+                }
+                else
+                {
+                    th->m_stack_size  = stack_words;
+                    th->m_stack_owned = true;
+                }
+            }
+
+            // finalize and register the thread
+            if (th != nullptr)
+            {
+                th->m_stk_priority = CmsisPrioToStk(cmsis_prio);
+                g_StkKernel.AddTask(th);
+                result = static_cast<osThreadId_t>(th);
+            }
         }
-        t->m_stack_size  = stack_words;
-        t->m_stack_owned = true;
     }
 
-    t->m_stk_priority = CmsisPrioToStk(cmsis_prio);
-
-    g_StkKernel.AddTask(t);
-
-    return static_cast<osThreadId_t>(t);
+    return result; // The solitary exit point
 }
 
 const char *osThreadGetName(osThreadId_t thread_id)
 {
-    if (thread_id == nullptr)
-        return nullptr;
+    const char *result;
 
-    return static_cast<StkThread *>(thread_id)->m_name;
+    if (thread_id == nullptr)
+    {
+        result = nullptr;
+    }
+    else
+    {
+        result = static_cast<StkThread *>(thread_id)->m_name;
+    }
+
+    return result;
 }
 
 osThreadId_t osThreadGetId(void)
 {
-    if ((osKernelGetState() == osKernelInactive) || IsIrqContext())
-        return nullptr;
+    osThreadId_t threadId = nullptr;
 
-    // STK's GetTid() returns the ITask pointer cast to Word.
-    stk::TId tid = stk::GetTid();
+    const osKernelState_t kernel_state = osKernelGetState();
+    const bool            is_irq       = IsIrqContext();
 
-    // tid is hw::PtrToWord(this) where 'this' is the StkThread* - cast it back.
-    return reinterpret_cast<osThreadId_t>(static_cast<void *>(
-        reinterpret_cast<StkThread *>(static_cast<uintptr_t>(tid))));
+    if ((kernel_state != osKernelInactive) && !is_irq)
+    {
+        // STK's GetTid() returns the ITask pointer cast to Word.
+        threadId = StkThread::ConvertTIdToThreadId(stk::GetTid());
+    }
+
+    return threadId;
 }
 
 osThreadState_t osThreadGetState(osThreadId_t thread_id)
 {
-    if (IsIrqContext() || (thread_id == nullptr))
-        return osThreadError;
+    osThreadState_t threadState = osThreadError;
 
-    StkThread *t = static_cast<StkThread *>(thread_id);
+    if (!IsIrqContext() && (thread_id != nullptr))
+    {
+        const StkThread *const th = static_cast<StkThread *>(thread_id);
 
-    if (t->m_suspended)
-        return osThreadBlocked;
+        if (th->m_suspended)
+        {
+            threadState = osThreadBlocked;
+        }
+        else if (thread_id == osThreadGetId())
+        {
+            threadState = osThreadRunning;
+        }
+        else
+        {
+            threadState = osThreadReady;
+        }
+    }
 
-    if (thread_id == osThreadGetId())
-        return osThreadRunning;
-
-    return osThreadReady;
+    return threadState;
 }
 
 uint32_t osThreadGetStackSize(osThreadId_t thread_id)
 {
-    if (thread_id == nullptr)
-        return 0U;
+    uint32_t result;
 
-    StkThread *t = static_cast<StkThread *>(thread_id);
-    return static_cast<uint32_t>(t->GetStackSizeBytes());
+    if (thread_id == nullptr)
+    {
+        result = 0U;
+    }
+    else
+    {
+        StkThread *const th = static_cast<StkThread *>(thread_id);
+        result = static_cast<uint32_t>(th->GetStackSizeBytes());
+    }
+
+    return result;
 }
 
 uint32_t osThreadGetStackSpace(osThreadId_t thread_id)
 {
-    if (thread_id == nullptr)
-        return 0U;
+    uint32_t result;
 
-    StkThread *t = static_cast<StkThread *>(thread_id);
-    return static_cast<uint32_t>(t->GetStackSpace() * sizeof(stk::Word));
+    if (thread_id == nullptr)
+    {
+        result = 0U;
+    }
+    else
+    {
+        StkThread *const th = static_cast<StkThread *>(thread_id);
+        result = static_cast<uint32_t>(th->GetStackSpace() * sizeof(stk::Word));
+    }
+
+    return result;
 }
 
 osStatus_t osThreadSetPriority(osThreadId_t thread_id, osPriority_t priority)
 {
-    if (IsIrqContext() || (thread_id == nullptr))
-        return IsIrqContext() ? osErrorISR : osErrorParameter;
+    osStatus_t result;
 
-    if ((priority < osPriorityIdle) || (priority > osPriorityISR))
-        return osErrorParameter;
+    if (IsIrqContext())
+    {
+        result = osErrorISR;
+    }
+    else if (thread_id == nullptr)
+    {
+        result = osErrorParameter;
+    }
+    else if ((priority < osPriorityIdle) || (priority > osPriorityISR))
+    {
+        result = osErrorParameter;
+    }
+    else
+    {
+        StkThread *const th = static_cast<StkThread *>(thread_id);
+        th->m_stk_priority = CmsisPrioToStk(priority);
+        result = osOK;
+    }
 
-    StkThread *t = static_cast<StkThread *>(thread_id);
-    t->m_stk_priority = CmsisPrioToStk(priority);
-
-    return osOK;
+    return result;
 }
 
 osPriority_t osThreadGetPriority(osThreadId_t thread_id)
 {
-    if (IsIrqContext() || (thread_id == nullptr))
-        return osPriorityError;
+    osPriority_t result;
 
-    StkThread *t = static_cast<StkThread *>(thread_id);
-    return StkPrioToCmsis(t->m_stk_priority);
+    if (IsIrqContext() || (thread_id == nullptr))
+    {
+        result = osPriorityError;
+    }
+    else
+    {
+        StkThread *const th = static_cast<StkThread *>(thread_id);
+        result = StkPrioToCmsis(th->m_stk_priority);
+    }
+
+    return result;
 }
 
 osStatus_t osThreadYield(void)
 {
-    if (IsIrqContext())
-        return osErrorISR;
-    if (osKernelGetState() == osKernelInactive)
-        return osError;
+    osStatus_t result;
 
-    stk::Yield();
-    return osOK;
+    if (IsIrqContext())
+    {
+        result = osErrorISR;
+    }
+    else if (osKernelGetState() == osKernelInactive)
+    {
+        result = osError;
+    }
+    else
+    {
+        stk::Yield();
+        result = osOK;
+    }
+
+    return result;
 }
 
 osStatus_t osThreadSuspend(osThreadId_t thread_id)
 {
-    if (IsIrqContext() || (thread_id == nullptr) || (osKernelGetState() == osKernelInactive))
-        return IsIrqContext() ? osErrorISR : osErrorParameter;
+    osStatus_t result;
 
-    StkThread *t = static_cast<StkThread *>(thread_id);
+    if (IsIrqContext())
+    {
+        result = osErrorISR;
+    }
+    else if (thread_id == nullptr)
+    {
+        result = osErrorParameter;
+    }
+    else if (osKernelGetState() == osKernelInactive)
+    {
+        result = osErrorParameter;
+    }
+    else
+    {
+        StkThread *const th = static_cast<StkThread *>(thread_id);
+        g_StkKernel.SuspendTask(th, th->m_suspended);
+        result = osOK;
+    }
 
-    g_StkKernel.SuspendTask(t, t->m_suspended);
-
-    return osOK;
+    return result;
 }
 
 osStatus_t osThreadResume(osThreadId_t thread_id)
 {
-    if (IsIrqContext() || (thread_id == nullptr) || (osKernelGetState() == osKernelInactive))
-        return IsIrqContext() ? osErrorISR : osErrorParameter;
+    osStatus_t result;
 
-    StkThread *t = static_cast<StkThread *>(thread_id);
+    if (IsIrqContext())
+    {
+        result = osErrorISR;
+    }
+    else if (thread_id == nullptr)
+    {
+        result = osErrorParameter;
+    }
+    else if (osKernelGetState() == osKernelInactive)
+    {
+        result = osErrorParameter;
+    }
+    else
+    {
+        StkThread *const th = static_cast<StkThread *>(thread_id);
 
-    stk::sync::ScopedCriticalSection cs_;
+        const stk::sync::ScopedCriticalSection cs_;
 
-    if (!t->m_suspended)
-        return osOK; // not suspended, nothing to do
+        if (!th->m_suspended)
+        {
+            result = osOK; // not suspended, nothing to do
+        }
+        else
+        {
+            g_StkKernel.ResumeTask(th);
+            th->m_suspended = false;
+            result = osOK;
+        }
+    }
 
-    g_StkKernel.ResumeTask(t);
-    t->m_suspended = false;
-
-    return osOK;
+    return result;
 }
 
 osStatus_t osThreadDetach(osThreadId_t thread_id)
 {
-    if (IsIrqContext() || (thread_id == nullptr))
-        return IsIrqContext() ? osErrorISR : osErrorParameter;
+    osStatus_t result;
 
-    StkThread *t = static_cast<StkThread *>(thread_id);
-
-    stk::sync::ScopedCriticalSection cs_;
-
-    switch (t->m_join_state)
+    if (IsIrqContext())
     {
-    case StkThread::JoinState::Detached:
-        // already detached - CMSIS spec says this is an error
-        return osError;
+        result = osErrorISR;
+    }
+    else if (thread_id == nullptr)
+    {
+        result = osErrorParameter;
+    }
+    else
+    {
+        StkThread *const th = static_cast<StkThread *>(thread_id);
 
-    case StkThread::JoinState::Joined:
-        // already joined - cannot detach
-        return osError;
+        const stk::sync::ScopedCriticalSection cs_;
 
-    case StkThread::JoinState::Exited:
-        // thread finished but nobody joined yet, transition to Detached
-        // and free the control block now, since no joiner will ever do it
-        t->m_join_state = StkThread::JoinState::Detached;
-        ObjDestroy(t); // safe: task slot already freed by the kernel
-        return osOK;
+        switch (th->m_join_state)
+        {
+        case StkThread::JoinState::Detached:
+            // already detached - CMSIS spec says this is an error
+            result = osError;
+            break;
 
-    case StkThread::JoinState::Joinable:
-        // normal case: thread is still running or just hasn't been joined
-        t->m_join_state = StkThread::JoinState::Detached;
-        return osOK;
+        case StkThread::JoinState::Joined:
+            // already joined - cannot detach
+            result = osError;
+            break;
+
+        case StkThread::JoinState::Exited:
+            // thread finished but nobody joined yet, transition to Detached
+            // and free the control block now, since no joiner will ever do it
+            th->m_join_state = StkThread::JoinState::Detached;
+            ObjDestroy(th); // safe: task slot already freed by the kernel
+            result = osOK;
+            break;
+
+        case StkThread::JoinState::Joinable:
+            // normal case: thread is still running or just hasn't been joined
+            th->m_join_state = StkThread::JoinState::Detached;
+            result = osOK;
+            break;
+
+        default:
+            result = osError;
+            break;
+        }
     }
 
-    return osError;
+    return result;
 }
 
 osStatus_t osThreadJoin(osThreadId_t thread_id)
 {
-    if (IsIrqContext() || (thread_id == nullptr))
-        return IsIrqContext() ? osErrorISR : osErrorParameter;
+    osStatus_t result;
 
-    // Self-join is undefined behavior per POSIX / CMSIS spec.
-    if (thread_id == osThreadGetId())
-        return osErrorParameter;
-
-    StkThread *t = static_cast<StkThread *>(thread_id);
-
-    stk::sync::ScopedCriticalSection cs_;
-
-    // Only joinable threads can be joined.
-    if (t->m_join_state == StkThread::JoinState::Detached)
-        return osError;
-
-    // Double-join: second caller always gets an error.
-    if (t->m_join_state == StkThread::JoinState::Joined)
-        return osError;
-
-    t->m_join_state = StkThread::JoinState::Joined;
-
-    // Block until OnExit() fires (transitions state to Exited).
-    // m_join_cv.Wait() atomically releases m_join_mutex and suspends.
-    while (t->m_join_state == StkThread::JoinState::Joined)
+    if (IsIrqContext())
     {
-        // WAIT_INFINITE - CMSIS osThreadJoin has no timeout parameter.
-        t->m_join_cv.Wait(cs_, stk::WAIT_INFINITE);
+        result = osErrorISR;
+    }
+    else if (thread_id == nullptr)
+    {
+        result = osErrorParameter;
+    }
+    // Self-join is undefined behavior per POSIX / CMSIS spec.
+    else if (thread_id == osThreadGetId())
+    {
+        result = osErrorParameter;
+    }
+    else
+    {
+        StkThread *th = static_cast<StkThread *>(thread_id);
+
+        stk::sync::ScopedCriticalSection cs_;
+
+        // Only joinable threads can be joined.
+        if (th->m_join_state == StkThread::JoinState::Detached)
+        {
+            result = osError;
+        }
+        // Double-join: second caller always gets an error.
+        else if (th->m_join_state == StkThread::JoinState::Joined)
+        {
+            result = osError;
+        }
+        else
+        {
+            th->m_join_state = StkThread::JoinState::Joined;
+
+            // Block until OnExit() fires (transitions state to Exited).
+            // m_join_cv.Wait() atomically releases m_join_mutex and suspends.
+            while (th->m_join_state == StkThread::JoinState::Joined)
+            {
+                // WAIT_INFINITE - CMSIS osThreadJoin has no timeout parameter.
+                STK_UNUSED(th->m_join_cv.Wait(cs_, stk::WAIT_INFINITE));
+            }
+
+            // At this point m_join_state == Exited (or Detached if someone
+            // raced osThreadDetach - treat that as an error).
+            if (th->m_join_state != StkThread::JoinState::Exited)
+            {
+                result = osError;
+            }
+            else
+            {
+                // Free the control block - the kernel has already freed the slot.
+                ObjDestroy(th);
+                result = osOK;
+            }
+        }
     }
 
-    // At this point m_join_state == Exited (or Detached if someone
-    // raced osThreadDetach - treat that as an error).
-    if (t->m_join_state != StkThread::JoinState::Exited)
-        return osError;
-
-    // Free the control block - the kernel has already freed the slot.
-    ObjDestroy(t);
-
-    return osOK;
+    return result;
 }
 
 __NO_RETURN void osThreadExit(void)
 {
-    StkThread *t = static_cast<StkThread *>(osThreadGetId());
+    StkThread *const th = static_cast<StkThread *>(osThreadGetId());
 
-    g_StkKernel.ScheduleTaskRemoval(t);
+    g_StkKernel.ScheduleTaskRemoval(th);
 
     // Wait for removal.
     for (;;)
+    {
         stk::Yield();
+    }
 }
 
 osStatus_t osThreadTerminate(osThreadId_t thread_id)
 {
-    if ((thread_id == nullptr) || (osKernelGetState() == osKernelInactive))
-        return osErrorParameter;
+    osStatus_t status = osErrorParameter;
+    const bool is_active = (osKernelGetState() != osKernelInactive);
 
-    StkThread *t = static_cast<StkThread *>(thread_id);
-
-    stk::sync::ScopedCriticalSection cs_;
-
-    // RemoveTask triggers the STATE_REMOVE_PENDING path in the kernel,
-    // which will call OnExit() before freeing the slot.
-    g_StkKernel.ScheduleTaskRemoval(t);
-
-    // For detached threads, free immediately (no joiner expected).
-    // For joinable threads, OnExit() will wake the joiner; the joiner
-    // calls ObjDestroy(). Do NOT free here.
+    if ((thread_id != nullptr) && !is_active)
     {
-        if (t->m_join_state == StkThread::JoinState::Detached)
-            ObjDestroy(t);
+        StkThread *const th = static_cast<StkThread *>(thread_id);
+
+        // avoid race conditions during termination
+        const stk::sync::ScopedCriticalSection cs_;
+
+        // RemoveTask triggers the STATE_REMOVE_PENDING path in the kernel,
+        // which will call OnExit() before freeing the slot.
+        g_StkKernel.ScheduleTaskRemoval(th);
+
+        // For detached threads, free immediately (no joiner expected).
+        // For joinable threads, OnExit() will wake the joiner; the joiner
+        // calls ObjDestroy(). Do NOT free here.
+        if (th->m_join_state == StkThread::JoinState::Detached)
+        {
+            ObjDestroy(th);
+        }
         // else: joiner owns the lifetime
+
+        status = osOK;
     }
 
-    return osOK;
+    return status;
 }
 
 uint32_t osThreadGetCount(void)
 {
-    if (osKernelGetState() == osKernelInactive)
-        return 0U;
+    uint32_t count = 0U;
 
-    // avoid race with OnTick
-    stk::sync::ScopedCriticalSection cs_;
+    if (osKernelGetState() != osKernelInactive)
+    {
+        // avoid race with OnTick
+        const stk::sync::ScopedCriticalSection cs_;
 
-    return static_cast<uint32_t>(g_StkKernel.GetSwitchStrategy()->GetSize());
+        count = static_cast<uint32_t>(g_StkKernel.GetSwitchStrategy()->GetSize());
+    }
+
+    return count;
 }
 
 uint32_t osThreadEnumerate(osThreadId_t *thread_array, uint32_t array_items)
@@ -966,7 +1292,8 @@ uint32_t osThreadEnumerate(osThreadId_t *thread_array, uint32_t array_items)
     if ((kstate != osKernelInactive) && (thread_array != nullptr) && (array_items != 0U))
     {
         // cast the raw pointer array to the expected ITask* destination type
-        stk::ITask **tasks_destination = reinterpret_cast<stk::ITask **>(thread_array);
+        stk::ITask **const tasks_destination = reinterpret_cast<stk::ITask **>(
+            reinterpret_cast<void *>(thread_array));
 
         // bind raw destination buffer into a temporary ArrayView object
         const size_t count = g_StkKernel.EnumerateTasks(
@@ -984,51 +1311,80 @@ uint32_t osThreadEnumerate(osThreadId_t *thread_array, uint32_t array_items)
 
 uint32_t osThreadFlagsSet(osThreadId_t thread_id, uint32_t flags)
 {
-    if ((thread_id == nullptr) || ((flags & osFlagsError) != 0))
-        return osFlagsErrorParameter;
+    uint32_t result;
 
-    StkThread *t = static_cast<StkThread *>(thread_id);
+    if ((thread_id == nullptr) || ((flags & osFlagsError) != 0U))
+    {
+        result = osFlagsErrorParameter;
+    }
+    else
+    {
+        StkThread *th = static_cast<StkThread *>(thread_id);
+        result = StkFlagsResultToCmsis(th->m_thread_flags.Set(flags));
+    }
 
-    uint32_t result = t->m_thread_flags.Set(flags);
-    return StkFlagsResultToCmsis(result);
+    return result;
 }
 
 uint32_t osThreadFlagsClear(uint32_t flags)
 {
-    osThreadId_t self = osThreadGetId();
+    uint32_t result;
+
+    osThreadId_t const self = osThreadGetId();
     if (self == nullptr)
-        return osFlagsErrorUnknown;
+    {
+        result = osFlagsErrorUnknown;
+    }
+    else
+    {
+        StkThread *th = static_cast<StkThread *>(self);
+        result = StkFlagsResultToCmsis(th->m_thread_flags.Clear(flags));
+    }
 
-    StkThread *t = static_cast<StkThread *>(self);
-
-    uint32_t result = t->m_thread_flags.Clear(flags);
-    return StkFlagsResultToCmsis(result);
+    return result;
 }
 
 uint32_t osThreadFlagsGet(void)
 {
-    osThreadId_t self = osThreadGetId();
-    if (self == nullptr)
-        return 0U;
+    uint32_t result;
 
-    return static_cast<StkThread *>(self)->m_thread_flags.Get();
+    osThreadId_t const self = osThreadGetId();
+    if (self == nullptr)
+    {
+        result = 0U;
+    }
+    else
+    {
+        result = static_cast<StkThread *>(self)->m_thread_flags.Get();
+    }
+
+    return result;
 }
 
 uint32_t osThreadFlagsWait(uint32_t flags, uint32_t options, uint32_t timeout)
 {
+    uint32_t result;
+
     if (IsIrqContext())
-        return osFlagsErrorISR;
+    {
+        result = osFlagsErrorISR;
+    }
+    else
+    {
+        osThreadId_t const self = osThreadGetId();
+        if (self == nullptr)
+        {
+            result = osFlagsErrorUnknown;
+        }
+        else
+        {
+            StkThread *th = static_cast<StkThread *>(self);
+            result = StkFlagsResultToCmsis(th->m_thread_flags.Wait(flags,
+                CmsisFlagsOptionsToStk(options), CmsisTimeoutToStk(timeout)));
+        }
+    }
 
-    osThreadId_t self = osThreadGetId();
-    if (self == nullptr)
-        return osFlagsErrorUnknown;
-
-    StkThread *t = static_cast<StkThread *>(self);
-
-    uint32_t result = t->m_thread_flags.Wait(flags, CmsisFlagsOptionsToStk(options),
-        CmsisTimeoutToStk(timeout));
-
-    return StkFlagsResultToCmsis(result);
+    return result;
 }
 
 
@@ -1038,26 +1394,43 @@ uint32_t osThreadFlagsWait(uint32_t flags, uint32_t options, uint32_t timeout)
 
 osStatus_t osDelay(uint32_t ticks)
 {
+    osStatus_t result;
+
     if (IsIrqContext())
-        return osErrorISR;
-    if (osKernelGetState() == osKernelInactive)
-        return osError;
+    {
+        result = osErrorISR;
+    }
+    else if (osKernelGetState() == osKernelInactive)
+    {
+        result = osError;
+    }
+    else
+    {
+        stk::Sleep(CmsisTimeoutToStk(ticks));
+        result = osOK;
+    }
 
-    stk::Timeout timeout = CmsisTimeoutToStk(ticks);
-
-    stk::Sleep(timeout);
-    return osOK;
+    return result;
 }
 
 osStatus_t osDelayUntil(uint32_t ticks)
 {
-    if (IsIrqContext())
-        return osErrorISR;
-    if (osKernelGetState() == osKernelInactive)
-        return osError;
+    osStatus_t result;
 
-    stk::SleepUntil(static_cast<stk::Ticks>(ticks));
-    return osOK;
+    if (IsIrqContext())
+    {
+        result = osErrorISR;
+    }
+    else if (osKernelGetState() == osKernelInactive)
+    {
+        result = osError;
+    }
+    else
+    {
+        result = (stk::SleepUntil(static_cast<stk::Ticks>(ticks)) ? osOK : osError);
+    }
+
+    return result;
 }
 
 
@@ -1068,76 +1441,151 @@ osStatus_t osDelayUntil(uint32_t ticks)
 osTimerId_t osTimerNew(osTimerFunc_t func, osTimerType_t type, void *argument,
                        const osTimerAttr_t *attr)
 {
-    if (IsIrqContext() || (func == nullptr) || (osKernelGetState() == osKernelInactive))
-        return nullptr;
+    osTimerId_t result;
 
-    if (!StkTimer::EnsureTimerHostCreated())
-        return nullptr;
+    if (IsIrqContext() || (func == nullptr))
+    {
+        result = nullptr;
+    }
+    else  if (osKernelGetState() == osKernelInactive)
+    {
+        result = nullptr;
+    }
+    else
+    {
+        const char *const name   = ((attr != nullptr) ? attr->name    : nullptr);
+        void       *const cb_mem = ((attr != nullptr) ? attr->cb_mem  : nullptr);
+        const uint32_t    cb_sz  = ((attr != nullptr) ? attr->cb_size : 0U);
+        
+        StkTimer::EnsureTimerHostCreated();
 
-    const char *name   = (attr != nullptr ? attr->name    : nullptr);
-    void       *cb_mem = (attr != nullptr ? attr->cb_mem  : nullptr);
-    uint32_t    cb_sz  = (attr != nullptr ? attr->cb_size : 0U);
+        StkTimer *const tmr = PlacementNewOrHeap<StkTimer>(cb_mem, cb_sz, func, type, argument, name);
+        result = static_cast<osTimerId_t>(tmr);
+    }
 
-    StkTimer *timer = PlacementNewOrHeap<StkTimer>(cb_mem, cb_sz, func, type, argument, name);
-    return static_cast<osTimerId_t>(timer);
+    return result;
 }
 
 const char *osTimerGetName(osTimerId_t timer_id)
 {
-    if (timer_id == nullptr)
-        return nullptr;
+    const char *result;
 
-    return static_cast<StkTimer *>(timer_id)->m_name;
+    if (timer_id == nullptr)
+    {
+        result = nullptr;
+    }
+    else
+    {
+        result = static_cast<StkTimer *>(timer_id)->m_name;
+    }
+
+    return result;
 }
 
 osStatus_t osTimerStart(osTimerId_t timer_id, uint32_t ticks)
 {
-    if (IsIrqContext() || (timer_id == nullptr) || (g_TimerHost == nullptr))
-        return IsIrqContext() ? osErrorISR : osErrorParameter;
+    osStatus_t result;
 
-    StkTimer *timer = static_cast<StkTimer *>(timer_id);
+    if (IsIrqContext())
+    {
+        result = osErrorISR;
+    }
+    else if ((timer_id == nullptr) || (g_TimerHost == nullptr))
+    {
+        result = osErrorParameter;
+    }
+    else
+    {
+        StkTimer *const tmr = static_cast<StkTimer *>(timer_id);
 
-    uint32_t period = (timer->m_type == osTimerPeriodic) ? ticks : 0U;
-    timer->m_period_ticks = period;
+        const uint32_t period_ticks = ((tmr->m_type == osTimerPeriodic) ? ticks : 0U);
+        tmr->m_period_ticks = period_ticks;
 
-    bool ok = g_TimerHost->Restart(*timer, ticks, period);
-    return (ok ? osOK : osError);
+        const bool ok = g_TimerHost->Restart(*tmr, ticks, period_ticks);
+        result = (ok ? osOK : osError);
+    }
+
+    return result;
 }
 
 osStatus_t osTimerStop(osTimerId_t timer_id)
 {
-    if (IsIrqContext() || (timer_id == nullptr) || (g_TimerHost == nullptr))
-        return IsIrqContext() ? osErrorISR : osErrorParameter;
+    osStatus_t result;
 
-    StkTimer *timer = static_cast<StkTimer *>(timer_id);
+    if (IsIrqContext())
+    {
+        result = osErrorISR;
+    }
+    else if ((timer_id == nullptr) || (g_TimerHost == nullptr))
+    {
+        result = osErrorParameter;
+    }
+    else
+    {
+        StkTimer *const tmr = static_cast<StkTimer *>(timer_id);
 
-    if (!timer->IsActive())
-        return osErrorResource;
+        if (!tmr->IsActive())
+        {
+            result = osErrorResource;
+        }
+        else
+        {
+            result = (g_TimerHost->Stop(*tmr) ? osOK : osError);
+        }
+    }
 
-    bool ok = g_TimerHost->Stop(*timer);
-    return (ok ? osOK : osError);
+    return result;
 }
 
 uint32_t osTimerIsRunning(osTimerId_t timer_id)
 {
-    if (timer_id == nullptr)
-        return 0U;
+    uint32_t result;
 
-    return (static_cast<StkTimer *>(timer_id)->IsActive() ? 1U : 0U);
+    if (timer_id == nullptr)
+    {
+        result = 0U;
+    }
+    else
+    {
+        result = (static_cast<StkTimer *>(timer_id)->IsActive() ? 1U : 0U);
+    }
+
+    return result;
 }
 
 osStatus_t osTimerDelete(osTimerId_t timer_id)
 {
-    if (IsIrqContext() || (timer_id == nullptr))
-        return IsIrqContext() ? osErrorISR : osErrorParameter;
+    osStatus_t result;
 
-    StkTimer *timer = static_cast<StkTimer *>(timer_id);
+    if (IsIrqContext())
+    {
+        result = osErrorISR;
+    }
+    else if ((timer_id == nullptr) || (g_TimerHost == nullptr))
+    {
+        result = osErrorParameter;
+    }
+    else
+    {
+        result = osOK;
+      
+        StkTimer *const tmr = static_cast<StkTimer *>(timer_id);
 
-    if ((g_TimerHost != nullptr) && timer->IsActive())
-        g_TimerHost->Stop(*timer);
+        if (tmr->IsActive())
+        {
+            if (!g_TimerHost->Stop(*tmr))
+            {
+                result = osError;
+            }
+        }
 
-    ObjDestroy(timer);
-    return osOK;
+        if (result == osOK)
+        {
+            ObjDestroy(tmr);
+        }
+    }
+
+    return result;
 }
 
 
@@ -1147,70 +1595,126 @@ osStatus_t osTimerDelete(osTimerId_t timer_id)
 
 osEventFlagsId_t osEventFlagsNew(const osEventFlagsAttr_t *attr)
 {
+    osEventFlagsId_t result;
+
     if (IsIrqContext())
-        return nullptr;
+    {
+        result = nullptr;
+    }
+    else
+    {
+        const char *const name   = ((attr != nullptr) ? attr->name    : nullptr);
+        void       *const cb_mem = ((attr != nullptr) ? attr->cb_mem  : nullptr);
+        const uint32_t    cb_sz  = ((attr != nullptr) ? attr->cb_size : 0U);
 
-    const char *name   = (attr != nullptr ? attr->name    : nullptr);
-    void       *cb_mem = (attr != nullptr ? attr->cb_mem  : nullptr);
-    uint32_t    cb_sz  = (attr != nullptr ? attr->cb_size : 0U);
+        StkEventFlags *const ef = PlacementNewOrHeap<StkEventFlags>(cb_mem, cb_sz, name);
+        result = static_cast<osEventFlagsId_t>(ef);
+    }
 
-    StkEventFlags *ef = PlacementNewOrHeap<StkEventFlags>(cb_mem, cb_sz, name);
-    return static_cast<osEventFlagsId_t>(ef);
+    return result;
 }
 
 const char *osEventFlagsGetName(osEventFlagsId_t ef_id)
 {
-    if (ef_id == nullptr)
-        return nullptr;
+    const char *result;
 
-    return static_cast<StkEventFlags *>(ef_id)->m_ef.GetTraceName();
+    if (ef_id == nullptr)
+    {
+        result = nullptr;
+    }
+    else
+    {
+        result = static_cast<StkEventFlags *>(ef_id)->m_ef.GetTraceName();
+    }
+
+    return result;
 }
 
 uint32_t osEventFlagsSet(osEventFlagsId_t ef_id, uint32_t flags)
 {
-    if ((ef_id == nullptr) || ((flags & osFlagsError) != 0U))
-        return osFlagsErrorParameter;
+    uint32_t result;
 
-    uint32_t result = static_cast<StkEventFlags *>(ef_id)->m_ef.Set(flags);
-    return StkFlagsResultToCmsis(result);
+    if ((ef_id == nullptr) || ((flags & osFlagsError) != 0U))
+    {
+        result = osFlagsErrorParameter;
+    }
+    else
+    {
+        result = StkFlagsResultToCmsis(static_cast<StkEventFlags *>(ef_id)->m_ef.Set(flags));
+    }
+
+    return result;
 }
 
 uint32_t osEventFlagsClear(osEventFlagsId_t ef_id, uint32_t flags)
 {
-    if ((ef_id == nullptr) || ((flags & osFlagsError) != 0U))
-        return osFlagsErrorParameter;
+    uint32_t result;
 
-    uint32_t result = static_cast<StkEventFlags *>(ef_id)->m_ef.Clear(flags);
-    return StkFlagsResultToCmsis(result);
+    if ((ef_id == nullptr) || ((flags & osFlagsError) != 0U))
+    {
+        result = osFlagsErrorParameter;
+    }
+    else
+    {
+        result = StkFlagsResultToCmsis(static_cast<StkEventFlags *>(ef_id)->m_ef.Clear(flags));
+    }
+
+    return result;
 }
 
 uint32_t osEventFlagsGet(osEventFlagsId_t ef_id)
 {
-    if (ef_id == nullptr)
-        return 0U;
+    uint32_t result;
 
-    return static_cast<StkEventFlags *>(ef_id)->m_ef.Get();
+    if (ef_id == nullptr)
+    {
+        result = 0U;
+    }
+    else
+    {
+        result = static_cast<StkEventFlags *>(ef_id)->m_ef.Get();
+    }
+
+    return result;
 }
 
 uint32_t osEventFlagsWait(osEventFlagsId_t ef_id, uint32_t flags, uint32_t options,
                           uint32_t timeout)
 {
+    uint32_t result;
+
     if ((ef_id == nullptr) || ((flags & osFlagsError) != 0U))
-        return osFlagsErrorParameter;
+    {
+        result = osFlagsErrorParameter;
+    }
+    else
+    {
+        result = StkFlagsResultToCmsis(static_cast<StkEventFlags *>(ef_id)->m_ef.Wait(flags,
+            CmsisFlagsOptionsToStk(options), CmsisTimeoutToStk(timeout)));
+    }
 
-    uint32_t result = static_cast<StkEventFlags *>(ef_id)->m_ef.Wait(flags,
-        CmsisFlagsOptionsToStk(options), CmsisTimeoutToStk(timeout));
-
-    return StkFlagsResultToCmsis(result);
+    return result;
 }
 
 osStatus_t osEventFlagsDelete(osEventFlagsId_t ef_id)
 {
-    if (IsIrqContext() || (ef_id == nullptr))
-        return IsIrqContext() ? osErrorISR : osErrorParameter;
+    osStatus_t result;
 
-    ObjDestroy(static_cast<StkEventFlags *>(ef_id));
-    return osOK;
+    if (IsIrqContext())
+    {
+        result = osErrorISR;
+    }
+    else if (ef_id == nullptr)
+    {
+        result = osErrorParameter;
+    }
+    else
+    {
+        ObjDestroy(static_cast<StkEventFlags *>(ef_id));
+        result = osOK;
+    }
+
+    return result;
 }
 
 
@@ -1220,81 +1724,142 @@ osStatus_t osEventFlagsDelete(osEventFlagsId_t ef_id)
 
 osMutexId_t osMutexNew(const osMutexAttr_t *attr)
 {
+    osMutexId_t result;
+
     if (IsIrqContext())
-        return nullptr;
+    {
+        result = nullptr;
+    }
+    else
+    {
+        // osMutexPrioInherit: ignored, supported by default.
+        // osMutexRecursive: ignored, sync::Mutex is always recursive.
+        // osMutexRobust: will assert as unsafe code.
+        const char *const name   = ((attr != nullptr) ? attr->name    : nullptr);
+        void       *const cb_mem = ((attr != nullptr) ? attr->cb_mem  : nullptr);
+        const uint32_t    cb_sz  = ((attr != nullptr) ? attr->cb_size : 0U);
+        const bool        robust = ((attr != nullptr) && ((attr->attr_bits & osMutexRobust) != 0U));
 
-    // osMutexPrioInherit: ignored, supported by default.
-    // osMutexRecursive: ignored, sync::Mutex is always recursive.
-    // osMutexRobust: will assert as unsafe code.
-    const char *name   = (attr != nullptr ? attr->name    : nullptr);
-    void       *cb_mem = (attr != nullptr ? attr->cb_mem  : nullptr);
-    uint32_t    cb_sz  = (attr != nullptr ? attr->cb_size : 0U);
-    bool        robust = (attr != nullptr) && (attr->attr_bits & osMutexRobust);
+        // disallow osMutexRobust
+        STK_ASSERT(!robust);
+        if (robust)
+        {
+            result = nullptr;
+        }
+        else
+        {
+            StkMutex *const m = PlacementNewOrHeap<StkMutex>(cb_mem, cb_sz, name);
+            result = static_cast<osMutexId_t>(m);
+        }
+    }
 
-    // disallow osMutexRobust
-    STK_ASSERT(!robust);
-    if (robust)
-        return nullptr;
-
-    StkMutex *m = PlacementNewOrHeap<StkMutex>(cb_mem, cb_sz, name);
-    return static_cast<osMutexId_t>(m);
+    return result;
 }
 
 const char *osMutexGetName(osMutexId_t mutex_id)
 {
-    if (mutex_id == nullptr)
-        return nullptr;
+    const char *result;
 
-    return static_cast<StkMutex *>(mutex_id)->m_mutex.GetTraceName();
+    if (mutex_id == nullptr)
+    {
+        result = nullptr;
+    }
+    else
+    {
+        result = static_cast<StkMutex *>(mutex_id)->m_mutex.GetTraceName();
+    }
+
+    return result;
 }
 
 osStatus_t osMutexAcquire(osMutexId_t mutex_id, uint32_t timeout)
 {
+    osStatus_t result;
+
     if (IsIrqContext())
-        return osErrorISR;
-    if (mutex_id == nullptr)
-        return osErrorParameter;
+    {
+        result = osErrorISR;
+    }
+    else if (mutex_id == nullptr)
+    {
+        result = osErrorParameter;
+    }
+    else
+    {
+        StkMutex *m = static_cast<StkMutex *>(mutex_id);
+        const stk::Timeout stk_timeout = CmsisTimeoutToStk(timeout);
 
-    StkMutex *m = static_cast<StkMutex *>(mutex_id);
-    stk::Timeout stk_timeout = CmsisTimeoutToStk(timeout);
+        const bool acquired = m->m_mutex.TimedLock(stk_timeout);
+        if (!acquired)
+        {
+            result = ((stk_timeout == stk::NO_WAIT) ? osErrorResource : osErrorTimeout);
+        }
+        else
+        {
+            result = osOK;
+        }
+    }
 
-    bool acquired = m->m_mutex.TimedLock(stk_timeout);
-    if (!acquired)
-        return ((stk_timeout == stk::NO_WAIT) ? osErrorResource : osErrorTimeout);
-
-    return osOK;
+    return result;
 }
 
 osStatus_t osMutexRelease(osMutexId_t mutex_id)
 {
-    if (IsIrqContext())
-        return osErrorISR;
-    if (mutex_id == nullptr)
-        return osErrorParameter;
+    osStatus_t result;
 
-    static_cast<StkMutex *>(mutex_id)->m_mutex.Unlock();
-    return osOK;
+    if (IsIrqContext())
+    {
+        result = osErrorISR;
+    }
+    else if (mutex_id == nullptr)
+    {
+        result = osErrorParameter;
+    }
+    else
+    {
+        static_cast<StkMutex *>(mutex_id)->m_mutex.Unlock();
+        result = osOK;
+    }
+
+    return result;
 }
 
 osThreadId_t osMutexGetOwner(osMutexId_t mutex_id)
 {
+    osThreadId_t result;
+
     if (mutex_id == nullptr)
-        return nullptr;
+    {
+        result = nullptr;
+    }
+    else
+    {        
+        result = StkThread::ConvertTIdToThreadId(
+            static_cast<StkMutex *>(mutex_id)->m_mutex.GetOwner());
+    }
 
-    stk::TId tid = static_cast<StkMutex *>(mutex_id)->m_mutex.GetOwner();
-
-    // tid is hw::PtrToWord(this) where 'this' is the StkThread* - cast it back.
-    return reinterpret_cast<osThreadId_t>(static_cast<void *>(
-        reinterpret_cast<StkThread *>(static_cast<uintptr_t>(tid))));
+    return result;
 }
 
 osStatus_t osMutexDelete(osMutexId_t mutex_id)
 {
-    if (IsIrqContext() || (mutex_id == nullptr))
-        return IsIrqContext() ? osErrorISR : osErrorParameter;
+    osStatus_t result;
 
-    ObjDestroy(static_cast<StkMutex *>(mutex_id));
-    return osOK;
+    if (IsIrqContext())
+    {
+        result = osErrorISR;
+    }
+    else if (mutex_id == nullptr)
+    {
+        result = osErrorParameter;
+    }
+    else
+    {
+        ObjDestroy(static_cast<StkMutex *>(mutex_id));
+        result = osOK;
+    }
+
+    return result;
 }
 
 
@@ -1305,73 +1870,129 @@ osStatus_t osMutexDelete(osMutexId_t mutex_id)
 osSemaphoreId_t osSemaphoreNew(uint32_t max_count, uint32_t initial_count,
                                const osSemaphoreAttr_t *attr)
 {
-    if (IsIrqContext())
-        return nullptr;
+    osSemaphoreId_t result;
 
-    if ((max_count == 0U) || (initial_count > max_count))
-        return nullptr;
+    if (IsIrqContext() || (max_count == 0U) || (initial_count > max_count))
+    {
+        result = nullptr;
+    }
+    else
+    {
+        // STK Semaphore uses uint16_t counters, clamp to stk::sync::Semaphore::COUNT_MAX.
+        const uint16_t mc = static_cast<uint16_t>(stk::Min(max_count,     static_cast<uint32_t>(stk::sync::Semaphore::COUNT_MAX)));
+        const uint16_t ic = static_cast<uint16_t>(stk::Min(initial_count, static_cast<uint32_t>(stk::sync::Semaphore::COUNT_MAX)));
 
-    // STK Semaphore uses uint16_t counters, clamp to stk::sync::Semaphore::COUNT_MAX.
-    uint16_t mc = stk::Min(max_count, static_cast<uint32_t>(stk::sync::Semaphore::COUNT_MAX));
-    uint16_t ic = stk::Min(initial_count, static_cast<uint32_t>(stk::sync::Semaphore::COUNT_MAX));
+        const char *const name   = ((attr != nullptr) ? attr->name    : nullptr);
+        void       *const cb_mem = ((attr != nullptr) ? attr->cb_mem  : nullptr);
+        const uint32_t    cb_sz  = ((attr != nullptr) ? attr->cb_size : 0U);
 
-    const char *name   = (attr != nullptr ? attr->name    : nullptr);
-    void       *cb_mem = (attr != nullptr ? attr->cb_mem  : nullptr);
-    uint32_t    cb_sz  = (attr != nullptr ? attr->cb_size : 0U);
+        StkSemaphore *const sem = PlacementNewOrHeap<StkSemaphore>(cb_mem, cb_sz, ic, mc, name);
+        result = static_cast<osSemaphoreId_t>(sem);
+    }
 
-    StkSemaphore *s = PlacementNewOrHeap<StkSemaphore>(cb_mem, cb_sz, ic, mc, name);
-    return static_cast<osSemaphoreId_t>(s);
+    return result;
 }
 
 const char *osSemaphoreGetName(osSemaphoreId_t semaphore_id)
 {
-    if (semaphore_id == nullptr)
-        return nullptr;
+    const char *result;
 
-    return static_cast<StkSemaphore *>(semaphore_id)->m_semaphore.GetTraceName();
+    if (semaphore_id == nullptr)
+    {
+        result = nullptr;
+    }
+    else
+    {
+        result = static_cast<StkSemaphore *>(semaphore_id)->m_semaphore.GetTraceName();
+    }
+
+    return result;
 }
 
 osStatus_t osSemaphoreAcquire(osSemaphoreId_t semaphore_id, uint32_t timeout)
 {
+    osStatus_t result;
+
     if (semaphore_id == nullptr)
-        return osErrorParameter;
-    if (IsIrqContext() && (timeout != 0U))
-        return osErrorISR;
+    {
+        result = osErrorParameter;
+    }
+    else if (IsIrqContext() && (timeout != 0U))
+    {
+        result = osErrorISR;
+    }
+    else
+    {
+        StkSemaphore *sem = static_cast<StkSemaphore *>(semaphore_id);
+        const stk::Timeout stk_timeout = CmsisTimeoutToStk(timeout);
 
-    StkSemaphore *s = static_cast<StkSemaphore *>(semaphore_id);
-    stk::Timeout stk_timeout = CmsisTimeoutToStk(timeout);
+        const bool acquired = sem->m_semaphore.Wait(stk_timeout);
+        if (!acquired)
+        {
+            result = ((stk_timeout == stk::NO_WAIT) ? osErrorResource : osErrorTimeout);
+        }
+        else
+        {
+            result = osOK;
+        }
+    }
 
-    bool acquired = s->m_semaphore.Wait(stk_timeout);
-    if (!acquired)
-        return (stk_timeout == stk::NO_WAIT) ? osErrorResource : osErrorTimeout;
-
-    return osOK;
+    return result;
 }
 
 osStatus_t osSemaphoreRelease(osSemaphoreId_t semaphore_id)
 {
-    if (semaphore_id == nullptr)
-        return osErrorParameter;
+    osStatus_t result;
 
-    static_cast<StkSemaphore *>(semaphore_id)->m_semaphore.Signal();
-    return osOK;
+    if (semaphore_id == nullptr)
+    {
+        result = osErrorParameter;
+    }
+    else
+    {
+        static_cast<StkSemaphore *>(semaphore_id)->m_semaphore.Signal();
+        result = osOK;
+    }
+
+    return result;
 }
 
 uint32_t osSemaphoreGetCount(osSemaphoreId_t semaphore_id)
 {
-    if (semaphore_id == nullptr)
-        return 0U;
+    uint32_t result;
 
-    return static_cast<uint32_t>(static_cast<StkSemaphore *>(semaphore_id)->m_semaphore.GetCount());
+    if (semaphore_id == nullptr)
+    {
+        result = 0U;
+    }
+    else
+    {
+        result = static_cast<uint32_t>(
+            static_cast<StkSemaphore *>(semaphore_id)->m_semaphore.GetCount());
+    }
+
+    return result;
 }
 
 osStatus_t osSemaphoreDelete(osSemaphoreId_t semaphore_id)
 {
-    if (IsIrqContext() || (semaphore_id == nullptr))
-        return (IsIrqContext() ? osErrorISR : osErrorParameter);
+    osStatus_t result;
 
-    ObjDestroy(static_cast<StkSemaphore *>(semaphore_id));
-    return osOK;
+    if (IsIrqContext())
+    {
+        result = osErrorISR;
+    }
+    else if (semaphore_id == nullptr)
+    {
+        result = osErrorParameter;
+    }
+    else
+    {
+        ObjDestroy(static_cast<StkSemaphore *>(semaphore_id));
+        result = osOK;
+    }
+
+    return result;
 }
 
 
@@ -1382,120 +2003,194 @@ osStatus_t osSemaphoreDelete(osSemaphoreId_t semaphore_id)
 osMemoryPoolId_t osMemoryPoolNew(uint32_t block_count, uint32_t block_size,
                                  const osMemoryPoolAttr_t *attr)
 {
+    osMemoryPoolId_t result;
+
     // ISR context: forbidden per CMSIS spec.
-    if (IsIrqContext())
-        return nullptr;
-
     // Zero capacity or zero block size are meaningless.
-    if ((block_count == 0U) || (block_size == 0U))
-        return nullptr;
-
-    const char *name    = (attr != nullptr ? attr->name    : nullptr);
-    void       *cb_mem  = (attr != nullptr ? attr->cb_mem  : nullptr);
-    uint32_t    cb_sz   = (attr != nullptr ? attr->cb_size : 0U);
-    void       *mp_mem  = (attr != nullptr ? attr->mp_mem  : nullptr);
-    uint32_t    mp_sz   = (attr != nullptr ? attr->mp_size : 0U);
-
-    // Compute the aligned block size and required storage byte count.
-    const uint32_t aligned_blk       = stk::memory::BlockMemoryPool::AlignBlockSize(block_size);
-    const uint32_t storage_required  = (block_count * aligned_blk);
-
-    StkMemPool *pool = nullptr;
-
-    if ((mp_mem != nullptr) && (mp_sz >= storage_required))
+    if (IsIrqContext() || (block_count == 0U) || (block_size == 0U))
     {
-        // Caller-supplied pool storage - BlockMemoryPool external-storage ctor.
-        pool = PlacementNewOrHeap<StkMemPool>(cb_mem, cb_sz,
-            block_count, block_size, name, static_cast<uint8_t *>(mp_mem));
+        result = nullptr;
     }
     else
     {
-        // Heap-allocated pool storage - BlockMemoryPool heap ctor.
-        pool = PlacementNewOrHeap<StkMemPool>(cb_mem, cb_sz,
-            block_count, block_size, name);
+        const char *const name   = ((attr != nullptr) ? attr->name    : nullptr);
+        void       *const cb_mem = ((attr != nullptr) ? attr->cb_mem  : nullptr);
+        const uint32_t    cb_sz  = ((attr != nullptr) ? attr->cb_size : 0U);
+        void       *const mp_mem = ((attr != nullptr) ? attr->mp_mem  : nullptr);
+        const uint32_t    mp_sz  = ((attr != nullptr) ? attr->mp_size : 0U);
 
-        // If the heap ctor failed to allocate storage, clean up and bail.
-        if ((pool != nullptr) && !pool->m_mpool.IsStorageValid())
+        // Compute the aligned block size and required storage byte count.
+        const uint32_t aligned_blk      = stk::memory::BlockMemoryPool::AlignBlockSize(block_size);
+        const uint32_t storage_required = (block_count * aligned_blk);
+
+        StkMemPool *pool;
+
+        if ((mp_mem != nullptr) && (mp_sz >= storage_required))
         {
-            ObjDestroy(pool);
-            return nullptr;
+            // Caller-supplied pool storage - BlockMemoryPool external-storage ctor.
+            pool = PlacementNewOrHeap<StkMemPool>(cb_mem, cb_sz,
+                block_count, block_size, name, static_cast<uint8_t *>(mp_mem));
         }
+        else
+        {
+            // Heap-allocated pool storage - BlockMemoryPool heap ctor.
+            pool = PlacementNewOrHeap<StkMemPool>(cb_mem, cb_sz,
+                block_count, block_size, name);
+
+            // If the heap ctor failed to allocate storage, clean up and bail.
+            if ((pool != nullptr) && !pool->m_mpool.IsStorageValid())
+            {
+                ObjDestroy(pool);
+                pool = nullptr;
+            }
+        }
+
+        result = static_cast<osMemoryPoolId_t>(pool);
     }
 
-    return static_cast<osMemoryPoolId_t>(pool);
+    return result;
 }
 
 const char *osMemoryPoolGetName(osMemoryPoolId_t mp_id)
 {
-    if (mp_id == nullptr)
-        return nullptr;
+    const char *result;
 
-    return static_cast<StkMemPool *>(mp_id)->m_mpool.GetTraceName();
+    if (mp_id == nullptr)
+    {
+        result = nullptr;
+    }
+    else
+    {
+        result = static_cast<StkMemPool *>(mp_id)->m_mpool.GetTraceName();
+    }
+
+    return result;
 }
 
 void *osMemoryPoolAlloc(osMemoryPoolId_t mp_id, uint32_t timeout)
 {
+    void *result;
+
     if (mp_id == nullptr)
-        return nullptr;
-
+    {
+        result = nullptr;
+    }
     // ISR context is only valid with timeout == 0 (NO_WAIT / TryAlloc).
-    if (IsIrqContext() && (timeout != 0U))
-        return nullptr;
+    else if (IsIrqContext() && (timeout != 0U))
+    {
+        result = nullptr;
+    }
+    else
+    {
+        result = static_cast<StkMemPool *>(mp_id)->m_mpool.TimedAlloc(CmsisTimeoutToStk(timeout));
+    }
 
-    return static_cast<StkMemPool *>(mp_id)->m_mpool.TimedAlloc(CmsisTimeoutToStk(timeout));
+    return result;
 }
 
 osStatus_t osMemoryPoolFree(osMemoryPoolId_t mp_id, void *block)
 {
+    osStatus_t result;
+
     if ((mp_id == nullptr) || (block == nullptr))
-        return osErrorParameter;
+    {
+        result = osErrorParameter;
+    }
+    else if (!static_cast<StkMemPool *>(mp_id)->m_mpool.Free(block))
+    {
+        result = osErrorParameter; // ptr not from this pool
+    }
+    else
+    {
+        result = osOK;
+    }
 
-    if (!static_cast<StkMemPool *>(mp_id)->m_mpool.Free(block))
-        return osErrorParameter; // ptr not from this pool
-
-    return osOK;
+    return result;
 }
 
 uint32_t osMemoryPoolGetCapacity(osMemoryPoolId_t mp_id)
 {
-    if (mp_id == nullptr)
-        return 0U;
+    uint32_t result;
 
-    return static_cast<StkMemPool *>(mp_id)->m_mpool.GetCapacity();
+    if (mp_id == nullptr)
+    {
+        result = 0U;
+    }
+    else
+    {
+        result = static_cast<StkMemPool *>(mp_id)->m_mpool.GetCapacity();
+    }
+
+    return result;
 }
 
 uint32_t osMemoryPoolGetBlockSize(osMemoryPoolId_t mp_id)
 {
-    if (mp_id == nullptr)
-        return 0U;
+    uint32_t result;
 
-    return static_cast<uint32_t>(static_cast<StkMemPool *>(mp_id)->m_mpool.GetBlockSize());
+    if (mp_id == nullptr)
+    {
+        result = 0U;
+    }
+    else
+    {
+        result = static_cast<uint32_t>(static_cast<StkMemPool *>(mp_id)->m_mpool.GetBlockSize());
+    }
+
+    return result;
 }
 
 uint32_t osMemoryPoolGetCount(osMemoryPoolId_t mp_id)
 {
-    if (mp_id == nullptr)
-        return 0U;
+    uint32_t result;
 
-    return static_cast<StkMemPool *>(mp_id)->m_mpool.GetUsedCount();
+    if (mp_id == nullptr)
+    {
+        result = 0U;
+    }
+    else
+    {
+        result = static_cast<StkMemPool *>(mp_id)->m_mpool.GetUsedCount();
+    }
+
+    return result;
 }
 
 uint32_t osMemoryPoolGetSpace(osMemoryPoolId_t mp_id)
 {
-    if (mp_id == nullptr)
-        return 0U;
+    uint32_t result;
 
-    return static_cast<StkMemPool *>(mp_id)->m_mpool.GetFreeCount();
+    if (mp_id == nullptr)
+    {
+        result = 0U;
+    }
+    else
+    {
+        result = static_cast<StkMemPool *>(mp_id)->m_mpool.GetFreeCount();
+    }
+
+    return result;
 }
 
 osStatus_t osMemoryPoolDelete(osMemoryPoolId_t mp_id)
 {
-    if (IsIrqContext() || (mp_id == nullptr))
-        return (IsIrqContext() ? osErrorISR : osErrorParameter);
+    osStatus_t result;
 
-    ObjDestroy(static_cast<StkMemPool *>(mp_id));
+    if (IsIrqContext())
+    {
+        result = osErrorISR;
+    }
+    else if (mp_id == nullptr)
+    {
+        result = osErrorParameter;
+    }
+    else
+    {
+        ObjDestroy(static_cast<StkMemPool *>(mp_id));
+        result = osOK;
+    }
 
-    return osOK;
+    return result;
 }
 
 
@@ -1506,135 +2201,236 @@ osStatus_t osMemoryPoolDelete(osMemoryPoolId_t mp_id)
 osMessageQueueId_t osMessageQueueNew(uint32_t msg_count, uint32_t msg_size,
                                      const osMessageQueueAttr_t *attr)
 {
-    if (IsIrqContext() || (msg_count == 0U) || (msg_size == 0U))
-        return nullptr;
+    osMessageQueueId_t result;
 
-    if (msg_count > stk::sync::MessageQueue::CAPACITY_MAX)
-        return nullptr;
-
-    const char *name         = (attr != nullptr ? attr->name    : nullptr);
-    void       *cb_mem       = (attr != nullptr ? attr->cb_mem  : nullptr);
-    uint32_t    cb_sz        = (attr != nullptr ? attr->cb_size : 0U);
-    void       *ext_buf      = (attr != nullptr ? attr->mq_mem  : nullptr);
-    uint32_t    ext_buf_size = (attr != nullptr ? attr->mq_size : 0U);
-
-    const uint32_t buf_required = msg_count * msg_size;
-
-    StkMessageQueue *mq = nullptr;
-
-    if ((ext_buf != nullptr) && (ext_buf_size >= buf_required))
+    if (IsIrqContext() || (msg_count == 0U) || (msg_size == 0U) || 
+        (msg_count > stk::sync::MessageQueue::CAPACITY_MAX))
     {
-        // Data buffer: use caller-supplied memory.
-        mq = PlacementNewOrHeap<StkMessageQueue>(cb_mem, cb_sz,
-            msg_count, msg_size, name, static_cast<uint8_t *>(ext_buf));
+        result = nullptr;
     }
     else
     {
-        // Data buffer: heap-allocated inside StkMessageQueue constructor.
-        mq = PlacementNewOrHeap<StkMessageQueue>(cb_mem, cb_sz,
-            msg_count, msg_size, name);
+        const char      *const name    = ((attr != nullptr) ? attr->name    : nullptr);
+        void            *const cb_mem  = ((attr != nullptr) ? attr->cb_mem  : nullptr);
+        const uint32_t   cb_sz         = ((attr != nullptr) ? attr->cb_size : 0U);
+        void            *const ext_buf = ((attr != nullptr) ? attr->mq_mem  : nullptr);
+        const uint32_t   ext_buf_size  = ((attr != nullptr) ? attr->mq_size : 0U);
 
-        if ((mq != nullptr) && (mq->m_mq.GetBuffer() == nullptr))
+        const uint32_t buf_required = (msg_count * msg_size);
+
+        StkMessageQueue *mq;
+
+        if ((ext_buf != nullptr) && (ext_buf_size >= buf_required))
         {
-            ObjDestroy(mq);
-            return nullptr;
+            // Data buffer: use caller-supplied memory.
+            mq = PlacementNewOrHeap<StkMessageQueue>(cb_mem, cb_sz,
+                msg_count, msg_size, name, static_cast<uint8_t *>(ext_buf));
         }
+        else
+        {
+            // Data buffer: heap-allocated inside StkMessageQueue constructor.
+            mq = PlacementNewOrHeap<StkMessageQueue>(cb_mem, cb_sz,
+                msg_count, msg_size, name);
+            
+            // Validate
+            if (mq != nullptr)
+            {
+                if (mq->m_mq.GetBuffer() == nullptr)
+                {
+                    ObjDestroy(mq);
+                    mq = nullptr;
+                }
+            }
+        }
+
+        result = static_cast<osMessageQueueId_t>(mq);
     }
 
-    return static_cast<osMessageQueueId_t>(mq);
+    return result;
 }
 
 const char *osMessageQueueGetName(osMessageQueueId_t mq_id)
 {
-    if (mq_id == nullptr)
-        return nullptr;
+    const char *result;
 
-    return static_cast<StkMessageQueue *>(mq_id)->m_mq.GetTraceName();
+    if (mq_id == nullptr)
+    {
+        result = nullptr;
+    }
+    else
+    {
+        result = static_cast<StkMessageQueue *>(mq_id)->m_mq.GetTraceName();
+    }
+
+    return result;
 }
 
 osStatus_t osMessageQueuePut(osMessageQueueId_t mq_id, const void *msg_ptr,
                              uint8_t /*msg_prio*/, uint32_t timeout)
 {
-    if (!mq_id || !msg_ptr)
-        return osErrorParameter;
-    if (IsIrqContext() && (timeout != 0U))
-        return osErrorISR;
+    osStatus_t result;
 
-    stk::Timeout stk_timeout = CmsisTimeoutToStk(timeout);
+    if ((mq_id == nullptr) || (msg_ptr == nullptr))
+    {
+        result = osErrorParameter;
+    }
+    else if (IsIrqContext() && (timeout != 0U))
+    {
+        result = osErrorISR;
+    }
+    else
+    {
+        const stk::Timeout stk_timeout = CmsisTimeoutToStk(timeout);
 
-    if (!static_cast<StkMessageQueue *>(mq_id)->m_mq.Put(msg_ptr, stk_timeout))
-        return ((stk_timeout == stk::NO_WAIT) ? osErrorResource : osErrorTimeout);
+        if (!static_cast<StkMessageQueue *>(mq_id)->m_mq.Put(msg_ptr, stk_timeout))
+        {
+            result = ((stk_timeout == stk::NO_WAIT) ? osErrorResource : osErrorTimeout);
+        }
+        else
+        {
+            result = osOK;
+        }
+    }
 
-    return osOK;
+    return result;
 }
 
 osStatus_t osMessageQueueGet(osMessageQueueId_t mq_id, void *msg_ptr,
                              uint8_t *msg_prio, uint32_t timeout)
 {
-    if (!mq_id || !msg_ptr)
-        return osErrorParameter;
-    if (IsIrqContext() && (timeout != 0U))
-        return osErrorISR;
+    osStatus_t result;
 
-    stk::Timeout stk_timeout = CmsisTimeoutToStk(timeout);
+    if ((mq_id == nullptr) || (msg_ptr == nullptr))
+    {
+        result = osErrorParameter;
+    }
+    else if (IsIrqContext() && (timeout != 0U))
+    {
+        result = osErrorISR;
+    }
+    else
+    {
+        const stk::Timeout stk_timeout = CmsisTimeoutToStk(timeout);
 
-    if (!static_cast<StkMessageQueue *>(mq_id)->m_mq.Get(msg_ptr, stk_timeout))
-        return ((stk_timeout == stk::NO_WAIT) ? osErrorResource : osErrorTimeout);
+        if (!static_cast<StkMessageQueue *>(mq_id)->m_mq.Get(msg_ptr, stk_timeout))
+        {
+            result = ((stk_timeout == stk::NO_WAIT) ? osErrorResource : osErrorTimeout);
+        }
+        else
+        {
+            if (msg_prio != nullptr)
+            {
+                *msg_prio = 0U; // STK queues have no priority lanes.
+            }
+            result = osOK;
+        }
+    }
 
-    if (msg_prio)
-        *msg_prio = 0U; // STK queues have no priority lanes.
-
-    return osOK;
+    return result;
 }
 
 uint32_t osMessageQueueGetCapacity(osMessageQueueId_t mq_id)
 {
-    if (mq_id == nullptr)
-        return 0U;
+    uint32_t result;
 
-    return static_cast<uint32_t>(static_cast<StkMessageQueue *>(mq_id)->m_mq.GetCapacity());
+    if (mq_id == nullptr)
+    {
+        result = 0U;
+    }
+    else
+    {
+        result = static_cast<uint32_t>(static_cast<StkMessageQueue *>(mq_id)->m_mq.GetCapacity());
+    }
+
+    return result;
 }
 
 uint32_t osMessageQueueGetMsgSize(osMessageQueueId_t mq_id)
 {
-    if (mq_id == nullptr)
-        return 0U;
+    uint32_t result;
 
-    return static_cast<uint32_t>(static_cast<StkMessageQueue *>(mq_id)->m_mq.GetMsgSize());
+    if (mq_id == nullptr)
+    {
+        result = 0U;
+    }
+    else
+    {
+        result = static_cast<uint32_t>(static_cast<StkMessageQueue *>(mq_id)->m_mq.GetMsgSize());
+    }
+
+    return result;
 }
 
 uint32_t osMessageQueueGetCount(osMessageQueueId_t mq_id)
 {
-    if (mq_id == nullptr)
-        return 0U;
+    uint32_t result;
 
-    return static_cast<uint32_t>(static_cast<StkMessageQueue *>(mq_id)->m_mq.GetCount());
+    if (mq_id == nullptr)
+    {
+        result = 0U;
+    }
+    else
+    {
+        result = static_cast<uint32_t>(static_cast<StkMessageQueue *>(mq_id)->m_mq.GetCount());
+    }
+
+    return result;
 }
 
 uint32_t osMessageQueueGetSpace(osMessageQueueId_t mq_id)
 {
-    if (mq_id == nullptr)
-        return 0U;
+    uint32_t result;
 
-    return static_cast<uint32_t>(static_cast<StkMessageQueue *>(mq_id)->m_mq.GetSpace());
+    if (mq_id == nullptr)
+    {
+        result = 0U;
+    }
+    else
+    {
+        result = static_cast<uint32_t>(static_cast<StkMessageQueue *>(mq_id)->m_mq.GetSpace());
+    }
+
+    return result;
 }
 
 osStatus_t osMessageQueueReset(osMessageQueueId_t mq_id)
 {
-    if (IsIrqContext() || (mq_id == nullptr))
-        return (IsIrqContext() ? osErrorISR : osErrorParameter);
+    osStatus_t result;
 
-    static_cast<StkMessageQueue *>(mq_id)->m_mq.Reset();
+    if (IsIrqContext())
+    {
+        result = osErrorISR;
+    }
+    else if (mq_id == nullptr)
+    {
+        result = osErrorParameter;
+    }
+    else
+    {
+        static_cast<StkMessageQueue *>(mq_id)->m_mq.Reset();
+        result = osOK;
+    }
 
-    return osOK;
+    return result;
 }
 
 osStatus_t osMessageQueueDelete(osMessageQueueId_t mq_id)
 {
-    if (IsIrqContext() || (mq_id == nullptr))
-        return (IsIrqContext() ? osErrorISR : osErrorParameter);
+    osStatus_t result;
 
-    ObjDestroy(static_cast<StkMessageQueue *>(mq_id));
+    if (IsIrqContext())
+    {
+        result = osErrorISR;
+    }
+    else if (mq_id == nullptr)
+    {
+        result = osErrorParameter;
+    }
+    else
+    {
+        ObjDestroy(static_cast<StkMessageQueue *>(mq_id));
+        result = osOK;
+    }
 
-    return osOK;
+    return result;
 }

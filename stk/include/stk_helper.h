@@ -72,7 +72,7 @@ protected:
     /*! \brief Destructor.
         \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
     */
-    ~Task() = default;
+    STK_VIRT_DTOR ~Task() = default;
 
 private:
     typename StackMemoryDef<_StackSize>::Type m_stack; //!< Stack memory region, 16-byte aligned.
@@ -119,7 +119,7 @@ protected:
     /*! \brief Destructor.
         \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
     */
-    ~TaskW() = default;
+    STK_VIRT_DTOR ~TaskW() = default;
 
 private:
     typename StackMemoryDef<_StackSize>::Type m_stack; //!< Stack memory region, 16-byte aligned.
@@ -154,7 +154,7 @@ public:
     /*! \brief Destructor.
         \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
     */
-    ~StackMemoryWrapper() = default;
+    STK_VIRT_DTOR ~StackMemoryWrapper() = default;
 
     /*! \brief Get pointer to the first element of the wrapped stack array.
     */

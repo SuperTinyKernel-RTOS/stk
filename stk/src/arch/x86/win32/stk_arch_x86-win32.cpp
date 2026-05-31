@@ -259,7 +259,7 @@ static struct Context final : public PlatformContext
         DWORD   m_thread_id;  //!< task's thread id
     };
 
-    bool InitStack(EStackType stack_type, Stack *stack, IStackMemory *stack_memory, ITask *user_task);
+    void InitStack(EStackType stack_type, Stack *stack, IStackMemory *stack_memory, ITask *user_task);
     void ConfigureTime();
     void StartActiveTask();
     void CreateTimerThreadAndJoin();
@@ -614,7 +614,7 @@ void Context::Stop()
     m_started = false;
 }
 
-bool Context::InitStack(EStackType stack_type, Stack *stack, IStackMemory *stack_memory, ITask *user_task)
+void Context::InitStack(EStackType stack_type, Stack *stack, IStackMemory *stack_memory, ITask *user_task)
 {
     InitStackMemory(stack_memory);
 
@@ -644,8 +644,6 @@ bool Context::InitStack(EStackType stack_type, Stack *stack, IStackMemory *stack
     }
 
     stack->SP = hw::PtrToWord(ctx);
-
-    return true;
 }
 
 void PlatformX86Win32::Initialize(IEventHandler *event_handler, IKernelService *service, uint32_t resolution_us,
@@ -677,9 +675,9 @@ void PlatformX86Win32::Resume(Timeout elapsed_ticks)
     STK_ASSERT(false); // unsupported
 }
 
-bool PlatformX86Win32::InitStack(EStackType stack_type, Stack *stack, IStackMemory *stack_memory, ITask *user_task)
+void PlatformX86Win32::InitStack(EStackType stack_type, Stack *stack, IStackMemory *stack_memory, ITask *user_task)
 {
-    return GetContext().InitStack(stack_type, stack, stack_memory, user_task);
+    GetContext().InitStack(stack_type, stack, stack_memory, user_task);
 }
 
 uint32_t PlatformX86Win32::GetTickResolution() const
