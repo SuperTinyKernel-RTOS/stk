@@ -73,7 +73,7 @@ void signal_func (osThreadId_t tid)  {
 /*----------------------------------------------------------------------------
  *      Thread 1 'phaseA': Phase A output
  *---------------------------------------------------------------------------*/
-void phaseA (void */*argument*/) {
+void phaseA (void *argument) {
   for (;;) {
     osThreadFlagsWait(0x0001, osFlagsWaitAny ,osWaitForever);    /* wait for an event flag 0x0001 */
     Switch_On(0);
@@ -87,7 +87,7 @@ void phaseA (void */*argument*/) {
 /*----------------------------------------------------------------------------
  *      Thread 2 'phaseB': Phase B output
  *---------------------------------------------------------------------------*/
-void phaseB (void */*argument*/) {
+void phaseB (void *argument) {
   for (;;) {
     osThreadFlagsWait(0x0001, osFlagsWaitAny, osWaitForever);    /* wait for an event flag 0x0001 */
     Switch_On(1);
@@ -101,7 +101,7 @@ void phaseB (void */*argument*/) {
 /*----------------------------------------------------------------------------
  *      Thread 3 'phaseC': Phase C output
  *---------------------------------------------------------------------------*/
-void phaseC (void */*argument*/) {
+void phaseC (void *argument) {
   for (;;) {
     osThreadFlagsWait(0x0001, osFlagsWaitAny, osWaitForever);    /* wait for an event flag 0x0001 */
     Switch_On(2);
@@ -115,7 +115,7 @@ void phaseC (void */*argument*/) {
 /*----------------------------------------------------------------------------
  *      Thread 4 'phaseD': Phase D output
  *---------------------------------------------------------------------------*/
-void phaseD (void */*argument*/) {
+void phaseD (void *argument) {
   for (;;) {
     osThreadFlagsWait(0x0001, osFlagsWaitAny, osWaitForever);    /* wait for an event flag 0x0001 */
     Switch_On(3);
@@ -129,7 +129,7 @@ void phaseD (void */*argument*/) {
 /*----------------------------------------------------------------------------
  *      Thread 5 'clock': Signal Clock
  *---------------------------------------------------------------------------*/
-void clock (void */*argument*/) {
+void clock (void *argument) {
   for (;;) {
     osThreadFlagsWait(0x0100, osFlagsWaitAny, osWaitForever);    /* wait for an event flag 0x0100 */
     osDelay(80);                                                 /* delay  80ms                   */
@@ -139,7 +139,7 @@ void clock (void */*argument*/) {
 /*----------------------------------------------------------------------------
  *      Main: Initialize and start RTX Kernel
  *---------------------------------------------------------------------------*/
-void app_main (void */*argument*/) {
+void app_main (void *argument) {
 
   tid_phaseA = osThreadNew(phaseA, NULL, NULL);
   tid_phaseB = osThreadNew(phaseB, NULL, NULL);
