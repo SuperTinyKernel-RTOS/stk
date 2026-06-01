@@ -11,6 +11,8 @@
 #include "board.h"
 #include "../led.h"
 
+using namespace bsp;
+
 void Led::Init(Id led, bool init_state)
 {
     uint8_t logic_state = (init_state ? LOGIC_LED_ON : LOGIC_LED_OFF);
@@ -21,7 +23,6 @@ void Led::Init(Id led, bool init_state)
     case Led::GREEN: LED_GREEN_INIT(logic_state); break;
     case Led::BLUE: LED_BLUE_INIT(logic_state); break;
     default:
-        assert(false);
         break;
     }
 }

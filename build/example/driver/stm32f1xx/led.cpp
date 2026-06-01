@@ -12,6 +12,8 @@
 #include "stm32f1xx_hal_gpio.h"
 #include "../led.h"
 
+using namespace bsp;
+
 #define LED_PORT GPIOA
 
 static void Led_InitGpio(int32_t pin)

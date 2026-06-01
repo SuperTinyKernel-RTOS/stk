@@ -19,6 +19,8 @@
 
 #include "../cpu.h"
 
+using namespace bsp;
+
 void Cpu::Start(uint8_t cpu_id, void (*entry_func)(void))
 {
     assert(cpu_id < 2);
