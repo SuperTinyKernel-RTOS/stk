@@ -46,6 +46,25 @@ template <typename T> static constexpr size_t StkGetWordCountForType()
     return ((sizeof(T) + sizeof(stk::Word) - 1) / sizeof(stk::Word));
 }
 
+// Custom strcmp replacement.
+static int32_t FreertosStrcmp(const char str1[], const char str2[]) // MISRA: declared as array, not pointer to allow indexed access
+{
+    size_t index = 0U;
+    int32_t result = 0;
+
+    // Loop until the end of either string or until a mismatch is found
+    while ((str1[index] != '\0') && (str2[index] != '\0') && (str1[index] == str2[index]))
+    {
+        index++;
+    }
+
+    // Calculate the difference between the characters where the loop stopped
+    // Cast to int to match standard strcmp return type
+    result = static_cast<int32_t>(str1[index]) - static_cast<int32_t>(str2[index]);
+
+    return result;
+}
+
 // -----------------------------------------------------------------------------
 // Private memory allocators (we define malloc, free here to overcome absence of declaration in
 // case of -ffreestanding compiler flag).
@@ -1362,7 +1381,7 @@ TaskHandle_t xTaskGetHandle(const char *pcNameToQuery)
     g_StkKernel.EnumerateTasksT<FREERTOS_STK_MAX_TASKS>([&](stk::ITask *task) -> bool
     {
         if ((task->GetTraceName() != nullptr) &&
-            (strcmp(task->GetTraceName(), pcNameToQuery) == 0))
+            (FreertosStrcmp(task->GetTraceName(), pcNameToQuery) == 0))
         {
             found = static_cast<TaskHandle_t>(task);
             return false; // stop iteration
@@ -4237,7 +4256,7 @@ size_t xMessageBufferSend(MessageBufferHandle_t xMessageBuffer,
         return 0U;
 
     // 2. Copy payload into the block.
-    memcpy(blk, pvTxData, xDataLengthBytes);
+    STK_MEMCPY(blk, pvTxData, xDataLengthBytes);
 
     // 3. Enqueue the envelope (should always succeed: pool and eq are 1:1,
     //    but guard with NO_WAIT to avoid deadlock if they desync).
@@ -4291,7 +4310,7 @@ size_t xMessageBufferReceive(MessageBufferHandle_t xMessageBuffer,
     }
 
     // 3. Copy payload out and return the block.
-    memcpy(pvRxData, env.blk, env.len);
+    STK_MEMCPY(pvRxData, env.blk, env.len);
     mb->m_pool.Free(env.blk);
 
     // Fire receive-complete callback outside any critical section.
@@ -4424,7 +4443,7 @@ size_t xMessageBufferSendFromISR(MessageBufferHandle_t  xMessageBuffer,
         return 0U; // pool full — no block consumed, nothing to free
 
     // Step 2: copy payload.
-    memcpy(blk, pvTxData, xDataLengthBytes);
+    STK_MEMCPY(blk, pvTxData, xDataLengthBytes);
 
     // Step 3: non-blocking enqueue.
     FrtosMessageBuffer::MsgEnvelope env = { xDataLengthBytes, blk };
@@ -4478,7 +4497,7 @@ size_t xMessageBufferReceiveFromISR(MessageBufferHandle_t  xMessageBuffer,
     }
 
     // Step 3: copy payload out and release pool block.
-    memcpy(pvRxData, env.blk, env.len);
+    STK_MEMCPY(pvRxData, env.blk, env.len);
     mb->m_pool.Free(env.blk);
 
     // Fire receive-complete callback outside any critical section.
