@@ -248,7 +248,6 @@ int main(int argc, char* argv[])
 
   osKernelInitialize();
   osThreadNew(app_main, NULL, NULL);
-
   if (osKernelGetState() == osKernelReady) {
     osKernelStart();
   }

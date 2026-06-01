@@ -460,14 +460,14 @@ static T *PlacementNewOrHeap(void *mem, size_t size, const Args &... args)
 
     if ((mem != nullptr) && (size >= sizeof(T)))
     {
-        obj = new (mem) T(args...); 
+        obj = new (mem) T(args...);
         obj->m_cb_owned = false;
     }
     else
     {
         obj = new (std::nothrow) T(args...);
         // m_cb_owned is already true from the constructor default
-        STK_ASSERT(obj != nullptr); 
+        STK_ASSERT(obj != nullptr);
     }
 
     return obj;
@@ -844,17 +844,13 @@ osThreadId_t osThreadNew(osThreadFunc_t func, void *argument, const osThreadAttr
             th->m_name       = (attr != nullptr) ? attr->name : nullptr;
             th->m_join_state = (is_joinable ? StkThread::JoinState::Joinable : StkThread::JoinState::Detached);
 
-            size_t stack_words = CMSIS_STK_DEFAULT_STACK_WORDS;
-
             // stack configuration
             if (attr != nullptr)
             {
-                stack_words = stk::Max<size_t>(attr->stack_size / sizeof(stk::Word), CMSIS_STK_MIN_STACK_WORDS);
-              
                 if ((attr->stack_mem != nullptr) && (attr->stack_size != 0U))
                 {
                     th->m_stack       = static_cast<stk::Word *>(attr->stack_mem);
-                    th->m_stack_size  = stack_words;
+                    th->m_stack_size  = stk::Max<size_t>(attr->stack_size / sizeof(stk::Word), CMSIS_STK_MIN_STACK_WORDS);
                     th->m_stack_owned = false;
                 }
             }
@@ -862,6 +858,8 @@ osThreadId_t osThreadNew(osThreadFunc_t func, void *argument, const osThreadAttr
             // allocate stack memory if not caller-provided
             if (th->m_stack == nullptr)
             {
+                const size_t stack_words = CMSIS_STK_DEFAULT_STACK_WORDS;
+
                 th->m_stack = new (std::nothrow) stk::Word[stack_words];
                 STK_ASSERT(th->m_stack != nullptr);
                 
