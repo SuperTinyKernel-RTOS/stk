@@ -149,6 +149,24 @@ typedef void (*stk_task_entry_t)(void *arg);
     #endif
 #endif
 
+/*! \def       STK_DEFINE_STACK_POOL
+    \brief     Allocates a statically bound, multi-dimensional stack pool for tasks.
+    \param[in] name: Identifier name of the generated array.
+    \param[in] max_tasks: Maximum number of tasks (rows in the array).
+    \param[in] stack_size: Size of each individual stack in words (columns).
+    \see       STK_GET_STACK_FROM_POOL
+*/
+#define STK_DEFINE_STACK_POOL(name, max_tasks, stack_size) \
+    static stk_word_t name[max_tasks][stack_size] __stk_c_stack
+
+/*! \def       STK_GET_STACK_FROM_POOL
+    \brief     Retrieves the base stack pointer for a specific task ID from a stack pool.
+    \param[in] name: Identifier name of the allocated stack pool.
+    \param[in] task_id: Index of the task whose stack pointer is requested.
+    \see       STK_DEFINE_STACK_POOL
+*/
+#define STK_GET_STACK_FROM_POOL(name, task_id) (name[task_id])
+
 // =============================================================================
 // Attributes
 // =============================================================================
