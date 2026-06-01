@@ -22,6 +22,7 @@ void Led::Init(Id led, bool init_state)
     case Led::RED: LED_RED_INIT(logic_state); break;
     case Led::GREEN: LED_GREEN_INIT(logic_state); break;
     case Led::BLUE: LED_BLUE_INIT(logic_state); break;
+    case Led::ORANGE: LED_BLUE_INIT(logic_state); LED_RED_INIT(logic_state); break;
     default:
         break;
     }
@@ -34,6 +35,18 @@ void Led::Set(Id led, bool state)
     case Led::RED: (state ? LED_RED_ON() : LED_RED_OFF()); break;
     case Led::GREEN: (state ? LED_GREEN_ON() : LED_GREEN_OFF()); break;
     case Led::BLUE: (state ? LED_BLUE_ON() : LED_BLUE_OFF()); break;
+    case Led::ORANGE:
+        if (state)
+        {
+            LED_BLUE_ON();
+            LED_RED_ON();
+        }
+        else
+        {
+            LED_BLUE_OFF();
+            LED_RED_OFF();
+        }
+        break;
     default:
         break;
     }
