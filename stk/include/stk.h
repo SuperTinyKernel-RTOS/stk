@@ -167,7 +167,7 @@ protected:
         /*! \brief  Get stack descriptor for this task slot.
             \return Stack info (SP register value and access mode flags).
         */
-        Stack GetUserStack() const { return m_stack;}
+        Stack GetUserStack() const override { return m_stack;}
 
         /*! \brief  Check whether this slot is bound to a user task.
             \return \c true if a user task is assigned (m_user != NULL); \c false if the slot is free.
