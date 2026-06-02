@@ -45,7 +45,7 @@ struct Led
         }
     }
     static void Set(Id led, bool state);
-    static void SwitchOnExclusive(Id led)
+    static inline void SwitchOnExclusive(Id led)
     {
         for (uint8_t i = 0U; i < LED_MAX; ++i)
         {
