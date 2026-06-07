@@ -324,31 +324,31 @@ void stk_kernel_init(stk_kernel_t *k, uint32_t tick_period_us);
 
 /*! \brief     Add task to non-HRT kernel (static or dynamic).
     \param[in] k: Kernel handle.
-    \param[in] task: Task handle created with one of stk_task_create_* functions.
+    \param[in] tsk: Task handle created with one of stk_task_create_* functions.
     \note      For static kernels this must be done before stk_kernel_start().
 */
-void stk_kernel_add_task(stk_kernel_t *k, stk_task_t *task);
+void stk_kernel_add_task(stk_kernel_t *k, stk_task_t *tsk);
 
 /*! \brief     Add task with HRT timing parameters (HRT kernels only).
     \param[in] k: Kernel handle.
-    \param[in] task: Task handle.
+    \param[in] tsk: Task handle.
     \param[in] periodicity_ticks: Period in ticks.
     \param[in] deadline_ticks: Relative deadline in ticks.
     \param[in] start_delay_ticks: Initial offset / phase in ticks (>= 0).
     \note      Must be called after stk_kernel_init() and before stk_kernel_start().
 */
 void stk_kernel_add_task_hrt(stk_kernel_t *k,
-                             stk_task_t *task,
-                             int32_t periodicity_ticks,
-                             int32_t deadline_ticks,
-                             int32_t start_delay_ticks);
+                             stk_task_t   *tsk,
+                             int32_t       periodicity_ticks,
+                             int32_t       deadline_ticks,
+                             int32_t       start_delay_ticks);
 
 /*! \brief     Remove finished task from dynamic kernel.
     \param[in] k: Kernel handle.
-    \param[in] task: Task that has already returned from its entry function.
+    \param[in] tsk: Task that has already returned from its entry function.
     \note      Only valid in dynamic kernels. Task must have exited (returned from entry function).
 */
-void stk_kernel_remove_task(stk_kernel_t *k, stk_task_t *task);
+void stk_kernel_remove_task(stk_kernel_t *k, stk_task_t *tsk);
 
 /*! \brief     Start the scheduler - never returns.
     \param[in] k: Kernel handle.
@@ -554,41 +554,41 @@ stk_task_t *stk_task_create_user(stk_task_entry_t  entry,
                                  uint32_t          stack_size);
 
 /*! \brief     Set task weight (used only by Smooth Weighted Round Robin).
-    \param[in] task: Task handle.
+    \param[in] tsk: Task handle.
     \param[in] weight: Positive weight value (recommended 1–16777215).
     \note      Must be called before adding task to kernel.
     \see       SwitchStrategySmoothWeightedRoundRobin.
 */
-void stk_task_set_weight(stk_task_t *task, stk_weight_t weight);
+void stk_task_set_weight(stk_task_t *tsk, stk_weight_t weight);
 
 /*! \brief     Set task priority (used only by Fixed Priority scheduler).
-    \param[in] task: Task handle.
+    \param[in] tsk: Task handle.
     \param[in] priority: Priority level [0 = lowest … 31 = highest].
     \note      Must be called before adding task to kernel.
 */
-void stk_task_set_priority(stk_task_t *task, uint8_t priority);
+void stk_task_set_priority(stk_task_t *tsk, uint8_t priority);
 
 /*! \brief     Assign human-readable task name (for tracing/debugging).
-    \param[in] task: Task handle.
+    \param[in] tsk: Task handle.
     \param[in] tname: Null-terminated string (may be NULL).
 */
-void stk_task_set_name(stk_task_t *task, const char *tname);
+void stk_task_set_name(stk_task_t *tsk, const char *tname);
 
 /*! \brief     Get human-readable task name previously set with stk_task_set_name().
-    \param[in] task: Task handle.
+    \param[in] tsk: Task handle.
     \return    Null-terminated name string, or NULL if not set.
     \note      ISR-safe (reads a stored pointer, no kernel call).
 */
-const char *stk_task_get_name(const stk_task_t *task);
+const char *stk_task_get_name(const stk_task_t *tsk);
 
 /*! \brief     Get the unique identifier of a task.
-    \param[in] task: Task handle.
+    \param[in] tsk: Task handle.
     \return    Task identifier (stk_tid_t). Equivalent to the value stk_tid() returns
                when called from within that task.
     \note      ISR-safe.
     \see       stk_tid
 */
-stk_tid_t stk_task_get_id(const stk_task_t *task);
+stk_tid_t stk_task_get_id(const stk_task_t *tsk);
 
 // =============================================================================
 // Services available from inside tasks
@@ -670,7 +670,7 @@ static inline stk_time_t stk_ms_from_ticks(stk_tick_t ticks)
     \return    64-bit hardware counter value. Useful for sub-tick timing measurements.
     \note      ISR-safe.
 */
-uint64_t stk_sys_timer_count(void);
+stk_cycle_t stk_sys_timer_count(void);
 
 /*! \brief     Get system timer frequency in Hz.
     \return    Timer frequency (Hz). Divide stk_sys_timer_count() differences by this value
@@ -687,7 +687,7 @@ uint32_t stk_sys_timer_frequency(void);
     \return    64-bit cycle count. Resolution is one clock cycle.
     \note      ISR-safe. Use stk_hires_frequency() to convert to real time.
 */
-uint64_t stk_hires_cycles(void);
+stk_cycle_t stk_hires_cycles(void);
 
 /*! \brief     Get CPU clock frequency in Hz.
     \return    Clock frequency in Hz.
@@ -773,11 +773,11 @@ void stk_sleep_cancel(stk_tid_t tid);
 void stk_kernel_destroy(stk_kernel_t *k);
 
 /*! \brief     Destroy dynamically created task object.
-    \param[in] task: Task handle.
+    \param[in] tsk: Task handle.
     \note      Only valid for tasks created with dynamic creation functions.
                Task must no longer be scheduled (must have exited or been removed).
 */
-void stk_task_destroy(stk_task_t *task);
+void stk_task_destroy(stk_task_t *tsk);
 
 // =============================================================================
 // Thread-Local Storage (TLS)
@@ -1397,11 +1397,11 @@ size_t stk_pipe_tryread_bulk(stk_pipe_t *pipe, void *dst, size_t count);
     \return    Number of elements actually read (0 if timeout fired before trigger was reached).
     \warning   ISR-safe only with \a timeout = \c STK_NO_WAIT.
 */
-size_t stk_pipe_read_bulk_triggered(stk_pipe_t *pipe,
-                                    void       *dst,
-                                    size_t      trigger,
-                                    size_t      max_count,
-                                    int32_t     timeout);
+size_t stk_pipe_read_bulk_triggered(stk_pipe_t   *pipe,
+                                    void         *dst,
+                                    size_t        trigger,
+                                    size_t        max_count,
+                                    stk_timeout_t timeout);
 
 /*! \brief     Non-blocking variant of stk_pipe_read_bulk_triggered.
     \details   Returns immediately with however many elements are available, up to

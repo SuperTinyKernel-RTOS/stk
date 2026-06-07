@@ -143,11 +143,11 @@ int64_t stk_timerhost_get_time_now(const stk_timerhost_t *host);
 stk_timer_t *stk_timer_create(stk_timer_callback_t callback, void *user_data);
 
 /*! \brief     Return a timer handle back to the static pool.
-    \param[in] timer: Timer handle.
+    \param[in] tmr: Timer handle.
     \warning   The timer must have been stopped (or never started) before calling this.
                Destroying an active timer is a programming error and triggers an assertion.
 */
-void stk_timer_destroy(stk_timer_t *timer);
+void stk_timer_destroy(stk_timer_t *tmr);
 
 // =============================================================================
 // Timer control
@@ -155,32 +155,32 @@ void stk_timer_destroy(stk_timer_t *timer);
 
 /*! \brief     Start a timer.
     \param[in] host: TimerHost that will manage this timer.
-    \param[in] timer: Timer handle.  Must not already be active.
+    \param[in] tmr: Timer handle.  Must not already be active.
     \param[in] delay: Initial delay in ticks before the first expiration.
     \param[in] period: Reload period in ticks.  Pass 0 for a one-shot timer.
     \return    \c true on success, \c false if the timer is already active or
                the command queue is full.
 */
 bool stk_timer_start(stk_timerhost_t *host,
-                     stk_timer_t     *timer,
+                     stk_timer_t     *tmr,
                      uint32_t         delay,
                      uint32_t         period);
 
 /*! \brief     Stop a running timer.
     \param[in] host: TimerHost managing the timer.
-    \param[in] timer: Timer handle.  Must be currently active.
+    \param[in] tmr: Timer handle.  Must be currently active.
     \return    \c true on success, \c false if the timer is not active or
                the command queue is full.
 */
-bool stk_timer_stop(stk_timerhost_t *host, stk_timer_t *timer);
+bool stk_timer_stop(stk_timerhost_t *host, stk_timer_t *tmr);
 
 /*! \brief     Reset a periodic timer's deadline (re-arm from now).
     \param[in] host: TimerHost managing the timer.
-    \param[in] timer: Timer handle.  Must be active and periodic (period != 0).
+    \param[in] tmr: Timer handle.  Must be active and periodic (period != 0).
     \return    \c true on success, \c false if preconditions are not met or
                the command queue is full.
 */
-bool stk_timer_reset(stk_timerhost_t *host, stk_timer_t *timer);
+bool stk_timer_reset(stk_timerhost_t *host, stk_timer_t *tmr);
 
 /*! \brief     Atomically stop and re-start a timer.
     \details   Unlike calling \a stk_timer_stop() + \a stk_timer_start(), this
@@ -188,13 +188,13 @@ bool stk_timer_reset(stk_timerhost_t *host, stk_timer_t *timer);
                fire between the implicit stop and re-start.  Consumes only one
                command queue slot.
     \param[in] host: TimerHost managing the timer.
-    \param[in] timer: Timer handle (active or inactive).
+    \param[in] tmr: Timer handle (active or inactive).
     \param[in] delay: Initial delay in ticks before the first expiration.
     \param[in] period: Reload period in ticks (0 = one-shot).
     \return    \c true on success, \c false if the command queue is full.
 */
 bool stk_timer_restart(stk_timerhost_t *host,
-                       stk_timer_t     *timer,
+                       stk_timer_t     *tmr,
                        uint32_t         delay,
                        uint32_t         period);
 
@@ -207,13 +207,13 @@ bool stk_timer_restart(stk_timerhost_t *host,
                into a single atomic operation, eliminating the TOCTOU race.
                If the timer is active but one-shot, no action is taken.
     \param[in] host: TimerHost managing the timer.
-    \param[in] timer: Timer handle (active or inactive).
+    \param[in] tmr: Timer handle (active or inactive).
     \param[in] delay: Initial delay in ticks (used only when starting).
     \param[in] period_ticks: Reload period in ticks (used only when starting, 0 = one-shot).
     \return    \c true on success, \c false if the command queue is full.
 */
 bool stk_timer_start_or_reset(stk_timerhost_t *host,
-                              stk_timer_t     *timer,
+                              stk_timer_t     *tmr,
                               uint32_t         delay,
                               uint32_t         period_ticks);
 
@@ -221,13 +221,13 @@ bool stk_timer_start_or_reset(stk_timerhost_t *host,
     \details   The new period takes effect on the next reload after the current deadline fires.
                To apply immediately, follow with \a stk_timer_reset().
     \param[in] host: TimerHost managing the timer.
-    \param[in] timer: Timer handle.  Must be active and periodic.
+    \param[in] tmr: Timer handle.  Must be active and periodic.
     \param[in] period_ticks: New reload period in ticks.  Must be non-zero.
     \return    \c true on success, \c false if preconditions are not met or
                the command queue is full.
 */
 bool stk_timer_set_period(stk_timerhost_t *host,
-                          stk_timer_t     *timer,
+                          stk_timer_t     *tmr,
                           uint32_t         period_ticks);
 
 // =============================================================================
@@ -235,37 +235,37 @@ bool stk_timer_set_period(stk_timerhost_t *host,
 // =============================================================================
 
 /*! \brief     Check whether a timer is currently active (started and not yet expired/stopped).
-    \param[in] timer: Timer handle.
+    \param[in] tmr: Timer handle.
     \return    \c true if the timer is active.
     \note      Advisory - may change immediately after the call.
 */
-bool stk_timer_is_active(const stk_timer_t *timer);
+bool stk_timer_is_active(const stk_timer_t *tmr);
 
 /*! \brief     Get the timer's reload period.
-    \param[in] timer: Timer handle.
+    \param[in] tmr: Timer handle.
     \return    Period in ticks, or 0 for a one-shot timer.
 */
-uint32_t stk_timer_get_period(const stk_timer_t *timer);
+uint32_t stk_timer_get_period(const stk_timer_t *tmr);
 
 /*! \brief     Get the absolute expiration tick count of the timer's next deadline.
-    \param[in] timer: Timer handle.
+    \param[in] tmr: Timer handle.
     \return    Absolute deadline (ticks).  Meaningful only when the timer is active.
 */
-int64_t stk_timer_get_deadline(const stk_timer_t *timer);
+int64_t stk_timer_get_deadline(const stk_timer_t *tmr);
 
 /*! \brief     Get the tick count at which the timer last expired.
-    \param[in] timer: Timer handle.
+    \param[in] tmr: Timer handle.
     \return    Expiration timestamp (ticks).  Zero if the timer has never fired.
 */
-int64_t stk_timer_get_timestamp(const stk_timer_t *timer);
+int64_t stk_timer_get_timestamp(const stk_timer_t *tmr);
 
 /*! \brief     Get remaining ticks until next expiration.
-    \param[in] timer: Timer handle.
+    \param[in] tmr: Timer handle.
     \return    Remaining ticks, or 0 if already expired or not active.
     \note      Computed from the last value written by the host's tick task -
                may be up to one tick-task wake cycle stale.
 */
-uint32_t stk_timer_get_remaining_ticks(const stk_timer_t *timer);
+uint32_t stk_timer_get_remaining_ticks(const stk_timer_t *tmr);
 
 // =============================================================================
 // PeriodicTrigger - lightweight in-place periodic polling helper
@@ -321,7 +321,7 @@ stk_periodic_trigger_t *stk_periodic_trigger_create(stk_periodic_trigger_mem_t *
 /*! \brief     Destroy instance (calls the C++ destructor in-place).
     \param[in] trig: Trigger handle. May be \c NULL (no-op).
 */
-void stk_periodic_trigger_destroy(stk_periodic_trigger_t *trig);
+void stk_periodic_trigger_destroy(stk_periodic_trigger_t *const trig);
 
 /*! \brief     Check whether the scheduled trigger time has been reached.
     \param[in] trig: Trigger handle (must be started).
@@ -336,7 +336,7 @@ void stk_periodic_trigger_destroy(stk_periodic_trigger_t *trig);
                calls will continue advancing one period at a time until
                the schedule catches up.
 */
-bool stk_periodic_trigger_poll(stk_periodic_trigger_t *const trig);
+bool stk_periodic_trigger_poll(stk_periodic_trigger_t *trig);
 
 /*! \brief     Change the trigger period while preserving phase.
     \param[in] trig: Trigger handle.
