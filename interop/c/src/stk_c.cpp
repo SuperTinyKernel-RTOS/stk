@@ -36,10 +36,40 @@ using namespace stk;
 
 #define STK_C_TASKS_MAX (STK_C_KERNEL_MAX_TASKS)
 
-static void FreeTask(const stk_task_t *task);
-
 // Forward decl.
 struct stk_task_t;
+
+// Cast from stk_kernel_t to IKernel without a warning.
+static __stk_forceinline IKernel *CastCToKernelInterface(stk_kernel_t *const k)
+{
+    return reinterpret_cast<IKernel *>(reinterpret_cast<void *>(k));
+}
+
+// Cast from const stk_kernel_t to const IKernel without a warning.
+static __stk_forceinline const IKernel *CastCToKernelInterfaceConst(const stk_kernel_t *const k)
+{
+    return reinterpret_cast<const IKernel *>(reinterpret_cast<const void *>(k));
+}
+
+// Cast from IKernel to stk_kernel_t without a warning.
+static __stk_forceinline stk_kernel_t *CastCppKernelInterfaceToC(IKernel *const k)
+{
+    return reinterpret_cast<stk_kernel_t *>(reinterpret_cast<void *>(k));
+}
+
+// Interop-private helpers
+namespace stk {
+namespace interop_c_helper {
+
+extern void InitializeTimerHost(stk_kernel_t *kernel, stk::time::TimerHost *th, EAccessMode amode)
+{
+    th->Initialize(CastCToKernelInterface(kernel), amode);
+}
+
+} // interop_c_helper
+} // stk
+
+static void FreeTask(const stk_task_t *tsk);
 
 class TaskWrapper final : public ITask
 {
@@ -51,7 +81,7 @@ public:
     /*! \brief Destructor.
         \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
     */
-    ~TaskWrapper() = default;
+    STK_VIRT_DTOR ~TaskWrapper() = default;
   
     // ITask
     EAccessMode GetAccessMode()              const override { return m_mode; }
@@ -64,7 +94,7 @@ public:
     size_t GetStackSize()      const override { return m_stack_size; }
     size_t GetStackSizeBytes() const override { return m_stack_size * sizeof(stk_word_t); }
 
-    void Initialize(stk_task_entry_t func, void *user_data, stk_word_t *stack,
+    void Initialize(stk_task_entry_t const func, void *user_data, stk_word_t *stack,
         size_t stack_size, EAccessMode mode)
     {
         m_func       = func;
@@ -82,10 +112,7 @@ private:
     STK_NONCOPYABLE_CLASS(TaskWrapper);
   
     void Run() override { m_func(m_user_data); }
-    void OnExit() override { FreeTask(ToStkTask()); }
-
-    //! Warning: stk_task_t::handle must be the first in stk_task_t struct.
-    stk_task_t *ToStkTask() { return reinterpret_cast<stk_task_t *>(this); }
+    void OnExit() override;
 
     stk_task_entry_t m_func;
     void            *m_user_data;
@@ -111,6 +138,17 @@ static struct TaskSlot
 }
 s_Tasks[STK_C_TASKS_MAX];
 
+// Cast from stk_task_t to TaskWrapper without a warning.
+static __stk_forceinline stk_task_t *CastCppTaskInterfaceToC(ITask *const t)
+{
+    return reinterpret_cast<stk_task_t *>(reinterpret_cast<void *>(t));
+}
+
+void TaskWrapper::OnExit() 
+{
+    FreeTask(CastCppTaskInterfaceToC(this)); 
+}
+
 // -----------------------------------------------------------------------------
 // EventOverriderWrapper - bridges stk_event_overrider_t callbacks into the
 // C++ IPlatform::IEventOverrider interface.
@@ -125,6 +163,11 @@ class EventOverrider final : public IPlatform::IEventOverrider
 public:
     EventOverrider() : m_cb(nullptr)
     {}
+
+    /*! \brief Destructor.
+        \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
+    */
+    STK_VIRT_DTOR ~EventOverrider() = default;
 
     /*! \brief     Bind or unbind a C-level overrider struct.
         \param[in] c: Pointer to a caller-owned stk_event_overrider_t, or nullptr
@@ -183,7 +226,7 @@ static void RegisterKernel(IKernel *k, uint8_t core_nr)
 
 static void UnregisterKernel(const IKernel *k)
 {
-    for (uint32_t i = 0; i < STK_C_CPU_COUNT; ++i)
+    for (uint32_t i = 0U; i < STK_C_CPU_COUNT; ++i)
     {
         if (s_KernelMap[i].kernel == k)
         {
@@ -196,73 +239,77 @@ static void UnregisterKernel(const IKernel *k)
 
 static void SetEventOverrider(IKernel *k, stk_event_overrider_t *overrider)
 {
-    for (uint32_t i = 0; i < STK_C_CPU_COUNT; ++i)
+    bool found = false;
+
+    for (uint32_t i = 0U; (i < STK_C_CPU_COUNT) && (!found); ++i)
     {
         if (s_KernelMap[i].kernel == k)
         {
             s_KernelMap[i].event_cb.SetCallback(overrider);
             k->GetPlatform()->SetEventOverrider(
-                (overrider != nullptr ? &s_KernelMap[i].event_cb : nullptr));
-            return;
+                (overrider != nullptr) ? &s_KernelMap[i].event_cb : nullptr);
+            found = true;
         }
     }
 
     // Kernel not found: stk_kernel_set_event_overrider() called before
     // stk_kernel_create() or after stk_kernel_destroy().
-    STK_ASSERT(false);
+    STK_ASSERT(found);
 }
 
 // -----------------------------------------------------------------------------
 // Helpers
 // -----------------------------------------------------------------------------
 
-static stk_task_t *AllocateTask(stk_task_entry_t entry,
-                                void *arg,
-                                stk_word_t *stack,
-                                uint32_t stack_size,
-                                EAccessMode mode)
+static stk_task_t *AllocateTask(stk_task_entry_t  entry,
+                                void             *arg,
+                                stk_word_t       *stack,
+                                uint32_t          stack_size,
+                                EAccessMode       amode)
 {
-    stk_task_t *task = nullptr;
+    stk_task_t *tsk = nullptr;
 
-    sync::ScopedCriticalSection __cs;
+    const sync::ScopedCriticalSection __cs;
 
-    for (uint32_t i = 0; i < STK_C_TASKS_MAX; ++i)
+    for (uint32_t i = 0U; i < STK_C_TASKS_MAX; ++i)
     {
         if (!s_Tasks[i].busy)
         {
             s_Tasks[i].busy = true;
 
-            task = &s_Tasks[i].task;
-            task->handle.Initialize(entry, arg, stack, stack_size, mode);
+            tsk = &s_Tasks[i].task;
+            tsk->handle.Initialize(entry, arg, stack, stack_size, amode);
             break;
         }
     }
 
-    STK_ASSERT(task != nullptr);
-    return task;
+    STK_ASSERT(tsk != nullptr);
+    return tsk;
 }
 
-void FreeTask(const stk_task_t *task)
+void FreeTask(const stk_task_t *tsk)
 {
-    sync::ScopedCriticalSection __cs;
+    bool found = false;
+    
+    const sync::ScopedCriticalSection __cs;
 
-    for (uint32_t i = 0; i < STK_C_TASKS_MAX; ++i)
+    for (uint32_t i = 0U; ((i < STK_C_TASKS_MAX) && !found); ++i)
     {
-        if (s_Tasks[i].busy && (task == &s_Tasks[i].task))
+        if (s_Tasks[i].busy && (tsk == &s_Tasks[i].task))
         {
             s_Tasks[i].busy = false;
-            return;
+            found = true;
         }
     }
 
-    STK_ASSERT(false);
+    STK_ASSERT(found);
 }
 
 // =============================================================================
 // C-interface
 // =============================================================================
 extern "C" {
-
+ 
 // -----------------------------------------------------------------------------
 // Kernel create/destroy wrappers
 // -----------------------------------------------------------------------------
@@ -278,15 +325,17 @@ extern "C" {
                             "Kernel memory size must be multiple of Word"); \
         alignas(alignof(KernelType_)) \
         static Word STK_KERNEL_MEM(X)[sizeof(KernelType_) / sizeof(Word)]; \
-        IKernel *kernel = new (STK_KERNEL_MEM(X)) KernelType_(); \
-        RegisterKernel(kernel, X); \
-        return reinterpret_cast<stk_kernel_t *>(kernel); \
+        k = new (STK_KERNEL_MEM(X)) KernelType_(); \
+        RegisterKernel(k, static_cast<uint8_t>(X)); \
+        break; \
     }
 
 stk_kernel_t *stk_kernel_create(uint8_t core_nr)
 {
-    STK_STATIC_ASSERT(STK_C_CPU_COUNT <= 8); // switch (core_nr) below handles cases 0..7; STK_C_KERNEL_TYPE_CPU_N is only defined up to N=7
+    STK_STATIC_ASSERT((STK_C_CPU_COUNT <= 8U)); // switch (core_nr) below handles cases 0..7; STK_C_KERNEL_TYPE_CPU_N is only defined up to N=7
     STK_ASSERT(core_nr < STK_C_CPU_COUNT);
+
+    IKernel *k;
 
     switch (core_nr)
     {
@@ -314,9 +363,12 @@ stk_kernel_t *stk_kernel_create(uint8_t core_nr)
 #ifdef STK_C_KERNEL_TYPE_CPU_7
     STK_KERNEL_CASE(7)
 #endif
-    default:
-        return nullptr;
+    default: {
+        k = nullptr;
+        break; }
     }
+
+    return CastCppKernelInterfaceToC(k);
 }
 
 void stk_kernel_destroy(stk_kernel_t *k)
@@ -327,7 +379,7 @@ void stk_kernel_destroy(stk_kernel_t *k)
     // the destructor: the platform teardown inside ~IKernel() may still invoke
     // GetPlatform() paths, and we must not leave a dangling overrider pointer
     // registered at that point.
-    UnregisterKernel(reinterpret_cast<IKernel *>(k));
+    UnregisterKernel(CastCToKernelInterface(k));
 }
 
 // -----------------------------------------------------------------------------
@@ -337,21 +389,21 @@ void stk_kernel_init(stk_kernel_t *k, uint32_t tick_period_us)
 {
     STK_ASSERT(k != nullptr);
 
-    reinterpret_cast<IKernel *>(k)->Initialize(tick_period_us);
+    CastCToKernelInterface(k)->Initialize(tick_period_us);
 }
 
 void stk_kernel_start(stk_kernel_t *k)
 {
     STK_ASSERT(k != nullptr);
 
-    reinterpret_cast<IKernel *>(k)->Start();
+    CastCToKernelInterface(k)->Start();
 }
 
 stk_kernel_state_t stk_kernel_get_state(const stk_kernel_t *k)
 {
     STK_ASSERT(k != nullptr);
 
-    return static_cast<stk_kernel_state_t>(reinterpret_cast<const stk::IKernel *>(k)->GetState());
+    return static_cast<stk_kernel_state_t>(CastCToKernelInterfaceConst(k)->GetState());
 }
 
 bool stk_kernel_is_schedulable(const stk_kernel_t *k)
@@ -359,56 +411,56 @@ bool stk_kernel_is_schedulable(const stk_kernel_t *k)
     STK_ASSERT(k != nullptr);
 
     return SchedulabilityCheck::IsSchedulableWCRT<STK_C_KERNEL_MAX_TASKS>(
-        reinterpret_cast<stk::IKernel *>(const_cast<stk_kernel_t *>(k))->GetSwitchStrategy());
+        const_cast<IKernel *>(CastCToKernelInterfaceConst(k))->GetSwitchStrategy());
 }
 
-void stk_kernel_add_task(stk_kernel_t *k, stk_task_t *task)
+void stk_kernel_add_task(stk_kernel_t *k, stk_task_t *tsk)
 {
     STK_ASSERT(k != nullptr);
-    STK_ASSERT(task != nullptr);
+    STK_ASSERT(tsk != nullptr);
 
-    reinterpret_cast<IKernel *>(k)->AddTask(&task->handle);
+    CastCToKernelInterface(k)->AddTask(&tsk->handle);
 }
 
-void stk_kernel_remove_task(stk_kernel_t *k, stk_task_t *task)
+void stk_kernel_remove_task(stk_kernel_t *k, stk_task_t *tsk)
 {
     STK_ASSERT(k != nullptr);
-    STK_ASSERT(task != nullptr);
+    STK_ASSERT(tsk != nullptr);
 
-    reinterpret_cast<IKernel *>(k)->RemoveTask(&task->handle);
+    CastCToKernelInterface(k)->RemoveTask(&tsk->handle);
 }
 
 bool stk_kernel_is_started(const stk_kernel_t *k)
 {
     STK_ASSERT(k != nullptr);
 
-    const stk::IKernel::EKernelState st = reinterpret_cast<const stk::IKernel *>(k)->GetState();
+    const stk::IKernel::EKernelState st = CastCToKernelInterfaceConst(k)->GetState();
     return ((st == stk::IKernel::KSTATE_RUNNING) || (st == stk::IKernel::KSTATE_SUSPENDED));
 }
 
-void stk_kernel_schedule_task_removal(stk_kernel_t *k, stk_task_t *task)
+void stk_kernel_schedule_task_removal(stk_kernel_t *k, stk_task_t *tsk)
 {
     STK_ASSERT(k != nullptr);
-    STK_ASSERT(task != nullptr);
+    STK_ASSERT(tsk != nullptr);
 
-    reinterpret_cast<IKernel *>(k)->ScheduleTaskRemoval(&task->handle);
+    CastCToKernelInterface(k)->ScheduleTaskRemoval(&tsk->handle);
 }
 
-void stk_kernel_suspend_task(stk_kernel_t *k, stk_task_t *task, bool *suspended)
+void stk_kernel_suspend_task(stk_kernel_t *k, stk_task_t *tsk, bool *suspended)
 {
     STK_ASSERT(k != nullptr);
-    STK_ASSERT(task != nullptr);
+    STK_ASSERT(tsk != nullptr);
     STK_ASSERT(suspended != nullptr);
 
-    reinterpret_cast<IKernel *>(k)->SuspendTask(&task->handle, *suspended);
+    CastCToKernelInterface(k)->SuspendTask(&tsk->handle, *suspended);
 }
 
-void stk_kernel_resume_task(stk_kernel_t *k, stk_task_t *task)
+void stk_kernel_resume_task(stk_kernel_t *k, stk_task_t *tsk)
 {
     STK_ASSERT(k != nullptr);
-    STK_ASSERT(task != nullptr);
+    STK_ASSERT(tsk != nullptr);
 
-    reinterpret_cast<IKernel *>(k)->ResumeTask(&task->handle);
+    CastCToKernelInterface(k)->ResumeTask(&tsk->handle);
 }
 
 size_t stk_kernel_enumerate_tasks(stk_kernel_t *k, stk_task_t **tasks, size_t max_count)
@@ -423,13 +475,13 @@ size_t stk_kernel_enumerate_tasks(stk_kernel_t *k, stk_task_t **tasks, size_t ma
         static_cast<size_t>(STK_C_TASKS_MAX);
 
     // Pass via ArrayView temporary object
-    const size_t ret_count = reinterpret_cast<IKernel *>(k)->EnumerateTasks(
-        ArrayView<stk::ITask*>(itasks, requested_size));
+    const size_t ret_count = CastCToKernelInterface(k)->EnumerateTasks(
+        ArrayView<stk::ITask *>(itasks, requested_size));
 
     ArrayView<stk_task_t *> output_view(tasks, max_count);
     for (size_t i = 0U; i < ret_count; ++i)
     {
-        output_view[i] = reinterpret_cast<stk_task_t *>(itasks[i]);
+        output_view[i] = CastCppTaskInterfaceToC(itasks[i]);
     }
 
     return ret_count;
@@ -439,50 +491,48 @@ stk_timeout_t stk_kernel_suspend(stk_kernel_t *k)
 {
     STK_ASSERT(k != nullptr);
 
-    return static_cast<stk_timeout_t>(
-        reinterpret_cast<IKernel *>(k)->GetPlatform()->Suspend());
+    return static_cast<stk_timeout_t>(CastCToKernelInterface(k)->GetPlatform()->Suspend());
 }
 
 void stk_kernel_resume(stk_kernel_t *k, stk_timeout_t elapsed_ticks)
 {
     STK_ASSERT(k != nullptr);
 
-    reinterpret_cast<IKernel *>(k)->GetPlatform()->Resume(
-        static_cast<stk::Timeout>(elapsed_ticks));
+    CastCToKernelInterface(k)->GetPlatform()->Resume(static_cast<stk::Timeout>(elapsed_ticks));
 }
 
 void stk_kernel_process_tick(stk_kernel_t *k)
 {
     STK_ASSERT(k != nullptr);
 
-    reinterpret_cast<IKernel *>(k)->GetPlatform()->ProcessTick();
+    CastCToKernelInterface(k)->GetPlatform()->ProcessTick();
 }
 
 void stk_kernel_process_hard_fault(stk_kernel_t *k)
 {
     STK_ASSERT(k != nullptr);
 
-    reinterpret_cast<IKernel *>(k)->GetPlatform()->ProcessHardFault();
+    CastCToKernelInterface(k)->GetPlatform()->ProcessHardFault();
 }
 
 void stk_kernel_set_event_overrider(stk_kernel_t *k, stk_event_overrider_t *overrider)
 {
     STK_ASSERT(k != nullptr);
 
-    SetEventOverrider(reinterpret_cast<IKernel *>(k), overrider);
+    SetEventOverrider(CastCToKernelInterface(k), overrider);
 }
 
 void stk_kernel_add_task_hrt(stk_kernel_t *k,
-                             stk_task_t *task,
-                             int32_t periodicity_ticks,
-                             int32_t deadline_ticks,
-                             int32_t start_delay_ticks)
+                             stk_task_t   *tsk,
+                             int32_t       periodicity_ticks,
+                             int32_t       deadline_ticks,
+                             int32_t       start_delay_ticks)
 {
     STK_ASSERT(k != nullptr);
-    STK_ASSERT(task != nullptr);
+    STK_ASSERT(tsk != nullptr);
 
-    reinterpret_cast<IKernel *>(k)->AddTask(
-        &task->handle,
+    CastCToKernelInterface(k)->AddTask(
+        &tsk->handle,
         periodicity_ticks,
         deadline_ticks,
         start_delay_ticks);
@@ -491,71 +541,72 @@ void stk_kernel_add_task_hrt(stk_kernel_t *k,
 // -----------------------------------------------------------------------------
 // Task creation
 // -----------------------------------------------------------------------------
-stk_task_t *stk_task_create_privileged(stk_task_entry_t entry,
-                                       void *arg,
-                                       stk_word_t *stack,
-                                       uint32_t stack_size)
+stk_task_t *stk_task_create_privileged(stk_task_entry_t  entry,
+                                       void             *arg,
+                                       stk_word_t       *stack,
+                                       uint32_t          stack_size)
 {
     STK_ASSERT(entry != nullptr);
     STK_ASSERT(stack != nullptr);
     STK_ASSERT(stack_size != 0);
 
-    return reinterpret_cast<stk_task_t *>(AllocateTask(entry, arg, stack, stack_size, ACCESS_PRIVILEGED));
+    return AllocateTask(entry, arg, stack, stack_size, ACCESS_PRIVILEGED);
 }
 
-stk_task_t *stk_task_create_user(stk_task_entry_t entry,
-                                 void *arg,
-                                 stk_word_t *stack,
-                                 uint32_t stack_size)
+stk_task_t *stk_task_create_user(stk_task_entry_t  entry,
+                                 void             *arg,
+                                 stk_word_t       *stack,
+                                 uint32_t          stack_size)
 {
     STK_ASSERT(entry != nullptr);
     STK_ASSERT(stack != nullptr);
     STK_ASSERT(stack_size != 0);
 
-    return reinterpret_cast<stk_task_t *>(AllocateTask(entry, arg, stack, stack_size, ACCESS_USER));
+    return AllocateTask(entry, arg, stack, stack_size, ACCESS_USER);
 }
 
-void stk_task_set_weight(stk_task_t *task, uint32_t weight)
+void stk_task_set_weight(stk_task_t *tsk, stk_weight_t weight)
 {
-    STK_ASSERT(task != nullptr);
-    STK_ASSERT(weight != 0);
+    STK_ASSERT(tsk != nullptr);
 
-    task->handle.SetWeight(weight);
+    tsk->handle.SetWeight(weight);
 }
 
-void stk_task_set_priority(stk_task_t *task, uint8_t priority)
+void stk_task_set_priority(stk_task_t *tsk, uint8_t priority)
 {
-    STK_ASSERT(priority <= 31);
+    STK_ASSERT(priority <= 31U);
+    
+    const stk_weight_t weight = static_cast<stk_weight_t>(priority);
 
-    stk_task_set_weight(task, priority);
+    stk_task_set_weight(tsk, weight);
 }
 
-void stk_task_set_name(stk_task_t *task, const char *tname)
+void stk_task_set_name(stk_task_t *tsk, const char *tname)
 {
-    STK_ASSERT(task != nullptr);
+    STK_ASSERT(tsk != nullptr);
 
-    task->handle.SetName(tname);
+    tsk->handle.SetName(tname);
 }
 
-const char *stk_task_get_name(const stk_task_t *task)
+const char *stk_task_get_name(const stk_task_t *tsk)
 {
-    STK_ASSERT(task != nullptr);
+    STK_ASSERT(tsk != nullptr);
 
-    return task->handle.GetTraceName();
+    return tsk->handle.GetTraceName();
 }
 
-stk_tid_t stk_task_get_id(const stk_task_t *task)
+stk_tid_t stk_task_get_id(const stk_task_t *tsk)
 {
-    STK_ASSERT(task != nullptr);
+    STK_ASSERT(tsk != nullptr);
 
-    return task->handle.GetId();
+    return tsk->handle.GetId();
 }
 
-void stk_task_destroy(stk_task_t *task)
+void stk_task_destroy(stk_task_t *tsk)
 {
-    STK_ASSERT(task != nullptr);
+    STK_ASSERT(tsk != nullptr);
 
-    FreeTask(task);
+    FreeTask(tsk);
 }
 
 // -----------------------------------------------------------------------------
@@ -575,7 +626,7 @@ void        stk_delay(stk_timeout_t ticks)     { stk::Delay(ticks); }
 void        stk_sleep(stk_timeout_t ticks)     { stk::Sleep(ticks); }
 void        stk_delay_ms(stk_timeout_t ms)     { stk::DelayMs(ms); }
 void        stk_sleep_ms(stk_timeout_t ms)     { stk::SleepMs(ms); }
-void        stk_sleep_until(stk_tick_t ts)     { stk::SleepUntil(ts); }
+bool        stk_sleep_until(stk_tick_t ts)     { return stk::SleepUntil(ts); }
 void        stk_sleep_cancel(stk_tid_t tid)    { stk::SleepCancel(tid); }
 void        stk_yield(void)                    { stk::Yield(); }
 

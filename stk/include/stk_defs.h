@@ -583,11 +583,11 @@ struct STK_ALLOCATE_COUNT
     \see   STK_ENDIAN_IDX_HI, hw::ReadVolatile64, hw::WriteVolatile64
 */
 #if defined(__BYTE_ORDER__) && (__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__)
-    #define STK_ENDIAN_IDX_HI (0) // big-endian: high word at index 0
-    #define STK_ENDIAN_IDX_LO (1) // big-endian: low word at index 1
+    #define STK_ENDIAN_IDX_HI (0U) // big-endian: high word at index 0
+    #define STK_ENDIAN_IDX_LO (1U) // big-endian: low word at index 1
 #else
-    #define STK_ENDIAN_IDX_HI (1) // little-endian (default): high word at index 1
-    #define STK_ENDIAN_IDX_LO (0) // little-endian (default): low word at index 0
+    #define STK_ENDIAN_IDX_HI (1U) // little-endian (default): high word at index 1
+    #define STK_ENDIAN_IDX_LO (0U) // little-endian (default): low word at index 0
 #endif
 
 /*! \def       STK_NONCOPYABLE_CLASS

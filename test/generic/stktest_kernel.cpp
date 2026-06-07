@@ -127,7 +127,7 @@ TEST(Kernel, AddTask)
 {
     Kernel<KERNEL_STATIC, 1, SwitchStrategyRR, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task;
-    const ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
+    ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
     PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
 
     kernel.Initialize();
@@ -240,7 +240,7 @@ TEST(Kernel, AddTaskWhenStarted)
 {
     Kernel<KERNEL_DYNAMIC, 2, SwitchStrategyRR, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task1, task2;
-    const ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
+    ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
 
     kernel.Initialize();
     kernel.AddTask(&task1);
@@ -308,7 +308,7 @@ TEST(Kernel, RemoveTask)
 {
     Kernel<KERNEL_DYNAMIC, 2, SwitchStrategyRR, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task1, task2;
-    const ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
+    ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
 
     kernel.Initialize();
     kernel.AddTask(&task1);
@@ -943,7 +943,7 @@ TEST(Kernel, HrtApiForNonHrtTask)
 {
     Kernel<KERNEL_STATIC, 1, SwitchStrategyRR, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task;
-    const ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
+    ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
 
     kernel.Initialize();
     kernel.AddTask(&task);
@@ -1048,7 +1048,7 @@ TEST(Kernel, HrtTaskCompleted)
     Kernel<KERNEL_DYNAMIC | KERNEL_HRT, 1, SwitchStrategyRR, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task;
     PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
-    const ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
+    ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
 
     kernel.Initialize();
     kernel.AddTask(&task, 1, 1, 0);
@@ -1584,7 +1584,7 @@ TEST(Kernel, CheckWeightLessApi)
 {
     Kernel<KERNEL_STATIC, 1, SwitchStrategyRR, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task;
-    const ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
+    ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
 
     kernel.Initialize();
     kernel.AddTask(&task);

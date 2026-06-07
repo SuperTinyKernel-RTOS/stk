@@ -217,11 +217,11 @@ public:
                    returned task may be sleeping; the kernel uses it only to seed the initial
                    context before the first GetNext() call.
     */
-    IKernelTask *GetFirst() const override
+    IKernelTask *GetFirst() override
     {
         STK_ASSERT(m_tasks.GetSize() != 0U);
 
-        return (*const_cast<IKernelTask::ListEntryType *>(m_tasks.GetFirst()));
+        return (*m_tasks.GetFirst());
     }
 
     /*! \brief     Get the total number of tasks managed by this strategy.
@@ -354,9 +354,9 @@ public:
     static inline SchedulabilityCheckResult<TTaskCount> IsSchedulableWCRT(const ITaskSwitchStrategy *strategy)
     {
         STK_ASSERT(strategy != nullptr);
-        STK_ASSERT(strategy->GetFirst() != nullptr);
+        STK_ASSERT(const_cast<ITaskSwitchStrategy *>(strategy)->GetFirst() != nullptr);
 
-        const IKernelTask::ListHeadType *const ktasks = strategy->GetFirst()->GetHead();
+        const IKernelTask::ListHeadType *const ktasks = const_cast<ITaskSwitchStrategy *>(strategy)->GetFirst()->GetHead();
 
         STK_ASSERT(ktasks != nullptr);
         STK_ASSERT(ktasks->GetSize() <= TTaskCount);
@@ -370,13 +370,15 @@ public:
         do
         {
             STK_ASSERT(idx < TTaskCount);
+            
             tasks[idx].period   = static_cast<uint32_t>(itr->GetHrtPeriodicity());
             tasks[idx].duration = static_cast<uint32_t>(itr->GetHrtDeadline());
-            idx += 1U;
+            ++idx;
             
             itr = (*itr->GetNext());
         }
         while (itr != start);
+        
         STK_ASSERT(idx == TTaskCount);
 
         // calculate CPU load
@@ -420,16 +422,14 @@ public:
                    computed WCRT for task \e i on return.
        \return     \c true if every task's WCRT <= its period (Tx); \c false if any task misses.
      */
-    static inline bool CalculateWCRT(const TaskTiming *task_array, const uint32_t count, TaskInfo *info_array)
+    static inline bool CalculateWCRT(const TaskTiming tasks[], const uint32_t count, TaskInfo info[])
     {
         bool schedulable = true;
-        ArrayView<const TaskTiming> tasks(task_array, count);
-        ArrayView<TaskInfo> info(info_array, count);
         info[0].wcrt = tasks[0].duration;
 
-        for (uint32_t t = 1U; t < tasks.GetSize(); )
+        for (uint32_t t = 1U; t < count; )
         {
-            uint32_t       w  = 0U;
+            uint32_t       w;
             const uint32_t Cx = tasks[t].duration;
             const uint32_t Tx = tasks[t].period;
             uint32_t       w0 = Cx;
@@ -465,7 +465,7 @@ public:
                     computed with integer arithmetic (truncating division). Cumulative load
                     is the running sum from index 0 to \a count - 1.
     */
-    static inline void GetTaskCpuLoad(const TaskTiming *tasks, const uint32_t count, TaskInfo *info)
+    static inline void GetTaskCpuLoad(const TaskTiming tasks[], const uint32_t count, TaskInfo info[])
     {
         uint16_t total = 0U;
 

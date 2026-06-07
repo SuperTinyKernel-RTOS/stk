@@ -45,14 +45,14 @@ extern "C" {
     \note  Increase if your application needs more simultaneous timers.
 */
 #ifndef STK_C_TIMER_MAX
-    #define STK_C_TIMER_MAX 32
+    #define STK_C_TIMER_MAX (32U)
 #endif
 
 /*! \def   STK_C_TIMER_HANDLER_STACK_SIZE
     \brief Stack size of the timer handler, increase if your timers consume more (default: 256).
 */
 #ifndef STK_C_TIMER_HANDLER_STACK_SIZE
-    #define STK_C_TIMER_HANDLER_STACK_SIZE 256
+    #define STK_C_TIMER_HANDLER_STACK_SIZE (256U)
 #endif
 
 // =============================================================================
@@ -209,26 +209,26 @@ bool stk_timer_restart(stk_timerhost_t *host,
     \param[in] host: TimerHost managing the timer.
     \param[in] timer: Timer handle (active or inactive).
     \param[in] delay: Initial delay in ticks (used only when starting).
-    \param[in] period: Reload period in ticks (used only when starting, 0 = one-shot).
+    \param[in] period_ticks: Reload period in ticks (used only when starting, 0 = one-shot).
     \return    \c true on success, \c false if the command queue is full.
 */
 bool stk_timer_start_or_reset(stk_timerhost_t *host,
-                               stk_timer_t     *timer,
-                               uint32_t         delay,
-                               uint32_t         period);
+                              stk_timer_t     *timer,
+                              uint32_t         delay,
+                              uint32_t         period_ticks);
 
 /*! \brief     Change the period of a running periodic timer without affecting the current deadline.
     \details   The new period takes effect on the next reload after the current deadline fires.
                To apply immediately, follow with \a stk_timer_reset().
     \param[in] host: TimerHost managing the timer.
     \param[in] timer: Timer handle.  Must be active and periodic.
-    \param[in] period: New reload period in ticks.  Must be non-zero.
+    \param[in] period_ticks: New reload period in ticks.  Must be non-zero.
     \return    \c true on success, \c false if preconditions are not met or
                the command queue is full.
 */
 bool stk_timer_set_period(stk_timerhost_t *host,
                           stk_timer_t     *timer,
-                          uint32_t         period);
+                          uint32_t         period_ticks);
 
 // =============================================================================
 // Timer query
@@ -290,7 +290,7 @@ uint32_t stk_timer_get_remaining_ticks(const stk_timer_t *timer);
 
 /*! \brief  A memory size (multiples of stk_word_t) required for PeriodicTrigger instance.
 */
-#define STK_PERIODIC_TRIGGER_IMPL_SIZE 16
+#define STK_PERIODIC_TRIGGER_IMPL_SIZE (16U)
 
 /*! \brief  Opaque memory container for a \a stk_periodic_trigger_t instance.
     \note   Declare as \c static or on the stack (not on the heap).
@@ -304,19 +304,19 @@ typedef struct stk_periodic_trigger_mem_t {
 typedef struct stk_periodic_trigger_t stk_periodic_trigger_t;
 
 /*! \brief     Construct PeriodicTrigger instance in the supplied memory buffer.
-    \param[in] memory: Pointer to the caller-supplied memory container.
-    \param[in] memory_size: Size of the container in bytes (must be >= sizeof(stk_periodic_trigger_mem_t)).
-    \param[in] period: Trigger period in ticks. Must be > 0.
+    \param[in] membuf: Pointer to the caller-supplied memory container.
+    \param[in] membuf_size: Size of the container in bytes (must be >= sizeof(stk_periodic_trigger_mem_t)).
+    \param[in] period_ticks: Trigger period in ticks. Must be > 0.
     \param[in] started: \c true to create the instance in a started state (first firing occurs
                no earlier than \a period ticks after construction); \c false to create it in a
                stopped state (call \a stk_periodic_trigger_restart() before polling).
-    \return    Trigger handle on success, or \c NULL if \a memory is \c NULL
+    \return    Trigger handle on success, or \c NULL if \a membuf is \c NULL
                or \a memory_size is too small.
 */
-stk_periodic_trigger_t *stk_periodic_trigger_create(stk_periodic_trigger_mem_t *memory,
-                                                    uint32_t                   memory_size,
-                                                    uint32_t                   period,
-                                                    bool                       started);
+stk_periodic_trigger_t *stk_periodic_trigger_create(stk_periodic_trigger_mem_t *const membuf,
+                                                    uint32_t                    membuf_size,
+                                                    uint32_t                    period_ticks,
+                                                    bool                        started);
 
 /*! \brief     Destroy instance (calls the C++ destructor in-place).
     \param[in] trig: Trigger handle. May be \c NULL (no-op).
@@ -336,16 +336,16 @@ void stk_periodic_trigger_destroy(stk_periodic_trigger_t *trig);
                calls will continue advancing one period at a time until
                the schedule catches up.
 */
-bool stk_periodic_trigger_poll(stk_periodic_trigger_t *trig);
+bool stk_periodic_trigger_poll(stk_periodic_trigger_t *const trig);
 
 /*! \brief     Change the trigger period while preserving phase.
     \param[in] trig: Trigger handle.
-    \param[in] period: New trigger period in ticks. Must be > 0.
+    \param[in] period_ticks: New trigger period in ticks. Must be > 0.
     \note      Adjusts the internally stored next-trigger time so that the
                relative progress toward the next firing is preserved.
                Takes effect immediately.
 */
-void stk_periodic_trigger_set_period(stk_periodic_trigger_t *trig, uint32_t period);
+void stk_periodic_trigger_set_period(stk_periodic_trigger_t *trig, uint32_t period_ticks);
 
 /*! \brief     Reset and start the trigger from the current tick count.
     \param[in] trig: Trigger handle.

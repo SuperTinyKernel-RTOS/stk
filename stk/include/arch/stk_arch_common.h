@@ -66,7 +66,7 @@ public:
             stack[i] = STK_STACK_MEMORY_FILLER;
         }
         
-        // get address of the last valid item and step forward by 1 Word size
+        // get address of the last valid item and step forward by 1 Word size to point to the top
         const Word stack_top = hw::PtrToWord(memory->GetStack()) + (stack.GetSize() * sizeof(Word));
 
         // expecting STK_STACK_MEMORY_ALIGN-byte aligned memory for a stack

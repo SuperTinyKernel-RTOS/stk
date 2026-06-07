@@ -63,6 +63,11 @@ public:
     */
     explicit DListEntry() : m_head(nullptr), m_next(nullptr), m_prev(nullptr)
     {}
+    
+    /*! \brief A tag for type-safe casts done by CastListEntryToParent.
+        \see   CastListEntryToParent.
+    */
+    enum { DLEntryTag = 1 };
 
     /*! \typedef DLEntryType
         \brief   Convenience alias for this entry type. Used to avoid repeating the full template spelling.
@@ -445,6 +450,25 @@ private:
     size_t       m_count; //!< Number of entries currently in the list.
     DLEntryType *m_first; //!< Pointer to the first (front) entry, or \c NULL when empty.
     DLEntryType *m_last;  //!< Pointer to the last (back) entry, or \c NULL when empty.
+};
+
+/*! \class DListCast
+    \brief Helper for casting list entries to concrete (parent) types.
+*/
+struct DListCast
+{
+    /*! \brief     Safely casts an intrusive list entry to its concrete parent container object type.
+        \param[in] entry: Pointer to the intrusive list entry. Must be a valid pointer or \c nullptr.
+        \return    A pointer converted to the target parent container type \c TargetType, or \c nullptr if the input entry was \c nullptr.
+    */
+    template <typename TTargetType, typename TSourceType>
+    static __stk_forceinline TTargetType *ListEntryToParent(TSourceType *const node)
+    {
+        STK_STATIC_ASSERT_N(TT, TTargetType::DLEntryTag == 1); // TTargetType must inherit DLEntryType
+        STK_STATIC_ASSERT_N(ST, TSourceType::DLEntryTag == 1); // TSourceType must inherit DLEntryType
+      
+        return static_cast<TTargetType *>(node);
+    }
 };
 
 } // namespace util

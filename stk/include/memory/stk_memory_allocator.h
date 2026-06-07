@@ -204,7 +204,7 @@ struct MemoryAllocator
         \param[in] count: Number of elements (must match the count passed to AllocateT()).
     */
     template <typename TElement>
-    static inline void FreeArrayT(TElement *ptr, size_t count)
+    static inline void FreeArrayT(TElement ptr[], size_t count)
     {
         STK_ASSERT(hw::PtrToWord(&Free) != 0U);
 

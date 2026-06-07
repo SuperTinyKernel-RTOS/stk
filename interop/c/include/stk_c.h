@@ -10,10 +10,17 @@
 #ifndef STK_C_H_
 #define STK_C_H_
 
-#include <stdint.h>
-#include <stddef.h>
-#include <stdbool.h>
-#include <assert.h>
+#ifdef __cplusplus
+    #include <cstdint>
+    #include <cstddef>
+    #include <cstdbool>
+    #include <cassert>
+#else
+    #include <stdint.h>
+    #include <stddef.h>
+    #include <stdbool.h>
+    #include <assert.h>
+#endif
 
 #include <stk_config.h>
 
@@ -66,6 +73,17 @@ extern "C" {
     \brief     Assertion macro used inside STK C bindings
 */
 #define STK_C_ASSERT(e) assert(e)
+  
+/*! \def       STK_STATIC_CAST
+    \brief     Convenience wrapper for static_cast and C-style cast.
+    \param[in] type: Value type.
+    \param[in] val: Value.
+*/
+#ifdef __cplusplus
+    #define STK_STATIC_CAST(type, val) static_cast<type>(val)
+#else
+    #define STK_STATIC_CAST(type, val) ((type)(val))
+#endif
 
 // =============================================================================
 // Types
@@ -99,6 +117,10 @@ typedef int32_t stk_timeout_t;
 */
 typedef uint64_t stk_cycle_t;
 
+/*! \brief     Task weight value.
+*/
+typedef int32_t stk_weight_t;
+
 /*! \brief     Opaque handle to a kernel instance.
 */
 typedef struct stk_kernel_t stk_kernel_t;
@@ -122,11 +144,11 @@ typedef void (*stk_task_entry_t)(void *arg);
 
 /*! \brief     Infinite timeout constant.
 */
-#define STK_WAIT_INFINITE ((stk_timeout_t)(INT32_MAX))
+#define STK_WAIT_INFINITE (STK_STATIC_CAST(stk_timeout_t, INT32_MAX))
 
 /*! \brief     No timeout constant.
 */
-#define STK_NO_WAIT ((stk_timeout_t)(0))
+#define STK_NO_WAIT (STK_STATIC_CAST(stk_timeout_t, 0))
 
 /*! \brief     Memory buffer alignment.
 */
@@ -134,18 +156,18 @@ typedef void (*stk_task_entry_t)(void *arg);
 
 /*! \brief     Alignment mask.
 */
-#define STK_ALIGN_MASK (STK_ALIGN_SIZE - 1)
+#define STK_ALIGN_MASK (STK_ALIGN_SIZE - 1U)
 
 /*! \def       STK_STACK_MEMORY_ALIGN
     \brief     Stack memory alignment.
 */
 #ifndef STK_STACK_MEMORY_ALIGN
     #if defined(__riscv)
-        #define STK_STACK_MEMORY_ALIGN 16U
+        #define STK_STACK_MEMORY_ALIGN (16U)
     #elif defined(__i386__) || defined(__x86_64__) || defined(_M_IX86) || defined(_M_X64)
-        #define STK_STACK_MEMORY_ALIGN 8U
+        #define STK_STACK_MEMORY_ALIGN (8U)
     #else // ARM, others
-        #define STK_STACK_MEMORY_ALIGN 4U
+        #define STK_STACK_MEMORY_ALIGN (4U)
     #endif
 #endif
 
@@ -166,7 +188,7 @@ typedef void (*stk_task_entry_t)(void *arg);
     \see       STK_DEFINE_STACK_POOL
 */
 #define STK_GET_STACK_FROM_POOL(name, task_id) (name[task_id])
-
+   
 // =============================================================================
 // Attributes
 // =============================================================================
@@ -514,10 +536,10 @@ void stk_kernel_set_event_overrider(stk_kernel_t *k, stk_event_overrider_t *over
     \param[in] stack_size: Number of elements (words) in the stack buffer.
     \return    Task handle (static storage in static kernels, heap in dynamic).
 */
-stk_task_t *stk_task_create_privileged(stk_task_entry_t entry,
-                                       void *arg,
-                                       stk_word_t *stack,
-                                       uint32_t stack_size);
+stk_task_t *stk_task_create_privileged(stk_task_entry_t  entry,
+                                       void             *arg,
+                                       stk_word_t       *stack,
+                                       uint32_t          stack_size);
 
 /*! \brief     Create user-mode task.
     \param[in] entry: Task entry function.
@@ -526,10 +548,10 @@ stk_task_t *stk_task_create_privileged(stk_task_entry_t entry,
     \param[in] stack_size: Number of elements (words) in the stack buffer.
     \return    Task handle.
 */
-stk_task_t *stk_task_create_user(stk_task_entry_t entry,
-                                 void *arg,
-                                 stk_word_t *stack,
-                                 uint32_t stack_size);
+stk_task_t *stk_task_create_user(stk_task_entry_t  entry,
+                                 void             *arg,
+                                 stk_word_t       *stack,
+                                 uint32_t          stack_size);
 
 /*! \brief     Set task weight (used only by Smooth Weighted Round Robin).
     \param[in] task: Task handle.
@@ -537,7 +559,7 @@ stk_task_t *stk_task_create_user(stk_task_entry_t entry,
     \note      Must be called before adding task to kernel.
     \see       SwitchStrategySmoothWeightedRoundRobin.
 */
-void stk_task_set_weight(stk_task_t *task, uint32_t weight);
+void stk_task_set_weight(stk_task_t *task, stk_weight_t weight);
 
 /*! \brief     Set task priority (used only by Fixed Priority scheduler).
     \param[in] task: Task handle.
@@ -606,7 +628,15 @@ stk_tick_t stk_ticks_from_ms(stk_time_t msec);
 */
 static inline stk_tick_t stk_ticks_from_ms_r(stk_time_t msec, uint32_t resolution)
 {
-    return ((resolution != 0U) ? (msec * 1000LL / (stk_time_t)resolution) : 0LL);
+    stk_time_t result = 0LL;
+    
+    if (resolution != 0U)
+    {
+        const stk_time_t total_scaled = msec * 1000LL;
+        result = total_scaled / STK_STATIC_CAST(stk_time_t, resolution);
+    }
+
+    return STK_STATIC_CAST(stk_tick_t, result);
 }
 
 /*! \brief     Returns current time in milliseconds since kernel start.
@@ -622,7 +652,8 @@ stk_time_t stk_time_now_ms(void);
 */
 static inline stk_time_t stk_ms_from_ticks_r(stk_tick_t ticks, uint32_t resolution)
 {
-    return (stk_time_t)((ticks * (stk_tick_t)resolution) / 1000LL);
+    const stk_tick_t total_ticks = ticks * STK_STATIC_CAST(stk_tick_t, resolution);
+    return STK_STATIC_CAST(stk_time_t, total_ticks / 1000LL);
 }
 
 /*! \brief     Convert ticks to milliseconds using the current kernel tick resolution.
@@ -706,6 +737,7 @@ void stk_sleep_ms(stk_timeout_t ms);
 
 /*! \brief     Put current task to sleep (non-HRT kernels only).
     \param[in] ts: Absolute time, a deadline for a sleep period.
+    \return    True if sleep succeeded, false otherwise.
     \note      Unlike stk_delay_ms(), this function does not spin and allows the kernel to
                idle the CPU. When \a KERNEL_TICKLESS is active and all tasks are sleeping,
                the SysTick is suppressed and the CPU enters a low-power WFI state until the
@@ -714,7 +746,7 @@ void stk_sleep_ms(stk_timeout_t ms);
                according to their periodicity and workload, use stk_yield instead.
     \see       stk_sleep, stk_sleep_ms, stk_ticks
 */
-void stk_sleep_until(stk_tick_t ts);
+bool stk_sleep_until(stk_tick_t ts);
 
 /*! \brief     Voluntarily give up CPU to another ready task (cooperative yield).
 */
@@ -808,7 +840,7 @@ void stk_critical_section_exit(void);
 
 /*! \brief     A memory size (multiples of stk_word_t) required for Mutex instance.
 */
-#define STK_MUTEX_IMPL_SIZE (10 + (STK_SYNC_DEBUG_NAMES ? 1 : 0))
+#define STK_MUTEX_IMPL_SIZE (10U + (STK_SYNC_DEBUG_NAMES ? 1U : 0U))
 
 /*! \brief     Opaque memory container for a Mutex instance.
 */
@@ -821,11 +853,11 @@ typedef struct stk_mutex_mem_t {
 typedef struct stk_mutex_t stk_mutex_t;
 
 /*! \brief     Create a Mutex (using provided memory).
-    \param[in] memory: Pointer to static memory container.
-    \param[in] memory_size: Size of the container (must be >= sizeof(stk_mutex_mem_t)).
+    \param[in] membuf: Pointer to static memory container.
+    \param[in] membuf_size: Size of the container (must be >= sizeof(stk_mutex_mem_t)).
     \return    Mutex handle.
 */
-stk_mutex_t *stk_mutex_create(stk_mutex_mem_t *memory, uint32_t memory_size);
+stk_mutex_t *stk_mutex_create(stk_mutex_mem_t *const membuf, uint32_t membuf_size);
 
 /*! \brief     Destroy a Mutex.
     \param[in] mtx: Mutex handle.
@@ -873,34 +905,34 @@ typedef struct {
 typedef struct stk_spinlock_t stk_spinlock_t;
 
 /*! \brief     Create a recursive SpinLock.
-    \param[in] memory: Pointer to static memory container.
-    \param[in] memory_size: Size of the container (must be >= sizeof(stk_spinlock_mem_t)).
+    \param[in] membuf: Pointer to static memory container.
+    \param[in] membuf_size: Size of the container (must be >= sizeof(stk_spinlock_mem_t)).
     \return    SpinLock handle.
 */
-stk_spinlock_t *stk_spinlock_create(stk_spinlock_mem_t *memory, uint32_t memory_size);
+stk_spinlock_t *stk_spinlock_create(stk_spinlock_mem_t *const membuf, uint32_t membuf_size);
 
 /*! \brief     Destroy the SpinLock.
 */
-void stk_spinlock_destroy(stk_spinlock_t *lock);
+void stk_spinlock_destroy(stk_spinlock_t *slock);
 
 /*! \brief     Acquire the SpinLock (recursive).
 */
-void stk_spinlock_lock(stk_spinlock_t *lock);
+void stk_spinlock_lock(stk_spinlock_t *slock);
 
 /*! \brief     Attempt to acquire the SpinLock immediately.
     \return    True if locked successfully, False otherwise.
 */
-bool stk_spinlock_trylock(stk_spinlock_t *lock);
+bool stk_spinlock_trylock(stk_spinlock_t *slock);
 
 /*! \brief     Release the SpinLock.
 */
-void stk_spinlock_unlock(stk_spinlock_t *lock);
+void stk_spinlock_unlock(stk_spinlock_t *slock);
 
 // ----- Condition Variable ----------------------------------------------------
 
 /*! \brief     A memory size (multiples of stk_word_t) required for ConditionVariable instance.
 */
-#define STK_CV_IMPL_SIZE (7 + (STK_SYNC_DEBUG_NAMES ? 1 : 0))
+#define STK_CV_IMPL_SIZE (7U + (STK_SYNC_DEBUG_NAMES ? 1U : 0U))
 
 /*! \brief     Opaque memory container for a ConditionVariable instance.
 */
@@ -913,11 +945,11 @@ typedef struct stk_cv_mem_t {
 typedef struct stk_cv_t stk_cv_t;
 
 /*! \brief     Create a Condition Variable (using provided memory).
-    \param[in] memory:      Pointer to static memory container.
-    \param[in] memory_size: Size of the container (must be >= sizeof(stk_cv_mem_t)).
+    \param[in] membuf:      Pointer to static memory container.
+    \param[in] membuf_size: Size of the container (must be >= sizeof(stk_cv_mem_t)).
     \return    CV handle.
 */
-stk_cv_t *stk_cv_create(stk_cv_mem_t *memory, uint32_t memory_size);
+stk_cv_t *stk_cv_create(stk_cv_mem_t *const membuf, uint32_t membuf_size);
 
 /*! \brief     Destroy a Condition Variable.
     \param[in] cv: CV handle.
@@ -948,7 +980,7 @@ void stk_cv_notify_all(stk_cv_t *cv);
 
 /*! \brief     A memory size (multiples of stk_word_t) required for Event instance.
 */
-#define STK_EVENT_IMPL_SIZE (8 + (STK_SYNC_DEBUG_NAMES ? 1 : 0))
+#define STK_EVENT_IMPL_SIZE (8U + (STK_SYNC_DEBUG_NAMES ? 1U : 0U))
 
 /*! \brief     Opaque memory container for an Event instance.
 */
@@ -961,12 +993,14 @@ typedef struct stk_event_mem_t {
 typedef struct stk_event_t stk_event_t;
 
 /*! \brief     Create an Event (using provided memory).
-    \param[in] memory: Pointer to static memory container.
-    \param[in] memory_size: Size of the container (must be >= sizeof(stk_event_mem_t)).
+    \param[in] membuf: Pointer to static memory container.
+    \param[in] membuf_size: Size of the container (must be >= sizeof(stk_event_mem_t)).
     \param[in] manual_reset: True for manual-reset, False for auto-reset.
     \return    Event handle.
 */
-stk_event_t *stk_event_create(stk_event_mem_t *memory, uint32_t memory_size, bool manual_reset);
+stk_event_t *stk_event_create(stk_event_mem_t *const membuf, 
+                              uint32_t         membuf_size, 
+                              bool             manual_reset);
 
 /*! \brief     Destroy an Event.
     \param[in] ev: Event handle.
@@ -988,13 +1022,17 @@ bool stk_event_trywait(stk_event_t *ev);
 
 /*! \brief     Set the event to signaled state.
     \param[in] ev: Event handle.
+    \return    \c true if state was changed from non-signaled to signaled,
+               \c false if event was already signaled.
 */
-void stk_event_set(stk_event_t *ev);
+bool stk_event_set(stk_event_t *ev);
 
 /*! \brief     Reset the event to non-signaled state.
     \param[in] ev: Event handle.
+    \return    \c true if state was changed from signaled to non-signaled,
+               \c false if event was already non-signaled.
 */
-void stk_event_reset(stk_event_t *ev);
+bool stk_event_reset(stk_event_t *ev);
 
 /*! \brief     Pulse the event (signal then immediately reset).
     \param[in] ev: Event handle.
@@ -1005,7 +1043,7 @@ void stk_event_pulse(stk_event_t *ev);
 
 /*! \brief     A memory size (multiples of stk_word_t) required for Semaphore instance.
 */
-#define STK_SEM_IMPL_SIZE (8 + (STK_SYNC_DEBUG_NAMES ? 1 : 0))
+#define STK_SEM_IMPL_SIZE (8U + (STK_SYNC_DEBUG_NAMES ? 1U : 0U))
 
 /*! \brief     Opaque memory container for a Semaphore instance.
 */
@@ -1018,15 +1056,17 @@ typedef struct stk_sem_mem_t {
 typedef struct stk_sem_t stk_sem_t;
 
 /*! \brief     Create a Semaphore (using provided memory).
-    \param[in] memory: Pointer to static memory container.
-    \param[in] memory_size: Size of the container (must be >= sizeof(stk_sem_mem_t)).
+    \param[in] membuf: Pointer to static memory container.
+    \param[in] membuf_size: Size of the container (must be >= sizeof(stk_sem_mem_t)).
     \param[in] initial_count: Starting value of the resource counter.
     \param[in] max_count: Maximum value the counter is allowed to reach.
                Pass 0 to use the default maximum (65534). Must be > initial_count.
     \return    Semaphore handle.
 */
-stk_sem_t *stk_sem_create(stk_sem_mem_t *memory, uint32_t memory_size,
-                           uint32_t initial_count, uint32_t max_count);
+stk_sem_t *stk_sem_create(stk_sem_mem_t *const membuf, 
+                          uint32_t       membuf_size,
+                          uint32_t       initial_count, 
+                          uint32_t       max_count);
 
 /*! \brief     Destroy a Semaphore.
     \param[in] sem: Semaphore handle.
@@ -1080,13 +1120,16 @@ uint16_t stk_sem_get_count(const stk_sem_t *sem);
 /*! \brief     Returns true if a value returned by stk_ef_set(), stk_ef_clear(),
                stk_ef_wait(), or stk_ef_trywait() is an error sentinel (bit 31 set).
 */
-static inline bool stk_ef_is_error(uint32_t result) { return ((result & STK_EF_ERROR_MASK) != 0U); }
+static inline bool stk_ef_is_error(uint32_t result) 
+{ 
+    return ((result & STK_EF_ERROR_MASK) != 0U); 
+}
 
 /*! \brief     A memory size (multiples of stk_word_t) required for EventFlags instance.
     \note      EventFlags contains one ConditionVariable (STK_CV_IMPL_SIZE words)
                plus one 32-bit flags word and alignment padding.
 */
-#define STK_EF_IMPL_SIZE (STK_CV_IMPL_SIZE + 1 + (STK_SYNC_DEBUG_NAMES ? 1 : 0))
+#define STK_EF_IMPL_SIZE (STK_CV_IMPL_SIZE + 1U + (STK_SYNC_DEBUG_NAMES ? 1U : 0U))
 
 /*! \brief     Opaque memory container for an EventFlags instance.
 */
@@ -1099,13 +1142,15 @@ typedef struct stk_ef_mem_t {
 typedef struct stk_ef_t stk_ef_t;
 
 /*! \brief     Create an EventFlags object (using provided memory).
-    \param[in] memory: Pointer to static memory container.
-    \param[in] memory_size: Size of the container (must be >= sizeof(stk_ef_mem_t)).
+    \param[in] membuf: Pointer to static memory container.
+    \param[in] membuf_size: Size of the container (must be >= sizeof(stk_ef_mem_t)).
     \param[in] initial_flags: Initial value of the 32-bit flags word (bits 0..30 only;
                bit 31 is reserved and must not be set).
     \return    EventFlags handle, or NULL if memory is too small.
 */
-stk_ef_t *stk_ef_create(stk_ef_mem_t *memory, uint32_t memory_size, uint32_t initial_flags);
+stk_ef_t *stk_ef_create(stk_ef_mem_t *const membuf, 
+                        uint32_t      membuf_size,
+                        uint32_t      initial_flags);
 
 /*! \brief     Destroy an EventFlags object.
     \param[in] ef: EventFlags handle.
@@ -1180,7 +1225,7 @@ uint32_t stk_ef_trywait(stk_ef_t *ef, uint32_t flags, uint32_t options);
     \note      The backing data buffer is allocated separately by the caller and
                passed to stk_pipe_create() via the \a buf / \a buf_size parameters.
 */
-#define STK_PIPE_IMPL_SIZE (6 + (2 * STK_CV_IMPL_SIZE) + (STK_SYNC_DEBUG_NAMES ? 1 : 0))
+#define STK_PIPE_IMPL_SIZE (6U + (2U * STK_CV_IMPL_SIZE) + (STK_SYNC_DEBUG_NAMES ? 1U : 0U))
 
 /*! \brief     Opaque memory container for a Pipe control-block.
 */
@@ -1213,13 +1258,13 @@ typedef struct stk_pipe_t stk_pipe_t;
     ((((capacity) * (element_size)) + STK_ALIGN_MASK) & ~STK_ALIGN_MASK)
 
 /*! \brief     Create a Pipe (using provided memory).
-    \details   Constructs a stk::sync::Pipe in-place inside \a memory. The pipe will
+    \details   Constructs a stk::sync::Pipe in-place inside \a membuf. The pipe will
                hold up to \a capacity elements, each \a element_size bytes wide.
                The backing ring-buffer storage must be supplied by the caller via
                \a buf / \a buf_size.
-    \param[in] memory: Pointer to static memory container for the Pipe control-block.
+    \param[in] membuf: Pointer to static memory container for the Pipe control-block.
                Must be at least sizeof(stk_pipe_mem_t) bytes.
-    \param[in] memory_size: Size of \a memory in bytes.
+    \param[in] membuf_size: Size of \a membuf in bytes.
     \param[in] buf: Pointer to the element data buffer.
                Must be at least \a capacity * \a element_size bytes.
     \param[in] buf_size: Size of \a buf in bytes (used for the safety assertion;
@@ -1231,8 +1276,8 @@ typedef struct stk_pipe_t stk_pipe_t;
                the required \a buf_size.
     \note      Only available when kernel is compiled with \a KERNEL_SYNC mode enabled.
 */
-stk_pipe_t *stk_pipe_create(stk_pipe_mem_t *memory,
-                            uint32_t        memory_size,
+stk_pipe_t *stk_pipe_create(stk_pipe_mem_t *const membuf,
+                            uint32_t        membuf_size,
                             uint8_t        *buf,
                             uint32_t        buf_size,
                             size_t          capacity,
@@ -1468,14 +1513,14 @@ typedef struct stk_msgq_t stk_msgq_t;
 #define STK_MSGQ_BUF_SIZE(capacity, msg_size) ((capacity) * (msg_size))
 
 /*! \brief     Create a MessageQueue (using provided memory).
-    \details   Constructs a stk::sync::MessageQueue in-place inside \a memory.
+    \details   Constructs a stk::sync::MessageQueue in-place inside \a membuf.
                The queue will hold up to \a capacity messages, each \a msg_size bytes
                wide.  The backing storage for messages must be supplied by the caller
                via \a buf / \a buf_size.
 
-    \param[in] memory: Pointer to static memory container for the queue object.
+    \param[in] membuf: Pointer to static memory container for the queue object.
                Must be at least sizeof(stk_msgq_mem_t) bytes.
-    \param[in] memory_size: Size of \a memory in bytes (must be >= sizeof(stk_msgq_mem_t)).
+    \param[in] membuf_size: Size of \a membuf in bytes (must be >= sizeof(stk_msgq_mem_t)).
     \param[in] buf: Pointer to the message data buffer.
                Must be at least \a capacity * \a msg_size bytes.
     \param[in] buf_size: Size of \a buf in bytes (used only for the safety assertion; must equal
@@ -1488,12 +1533,12 @@ typedef struct stk_msgq_t stk_msgq_t;
                the required \a buf_size.
     \note      Only available when kernel is compiled with \a KERNEL_SYNC mode enabled.
 */
-stk_msgq_t *stk_msgq_create(stk_msgq_mem_t *memory,
-                             uint32_t        memory_size,
-                             uint8_t        *buf,
-                             uint32_t        buf_size,
-                             size_t          capacity,
-                             size_t          msg_size);
+stk_msgq_t *stk_msgq_create(stk_msgq_mem_t *const membuf,
+                            uint32_t        membuf_size,
+                            uint8_t        *buf,
+                            uint32_t        buf_size,
+                            size_t          capacity,
+                            size_t          msg_size);
 
 /*! \brief     Destroy a MessageQueue.
     \param[in] mq: MessageQueue handle.
@@ -1684,7 +1729,7 @@ bool stk_msgq_is_storage_valid(const stk_msgq_t *mq);
 
 /*! \brief     A memory size (multiples of stk_word_t) required for RWMutex instance.
 */
-#define STK_RWMUTEX_IMPL_SIZE (17 + (STK_SYNC_DEBUG_NAMES ? 3 : 0))
+#define STK_RWMUTEX_IMPL_SIZE (17U + (STK_SYNC_DEBUG_NAMES ? 3U : 0U))
 
 /*! \brief     Opaque memory container for an RWMutex instance.
 */
@@ -1697,11 +1742,11 @@ typedef struct stk_rwmutex_mem_t {
 typedef struct stk_rwmutex_t stk_rwmutex_t;
 
 /*! \brief     Create an RWMutex (using provided memory).
-    \param[in] memory: Pointer to static memory container.
-    \param[in] memory_size: Size of the container (must be >= sizeof(stk_rwmutex_mem_t)).
+    \param[in] membuf: Pointer to static memory container.
+    \param[in] membuf_size: Size of the container (must be >= sizeof(stk_rwmutex_mem_t)).
     \return    RWMutex handle, or NULL if memory is too small.
 */
-stk_rwmutex_t *stk_rwmutex_create(stk_rwmutex_mem_t *memory, uint32_t memory_size);
+stk_rwmutex_t *stk_rwmutex_create(stk_rwmutex_mem_t *const membuf, uint32_t membuf_size);
 
 /*! \brief     Destroy an RWMutex.
     \param[in] rw: RWMutex handle.

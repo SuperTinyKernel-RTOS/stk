@@ -71,7 +71,7 @@ extern "C" {
     \note    Increase if your application needs more simultaneous pools.
 */
 #ifndef STK_C_BLOCKPOOL_MAX
-    #define STK_C_BLOCKPOOL_MAX 8U
+    #define STK_C_BLOCKPOOL_MAX (8U)
 #endif
 
 // =============================================================================
@@ -214,7 +214,7 @@ void *stk_blockpool_alloc(stk_blockpool_t *pool);
                before a block became available.
     \warning   ISR-safe \b only when \a timeout = \c STK_NO_WAIT; not ISR-safe otherwise.
 */
-void *stk_blockpool_timed_alloc(stk_blockpool_t *pool, uint32_t timeout);
+void *stk_blockpool_timed_alloc(stk_blockpool_t *pool, stk_timeout_t timeout);
 
 /*! \brief     Non-blocking allocation attempt.
     \details   Returns a block immediately if one is available, or \c NULL if the

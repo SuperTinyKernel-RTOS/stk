@@ -168,13 +168,11 @@ public:
                    at kernel start to seed the initial context; EDF ordering begins with the
                    first GetNext() call.
     */
-    IKernelTask *GetFirst() const override
+    IKernelTask *GetFirst() override
     {
         STK_ASSERT(GetSize() != 0U);
-
-        return (!m_tasks.IsEmpty() ?
-            (*const_cast<IKernelTask::ListEntryType *>(m_tasks.GetFirst())) :
-            (*const_cast<IKernelTask::ListEntryType *>(m_sleep.GetFirst())));
+        
+        return (*(!m_tasks.IsEmpty() ? m_tasks.GetFirst() : m_sleep.GetFirst()));
     }
 
     /*! \brief  Get total number of tasks managed by this strategy.
