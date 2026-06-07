@@ -32,16 +32,16 @@
 // _STK_ARCH_DEFINED is set by whichever back-end is included; it can be tested by downstream
 // headers or build checks to verify that a valid architecture was selected.
 #ifdef _STK_ARCH_ARM_CORTEX_M
-#include "arch/arm/cortex-m/stk_arch_arm-cortex-m.h"
-#define _STK_ARCH_DEFINED
+    #include "arch/arm/cortex-m/stk_arch_arm-cortex-m.h"
+    #define _STK_ARCH_DEFINED
 #endif
 #ifdef _STK_ARCH_RISC_V
-#include "arch/risc-v/stk_arch_risc-v.h"
-#define _STK_ARCH_DEFINED
+    #include "arch/risc-v/stk_arch_risc-v.h"
+    #define _STK_ARCH_DEFINED
 #endif
 #ifdef _STK_ARCH_X86_WIN32
-#include "arch/x86/win32/stk_arch_x86-win32.h"
-#define _STK_ARCH_DEFINED
+    #include "arch/x86/win32/stk_arch_x86-win32.h"
+    #define _STK_ARCH_DEFINED
 #endif
 
 #ifndef STK_PANIC_HANDLER
@@ -376,10 +376,12 @@ protected:
     \see       WriteVolatile64
 */
 template <typename T>
-__stk_forceinline T ReadVolatile64(volatile const T *addr)
+static __stk_forceinline T ReadVolatile64(volatile const T *addr)
 {
     STK_STATIC_ASSERT_N(sz, sizeof(T) == 8U);  // only 64-bit types permitted
     STK_STATIC_ASSERT_N(al, alignof(T) >= 4U); // type must be at least 4-byte aligned
+    STK_STATIC_ASSERT_N(ilo, ((STK_ENDIAN_IDX_LO >= 0U) && (STK_ENDIAN_IDX_LO <= 1U)));
+    STK_STATIC_ASSERT_N(ihi, ((STK_ENDIAN_IDX_HI >= 0U) && (STK_ENDIAN_IDX_HI <= 1U)));
 
     if __stk_constexpr_cpp17 (sizeof(void *) == 8U) // 64-bit arch: aligned 64-bit load is inherently atomic
     {
@@ -387,12 +389,18 @@ __stk_forceinline T ReadVolatile64(volatile const T *addr)
     }
     else
     {
-        // 32-bit arch: split the 64-bit address into two 32-bit halves.
-        // Writer always updates hi before lo (see WriteVolatile64), so if hi is
-        // the same before and after reading lo, no write straddled the two reads.        
+        // 32-bit arch: split the 64-bit address into two 32-bit halves;
+        // writer always updates hi before lo (see WriteVolatile64), so if hi is
+        // the same before and after reading lo, no write straddled the two reads.
+    #if STK_STRICT_COMPLIANCY
+        const Word p_base = hw::PtrToWord(addr);
+        volatile const uint32_t *const plo = hw::WordToPtr<uint32_t>(p_base + (STK_ENDIAN_IDX_LO * sizeof(uint32_t)));
+        volatile const uint32_t *const phi = hw::WordToPtr<uint32_t>(p_base + (STK_ENDIAN_IDX_HI * sizeof(uint32_t)));
+    #else
         volatile const uint32_t *const p_base = reinterpret_cast<volatile const uint32_t *>(addr);
         volatile const uint32_t *const plo = &p_base[STK_ENDIAN_IDX_LO];
-        volatile const uint32_t *const phi = &p_base[STK_ENDIAN_IDX_HI];
+        volatile const uint32_t *const phi = &p_base[STK_ENDIAN_IDX_HI];  
+    #endif
 
         uint32_t hi, lo;
         do
@@ -405,7 +413,9 @@ __stk_forceinline T ReadVolatile64(volatile const T *addr)
         }
         while (hi != (*phi)); // hi changed: a write occurred during the read; retry
 
-        return (static_cast<uint64_t>(hi) << 32) | lo;
+        const uint64_t result = (static_cast<uint64_t>(hi) << 32U) | static_cast<uint64_t>(lo);
+        
+        return static_cast<T>(result);
     }
 }
 
@@ -431,10 +441,12 @@ __stk_forceinline T ReadVolatile64(volatile const T *addr)
     \see       ReadVolatile64
 */
 template <typename T>
-__stk_forceinline void WriteVolatile64(volatile T *addr, T value)
+static __stk_forceinline void WriteVolatile64(volatile T *addr, T value)
 {
     STK_STATIC_ASSERT_N(sz, sizeof(T) == 8U);  // only 64-bit types permitted
     STK_STATIC_ASSERT_N(al, alignof(T) >= 4U); // type must be at least 4-byte aligned
+    STK_STATIC_ASSERT_N(ilo, ((STK_ENDIAN_IDX_LO >= 0U) && (STK_ENDIAN_IDX_LO <= 1U)));
+    STK_STATIC_ASSERT_N(ihi, ((STK_ENDIAN_IDX_HI >= 0U) && (STK_ENDIAN_IDX_HI <= 1U)));
 
     if __stk_constexpr_cpp17 (sizeof(void *) == 8U) // 64-bit arch: aligned 64-bit store is inherently atomic
     {
@@ -442,13 +454,19 @@ __stk_forceinline void WriteVolatile64(volatile T *addr, T value)
     }
     else
     {
+    #if STK_STRICT_COMPLIANCY
+        const Word p_base = hw::PtrToWord(addr);
+        volatile uint32_t *const plo = hw::WordToPtr<uint32_t>(p_base + (STK_ENDIAN_IDX_LO * sizeof(uint32_t)));
+        volatile uint32_t *const phi = hw::WordToPtr<uint32_t>(p_base + (STK_ENDIAN_IDX_HI * sizeof(uint32_t)));
+    #else
         volatile uint32_t *const p_base = reinterpret_cast<volatile uint32_t *>(addr);
         volatile uint32_t *const plo = &p_base[STK_ENDIAN_IDX_LO];
         volatile uint32_t *const phi = &p_base[STK_ENDIAN_IDX_HI];
+    #endif
 
-        // Write hi first: ReadVolatile64 reads hi twice and retries if it changed,
+        // write hi first: ReadVolatile64 reads hi twice and retries if it changed,
         // so writing hi before lo ensures readers can detect a torn write.
-        (*phi) = static_cast<uint32_t>(static_cast<uint64_t>(value) >> 32);
+        (*phi) = static_cast<uint32_t>(static_cast<uint64_t>(value) >> 32U);
         __stk_full_memfence();
 
         (*plo) = static_cast<uint32_t>(value);
@@ -476,11 +494,20 @@ struct HiResClock
         \note   ISR-safe.
         \return Microseconds.
     */
-    static inline Ticks GetTimeUs()
+    static __stk_forceinline Ticks GetTimeUs()
     {
+        Ticks ticks = 0LL;
         const uint32_t freq = GetFrequency();
-        return ((freq != 0U) ? 
-            static_cast<Ticks>((GetCycles() * 1000000ULL) / freq) : static_cast<Ticks>(0));
+
+        if (freq != 0U)
+        {
+            const Cycles cycles = GetCycles();
+            const Cycles ticksu = (cycles * 1000000ULL) / static_cast<Cycles>(freq);
+            
+            ticks = static_cast<Ticks>(ticksu);
+        }
+
+        return ticks;
     }
 };
 
@@ -504,7 +531,7 @@ static constexpr ITask *GetUserTaskFromTid(TId task_id) noexcept { return hw::Wo
     \note      Can be overridden by defining _STK_CUSTOM_MEMCPY in system configuration.
 */
 #ifndef _STK_CUSTOM_MEMCPY
-static inline void STK_MEMCPY(void *const dest, const void *const src, const size_t size)
+static __stk_forceinline void STK_MEMCPY(void *const dest, const void *const src, const size_t size)
 {
     using namespace stk;
 
@@ -514,6 +541,7 @@ static inline void STK_MEMCPY(void *const dest, const void *const src, const siz
         const Word src_addr  = hw::PtrToWord(src);
 
         // fast path: check if destination, source, and size are all 4-byte aligned
+        // then copy data in 4-byte chunks
         if (((dest_addr & 0x03U) == 0U) && 
             ((src_addr  & 0x03U) == 0U) && 
             ((size      & 0x03U) == 0U))
@@ -522,10 +550,7 @@ static inline void STK_MEMCPY(void *const dest, const void *const src, const siz
             const uint32_t *const p_s32 = static_cast<const uint32_t *>(src);
             const size_t          words = (size >> 2U);
 
-            for (size_t i = 0U; i < words; ++i)
-            {
-                p_d32[i] = p_s32[i];
-            }
+            STK_UNUSED(std::copy_n(p_s32, words, p_d32));
         }
         // slow path
         else

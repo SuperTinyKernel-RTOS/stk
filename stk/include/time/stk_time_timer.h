@@ -137,6 +137,7 @@ public:
     class Timer : private util::DListEntry<Timer, false>
     {
         friend class TimerHost;
+        friend class util::DListCast; // allow casts because DListEntry is private
 
     public:
         /*! \brief     Default constructor.
@@ -150,6 +151,11 @@ public:
             \note      MISRA deviation: [STK-DEV-005] Rule 10-3-2.
         */
         STK_VIRT_DTOR ~Timer() = default;
+        
+        /*! \brief A tag for type-safe casts done by CastListEntryToParent.
+            \see   CastListEntryToParent.
+        */
+        enum { DLEntryTag = 1 };
 
         /*! \brief     Callback invoked by the handler task when this timer expires.
             \param[in] host: Pointer to the TimerHost that fired this timer.
@@ -693,10 +699,10 @@ inline void TimerHost::UpdateTime()
         // using WriteVolatile64() to guarantee correct lockless reading order by ReadVolatile64
         hw::WriteVolatile64(&m_now, now);
 
-        Timer *tmr = static_cast<Timer *>(m_active.GetFirst());
+        Timer *tmr = util::DListCast::ListEntryToParent<Timer>(m_active.GetFirst());
         while (tmr != nullptr)
         {
-            Timer *const next = static_cast<Timer *>(tmr->GetNext());
+          Timer *const next = util::DListCast::ListEntryToParent<Timer>(tmr->GetNext());
 
             if (tmr->m_active)
             {

@@ -510,10 +510,10 @@ protected:
         \note      Must be called inside the critical section (see \a hw::CriticalSection, \a sync::ScopedCrticalSection).
     */
     void WakeOne()
-    {
-        if (!m_wait_list.IsEmpty())
+    {      
+        if (IWaitObject *const obj = util::DListCast::ListEntryToParent<IWaitObject>(m_wait_list.GetFirst()))
         {
-            static_cast<IWaitObject *>(m_wait_list.GetFirst())->Wake(false);
+            obj->Wake(false);
         }
     }
 
@@ -525,9 +525,9 @@ protected:
     */
     void WakeAll()
     {
-        while (!m_wait_list.IsEmpty())
+        while (IWaitObject *const obj = util::DListCast::ListEntryToParent<IWaitObject>(m_wait_list.GetFirst()))
         {
-            static_cast<IWaitObject *>(m_wait_list.GetFirst())->Wake(false);
+            obj->Wake(false);
         }
     }
 
@@ -1040,8 +1040,8 @@ public:
     /*! \brief     Get first task.
         \return    Pointer to the first task in the managed set, or \c NULL if no tasks have been added.
     */
-    virtual IKernelTask *GetFirst() const = 0;
-
+    virtual IKernelTask *GetFirst() = 0;
+    
     /*! \brief     Advance the internal iterator and return the next runnable task.
         \return    Pointer to the next active task to schedule, or \c NULL if no runnable tasks are available
                    (in which case the kernel transitions to \a FSM_STATE_SLEEPING).

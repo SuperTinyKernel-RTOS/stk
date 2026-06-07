@@ -193,11 +193,11 @@ inline bool ISyncObject::Tick(Timeout elapsed_ticks)
     hw::CriticalSection::ScopedLock cs_;
 #endif
 
-    IWaitObject *itr = static_cast<IWaitObject *>(m_wait_list.GetFirst());
+    IWaitObject *itr = util::DListCast::ListEntryToParent<IWaitObject>(m_wait_list.GetFirst());
 
     while (itr != nullptr)
     {
-        IWaitObject *const next = static_cast<IWaitObject *>(itr->GetNext());
+        IWaitObject *const next = util::DListCast::ListEntryToParent<IWaitObject>(itr->GetNext());
 
         if (!itr->Tick(elapsed_ticks))
         {
@@ -214,7 +214,7 @@ inline bool ISyncObject::Tick(Timeout elapsed_ticks)
 inline Weight ISyncObject::FindWeightHigherThan(Weight comp) const
 {
     Weight max_weight = NO_WEIGHT;
-    const IWaitObject *itr = static_cast<const IWaitObject *>(m_wait_list.GetFirst());     
+    const IWaitObject *itr = util::DListCast::ListEntryToParent<const IWaitObject>(m_wait_list.GetFirst());     
 
     while (itr != nullptr)
     {
@@ -224,7 +224,7 @@ inline Weight ISyncObject::FindWeightHigherThan(Weight comp) const
             max_weight = w;
         }
             
-        itr = static_cast<const IWaitObject *>(itr->GetNext());
+        itr = util::DListCast::ListEntryToParent<const IWaitObject>(itr->GetNext());
     }
 
     return ((max_weight > comp) ? max_weight : NO_WEIGHT);
@@ -240,9 +240,19 @@ inline TId ITask::GetId() const
     \return    Id of the calling task/thread.
     \warning   ISR-unsafe. Calling from an ISR context is not permitted and will trigger an assertion.
 */
-__stk_forceinline TId GetTid()
+static __stk_forceinline TId GetTid()
 {
     return IKernelService::GetInstance()->GetTid();
+}
+
+/*! \brief     Get number of microseconds in one tick.
+    \note      Tick is a periodicity of the system timer expressed in microseconds.
+    \note      ISR-safe.
+    \return    Microseconds in one tick.
+*/
+static __stk_forceinline uint32_t GetTickResolution()
+{
+    return IKernelService::GetInstance()->GetTickResolution();
 }
 
 /*! \brief     Convert ticks to milliseconds.
@@ -251,7 +261,7 @@ __stk_forceinline TId GetTid()
     \return    Equivalent time in milliseconds.
     \note      ISR-safe (performs only arithmetic, no kernel calls).
 */
-__stk_forceinline Time GetMsFromTicks(Ticks tick_count, uint32_t resolution)
+static __stk_forceinline Time GetMsFromTicks(Ticks tick_count, uint32_t resolution)
 {
     return static_cast<Time>((tick_count * static_cast<Time>(resolution)) / 1000LL);
 }
@@ -262,28 +272,16 @@ __stk_forceinline Time GetMsFromTicks(Ticks tick_count, uint32_t resolution)
     \return    Equivalent tick count.
     \note      ISR-safe (performs only arithmetic, no kernel calls).
 */
-__stk_forceinline Ticks GetTicksFromMs(Time ms, uint32_t resolution)
+static __stk_forceinline Ticks GetTicksFromMs(Time ms, uint32_t resolution)
 {
-    return static_cast<Ticks>(((resolution != 0U) ? (ms * 1000LL / static_cast<Time>(resolution)) : 0LL));
-}
+    Ticks tick_count = 0LL;
 
-/*! \brief     Get number of ticks elapsed since kernel start.
-    \note      ISR-safe.
-    \return    Ticks.
-*/
-__stk_forceinline Ticks GetTicks()
-{
-    return IKernelService::GetInstance()->GetTicks();
-}
+    if (resolution != 0U)
+    {
+        tick_count = static_cast<Ticks>((ms * 1000LL) / static_cast<Time>(resolution));
+    }
 
-/*! \brief     Get number of microseconds in one tick.
-    \note      Tick is a periodicity of the system timer expressed in microseconds.
-    \note      ISR-safe.
-    \return    Microseconds in one tick.
-*/
-__stk_forceinline uint32_t GetTickResolution()
-{
-    return IKernelService::GetInstance()->GetTickResolution();
+    return tick_count;
 }
 
 /*! \brief     Convert milliseconds to ticks using the current kernel tick resolution.
@@ -293,9 +291,34 @@ __stk_forceinline uint32_t GetTickResolution()
                Use the two-argument form GetTicksFromMsec(ms, resolution) in ISR context.
     \warning   ISR-unsafe (internally calls GetTickResolution() which accesses the kernel service).
 */
-__stk_forceinline Ticks GetTicksFromMs(Time ms)
+static __stk_forceinline Ticks GetTicksFromMs(Time ms)
 {
     return GetTicksFromMs(ms, GetTickResolution());
+}
+
+/*! \brief     Convert milliseconds to ticks and clamp the result to a Timeout type.
+    \param[in] ms: Time in milliseconds to convert.
+    \return    Equivalent tick count clamped to the maximum value allowed by Timeout (WAIT_INFINITE).
+    \note      ISR-unsafe (internally calls GetTickResolution() which accesses the kernel service).
+*/
+static __stk_forceinline Timeout GetTicksFromMsClampedToTimeout(Timeout ms)
+{
+    const Time time_ms = static_cast<Time>(ms);
+    const Ticks tick_count = GetTicksFromMs(time_ms);    
+    
+    const Ticks final_ticks = (tick_count < static_cast<Ticks>(WAIT_INFINITE)) ? 
+        tick_count : static_cast<Ticks>(WAIT_INFINITE);
+        
+    return static_cast<Timeout>(final_ticks);
+}
+
+/*! \brief     Get number of ticks elapsed since kernel start.
+    \note      ISR-safe.
+    \return    Ticks.
+*/
+static __stk_forceinline Ticks GetTicks()
+{
+    return IKernelService::GetInstance()->GetTicks();
 }
 
 /*! \brief     Get current time in milliseconds since kernel start.
@@ -304,21 +327,21 @@ __stk_forceinline Ticks GetTicksFromMs(Time ms)
     \note      When the tick resolution is exactly 1000 µs (1 ms, the default PERIODICITY_DEFAULT),
                the tick count is returned directly without multiplication, avoiding a 64-bit multiply.
 */
-static inline Time GetTimeNowMs()
+static __stk_forceinline Time GetTimeNowMs()
 {
     const IKernelService *const service = IKernelService::GetInstance();
     const uint32_t resolution = service->GetTickResolution();
     const Ticks tick_count = service->GetTicks();
 
     return ((resolution == 1000U) ? tick_count : 
-        ((tick_count * static_cast<Ticks>(resolution)) / static_cast<Ticks>(1000)));
+        ((tick_count * static_cast<Ticks>(resolution)) / 1000LL));
 }
 
 /*! \brief     Get system timer count value.
     \note      ISR-safe.
     \return    64-bit count value.
 */
-__stk_forceinline Cycles GetSysTimerCount()
+static __stk_forceinline Cycles GetSysTimerCount()
 {
     return IKernelService::GetInstance()->GetSysTimerCount();
 }
@@ -327,7 +350,7 @@ __stk_forceinline Cycles GetSysTimerCount()
     \note      ISR-safe.
     \return    Frequency (Hz).
 */
-__stk_forceinline uint32_t GetSysTimerFrequency()
+static __stk_forceinline uint32_t GetSysTimerFrequency()
 {
     return IKernelService::GetInstance()->GetSysTimerFrequency();
 }
@@ -338,7 +361,7 @@ __stk_forceinline uint32_t GetSysTimerFrequency()
     \param[in] tick_count: Sleep time (in ticks). 0 does not cause yield, use Yield instead. Negative will cause an assertion.
     \warning   ISR-unsafe. Calling from an ISR context is not permitted and will trigger an assertion.
 */
-__stk_forceinline void Sleep(Timeout tick_count)
+static __stk_forceinline void Sleep(Timeout tick_count)
 {
     IKernelService::GetInstance()->Sleep(tick_count);
 }
@@ -351,10 +374,9 @@ __stk_forceinline void Sleep(Timeout tick_count)
     \param[in] ms: Sleep time (milliseconds). 0 does not cause yield, use Yield instead. Negative will cause an assertion.
     \warning   ISR-unsafe. Calling from an ISR context is not permitted and will trigger an assertion.
 */
-static inline void SleepMs(Timeout ms)
+static __stk_forceinline void SleepMs(Timeout ms)
 {
-    const Ticks tick_count = GetTicksFromMs(static_cast<Time>(ms));
-    Sleep(static_cast<Timeout>(tick_count < WAIT_INFINITE ? tick_count : WAIT_INFINITE));
+    Sleep(GetTicksFromMsClampedToTimeout(ms));
 }
 
 /*! \brief     Put calling process into a sleep state until the specified timestamp.
@@ -364,7 +386,7 @@ static inline void SleepMs(Timeout ms)
     \warning   ISR-unsafe. Calling from an ISR context is not permitted and will trigger an assertion.
     \return    True if sleep succeeded, false otherwise.
 */
-__stk_forceinline bool SleepUntil(Ticks timestamp)
+static __stk_forceinline bool SleepUntil(Ticks timestamp)
 {
     return IKernelService::GetInstance()->SleepUntil(timestamp);
 }
@@ -374,7 +396,7 @@ __stk_forceinline bool SleepUntil(Ticks timestamp)
     \note      No-op if task was not in a sleeping state.
     \note      ISR-safe.
 */
-__stk_forceinline void SleepCancel(TId task_id)
+static __stk_forceinline void SleepCancel(TId task_id)
 {
     IKernelService::GetInstance()->SleepCancel(task_id);
 }
@@ -383,7 +405,7 @@ __stk_forceinline void SleepCancel(TId task_id)
     \note      A cooperative scheduling mechanism. In HRT mode acts as a cooperation point (see stk::KERNEL_HRT).
     \warning   ISR-unsafe. Calling from an ISR context is not permitted and will trigger an assertion.
 */
-__stk_forceinline void Yield()
+static __stk_forceinline void Yield()
 {
     IKernelService::GetInstance()->SwitchToNext();
 }
@@ -394,7 +416,7 @@ __stk_forceinline void Yield()
     \param[in] tick_count: Delay time (in ticks). Negative will cause an assertion.
     \warning   ISR-unsafe. Calling from an ISR context is not permitted and will trigger an assertion.
 */
-__stk_forceinline void Delay(Timeout tick_count)
+static __stk_forceinline void Delay(Timeout tick_count)
 {
     IKernelService::GetInstance()->Delay(tick_count);
 }
@@ -405,10 +427,9 @@ __stk_forceinline void Delay(Timeout tick_count)
     \param[in] ms: Delay time (milliseconds). Negative will cause an assertion.
     \warning   ISR-unsafe. Calling from an ISR context is not permitted and will trigger an assertion.
 */
-static inline void DelayMs(Timeout ms)
+static __stk_forceinline void DelayMs(Timeout ms)
 {
-    const Ticks tick_count = GetTicksFromMs(static_cast<Time>(ms));
-    Delay(static_cast<Timeout>(tick_count < WAIT_INFINITE ? tick_count : WAIT_INFINITE));
+    Delay(GetTicksFromMsClampedToTimeout(ms));
 }
 
 } // namespace stk

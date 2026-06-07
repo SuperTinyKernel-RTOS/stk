@@ -188,7 +188,7 @@ public:
                    with GetNext(). The sleep fallback allows the kernel to identify any task even
                    when all are currently sleeping.
     */
-    IKernelTask *GetFirst() const override
+    IKernelTask *GetFirst() override
     {
         STK_ASSERT(GetSize() != 0U);
 
@@ -196,12 +196,12 @@ public:
 
         if (m_ready_bitmap == 0U)
         {
-            first_task = (*const_cast<IKernelTask::ListEntryType *>(m_sleep.GetFirst()));
+            first_task = (*m_sleep.GetFirst());
         }
         else
         {
             const Priority prio = GetHighestReadyPriority(m_ready_bitmap);
-            first_task = (*const_cast<IKernelTask::ListEntryType *>(m_tasks[prio].GetFirst()));
+            first_task = (*m_tasks[prio].GetFirst());
         }
 
         return first_task;

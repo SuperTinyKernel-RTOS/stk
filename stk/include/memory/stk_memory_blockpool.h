@@ -312,7 +312,7 @@ private:
     void *PopFreeList();
 
     uint8_t                 *m_storage;        //!< flat byte array holding all N blocks (owned or external)
-    MemoryBlock             *m_free_list;       //!< head of the intrusive free-list (nullptr when pool is empty)
+    MemoryBlock             *m_free_list;      //!< head of the intrusive free-list (nullptr when pool is empty)
     sync::ConditionVariable  m_cv;             //!< signalled by Free() to wake one task blocked in TimedAlloc()
     size_t                   m_block_size;     //!< aligned block size in bytes (>= BLOCK_ALIGN)
     size_t                   m_capacity;       //!< total number of blocks
@@ -548,7 +548,7 @@ inline void BlockMemoryPool::BuildFreeList()
     // (lowest address), giving ascending allocation order.
     for (size_t i = m_capacity; i-- > 0U; )
     {
-        MemoryBlock *const blk = reinterpret_cast<MemoryBlock *>(m_storage + (i * m_block_size));
+        MemoryBlock *const blk = hw::WordToPtr<MemoryBlock>(hw::PtrToWord(m_storage) + (i * m_block_size));
 
         blk->next   = m_free_list;
         m_free_list = blk;

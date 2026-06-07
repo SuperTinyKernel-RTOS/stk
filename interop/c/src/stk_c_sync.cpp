@@ -32,46 +32,52 @@ struct stk_mutex_t
     Mutex handle;
 };
 
-stk_mutex_t *stk_mutex_create(stk_mutex_mem_t *memory, uint32_t memory_size)
+stk_mutex_t *stk_mutex_create(stk_mutex_mem_t *const membuf, uint32_t membuf_size)
 {
-    STK_ASSERT(memory != nullptr);
-    STK_ASSERT(memory_size >= sizeof(stk_mutex_t));
-    if (memory_size < sizeof(stk_mutex_t))
-        return nullptr;
+    STK_ASSERT(membuf != nullptr);
+    STK_ASSERT(membuf_size >= sizeof(stk_mutex_t));
 
-    return new (memory->data) stk_mutex_t();
+    stk_mutex_t *result = nullptr;
+    if (membuf_size >= sizeof(stk_mutex_t))
+    {
+        result = new (membuf->data) stk_mutex_t();
+    }
+
+    return result;
 }
 
 void stk_mutex_destroy(stk_mutex_t *mtx)
 {
-    if (mtx != NULL)
+    if (mtx != nullptr)
+    {
         mtx->~stk_mutex_t();
+    }
 }
 
 void stk_mutex_lock(stk_mutex_t *mtx)
 {
-    STK_ASSERT(mtx != NULL);
+    STK_ASSERT(mtx != nullptr);
 
     mtx->handle.Lock();
 }
 
 bool stk_mutex_trylock(stk_mutex_t *mtx)
 {
-    STK_ASSERT(mtx != NULL);
+    STK_ASSERT(mtx != nullptr);
 
     return mtx->handle.TryLock();
 }
 
 void stk_mutex_unlock(stk_mutex_t *mtx)
 {
-    STK_ASSERT(mtx != NULL);
+    STK_ASSERT(mtx != nullptr);
 
     mtx->handle.Unlock();
 }
 
 bool stk_mutex_timed_lock(stk_mutex_t *mtx, stk_timeout_t timeout)
 {
-    STK_ASSERT(mtx != NULL);
+    STK_ASSERT(mtx != nullptr);
 
     return mtx->handle.TimedLock(timeout);
 }
@@ -84,38 +90,44 @@ struct stk_spinlock_t
     sync::SpinLock handle;
 };
 
-stk_spinlock_t *stk_spinlock_create(stk_spinlock_mem_t *memory, uint32_t memory_size)
+stk_spinlock_t *stk_spinlock_create(stk_spinlock_mem_t *const membuf, uint32_t membuf_size)
 {
-    STK_ASSERT(memory != nullptr);
-    STK_ASSERT(memory_size >= sizeof(stk_spinlock_t));
-    if (memory_size < sizeof(stk_spinlock_t))
-        return nullptr;
+    STK_ASSERT(membuf != nullptr);
+    STK_ASSERT(membuf_size >= sizeof(stk_spinlock_t));
 
-    return new (memory->data) stk_spinlock_t();
+    stk_spinlock_t *result = nullptr;
+    if (membuf_size >= sizeof(stk_spinlock_t))
+    {
+        result = new (membuf->data) stk_spinlock_t();
+    }
+
+    return result;
 }
 
-void stk_spinlock_destroy(stk_spinlock_t *lock)
+void stk_spinlock_destroy(stk_spinlock_t *slock)
 {
-    if (lock != nullptr)
-        lock->~stk_spinlock_t();
+    if (slock != nullptr)
+    {
+        slock->~stk_spinlock_t();
+    }
 }
 
-void stk_spinlock_lock(stk_spinlock_t *lock)
+void stk_spinlock_lock(stk_spinlock_t *slock)
 {
-    STK_ASSERT(lock != nullptr);
-    lock->handle.Lock();
+    STK_ASSERT(slock != nullptr);
+    slock->handle.Lock();
 }
 
-bool stk_spinlock_trylock(stk_spinlock_t *lock)
+bool stk_spinlock_trylock(stk_spinlock_t *slock)
 {
-    STK_ASSERT(lock != nullptr);
-    return lock->handle.TryLock();
+    STK_ASSERT(slock != nullptr);
+    return slock->handle.TryLock();
 }
 
-void stk_spinlock_unlock(stk_spinlock_t *lock)
+void stk_spinlock_unlock(stk_spinlock_t *slock)
 {
-    STK_ASSERT(lock != nullptr);
-    lock->handle.Unlock();
+    STK_ASSERT(slock != nullptr);
+    slock->handle.Unlock();
 }
 
 // -----------------------------------------------------------------------------
@@ -126,20 +138,26 @@ struct stk_cv_t
     ConditionVariable handle;
 };
 
-stk_cv_t *stk_cv_create(stk_cv_mem_t *memory, uint32_t memory_size)
+stk_cv_t *stk_cv_create(stk_cv_mem_t *const membuf, uint32_t membuf_size)
 {
-    STK_ASSERT(memory != nullptr);
-    STK_ASSERT(memory_size >= sizeof(stk_cv_t));
-    if (memory_size < sizeof(stk_cv_t))
-        return nullptr;
+    STK_ASSERT(membuf != nullptr);
+    STK_ASSERT(membuf_size >= sizeof(stk_cv_t));
 
-    return new (memory->data) stk_cv_t();
+    stk_cv_t *result = nullptr;
+    if (membuf_size >= sizeof(stk_cv_t))
+    {
+        result = new (membuf->data) stk_cv_t();
+    }
+
+    return result;
 }
 
 void stk_cv_destroy(stk_cv_t *cv)
 {
     if (cv != nullptr)
+    {
         cv->~stk_cv_t();
+    }
 }
 
 bool stk_cv_wait(stk_cv_t *cv, stk_mutex_t *mtx, stk_timeout_t timeout)
@@ -175,20 +193,28 @@ struct stk_event_t
     Event handle;
 };
 
-stk_event_t *stk_event_create(stk_event_mem_t *memory, uint32_t memory_size, bool manual_reset)
+stk_event_t *stk_event_create(stk_event_mem_t *const membuf, 
+                              uint32_t         membuf_size, 
+                              bool             manual_reset)
 {
-    STK_ASSERT(memory != nullptr);
-    STK_ASSERT(memory_size >= sizeof(stk_event_t));
-    if (memory_size < sizeof(stk_event_t))
-        return nullptr;
+    STK_ASSERT(membuf != nullptr);
+    STK_ASSERT(membuf_size >= sizeof(stk_event_t));
 
-    return new (memory->data) stk_event_t(manual_reset);
+    stk_event_t *result = nullptr;
+    if (membuf_size >= sizeof(stk_event_t))
+    {
+        result = new (membuf->data) stk_event_t(manual_reset);
+    }
+
+    return result;
 }
 
 void stk_event_destroy(stk_event_t *ev)
 {
     if (ev != nullptr)
+    {
         ev->~stk_event_t();
+    }
 }
 
 bool stk_event_wait(stk_event_t *ev, stk_timeout_t timeout)
@@ -205,18 +231,18 @@ bool stk_event_trywait(stk_event_t *ev)
     return ev->handle.TryWait();
 }
 
-void stk_event_set(stk_event_t *ev)
+bool stk_event_set(stk_event_t *ev)
 {
     STK_ASSERT(ev != nullptr);
 
-    ev->handle.Set();
+    return ev->handle.Set();
 }
 
-void stk_event_reset(stk_event_t *ev)
+bool stk_event_reset(stk_event_t *ev)
 {
     STK_ASSERT(ev != nullptr);
 
-    ev->handle.Reset();
+    return ev->handle.Reset();
 }
 
 void stk_event_pulse(stk_event_t *ev)
@@ -239,25 +265,31 @@ struct stk_sem_t
     Semaphore handle;
 };
 
-stk_sem_t *stk_sem_create(stk_sem_mem_t *memory, uint32_t memory_size,
-                           uint32_t initial_count, uint32_t max_count)
+stk_sem_t *stk_sem_create(stk_sem_mem_t *const membuf, 
+                          uint32_t       membuf_size,
+                          uint32_t       initial_count, 
+                          uint32_t       max_count)
 {
-    STK_ASSERT(memory != nullptr);
-    STK_ASSERT(memory_size >= sizeof(stk_sem_t));
+    STK_ASSERT(membuf != nullptr);
+    STK_ASSERT(membuf_size >= sizeof(stk_sem_t));
     STK_ASSERT(initial_count < (max_count == 0U ? Semaphore::COUNT_MAX : max_count));
 
-    if (memory_size < sizeof(stk_sem_t))
-        return nullptr;
+    stk_sem_t *result = nullptr;
+    if (membuf_size >= sizeof(stk_sem_t))
+    {
+        const uint32_t effective_max = ((max_count == 0U) ? Semaphore::COUNT_MAX : max_count);
+        result = new (membuf->data) stk_sem_t(initial_count, effective_max);
+    }
 
-    const uint32_t effective_max = (max_count == 0U) ? Semaphore::COUNT_MAX : max_count;
-
-    return new (memory->data) stk_sem_t(initial_count, effective_max);
+    return result;
 }
 
 void stk_sem_destroy(stk_sem_t *sem)
 {
     if (sem != nullptr)
+    {
         sem->~stk_sem_t();
+    }
 }
 
 bool stk_sem_wait(stk_sem_t *sem, stk_timeout_t timeout)
@@ -299,20 +331,28 @@ struct stk_ef_t
     EventFlags handle;
 };
 
-stk_ef_t *stk_ef_create(stk_ef_mem_t *memory, uint32_t memory_size, uint32_t initial_flags)
+stk_ef_t *stk_ef_create(stk_ef_mem_t *const membuf, 
+                        uint32_t      membuf_size, 
+                        uint32_t      initial_flags)
 {
-    STK_ASSERT(memory != nullptr);
-    STK_ASSERT(memory_size >= sizeof(stk_ef_t));
-    if (memory_size < sizeof(stk_ef_t))
-        return nullptr;
+    STK_ASSERT(membuf != nullptr);
+    STK_ASSERT(membuf_size >= sizeof(stk_ef_t));
 
-    return new (memory->data) stk_ef_t(initial_flags);
+    stk_ef_t *result = nullptr;
+    if (membuf_size >= sizeof(stk_ef_t))
+    {
+        result = new (membuf->data) stk_ef_t(initial_flags);
+    }
+
+    return result;
 }
 
 void stk_ef_destroy(stk_ef_t *ef)
 {
     if (ef != nullptr)
+    {
         ef->~stk_ef_t();
+    }
 }
 
 uint32_t stk_ef_set(stk_ef_t *ef, uint32_t flags)
@@ -362,30 +402,35 @@ struct stk_pipe_t
     {}
 };
 
-stk_pipe_t *stk_pipe_create(stk_pipe_mem_t *memory,
-                             uint32_t       memory_size,
-                             uint8_t       *buf,
-                             uint32_t       buf_size,
-                             size_t         capacity,
-                             size_t         element_size)
+stk_pipe_t *stk_pipe_create(stk_pipe_mem_t *const membuf,
+                            uint32_t        membuf_size,
+                            uint8_t        *buf,
+                            uint32_t        buf_size,
+                            size_t          capacity,
+                            size_t          element_size)
 {
-    STK_ASSERT(memory       != nullptr);
+    STK_ASSERT(membuf       != nullptr);
     STK_ASSERT(buf          != nullptr);
     STK_ASSERT(capacity     >= 1U);
     STK_ASSERT(element_size >= 1U);
-    STK_ASSERT(memory_size  >= sizeof(stk_pipe_t));
+    STK_ASSERT(membuf_size  >= sizeof(stk_pipe_t));
     STK_ASSERT(buf_size     >= capacity * element_size);
 
-    if ((memory_size < sizeof(stk_pipe_t)) || (buf_size < (capacity * element_size)))
-        return nullptr;
+    stk_pipe_t *result = nullptr;
+    if ((membuf_size >= sizeof(stk_pipe_t)) && (buf_size >= (capacity * element_size)))
+    {
+        result = new (membuf->data) stk_pipe_t(buf, capacity, element_size);
+    }
 
-    return new (memory->data) stk_pipe_t(buf, capacity, element_size);
+    return result;
 }
 
 void stk_pipe_destroy(stk_pipe_t *pipe)
 {
     if (pipe != nullptr)
+    {
         pipe->~stk_pipe_t();
+    }
 }
 
 bool stk_pipe_write(stk_pipe_t *pipe, const void *data, stk_timeout_t timeout)
@@ -448,8 +493,11 @@ size_t stk_pipe_tryread_bulk(stk_pipe_t *pipe, void *dst, size_t count)
     return pipe->handle.TryReadBulk(dst, count);
 }
 
-size_t stk_pipe_read_bulk_triggered(stk_pipe_t *pipe, void *dst,
-                                    size_t trigger, size_t max_count, stk_timeout_t timeout)
+size_t stk_pipe_read_bulk_triggered(stk_pipe_t   *pipe, 
+                                    void         *dst,
+                                    size_t        trigger, 
+                                    size_t        max_count, 
+                                    stk_timeout_t timeout)
 {
     STK_ASSERT(pipe != nullptr);
 
@@ -531,30 +579,35 @@ struct stk_msgq_t
     MessageQueue handle;
 };
 
-stk_msgq_t *stk_msgq_create(stk_msgq_mem_t *memory,
-                             uint32_t        memory_size,
-                             uint8_t        *buf,
-                             uint32_t        buf_size,
-                             size_t          capacity,
-                             size_t          msg_size)
+stk_msgq_t *stk_msgq_create(stk_msgq_mem_t *const membuf,
+                            uint32_t        membuf_size,
+                            uint8_t        *buf,
+                            uint32_t        buf_size,
+                            size_t          capacity,
+                            size_t          msg_size)
 {
-    STK_ASSERT(memory != nullptr);
+    STK_ASSERT(membuf != nullptr);
     STK_ASSERT(buf != nullptr);
     STK_ASSERT(capacity >= 1U);
     STK_ASSERT(msg_size >= 1U);
-    STK_ASSERT(memory_size >= sizeof(stk_msgq_t));
+    STK_ASSERT(membuf_size >= sizeof(stk_msgq_t));
     STK_ASSERT(buf_size >= capacity * msg_size);
 
-    if ((memory_size < sizeof(stk_msgq_t)) || (buf_size < (capacity * msg_size)))
-        return nullptr;
+    stk_msgq_t *result = nullptr;
+    if ((membuf_size >= sizeof(stk_msgq_t)) && (buf_size >= (capacity * msg_size)))
+    {
+        result = new (membuf) stk_msgq_t(buf, capacity, msg_size);
+    }
 
-    return new (memory) stk_msgq_t(buf, capacity, msg_size);
+    return result;
 }
 
 void stk_msgq_destroy(stk_msgq_t *mq)
 {
     if (mq != nullptr)
+    {
         mq->~stk_msgq_t();
+    }
 }
 
 bool stk_msgq_put(stk_msgq_t *mq, const void *msg, stk_timeout_t timeout)
@@ -562,7 +615,7 @@ bool stk_msgq_put(stk_msgq_t *mq, const void *msg, stk_timeout_t timeout)
     STK_ASSERT(mq != nullptr);
     STK_ASSERT(msg != nullptr);
 
-    return reinterpret_cast<stk_msgq_t *>(mq)->handle.Put(msg, timeout);
+    return mq->handle.Put(msg, timeout);
 }
 
 bool stk_msgq_tryput(stk_msgq_t *mq, const void *msg)
@@ -570,7 +623,7 @@ bool stk_msgq_tryput(stk_msgq_t *mq, const void *msg)
     STK_ASSERT(mq != nullptr);
     STK_ASSERT(msg != nullptr);
 
-    return reinterpret_cast<stk_msgq_t *>(mq)->handle.TryPut(msg);
+    return mq->handle.TryPut(msg);
 }
 
 bool stk_msgq_putfront(stk_msgq_t *mq, const void *msg, stk_timeout_t timeout)
@@ -578,7 +631,7 @@ bool stk_msgq_putfront(stk_msgq_t *mq, const void *msg, stk_timeout_t timeout)
     STK_ASSERT(mq != nullptr);
     STK_ASSERT(msg != nullptr);
 
-    return reinterpret_cast<stk_msgq_t *>(mq)->handle.PutFront(msg, timeout);
+    return mq->handle.PutFront(msg, timeout);
 }
 
 bool stk_msgq_tryputfront(stk_msgq_t *mq, const void *msg)
@@ -586,7 +639,7 @@ bool stk_msgq_tryputfront(stk_msgq_t *mq, const void *msg)
     STK_ASSERT(mq != nullptr);
     STK_ASSERT(msg != nullptr);
 
-    return reinterpret_cast<stk_msgq_t *>(mq)->handle.TryPutFront(msg);
+    return mq->handle.TryPutFront(msg);
 }
 
 bool stk_msgq_get(stk_msgq_t *mq, void *msg, stk_timeout_t timeout)
@@ -594,7 +647,7 @@ bool stk_msgq_get(stk_msgq_t *mq, void *msg, stk_timeout_t timeout)
     STK_ASSERT(mq != nullptr);
     STK_ASSERT(msg != nullptr);
 
-    return reinterpret_cast<stk_msgq_t *>(mq)->handle.Get(msg, timeout);
+    return mq->handle.Get(msg, timeout);
 }
 
 bool stk_msgq_tryget(stk_msgq_t *mq, void *msg)
@@ -602,7 +655,7 @@ bool stk_msgq_tryget(stk_msgq_t *mq, void *msg)
     STK_ASSERT(mq != nullptr);
     STK_ASSERT(msg != nullptr);
 
-    return reinterpret_cast<stk_msgq_t *>(mq)->handle.TryGet(msg);
+    return mq->handle.TryGet(msg);
 }
 
 bool stk_msgq_peek(stk_msgq_t *mq, void *msg, stk_timeout_t timeout)
@@ -610,7 +663,7 @@ bool stk_msgq_peek(stk_msgq_t *mq, void *msg, stk_timeout_t timeout)
     STK_ASSERT(mq != nullptr);
     STK_ASSERT(msg != nullptr);
 
-    return reinterpret_cast<stk_msgq_t *>(mq)->handle.Peek(msg, timeout);
+    return mq->handle.Peek(msg, timeout);
 }
 
 bool stk_msgq_trypeek(stk_msgq_t *mq, void *msg)
@@ -618,7 +671,7 @@ bool stk_msgq_trypeek(stk_msgq_t *mq, void *msg)
     STK_ASSERT(mq != nullptr);
     STK_ASSERT(msg != nullptr);
 
-    return reinterpret_cast<stk_msgq_t *>(mq)->handle.TryPeek(msg);
+    return mq->handle.TryPeek(msg);
 }
 
 bool stk_msgq_peekfront(stk_msgq_t *mq, void *msg, stk_timeout_t timeout)
@@ -626,7 +679,7 @@ bool stk_msgq_peekfront(stk_msgq_t *mq, void *msg, stk_timeout_t timeout)
     STK_ASSERT(mq != nullptr);
     STK_ASSERT(msg != nullptr);
 
-    return reinterpret_cast<stk_msgq_t *>(mq)->handle.PeekFront(msg, timeout);
+    return mq->handle.PeekFront(msg, timeout);
 }
 
 bool stk_msgq_trypeekfront(stk_msgq_t *mq, void *msg)
@@ -634,70 +687,70 @@ bool stk_msgq_trypeekfront(stk_msgq_t *mq, void *msg)
     STK_ASSERT(mq != nullptr);
     STK_ASSERT(msg != nullptr);
 
-    return reinterpret_cast<stk_msgq_t *>(mq)->handle.TryPeekFront(msg);
+    return mq->handle.TryPeekFront(msg);
 }
 
 void stk_msgq_reset(stk_msgq_t *mq)
 {
     STK_ASSERT(mq != nullptr);
 
-    reinterpret_cast<stk_msgq_t *>(mq)->handle.Reset();
+    mq->handle.Reset();
 }
 
 size_t stk_msgq_get_capacity(const stk_msgq_t *mq)
 {
     STK_ASSERT(mq != nullptr);
 
-    return reinterpret_cast<const stk_msgq_t *>(mq)->handle.GetCapacity();
+    return mq->handle.GetCapacity();
 }
 
 size_t stk_msgq_get_msg_size(const stk_msgq_t *mq)
 {
     STK_ASSERT(mq != nullptr);
 
-    return reinterpret_cast<const stk_msgq_t *>(mq)->handle.GetMsgSize();
+    return mq->handle.GetMsgSize();
 }
 
 size_t stk_msgq_get_count(const stk_msgq_t *mq)
 {
     STK_ASSERT(mq != nullptr);
 
-    return reinterpret_cast<const stk_msgq_t *>(mq)->handle.GetCount();
+    return mq->handle.GetCount();
 }
 
 size_t stk_msgq_get_space(const stk_msgq_t *mq)
 {
     STK_ASSERT(mq != nullptr);
 
-    return reinterpret_cast<const stk_msgq_t *>(mq)->handle.GetSpace();
+    return mq->handle.GetSpace();
 }
 
 bool stk_msgq_is_empty(const stk_msgq_t *mq)
 {
     STK_ASSERT(mq != nullptr);
 
-    return reinterpret_cast<const stk_msgq_t *>(mq)->handle.IsEmpty();
+    return mq->handle.IsEmpty();
 }
 
 bool stk_msgq_is_full(const stk_msgq_t *mq)
 {
     STK_ASSERT(mq != nullptr);
 
-    return reinterpret_cast<const stk_msgq_t *>(mq)->handle.IsFull();
+    return mq->handle.IsFull();
 }
 
 uint8_t *stk_msgq_get_buffer(stk_msgq_t *mq)
 {
     STK_ASSERT(mq != nullptr);
 
-    return reinterpret_cast<stk_msgq_t *>(mq)->handle.GetBuffer();
+    return mq->handle.GetBuffer();
 }
 
 bool stk_msgq_is_storage_valid(const stk_msgq_t *mq)
 {
     STK_ASSERT(mq != nullptr);
 
-    return reinterpret_cast<const stk_msgq_t *>(mq)->handle.IsStorageValid();
+    return mq->handle.IsStorageValid();
 }
 
 // -----------------------------------------------------------------------------
@@ -708,20 +761,26 @@ struct stk_rwmutex_t
     sync::RWMutex handle;
 };
 
-stk_rwmutex_t *stk_rwmutex_create(stk_rwmutex_mem_t *memory, uint32_t memory_size)
+stk_rwmutex_t *stk_rwmutex_create(stk_rwmutex_mem_t *const membuf, uint32_t membuf_size)
 {
-    STK_ASSERT(memory != nullptr);
-    STK_ASSERT(memory_size >= sizeof(stk_rwmutex_t));
-    if (memory_size < sizeof(stk_rwmutex_t))
-        return nullptr;
+    STK_ASSERT(membuf != nullptr);
+    STK_ASSERT(membuf_size >= sizeof(stk_rwmutex_t));
 
-    return (stk_rwmutex_t *)new (memory->data) stk_rwmutex_t();
+    stk_rwmutex_t *result = nullptr;
+    if (membuf_size >= sizeof(stk_rwmutex_t))
+    {
+        result = new (membuf->data) stk_rwmutex_t();
+    }
+    
+    return result;
 }
 
 void stk_rwmutex_destroy(stk_rwmutex_t *rw)
 {
     if (rw != nullptr)
+    {
         rw->~stk_rwmutex_t();
+    }
 }
 
 void stk_rwmutex_read_lock(stk_rwmutex_t *rw)

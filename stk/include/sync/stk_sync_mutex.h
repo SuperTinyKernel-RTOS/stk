@@ -209,7 +209,7 @@ inline void Mutex::Unlock()
         if (!m_wait_list.IsEmpty())
         {
             // pass ownership directly to the first waiter (FIFO order)
-            IWaitObject *const waiter = static_cast<IWaitObject *>(m_wait_list.GetFirst());
+            IWaitObject *const waiter = util::DListCast::ListEntryToParent<IWaitObject>(m_wait_list.GetFirst());
 
             // transfer ownership to the waiter
             m_recursion_count = 1U;

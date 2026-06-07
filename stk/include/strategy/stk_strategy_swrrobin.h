@@ -178,13 +178,11 @@ public:
         \note      Preference is given to runnable tasks. The sleep fallback allows the kernel to
                    identify any task even when all are currently sleeping.
     */
-    IKernelTask *GetFirst() const override
+    IKernelTask *GetFirst() override
     {
         STK_ASSERT(GetSize() != 0U);
-
-        return (!m_tasks.IsEmpty() ?
-            (*const_cast<IKernelTask::ListEntryType *>(m_tasks.GetFirst())) :
-            (*const_cast<IKernelTask::ListEntryType *>(m_sleep.GetFirst())));
+        
+        return (*(!m_tasks.IsEmpty() ? m_tasks.GetFirst() : m_sleep.GetFirst()));
     }
 
     /*! \brief  Get the total number of tasks managed by this strategy.

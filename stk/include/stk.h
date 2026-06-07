@@ -1615,7 +1615,7 @@ protected:
             else
             if (m_fsm_state == FSM_STATE_SLEEPING)
             {
-                m_task_now = static_cast<KernelTask *>(m_strategy.GetFirst());
+                m_task_now = util::DListCast::ListEntryToParent<KernelTask>(m_strategy.GetFirst());
                 active     = &m_sleep_trap[0].stack;
             }
             else
@@ -1737,7 +1737,8 @@ protected:
 
             if (delta > 0)
             {
-                task->ScheduleSleep(static_cast<Timeout>(Min(delta, static_cast<Ticks>(WAIT_INFINITE))));
+                const Ticks infinite_ticks = WAIT_INFINITE;              
+                task->ScheduleSleep(static_cast<Timeout>(Min(delta, infinite_ticks)));
             }
             else
             {
@@ -2024,7 +2025,7 @@ protected:
         {
             ISyncObject::ListEntryType *const next = itr->GetNext();
 
-            if (!static_cast<ISyncObject *>(itr)->Tick(elapsed_ticks))
+            if (!util::DListCast::ListEntryToParent<ISyncObject>(itr)->Tick(elapsed_ticks))
             {
                 m_sync_list->Unlink(itr);
             }
@@ -2072,7 +2073,7 @@ protected:
         EFsmEvent type = FSM_EVENT_SLEEP;
 
         // try getting next task for scheduling
-        next = static_cast<KernelTask *>(m_strategy.GetNext());
+        next = util::DListCast::ListEntryToParent<KernelTask>(m_strategy.GetNext());
 
         // sleep-aware strategy returns nullptr if no active tasks available
         if (next != nullptr)
@@ -2256,7 +2257,7 @@ protected:
         idle   = now->GetUserStackPtr();
         active = &m_sleep_trap[0].stack;
 
-        m_task_now = static_cast<KernelTask *>(m_strategy.GetFirst());
+        m_task_now = util::DListCast::ListEntryToParent<KernelTask>(m_strategy.GetFirst());
 
     #if STK_SEGGER_SYSVIEW
         SEGGER_SYSVIEW_OnTaskStopReady(now->GetUserStackPtr()->tid, TRACE_EVENT_SLEEP);
