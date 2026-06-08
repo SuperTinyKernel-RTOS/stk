@@ -93,6 +93,8 @@ extern void InitializeTimerHost(stk_kernel_t *kernel, stk::time::TimerHost *th, 
 
 void CTimerWrapper::OnExpired(TimerHost *host)
 {
+    STK_UNUSED(host);
+
     if (m_callback != nullptr)
     {
         m_callback(m_host_handle, CastCppTimerWrapperToC(this), m_user_data);

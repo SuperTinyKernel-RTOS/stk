@@ -127,7 +127,7 @@
     #define STK_TLS_PREFER_REGISTER (0)
 #endif
 
-/*! \def   STK_NEED_TASK_ID
+/*! \def   STK_STACK_NEEDS_TASK_ID
     \brief When defined as 1, the Stack descriptor (stk::Stack) carries a \c tid field
            used by the SEGGER SystemView trace back-end to identify tasks during context switches.
     \note  Set unconditionally (no \c #ifndef guard) whenever STK_SEGGER_SYSVIEW is enabled.
@@ -268,24 +268,22 @@
     #define __stk_attr_deprecated
 #endif
 
-/*! \def    __stk_full_memfence
-    \brief Emits a full (sequentially-consistent) memory barrier (in-code statement).
+/*! \brief Emits a full (sequentially-consistent) memory barrier (in-code statement).
     \note  Prevents both the compiler and the CPU from reordering memory accesses across this point.
            Used to enforce visibility ordering between cores or between a task and an ISR without
            entering a critical section.
 */
 #if defined(__GNUC__) || defined(__clang__)
-    #define __stk_full_memfence() __sync_synchronize()
+    static __stk_forceinline void __stk_full_memfence() { __sync_synchronize(); }
 #elif defined(__ICCARM__)
-    #define __stk_full_memfence() __DMB()
+    static __stk_forceinline void __stk_full_memfence() { __DMB(); }
 #elif defined(_MSC_VER)
-    #define __stk_full_memfence() __stk_dmb()
+    static __stk_forceinline void __stk_full_memfence() { __stk_dmb(); }
 #else
     #error "__stk_full_memfence() is not implemented for this compiler. Add a definition to stk_defs.h."
 #endif
 
-/*! \def   __stk_compiler_barrier
-    \brief Compiler-only barrier: prevents instruction reordering by the compiler,
+/*! \brief Compiler-only barrier: prevents instruction reordering by the compiler,
            emits no hardware instruction and costs zero cycles.
     \note  Use to pin a memory access to its intended position in the instruction
            stream without any bus or cache side-effects.
@@ -294,15 +292,14 @@
            still the correct lightweight barrier for this purpose.
 */
 #if defined(__GNUC__) || defined(__clang__) || defined(__ICCARM__)
-    #define __stk_compiler_barrier() __asm volatile("" ::: "memory")
+    static __stk_forceinline void __stk_compiler_barrier() { __asm volatile("" ::: "memory"); }
 #elif defined(_MSC_VER)
-    #define __stk_compiler_barrier() _ReadWriteBarrier()
+    static __stk_forceinline void __stk_compiler_barrier() { _ReadWriteBarrier(); }
 #else
     #error "__stk_compiler_barrier() is not implemented for this compiler. Add a definition to stk_defs.h."
 #endif
 
-/*! \def   __stk_relax_cpu
-    \brief Emits a CPU pipeline-relaxation hint for use inside hot busy-wait (spin) loops (in-code statement).
+/*! \brief Emits a CPU pipeline-relaxation hint for use inside hot busy-wait (spin) loops (in-code statement).
     \note  Reduces power consumption and memory-bus contention while spinning by signalling to the CPU
            that the current thread is in a spin-wait. Platform-specific expansions:
            - x86/x64 (GCC/Clang/MSVC): the \c PAUSE instruction via \c __builtin_ia32_pause() or \c _mm_pause().
@@ -317,28 +314,28 @@
 #ifndef __stk_relax_cpu
 #if defined(__GNUC__) || defined(__clang__)
     #if defined(__i386__) || defined(__x86_64__)
-        #define __stk_relax_cpu() __builtin_ia32_pause()
+    static __stk_forceinline void __stk_relax_cpu() { __builtin_ia32_pause(); }
     #elif defined(__riscv)
         #ifdef __riscv_zihintpause
-            #define __stk_relax_cpu() __builtin_riscv_pause()
+            static __stk_forceinline void __stk_relax_cpu() { __builtin_riscv_pause(); }
         #else
-            #define __stk_relax_cpu() __stk_full_memfence()
+            static __stk_forceinline void __stk_relax_cpu() { __stk_full_memfence(); }
         #endif
     #elif defined(__ARM_ARCH) || defined(_STK_ARCH_ARM_CORTEX_M)
-        #define __stk_relax_cpu() __asm volatile("yield")
+            static __stk_forceinline void __stk_relax_cpu() { __asm volatile("yield"); }
     #else
-        #define __stk_relax_cpu() __stk_full_memfence()
+            static __stk_forceinline void __stk_relax_cpu() { __stk_full_memfence(); }
     #endif
 #elif defined(__ICCARM__)
-    #define __stk_relax_cpu() __asm volatile("YIELD")
+    static __stk_forceinline void __stk_relax_cpu() { __asm volatile("YIELD"); }
 #elif defined(_MSC_VER)
     #include <intrin.h>
     #if defined(_M_IX86) || defined(_M_X64)
-        #define __stk_relax_cpu() _mm_pause()
+        static __stk_forceinline void __stk_relax_cpu() { _mm_pause(); }
     #elif defined(_M_ARM) || defined(_M_ARM64)
-        #define __stk_relax_cpu() __yield()
+        static __stk_forceinline void __stk_relax_cpu() { __yield(); }
     #else
-        #define __stk_relax_cpu() __stk_full_memfence()
+        static __stk_forceinline void __stk_relax_cpu() { __stk_full_memfence(); }
     #endif
 #else
     #error "__stk_relax_cpu() is not implemented for this compiler. Add a definition to stk_defs.h."
@@ -361,18 +358,18 @@
 */
 #if defined(DEBUG) || defined(_DEBUG)
     #if defined(_STK_ARCH_ARM_CORTEX_M)
-        #define __stk_debug_break() __asm volatile("bkpt 0")
+        static __stk_forceinline void __stk_debug_break() { __asm volatile("bkpt 0"); }
     #elif defined(_STK_ARCH_RISC_V)
-        #define __stk_debug_break() __asm volatile("ebreak")
+        static __stk_forceinline void __stk_debug_break() { __asm volatile("ebreak"); }
     #elif defined(_STK_ARCH_X86_WIN32)
         #ifdef _MSC_VER
-            #define __stk_debug_break() __debugbreak()
+            static __stk_forceinline void __stk_debug_break() { __debugbreak(); }
         #else
-            #define __stk_debug_break() __asm volatile("int $3")
+            static __stk_forceinline void __stk_debug_break() { __asm volatile("int $3"); }
         #endif
     #endif
 #else
-    #define __stk_debug_break()
+    static __stk_forceinline void __stk_debug_break() {}
 #endif
 
 /*! \def   __stk_constexpr_cpp17

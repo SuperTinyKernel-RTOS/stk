@@ -35,6 +35,7 @@ public:
 
     /*! \brief     Initialize context.
         \param[in] handler: Event handler.
+        \param[in] service: Kernel service.
         \param[in] exit_trap: Exit trap's stack.
         \param[in] resolution_us: Tick resolution in microseconds (for example 1000 equals to 1 millisecond resolution).
     */

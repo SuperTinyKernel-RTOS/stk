@@ -385,8 +385,19 @@ typedef uint32_t EventBits_t; /*!< Bitmask for event group operations (bits 0..2
  * resolved whether the caller is a C or a C++ translation unit.
  * -------------------------------------------------------------------------*/
 
+/// Enter a critical section by disabling preemption and interrupts.
+/// Calls may be nested; each call must be balanced by a matching vPortExitCritical().
+/// \note Not ISR-safe; must only be called from task context.
 void vPortEnterCritical(void);
+
+/// Exit a critical section previously entered with vPortEnterCritical().
+/// Re-enables preemption and interrupts only when the outermost nesting level is exited.
+/// \note Not ISR-safe; must only be called from task context.
 void vPortExitCritical(void);
+
+/// Request an immediate context switch to the highest-priority ready task.
+/// Called by the taskYIELD() and portYIELD() macros.
+/// \note May trigger a preemption; safe only from task context.
 void taskYIELD_impl(void);
 
 #define taskENTER_CRITICAL()     vPortEnterCritical()
@@ -453,6 +464,7 @@ BaseType_t xTaskCreate(TaskFunction_t  pvTaskCode,
                        TaskHandle_t   *pxCreatedTask);
 
 /// Delete a task. Pass NULL to delete the calling task.
+/// \param xTaskToDelete  Handle of the task to delete, or NULL to delete the calling task.
 void vTaskDelete(TaskHandle_t xTaskToDelete);
 
 /// Opaque buffer type that the caller must supply for xTaskCreateStatic().
@@ -653,12 +665,15 @@ void vTaskList(char *pcWriteBuffer);
 void vTaskGetRunTimeStats(char *pcWriteBuffer);
 
 /// Suspend a task indefinitely. Pass NULL to suspend the calling task.
+/// \param xTaskToSuspend  Handle of the task to suspend, or NULL for the calling task.
 void vTaskSuspend(TaskHandle_t xTaskToSuspend);
 
 /// Resume a previously suspended task.
+/// \param xTaskToResume  Handle of the task to resume.
 void vTaskResume(TaskHandle_t xTaskToResume);
 
 /// Resume a previously suspended task from ISR context.
+/// \param xTaskToResume  Handle of the task to resume.
 /// \return pdTRUE if the task was successfully resumed.
 BaseType_t xTaskResumeFromISR(TaskHandle_t xTaskToResume);
 
@@ -666,52 +681,75 @@ BaseType_t xTaskResumeFromISR(TaskHandle_t xTaskToResume);
 /// vTaskDelayUntil, or any timed sync primitive wait).
 /// The task is made immediately runnable; its next Wait/Sleep will not be
 /// affected.
+/// \param xTask  Handle of the task whose delay is to be aborted.
 /// \return pdPASS if the task was in a delayed state and the abort was issued,
 ///         pdFAIL if the task was not delayed.
 /// \note   ISR-safe (delegates to stk::AbortSleep which is ISR-safe).
 BaseType_t xTaskAbortDelay(TaskHandle_t xTask);
 
 /// Block the calling task for a number of ticks.
+/// \param xTicksToDelay  Number of ticks to block. 0 yields without blocking.
 void vTaskDelay(TickType_t xTicksToDelay);
 
 /// Block until an absolute tick deadline for drift-free periodic loops.
 /// Updates *pxPreviousWakeTime on each call.
+/// \param pxPreviousWakeTime  In/out: tick count at the last wake point; updated on return.
+/// \param xTimeIncrement      Period in ticks between successive wake points.
 void vTaskDelayUntil(TickType_t *pxPreviousWakeTime, TickType_t xTimeIncrement);
 
 /// Delay until an absolute tick deadline (FreeRTOS 10.2+ name for vTaskDelayUntil).
 /// Updates *pxPreviousWakeTime on each call.
+/// \param pxPreviousWakeTime  In/out: tick count at the last wake point; updated on return.
+/// \param xTimeIncrement      Period in ticks between successive wake points.
 /// \return pdTRUE if the task delayed, pdFALSE if the deadline had already passed
 ///         before the call was made (the task did not block).
 BaseType_t xTaskDelayUntil(TickType_t *pxPreviousWakeTime, TickType_t xTimeIncrement);
 
 /// Change the priority of a task. Pass NULL xTask for the calling task.
+/// \param xTask          Handle of the task to modify, or NULL for the calling task.
+/// \param uxNewPriority  New priority level (0 = lowest, configMAX_PRIORITIES-1 = highest).
 void vTaskPrioritySet(TaskHandle_t xTask, UBaseType_t uxNewPriority);
 
 /// Query the priority of a task. Pass NULL xTask for the calling task.
+/// \param xTask  Handle of the task to query, or NULL for the calling task.
+/// \return Current priority level of the task.
 UBaseType_t uxTaskPriorityGet(TaskHandle_t xTask);
 
 /// Query the priority of a task from ISR context (ISR-safe).
+/// \param xTask  Handle of the task to query.
+/// \return Current priority level of the task.
 UBaseType_t uxTaskPriorityGetFromISR(TaskHandle_t xTask);
 
 /// Return the current execution state of a task.
+/// \param xTask  Handle of the task to query.
+/// \return One of eRunning, eReady, eBlocked, eSuspended, eDeleted, or eInvalid.
 eTaskState eTaskGetState(TaskHandle_t xTask);
 
 /// Return the handle of the currently executing task.
+/// \return Handle of the task that is currently running on the CPU.
 TaskHandle_t xTaskGetCurrentTaskHandle(void);
 
 /// Look up a task handle by name string (O(n) scan).
+/// \param pcNameToQuery  Name string to search for (exact match).
 /// \return Handle of the first matching task, or NULL if not found.
 TaskHandle_t xTaskGetHandle(const char *pcNameToQuery);
 
 /// Return the name string of a task.
+/// \param xTaskToQuery  Handle of the task to query, or NULL for the calling task.
+/// \return Pointer to the task's name string (not a copy; valid for the task's lifetime).
 const char *pcTaskGetName(TaskHandle_t xTaskToQuery);
 
 /// Return the unused stack depth high-water mark in Words.
 /// Pass NULL for the calling task.
+/// \param xTask  Handle of the task to query, or NULL for the calling task.
+/// \return Minimum free stack space observed since task creation, in Words.
 UBaseType_t uxTaskGetStackHighWaterMark(TaskHandle_t xTask);
 
 /// Return the unused stack depth high-water mark in Words.
 /// Pass NULL for the calling task.
+/// \param xTask  Handle of the task to query, or NULL for the calling task.
+/// \return Minimum free stack space observed since task creation, in Words
+///         (returned as configSTACK_DEPTH_TYPE for extended range on 32-bit targets).
 configSTACK_DEPTH_TYPE uxTaskGetStackHighWaterMark2(TaskHandle_t xTask);
 
 /// Populate an array of TaskStatus_t with a snapshot of every task's state.
@@ -750,29 +788,41 @@ QueueHandle_t xQueueCreateStatic(UBaseType_t    uxQueueLength,
                                   StaticQueue_t *pxStaticQueue);
 
 /// Delete a queue and free all associated memory.
+/// \param xQueue  Handle of the queue to delete.
 void vQueueDelete(QueueHandle_t xQueue);
 
 /// Post an item to the back of a queue (blocking).
-/// \param xTicksToWait  Ticks to wait if full. portMAX_DELAY = wait forever.
+/// \param xQueue         Handle of the target queue.
+/// \param pvItemToQueue  Pointer to the item to copy into the queue.
+/// \param xTicksToWait   Ticks to wait if full. portMAX_DELAY = wait forever.
 /// \return pdTRUE on success, pdFALSE on timeout.
 BaseType_t xQueueSend(QueueHandle_t xQueue,
                       const void   *pvItemToQueue,
                       TickType_t    xTicksToWait);
 
 /// Post an item to the back of a queue (alias of xQueueSend).
+/// \param xQueue         Handle of the target queue.
+/// \param pvItemToQueue  Pointer to the item to copy into the queue.
+/// \param xTicksToWait   Ticks to wait if full. portMAX_DELAY = wait forever.
+/// \return pdTRUE on success, pdFALSE on timeout.
 BaseType_t xQueueSendToBack(QueueHandle_t xQueue,
                             const void   *pvItemToQueue,
                             TickType_t    xTicksToWait);
 
 /// Post an item to the front of a queue (blocking).
 /// The item becomes the next item returned by xQueueReceive().
-/// \param xTicksToWait  Ticks to wait if full. portMAX_DELAY = wait forever.
+/// \param xQueue         Handle of the target queue.
+/// \param pvItemToQueue  Pointer to the item to copy into the queue.
+/// \param xTicksToWait   Ticks to wait if full. portMAX_DELAY = wait forever.
 /// \return pdTRUE on success, pdFALSE on timeout.
 BaseType_t xQueueSendToFront(QueueHandle_t xQueue,
                              const void   *pvItemToQueue,
                              TickType_t    xTicksToWait);
 
 /// Receive (dequeue) an item from a queue (blocking).
+/// \param xQueue        Handle of the source queue.
+/// \param pvBuffer      Destination buffer; must be at least uxItemSize bytes.
+/// \param xTicksToWait  Ticks to wait if the queue is empty. portMAX_DELAY = wait forever.
 /// \return pdTRUE on success, pdFALSE on timeout.
 BaseType_t xQueueReceive(QueueHandle_t xQueue,
                          void         *pvBuffer,
@@ -785,6 +835,8 @@ BaseType_t xQueueReceive(QueueHandle_t xQueue,
 /// fully atomic — backed by stk::sync::MessageQueue::Peek() which holds an
 /// internal critical section for the duration of the copy.
 ///
+/// \param xQueue        Handle of the queue to peek.
+/// \param pvBuffer      Destination buffer; must be at least uxItemSize bytes.
 /// \param xTicksToWait  Ticks to wait if the queue is empty.
 ///                      portMAX_DELAY waits indefinitely.
 /// \return pdTRUE if an item was peeked, pdFALSE on timeout.
@@ -799,6 +851,8 @@ BaseType_t xQueuePeek(QueueHandle_t xQueue,
 /// Copies the oldest item into \a pvBuffer atomically without consuming it,
 /// backed by stk::sync::MessageQueue::TryPeek() which is ISR-safe.
 ///
+/// \param xQueue   Handle of the queue to peek.
+/// \param pvBuffer Destination buffer; must be at least uxItemSize bytes.
 /// \return pdTRUE if an item was available and peeked, pdFALSE if the queue
 ///         was empty.
 /// \warning ISR-safe.
@@ -806,42 +860,56 @@ BaseType_t xQueuePeekFromISR(QueueHandle_t  xQueue,
                               void          *pvBuffer);
 
 /// Return the number of items currently in the queue.
+/// \param xQueue  Handle of the queue to inspect.
+/// \return Number of items currently stored in the queue.
 UBaseType_t uxQueueMessagesWaiting(QueueHandle_t xQueue);
 
 /// Return the number of items currently in the queue from ISR context.
+/// \param xQueue  Handle of the queue to inspect.
 /// \note ISR-safe on targets where a size_t-aligned read is atomic.
 /// \return Point-in-time snapshot of the message count.
 UBaseType_t uxQueueMessagesWaitingFromISR(QueueHandle_t xQueue);
 
 /// Return the number of free slots in the queue.
+/// \param xQueue  Handle of the queue to inspect.
+/// \return Number of items that can still be enqueued without blocking.
 UBaseType_t uxQueueSpacesAvailable(QueueHandle_t xQueue);
 
 /// Reset a queue to the empty state, discarding all pending items.
+/// \param xQueue  Handle of the queue to reset.
 /// \return pdPASS.
 BaseType_t xQueueReset(QueueHandle_t xQueue);
 
 /// Overwrite the value stored in a queue of length 1 (mailbox pattern).
 /// If the queue is already full the existing item is discarded before writing.
+/// \param xQueue         Handle of the length-1 queue to overwrite.
+/// \param pvItemToQueue  Pointer to the item to write into the queue.
 /// \note Intended for length-1 queues only; behaviour is undefined for longer queues.
 /// \return pdPASS always (the write always succeeds after the discard).
 BaseType_t xQueueOverwrite(QueueHandle_t xQueue, const void *pvItemToQueue);
 
 /// Overwrite the value stored in a length-1 queue from ISR context.
-/// \param pxHigherPriorityTaskWoken  Set pdTRUE if a context switch is needed.
+/// \param xQueue                    Handle of the length-1 queue to overwrite.
+/// \param pvItemToQueue             Pointer to the item to write.
+/// \param pxHigherPriorityTaskWoken Set pdTRUE if a context switch is needed.
 /// \return pdPASS always.
 BaseType_t xQueueOverwriteFromISR(QueueHandle_t  xQueue,
                                    const void    *pvItemToQueue,
                                    BaseType_t    *pxHigherPriorityTaskWoken);
 
 /// Post an item from ISR context (non-blocking).
-/// \param pxHigherPriorityTaskWoken  Set pdTRUE if a context switch is needed.
+/// \param xQueue                    Handle of the target queue.
+/// \param pvItemToQueue             Pointer to the item to copy into the queue.
+/// \param pxHigherPriorityTaskWoken Set pdTRUE if a context switch is needed.
 /// \return pdTRUE if posted, pdFALSE if the queue was full.
 BaseType_t xQueueSendFromISR(QueueHandle_t  xQueue,
                              const void    *pvItemToQueue,
                              BaseType_t    *pxHigherPriorityTaskWoken);
 
 /// Receive an item from ISR context (non-blocking).
-/// \param pxHigherPriorityTaskWoken  Set pdTRUE if a context switch is needed.
+/// \param xQueue                    Handle of the source queue.
+/// \param pvBuffer                  Destination buffer; must be at least uxItemSize bytes.
+/// \param pxHigherPriorityTaskWoken Set pdTRUE if a context switch is needed.
 /// \return pdTRUE if received, pdFALSE if the queue was empty.
 BaseType_t xQueueReceiveFromISR(QueueHandle_t  xQueue,
                                 void          *pvBuffer,
@@ -850,7 +918,9 @@ BaseType_t xQueueReceiveFromISR(QueueHandle_t  xQueue,
 /// Post an item to the back of a queue from ISR context (non-blocking).
 /// Equivalent to xQueueSendFromISR(); provided for source compatibility with
 /// code that explicitly names the insertion end.
-/// \param pxHigherPriorityTaskWoken  Set pdTRUE if a context switch is needed.
+/// \param xQueue                    Handle of the target queue.
+/// \param pvItemToQueue             Pointer to the item to copy into the queue.
+/// \param pxHigherPriorityTaskWoken Set pdTRUE if a context switch is needed.
 /// \return pdTRUE if posted, pdFALSE if the queue was full.
 BaseType_t xQueueSendToBackFromISR(QueueHandle_t  xQueue,
                                    const void    *pvItemToQueue,
@@ -862,7 +932,9 @@ BaseType_t xQueueSendToBackFromISR(QueueHandle_t  xQueue,
 /// Backed by stk::sync::MessageQueue::TryPutFront() which retreats the tail
 /// pointer atomically under an internal critical section.
 ///
-/// \param pxHigherPriorityTaskWoken  Always set to pdFALSE; STK handles scheduling.
+/// \param xQueue                    Handle of the target queue.
+/// \param pvItemToQueue             Pointer to the item to copy into the queue.
+/// \param pxHigherPriorityTaskWoken Always set to pdFALSE; STK handles scheduling.
 /// \return pdTRUE if posted, pdFALSE if the queue was full.
 /// \warning ISR-safe.
 BaseType_t xQueueSendToFrontFromISR(QueueHandle_t  xQueue,
@@ -870,12 +942,14 @@ BaseType_t xQueueSendToFrontFromISR(QueueHandle_t  xQueue,
                                     BaseType_t    *pxHigherPriorityTaskWoken);
 
 /// Query whether a queue is empty from ISR context.
+/// \param xQueue  Handle of the queue to query.
 /// \note ISR-safe on targets where a size_t-aligned read is atomic
 ///       (per stk::sync::MessageQueue::IsEmpty() contract).
 /// \return pdTRUE if the queue contains no items, pdFALSE otherwise.
 BaseType_t xQueueIsQueueEmptyFromISR(const QueueHandle_t xQueue);
 
 /// Query whether a queue is full from ISR context.
+/// \param xQueue  Handle of the queue to query.
 /// \note ISR-safe on targets where a size_t-aligned read is atomic
 ///       (per stk::sync::MessageQueue::IsFull() contract).
 /// \return pdTRUE if the queue holds capacity items, pdFALSE otherwise.
@@ -1059,39 +1133,51 @@ SemaphoreHandle_t xSemaphoreCreateRecursiveMutex(void);
 SemaphoreHandle_t xSemaphoreCreateRecursiveMutexStatic(StaticSemaphore_t *pxMutexBuffer);
 
 /// Delete a semaphore or mutex and free its memory.
+/// \param xSemaphore  Handle of the semaphore or mutex to delete.
 void vSemaphoreDelete(SemaphoreHandle_t xSemaphore);
 
 /// Take (acquire) a semaphore or mutex (blocking).
+/// \param xSemaphore    Handle of the semaphore or mutex to acquire.
 /// \param xTicksToWait  Ticks to wait. portMAX_DELAY = wait forever.
 /// \return pdTRUE if acquired, pdFALSE on timeout.
 BaseType_t xSemaphoreTake(SemaphoreHandle_t xSemaphore, TickType_t xTicksToWait);
 
 /// Take (acquire) a binary or counting semaphore from ISR context (non-blocking).
 /// \note Mutex take from ISR is not permitted and returns pdFALSE.
-/// \param pxHigherPriorityTaskWoken  Set pdTRUE if a context switch is needed.
+/// \param xSemaphore                Handle of the semaphore to acquire.
+/// \param pxHigherPriorityTaskWoken Set pdTRUE if a context switch is needed.
 /// \return pdTRUE if acquired, pdFALSE if the count was zero.
 BaseType_t xSemaphoreTakeFromISR(SemaphoreHandle_t xSemaphore,
                                   BaseType_t       *pxHigherPriorityTaskWoken);
 
 /// Take a recursive mutex (blocking).
+/// \param xMutex        Handle of the recursive mutex to acquire.
+/// \param xTicksToWait  Ticks to wait. portMAX_DELAY = wait forever.
+/// \return pdTRUE if the mutex was acquired, pdFALSE on timeout.
 BaseType_t xSemaphoreTakeRecursive(SemaphoreHandle_t xMutex, TickType_t xTicksToWait);
 
 /// Give (release) a semaphore or mutex.
+/// \param xSemaphore  Handle of the semaphore or mutex to release.
 /// \return pdTRUE on success, pdFALSE if max count would be exceeded.
 BaseType_t xSemaphoreGive(SemaphoreHandle_t xSemaphore);
 
 /// Give a recursive mutex.
+/// \param xMutex  Handle of the recursive mutex to release.
+/// \return pdTRUE on success, pdFALSE if the calling task does not own the mutex.
 BaseType_t xSemaphoreGiveRecursive(SemaphoreHandle_t xMutex);
 
 /// Give a binary or counting semaphore from ISR context.
 /// \note Mutex give from ISR is not permitted and returns pdFALSE.
-/// \param pxHigherPriorityTaskWoken  Set pdTRUE if a context switch is needed.
+/// \param xSemaphore                Handle of the semaphore to release.
+/// \param pxHigherPriorityTaskWoken Set pdTRUE if a context switch is needed.
 /// \return pdTRUE on success, pdFALSE on error or max-count overflow.
 BaseType_t xSemaphoreGiveFromISR(SemaphoreHandle_t xSemaphore,
                                  BaseType_t       *pxHigherPriorityTaskWoken);
 
 /// Return the current count of a counting semaphore, or 1/0 for a mutex
 /// (1 = unlocked, 0 = locked).
+/// \param xSemaphore  Handle of the semaphore or mutex to query.
+/// \return Current count value.
 UBaseType_t uxSemaphoreGetCount(SemaphoreHandle_t xSemaphore);
 
 /// Return the handle of the task that currently holds a mutex.
@@ -1156,45 +1242,67 @@ TimerHandle_t xTimerCreateStatic(const char             *pcTimerName,
                                   StaticTimer_t           *pxTimerBuffer);
 
 /// Delete a software timer and free its memory.
+/// \param xTimer        Handle of the timer to delete.
+/// \param xTicksToWait  Accepted for API compatibility; ignored (command queue write is non-blocking).
 /// \return pdPASS.
 BaseType_t xTimerDelete(TimerHandle_t xTimer, TickType_t xTicksToWait);
 
 /// Start (or restart) a timer from the current tick.
+/// \param xTimer        Handle of the timer to start.
+/// \param xTicksToWait  Accepted for API compatibility; ignored (command queue write is non-blocking).
 /// \return pdPASS on success, pdFAIL on error.
 BaseType_t xTimerStart(TimerHandle_t xTimer, TickType_t xTicksToWait);
 
 /// Stop a running timer.
+/// \param xTimer        Handle of the timer to stop.
+/// \param xTicksToWait  Accepted for API compatibility; ignored (command queue write is non-blocking).
 /// \return pdPASS on success, pdFAIL if the timer was not running.
 BaseType_t xTimerStop(TimerHandle_t xTimer, TickType_t xTicksToWait);
 
 /// Reset a timer (restart its period from the current tick).
+/// \param xTimer        Handle of the timer to reset.
+/// \param xTicksToWait  Accepted for API compatibility; ignored (command queue write is non-blocking).
 /// \return pdPASS on success.
 BaseType_t xTimerReset(TimerHandle_t xTimer, TickType_t xTicksToWait);
 
 /// Change the period of a timer and restart it immediately.
+/// \param xTimer        Handle of the timer to modify.
+/// \param xNewPeriod    New timer period in ticks (must be > 0).
+/// \param xTicksToWait  Accepted for API compatibility; ignored (command queue write is non-blocking).
 /// \return pdPASS on success.
 BaseType_t xTimerChangePeriod(TimerHandle_t xTimer,
                               TickType_t    xNewPeriod,
                               TickType_t    xTicksToWait);
 
 /// Query whether a timer is currently active (running).
+/// \param xTimer  Handle of the timer to query.
 /// \return pdTRUE if active, pdFALSE if stopped or expired.
 BaseType_t xTimerIsTimerActive(TimerHandle_t xTimer);
 
 /// Return the application-defined ID stored in a timer.
+/// \param xTimer  Handle of the timer to query.
+/// \return The ID value set at creation or by vTimerSetTimerID().
 void *pvTimerGetTimerID(TimerHandle_t xTimer);
 
 /// Set the application-defined ID stored in a timer.
+/// \param xTimer    Handle of the timer to modify.
+/// \param pvNewID   New ID value to store in the timer.
 void vTimerSetTimerID(TimerHandle_t xTimer, void *pvNewID);
 
 /// Return the name string of a timer.
+/// \param xTimer  Handle of the timer to query.
+/// \return Pointer to the timer's name string (not a copy; valid for the timer's lifetime).
 const char *pcTimerGetName(TimerHandle_t xTimer);
 
 /// Return the period of a timer in ticks.
+/// \param xTimer  Handle of the timer to query.
+/// \return Timer period in ticks as set at creation or by xTimerChangePeriod().
 TickType_t xTimerGetPeriod(TimerHandle_t xTimer);
 
 /// Return the absolute tick count at which the timer will next expire.
 /// Returns 0 if the timer is not currently running.
+/// \param xTimer  Handle of the timer to query.
+/// \return Absolute tick value of the next expiry, or 0 if the timer is stopped.
 TickType_t xTimerGetExpiryTime(TimerHandle_t xTimer);
 
 /* -------------------------------------------------------------------------
@@ -1215,24 +1323,28 @@ TickType_t xTimerGetExpiryTime(TimerHandle_t xTimer);
  * -------------------------------------------------------------------------*/
 
 /// Start (or restart) a timer from ISR context.
+/// \param xTimer                    Handle of the timer to start.
 /// \param pxHigherPriorityTaskWoken Always set to pdFALSE.
 /// \return pdPASS on success, pdFAIL if the command queue is full or handle is invalid.
 BaseType_t xTimerStartFromISR(TimerHandle_t xTimer,
                                BaseType_t   *pxHigherPriorityTaskWoken);
 
 /// Stop a running timer from ISR context.
+/// \param xTimer                    Handle of the timer to stop.
 /// \param pxHigherPriorityTaskWoken Always set to pdFALSE.
 /// \return pdPASS on success, pdFAIL if the timer is not running or handle is invalid.
 BaseType_t xTimerStopFromISR(TimerHandle_t xTimer,
                               BaseType_t   *pxHigherPriorityTaskWoken);
 
 /// Reset (restart the period of) a timer from ISR context.
+/// \param xTimer                    Handle of the timer to reset.
 /// \param pxHigherPriorityTaskWoken Always set to pdFALSE.
 /// \return pdPASS on success, pdFAIL if the command queue is full or handle is invalid.
 BaseType_t xTimerResetFromISR(TimerHandle_t xTimer,
                                BaseType_t   *pxHigherPriorityTaskWoken);
 
 /// Change the period of a timer and restart it from ISR context.
+/// \param xTimer                    Handle of the timer to modify.
 /// \param xNewPeriod                New timer period in ticks (must be > 0).
 /// \param pxHigherPriorityTaskWoken Always set to pdFALSE.
 /// \return pdPASS on success, pdFAIL if the command queue is full or arguments are invalid.
@@ -1304,22 +1416,30 @@ EventGroupHandle_t xEventGroupCreate(void);
 EventGroupHandle_t xEventGroupCreateStatic(StaticEventGroup_t *pxEventGroupBuffer);
 
 /// Delete an event group and free its memory.
+/// \param xEventGroup  Handle of the event group to delete.
 void vEventGroupDelete(EventGroupHandle_t xEventGroup);
 
 /// Set one or more bits in an event group (ISR-safe).
+/// \param xEventGroup  Handle of the event group to modify.
+/// \param uxBitsToSet  Bitmask of bits to set (OR'd into the current value).
 /// \return Value of the event group bits after the set operation.
 EventBits_t xEventGroupSetBits(EventGroupHandle_t xEventGroup,
                                EventBits_t        uxBitsToSet);
 
 /// Clear one or more bits in an event group (ISR-safe).
+/// \param xEventGroup   Handle of the event group to modify.
+/// \param uxBitsToClear Bitmask of bits to clear (ANDed with complement into the current value).
 /// \return Value of the bits BEFORE clearing.
 EventBits_t xEventGroupClearBits(EventGroupHandle_t xEventGroup,
                                  EventBits_t        uxBitsToClear);
 
 /// Return the current event group bits without blocking or modifying them.
+/// \param xEventGroup  Handle of the event group to read.
+/// \return Current bitmask value of the event group.
 EventBits_t xEventGroupGetBits(EventGroupHandle_t xEventGroup);
 
 /// Block the calling task until the specified bit condition is met.
+/// \param xEventGroup      Handle of the event group to wait on.
 /// \param uxBitsToWaitFor  Bitmask of bits to watch.
 /// \param xClearOnExit     pdTRUE = atomically clear matched bits on return.
 /// \param xWaitForAllBits  pdTRUE = AND semantics, pdFALSE = OR semantics.
@@ -1332,13 +1452,17 @@ EventBits_t xEventGroupWaitBits(EventGroupHandle_t xEventGroup,
                                 TickType_t         xTicksToWait);
 
 /// Set event group bits from ISR context.
-/// \param pxHigherPriorityTaskWoken  Set pdTRUE if a context switch is needed.
+/// \param xEventGroup               Handle of the event group to modify.
+/// \param uxBitsToSet               Bitmask of bits to set.
+/// \param pxHigherPriorityTaskWoken Set pdTRUE if a context switch is needed.
 /// \return pdPASS on success, pdFAIL on invalid bits argument.
 BaseType_t xEventGroupSetBitsFromISR(EventGroupHandle_t  xEventGroup,
                                      EventBits_t         uxBitsToSet,
                                      BaseType_t         *pxHigherPriorityTaskWoken);
 
 /// Clear event group bits from ISR context.
+/// \param xEventGroup   Handle of the event group to modify.
+/// \param uxBitsToClear Bitmask of bits to clear.
 /// \return Value of the bits BEFORE clearing.
 EventBits_t xEventGroupClearBitsFromISR(EventGroupHandle_t xEventGroup,
                                         EventBits_t        uxBitsToClear);
@@ -1386,6 +1510,7 @@ EventBits_t xEventGroupSync(EventGroupHandle_t xEventGroup,
 
 /// Send a notification to a task (slot 0), incrementing its notification value by 1.
 /// Equivalent to xTaskNotify(xTaskToNotify, 0, eIncrement).
+/// \param xTaskToNotify  Handle of the task to notify (must not be NULL).
 /// \return pdPASS.
 BaseType_t xTaskNotifyGive(TaskHandle_t xTaskToNotify);
 
@@ -1396,8 +1521,9 @@ BaseType_t xTaskNotifyGive(TaskHandle_t xTaskToNotify);
 uint32_t ulTaskNotifyTake(BaseType_t ulClearCountOnExit, TickType_t xTicksToWait);
 
 /// Send a notification to a task (slot 0) with a specific action on its value.
-/// \param ulValue   Value applied according to eAction.
-/// \param eAction   How ulValue is applied to the task's notification value.
+/// \param xTaskToNotify  Handle of the task to notify (must not be NULL).
+/// \param ulValue        Value applied according to eAction.
+/// \param eAction        How ulValue is applied to the task's notification value.
 /// \return pdPASS, or pdFAIL if eSetValueWithoutOverwrite and already pending.
 BaseType_t xTaskNotify(TaskHandle_t  xTaskToNotify,
                        uint32_t      ulValue,
@@ -1415,7 +1541,11 @@ BaseType_t xTaskNotifyWait(uint32_t   ulBitsToClearOnEntry,
                            TickType_t xTicksToWait);
 
 /// Send a notification (slot 0) from ISR context.
-/// \param pxHigherPriorityTaskWoken  Set pdTRUE if a context switch is needed (always pdFALSE in STK wrapper).
+/// \param xTaskToNotify             Handle of the task to notify (must not be NULL).
+/// \param ulValue                   Value applied according to eAction.
+/// \param eAction                   How ulValue is applied to the task's notification value.
+/// \param pxHigherPriorityTaskWoken Set pdTRUE if a context switch is needed (always pdFALSE in STK wrapper).
+/// \return pdPASS, or pdFAIL if eSetValueWithoutOverwrite and a notification was already pending.
 BaseType_t xTaskNotifyFromISR(TaskHandle_t  xTaskToNotify,
                               uint32_t      ulValue,
                               eNotifyAction eAction,
@@ -1434,6 +1564,7 @@ BaseType_t xTaskNotifyFromISR(TaskHandle_t  xTaskToNotify,
  * -------------------------------------------------------------------------*/
 
 /// Send a notification to a specific slot of a task, incrementing the slot's value by 1.
+/// \param xTaskToNotify    Handle of the task to notify (must not be NULL).
 /// \param uxIndexToNotify  Notification slot index (0 .. configTASK_NOTIFICATION_ARRAY_ENTRIES-1).
 /// \return pdPASS, or pdFAIL if the index is out of range.
 BaseType_t xTaskNotifyGiveIndexed(TaskHandle_t xTaskToNotify,
@@ -1449,7 +1580,8 @@ uint32_t ulTaskNotifyTakeIndexed(UBaseType_t uxIndexToWait,
                                  TickType_t  xTicksToWait);
 
 /// Send a notification to a specific slot of a task with a chosen action.
-/// \param uxIndexToNotify  Notification slot index.
+/// \param xTaskToNotify    Handle of the task to notify (must not be NULL).
+/// \param uxIndexToNotify  Notification slot index (0 .. configTASK_NOTIFICATION_ARRAY_ENTRIES-1).
 /// \param ulValue          Value applied according to eAction.
 /// \param eAction          How ulValue is applied to the slot's value.
 /// \return pdPASS, or pdFAIL on bad index or eSetValueWithoutOverwrite conflict.
@@ -1472,8 +1604,12 @@ BaseType_t xTaskNotifyWaitIndexed(UBaseType_t  uxIndexToWait,
                                    TickType_t   xTicksToWait);
 
 /// Send a notification to a specific slot from ISR context.
-/// \param uxIndexToNotify           Notification slot index.
+/// \param xTaskToNotify             Handle of the task to notify (must not be NULL).
+/// \param uxIndexToNotify           Notification slot index (0 .. configTASK_NOTIFICATION_ARRAY_ENTRIES-1).
+/// \param ulValue                   Value applied according to eAction.
+/// \param eAction                   How ulValue is applied to the slot's notification value.
 /// \param pxHigherPriorityTaskWoken Always set to pdFALSE (STK handles wake internally).
+/// \return pdPASS, or pdFAIL if eSetValueWithoutOverwrite and notification was already pending.
 BaseType_t xTaskNotifyFromISRIndexed(TaskHandle_t  xTaskToNotify,
                                       UBaseType_t   uxIndexToNotify,
                                       uint32_t      ulValue,
@@ -1503,7 +1639,12 @@ BaseType_t xTaskNotifyAndQuery(TaskHandle_t  xTaskToNotify,
                                uint32_t     *pulPreviousNotifyValue);
 
 /// Indexed variant of xTaskNotifyAndQuery.
-/// \param uxIndexToNotify  Notification slot index (0 .. configTASK_NOTIFICATION_ARRAY_ENTRIES-1).
+/// \param xTaskToNotify           Target task handle (must not be NULL).
+/// \param uxIndexToNotify         Notification slot index (0 .. configTASK_NOTIFICATION_ARRAY_ENTRIES-1).
+/// \param ulValue                 Value applied according to eAction.
+/// \param eAction                 How ulValue is applied to the slot's notification value.
+/// \param pulPreviousNotifyValue  Receives the slot value *before* the action is applied. May be NULL.
+/// \return pdPASS, or pdFAIL if eSetValueWithoutOverwrite and notification was already pending.
 /// \note   ISR-safe.
 BaseType_t xTaskNotifyAndQueryIndexed(TaskHandle_t  xTaskToNotify,
                                       UBaseType_t   uxIndexToNotify,
@@ -1512,7 +1653,12 @@ BaseType_t xTaskNotifyAndQueryIndexed(TaskHandle_t  xTaskToNotify,
                                       uint32_t     *pulPreviousNotifyValue);
 
 /// ISR-safe variant of xTaskNotifyAndQuery (slot 0).
-/// \param pxHigherPriorityTaskWoken  Always set to pdFALSE (STK handles wake internally).
+/// \param xTaskToNotify             Target task handle (must not be NULL).
+/// \param ulValue                   Value applied according to eAction.
+/// \param eAction                   How ulValue is applied to the task's notification value.
+/// \param pulPreviousNotifyValue    Receives the slot value *before* the action is applied. May be NULL.
+/// \param pxHigherPriorityTaskWoken Always set to pdFALSE (STK handles wake internally).
+/// \return pdPASS, or pdFAIL if eSetValueWithoutOverwrite and notification was already pending.
 /// \note   ISR-safe.
 BaseType_t xTaskNotifyAndQueryFromISR(TaskHandle_t  xTaskToNotify,
                                       uint32_t      ulValue,
@@ -1521,8 +1667,13 @@ BaseType_t xTaskNotifyAndQueryFromISR(TaskHandle_t  xTaskToNotify,
                                       BaseType_t   *pxHigherPriorityTaskWoken);
 
 /// ISR-safe indexed variant of xTaskNotifyAndQuery.
-/// \param uxIndexToNotify           Notification slot index.
+/// \param xTaskToNotify             Target task handle (must not be NULL).
+/// \param uxIndexToNotify           Notification slot index (0 .. configTASK_NOTIFICATION_ARRAY_ENTRIES-1).
+/// \param ulValue                   Value applied according to eAction.
+/// \param eAction                   How ulValue is applied to the slot's notification value.
+/// \param pulPreviousNotifyValue    Receives the slot value *before* the action is applied. May be NULL.
 /// \param pxHigherPriorityTaskWoken Always set to pdFALSE.
+/// \return pdPASS, or pdFAIL if eSetValueWithoutOverwrite and notification was already pending.
 /// \note   ISR-safe.
 BaseType_t xTaskNotifyAndQueryFromISRIndexed(TaskHandle_t  xTaskToNotify,
                                              UBaseType_t   uxIndexToNotify,
@@ -1638,6 +1789,7 @@ StreamBufferHandle_t xStreamBufferCreateStatic(
     StaticStreamBuffer_t *pxStaticStreamBuffer);
 
 /// Delete a stream buffer and free heap resources (if dynamically allocated).
+/// \param xStreamBuffer  Handle of the stream buffer to delete.
 void vStreamBufferDelete(StreamBufferHandle_t xStreamBuffer);
 
 /// Write bytes into the stream buffer.
@@ -1652,6 +1804,9 @@ size_t xStreamBufferSend(StreamBufferHandle_t xStreamBuffer,
                           TickType_t           xTicksToWait);
 
 /// Write bytes from ISR context (non-blocking, NO_WAIT).
+/// \param xStreamBuffer             Handle of the stream buffer to write to.
+/// \param pvTxData                  Pointer to source data.
+/// \param xDataLengthBytes          Number of bytes to write.
 /// \param pxHigherPriorityTaskWoken Always set to pdFALSE (STK handles scheduling).
 /// \return Number of bytes actually written.
 size_t xStreamBufferSendFromISR(StreamBufferHandle_t  xStreamBuffer,
@@ -1671,6 +1826,9 @@ size_t xStreamBufferReceive(StreamBufferHandle_t xStreamBuffer,
                              TickType_t           xTicksToWait);
 
 /// Read bytes from ISR context (non-blocking, NO_WAIT).
+/// \param xStreamBuffer             Handle of the stream buffer to read from.
+/// \param pvRxData                  Destination buffer.
+/// \param xBufferLengthBytes        Maximum bytes to read.
 /// \param pxHigherPriorityTaskWoken Always set to pdFALSE.
 /// \return Number of bytes actually read.
 size_t xStreamBufferReceiveFromISR(StreamBufferHandle_t  xStreamBuffer,
@@ -1679,18 +1837,27 @@ size_t xStreamBufferReceiveFromISR(StreamBufferHandle_t  xStreamBuffer,
                                     BaseType_t           *pxHigherPriorityTaskWoken);
 
 /// Return the number of bytes currently available to read.
+/// \param xStreamBuffer  Handle of the stream buffer to query.
+/// \return Number of bytes that can be read without blocking.
 size_t xStreamBufferBytesAvailable(StreamBufferHandle_t xStreamBuffer);
 
 /// Return the number of free bytes available for writing.
+/// \param xStreamBuffer  Handle of the stream buffer to query.
+/// \return Number of bytes that can be written without blocking.
 size_t xStreamBufferSpacesAvailable(StreamBufferHandle_t xStreamBuffer);
 
 /// Return pdTRUE if the stream buffer contains no data.
+/// \param xStreamBuffer  Handle of the stream buffer to query.
+/// \return pdTRUE if empty, pdFALSE if at least one byte is available.
 BaseType_t xStreamBufferIsEmpty(StreamBufferHandle_t xStreamBuffer);
 
 /// Return pdTRUE if the stream buffer is full (no write space remaining).
+/// \param xStreamBuffer  Handle of the stream buffer to query.
+/// \return pdTRUE if full, pdFALSE if at least one byte of write space remains.
 BaseType_t xStreamBufferIsFull(StreamBufferHandle_t xStreamBuffer);
 
 /// Discard all data and reset the stream buffer to the empty state.
+/// \param xStreamBuffer  Handle of the stream buffer to reset.
 /// \return pdPASS always.
 BaseType_t xStreamBufferReset(StreamBufferHandle_t xStreamBuffer);
 
@@ -1700,6 +1867,7 @@ BaseType_t xStreamBufferReset(StreamBufferHandle_t xStreamBuffer);
 /// Data in the buffer is discarded; tasks blocked in xStreamBufferSend() that
 /// were waiting for space are woken.
 ///
+/// \param xStreamBuffer             Handle of the stream buffer to reset.
 /// \param pxHigherPriorityTaskWoken Always set to pdFALSE; STK handles scheduling.
 /// \return pdPASS on success, pdFAIL if the handle is NULL.
 /// \note ISR-safe.
@@ -1707,6 +1875,7 @@ BaseType_t xStreamBufferResetFromISR(StreamBufferHandle_t  xStreamBuffer,
                                       BaseType_t           *pxHigherPriorityTaskWoken);
 
 /// Change the trigger level for a stream buffer.
+/// \param xStreamBuffer      Handle of the stream buffer to modify.
 /// \param xTriggerLevelBytes New minimum bytes for Receive() to unblock (>= 1).
 /// \return pdTRUE on success, pdFALSE if xTriggerLevelBytes > buffer capacity.
 BaseType_t xStreamBufferSetTriggerLevel(StreamBufferHandle_t xStreamBuffer,
@@ -1853,9 +2022,11 @@ MessageBufferHandle_t xMessageBufferCreateStaticWithCallback(
     StreamBufferCallbackFunction_t pxReceiveCompletedCallback);
 
 /// Delete a message buffer and free heap resources (if dynamically allocated).
+/// \param xMessageBuffer  Handle of the message buffer to delete.
 void vMessageBufferDelete(MessageBufferHandle_t xMessageBuffer);
 
 /// Send a message into the message buffer (task context, may block).
+/// \param xMessageBuffer   Handle of the message buffer to send to.
 /// \param pvTxData         Pointer to message payload.
 /// \param xDataLengthBytes Payload size in bytes (must be <= max message size).
 /// \param xTicksToWait     Ticks to wait for a free block + envelope slot.
@@ -1872,8 +2043,9 @@ size_t xMessageBufferSend(MessageBufferHandle_t xMessageBuffer,
 /// Attempts a single non-blocking pool allocation followed by a non-blocking
 /// envelope enqueue.  Returns 0 immediately if either resource is unavailable.
 ///
-/// \param pvTxData                 Pointer to message payload.
-/// \param xDataLengthBytes         Payload size (must be <= max message size).
+/// \param xMessageBuffer            Handle of the message buffer to send to.
+/// \param pvTxData                  Pointer to message payload.
+/// \param xDataLengthBytes          Payload size (must be <= max message size).
 /// \param pxHigherPriorityTaskWoken Always set to pdFALSE; STK handles scheduling.
 /// \return xDataLengthBytes on success, 0 if the buffer was full or arguments invalid.
 /// \warning ISR-safe (non-blocking). Must not be called with a non-zero timeout.
@@ -1883,6 +2055,7 @@ size_t xMessageBufferSendFromISR(MessageBufferHandle_t  xMessageBuffer,
                                   BaseType_t            *pxHigherPriorityTaskWoken);
 
 /// Receive a message from the message buffer (task context, may block).
+/// \param xMessageBuffer     Handle of the message buffer to receive from.
 /// \param pvRxData           Destination buffer.
 /// \param xBufferLengthBytes Capacity of pvRxData; must be >= the oldest message length.
 /// \param xTicksToWait       Ticks to wait for a message. portMAX_DELAY blocks indefinitely.
@@ -1899,6 +2072,7 @@ size_t xMessageBufferReceive(MessageBufferHandle_t xMessageBuffer,
 /// available and fits in the destination buffer the payload is copied out and
 /// the pool block is freed.
 ///
+/// \param xMessageBuffer           Handle of the message buffer to receive from.
 /// \param pvRxData                 Destination buffer.
 /// \param xBufferLengthBytes       Capacity of pvRxData; must be >= the oldest message length.
 /// \param pxHigherPriorityTaskWoken Always set to pdFALSE; STK handles scheduling.
@@ -1910,14 +2084,17 @@ size_t xMessageBufferReceiveFromISR(MessageBufferHandle_t  xMessageBuffer,
                                      BaseType_t            *pxHigherPriorityTaskWoken);
 
 /// Return pdTRUE if the message buffer contains no messages.
+/// \param xMessageBuffer  Handle of the message buffer.
 /// \note ISR-safe.
 BaseType_t xMessageBufferIsEmpty(MessageBufferHandle_t xMessageBuffer);
 
 /// Return pdTRUE if no more messages can be enqueued (pool exhausted).
+/// \param xMessageBuffer  Handle of the message buffer.
 /// \note ISR-safe.
 BaseType_t xMessageBufferIsFull(MessageBufferHandle_t xMessageBuffer);
 
 /// Return the number of free envelope slots available for sending.
+/// \param xMessageBuffer  Handle of the message buffer.
 /// \note ISR-safe.
 size_t xMessageBufferSpacesAvailable(MessageBufferHandle_t xMessageBuffer);
 
@@ -1928,6 +2105,7 @@ size_t xMessageBufferSpacesAvailable(MessageBufferHandle_t xMessageBuffer);
 /// envelope atomically without consuming it.  No dequeue-and-reinsert pair is
 /// needed; the queue state is left unchanged in a single ISR-safe operation.
 ///
+/// \param xMessageBuffer  Handle of the message buffer.
 /// \return Length in bytes of the oldest pending message, or 0 if the buffer
 ///         is empty.
 /// \note ISR-safe.
@@ -1946,6 +2124,7 @@ BaseType_t xMessageBufferReset(MessageBufferHandle_t xMessageBuffer);
 /// envelope queue.  Wakes any task blocked in xMessageBufferSend() that was
 /// waiting for a free slot.
 ///
+/// \param xMessageBuffer            Handle of the message buffer.
 /// \param pxHigherPriorityTaskWoken Always set to pdFALSE; STK handles scheduling.
 /// \return pdPASS always.
 /// \warning ISR-safe.

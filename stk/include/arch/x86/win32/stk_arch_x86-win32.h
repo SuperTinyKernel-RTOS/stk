@@ -58,8 +58,7 @@ typedef PlatformX86Win32 PlatformDefault;
 
 } // namespace stk
 
-/*! \def   __stk_dmb
-    \brief Data memory barrier.
+/*! \brief Data memory barrier.
 */
 #if defined(_MSC_VER)
     #include <intrin.h>

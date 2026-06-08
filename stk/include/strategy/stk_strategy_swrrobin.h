@@ -145,9 +145,8 @@ public:
 
         if (!m_tasks.IsEmpty())
         {
+            IKernelTask *itr = (*m_tasks.GetFirst()), *const start = itr;
             int32_t max_weight = INT32_MIN;
-            IKernelTask *itr = (*m_tasks.GetFirst());
-            IKernelTask *const start = itr;
 
             do
             {

@@ -416,9 +416,9 @@ public:
        The highest-priority task (index 0) has no higher-priority interference; its WCRT
        is set directly to its own WCET (\c tasks[0].duration) without iteration.
 
-       \param[in]  task_array: Array of TaskTiming in descending priority order (index 0 = highest).
+       \param[in]  tasks: Array of TaskTiming in descending priority order (index 0 = highest).
        \param[in]  count: Number of tasks in \a tasks.
-       \param[out] info_array: Array of TaskInfo of size \a count. \c info[i].wcrt receives the
+       \param[out] info: Array of TaskInfo of size \a count. \c info[i].wcrt receives the
                    computed WCRT for task \e i on return.
        \return     \c true if every task's WCRT <= its period (Tx); \c false if any task misses.
      */
@@ -458,9 +458,9 @@ public:
     }
 
     /*! \brief      Compute per-task and cumulative CPU utilization, in whole percent.
-        \param[in]  tasks Array of TaskTiming in descending priority order (index 0 = highest).
-        \param[in]  count Number of tasks in \a tasks.
-        \param[out] info  Array of TaskInfo of size \a count. \c info[i].cpu_load is populated on return.
+        \param[in]  tasks: Array of TaskTiming in descending priority order (index 0 = highest).
+        \param[in]  count: Number of tasks in \a tasks.
+        \param[out] info:  Array of TaskInfo of size \a count. \c info[i].cpu_load is populated on return.
         \note       Per-task load = floor(C / T * 100) = floor(duration * 100 / period),
                     computed with integer arithmetic (truncating division). Cumulative load
                     is the running sum from index 0 to \a count - 1.

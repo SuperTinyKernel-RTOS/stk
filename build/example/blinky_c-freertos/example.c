@@ -85,6 +85,7 @@ void signal_func (TaskHandle_t tid)  {
  *        -> xTaskNotifyWait(0, mask, &flags, portMAX_DELAY)
  *---------------------------------------------------------------------------*/
 void phaseA (void *argument) {
+  (void)argument;
   uint32_t flags;
   for (;;) {
     xTaskNotifyWait(0x00000000, 0x0001, &flags, portMAX_DELAY); /* wait for notification bit 0x0001 */
@@ -100,6 +101,7 @@ void phaseA (void *argument) {
  *      Task 2 'phaseB': Phase B output
  *---------------------------------------------------------------------------*/
 void phaseB (void *argument) {
+  (void)argument;
   uint32_t flags;
   for (;;) {
     xTaskNotifyWait(0x00000000, 0x0001, &flags, portMAX_DELAY); /* wait for notification bit 0x0001 */
@@ -115,6 +117,7 @@ void phaseB (void *argument) {
  *      Task 3 'phaseC': Phase C output
  *---------------------------------------------------------------------------*/
 void phaseC (void *argument) {
+  (void)argument;
   uint32_t flags;
   for (;;) {
     xTaskNotifyWait(0x00000000, 0x0001, &flags, portMAX_DELAY); /* wait for notification bit 0x0001 */
@@ -130,6 +133,7 @@ void phaseC (void *argument) {
  *      Task 4 'phaseD': Phase D output
  *---------------------------------------------------------------------------*/
 void phaseD (void *argument) {
+  (void)argument;
   uint32_t flags;
   for (;;) {
     xTaskNotifyWait(0x00000000, 0x0001, &flags, portMAX_DELAY); /* wait for notification bit 0x0001 */
@@ -145,6 +149,7 @@ void phaseD (void *argument) {
  *      Task 5 'clock': Signal Clock
  *---------------------------------------------------------------------------*/
 void clock_task (void *argument) {
+  (void)argument;
   uint32_t flags;
   for (;;) {
     xTaskNotifyWait(0x00000000, 0x0100, &flags, portMAX_DELAY); /* wait for notification bit 0x0100 */
@@ -161,6 +166,7 @@ void clock_task (void *argument) {
  *        osDelay(osWaitForever)     -> vTaskSuspend(NULL)   (suspend self permanently)
  *---------------------------------------------------------------------------*/
 void app_main (void *argument) {
+  (void)argument;
 
   /* Create phase tasks
    * Stack size (256 words) and priority (2) are typical starting values;

@@ -114,8 +114,8 @@ enum ETraceEventId
 */
 typedef uintptr_t Word;
 
-/*! \typedef ThreadId
-    \brief   Task/thread id.
+/*! \typedef TId
+    \brief   Task (thread) id.
 */
 typedef Word TId;
 
@@ -204,7 +204,7 @@ constexpr Weight DEFAULT_WEIGHT = 1;
     interrupt service routine, i.e. its upper 20 bits match \c TID_ISR_N.
     Use this predicate instead of comparing against \c TID_ISR_N directly.
 
-    \param[in] tid: Task identifier to test.
+    \param[in] id: Task identifier to test.
     \return    \c true if \a tid encodes an ISR context, \c false otherwise.
     \note      ISR-safe (bitmask arithmetic only, no kernel calls).
     \see       TID_ISR_N
@@ -684,8 +684,8 @@ public:
     */
     virtual ITask *GetUserTask() = 0;
     
-    /*! \brief      Get user task's Stack info.
-        \param[out] stack: Stack info.
+    /*! \brief     Get user task's Stack info.
+        \return    Snapshot of Stack info.
     */
     virtual Stack GetUserStack() const = 0;
 
@@ -1125,7 +1125,7 @@ protected:
 class IKernel
 {
 public:
-    /*! \enum    EState
+    /*! \enum    EKernelState
         \brief   Kernel state.
     */
     enum EKernelState : uint8_t

@@ -77,7 +77,7 @@ typedef PlatformRiscV PlatformDefault;
     \return TLS value.
     \note   tp register is an alias for x4
 */
-__stk_forceinline Word GetTls()
+static __stk_forceinline Word GetTls()
 {
     Word tp;
     __asm volatile("mv %0, tp" : "=r"(tp) : /* input: none */ : /* clobbers: none */);
@@ -88,7 +88,7 @@ __stk_forceinline Word GetTls()
     \param[in] tp: TLS value.
     \note      tp register is an alias for x4
 */
-__stk_forceinline void SetTls(Word tp)
+static __stk_forceinline void SetTls(Word tp)
 {
     __asm volatile("mv tp, %0" : /* output: none */ : "r"(tp) : /* clobbers: none */);
 }
@@ -98,8 +98,7 @@ __stk_forceinline void SetTls(Word tp)
 
 } // namespace stk
 
-/*! \def   __stk_dmb
-    \brief Data memory barrier.
+/*! \brief Data memory barrier.
 */
 static __stk_forceinline void __stk_dmb() { __asm volatile("fence rw, rw" ::: "memory"); }
 

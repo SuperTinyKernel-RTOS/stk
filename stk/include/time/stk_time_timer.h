@@ -277,7 +277,7 @@ public:
     bool StartOrReset(Timer &tmr, uint32_t delay, uint32_t period = 0);
 
     /*! \brief     Change the period of a running periodic timer without affecting its current deadline.
-        \param[in] timer: Timer instance. Must be active and periodic.
+        \param[in] tmr: Timer instance. Must be active and periodic.
         \param[in] period: New reload period in ticks. Must be non-zero.
         \return    True on success, false if timer is not active, not periodic,
                    period is zero, or command queue is full.

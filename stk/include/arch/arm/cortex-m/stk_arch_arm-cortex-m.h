@@ -74,7 +74,7 @@ typedef PlatformArmCortexM PlatformDefault;
              epilogue.
     \see     SetTls, stk::hw::GetTlsPtr, stk::hw::SetTlsPtr
 */
-__stk_forceinline Word GetTls()
+static __stk_forceinline Word GetTls()
 {
     Word tp;
     __asm volatile("MOV %0, r9" : "=r"(tp) : /* input: none */ : /* clobbers: none */);
@@ -89,7 +89,7 @@ __stk_forceinline Word GetTls()
                code.** See \c GetTls() for the full explanation.
     \see       GetTls, stk::hw::GetTlsPtr, stk::hw::SetTlsPtr
 */
-__stk_forceinline void SetTls(Word tp)
+static __stk_forceinline void SetTls(Word tp)
 {
     __asm volatile("MOV r9, %0" : /* output: none */ : "r"(tp) : /* clobbers: none */);
 }
@@ -101,8 +101,7 @@ __stk_forceinline void SetTls(Word tp)
 
 } // namespace stk
 
-/*! \def   __stk_dmb
-    \brief Hardware memory barrier: ensures visibility across cores and bus masters.
+/*! \brief Hardware memory barrier: ensures visibility across cores and bus masters.
 */
 static __stk_forceinline void __stk_dmb() { __asm volatile("dmb sy" ::: "memory"); }
 

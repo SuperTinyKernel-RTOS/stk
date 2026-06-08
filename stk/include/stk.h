@@ -645,9 +645,8 @@ protected:
 
         /*! \brief     Called when task is switched out from the scheduling process.
             \note      Related to stk::KERNEL_HRT mode only.
-            \param[in] platform: Platform driver instance.
         */
-        void HrtOnSwitchedOut(IPlatform */*platform*/)
+        void HrtOnSwitchedOut()
         {
             const Timeout duration = m_hrt[0].duration;
 
@@ -2190,7 +2189,7 @@ protected:
             {
                 if (now->m_hrt[0].done)
                 {
-                    now->HrtOnSwitchedOut(&m_platform);
+                    now->HrtOnSwitchedOut();
                     next->HrtOnSwitchedIn();
                 }
             }
@@ -2267,7 +2266,7 @@ protected:
         {
             if (!now->IsPendingRemoval())
             {
-                now->HrtOnSwitchedOut(&m_platform);
+                now->HrtOnSwitchedOut();
             }
         }
 

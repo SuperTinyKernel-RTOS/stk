@@ -12,12 +12,12 @@
 
 #include "stk_defs.h"
 
-/*! \def   STK_MEMORY_PLACEMENTNEW
+/*! \def   STK_MEMORY_PLACEMENT_NEW
     \brief When defined as 1, placement new C++ operator is enabled for memory::MemoryAllocator.
     \see   memory::MemoryAllocator::AllocateOneT, memory::MemoryAllocator::AllocateArrayT
 */
 #ifndef STK_MEMORY_PLACEMENT_NEW
-    #define STK_MEMORY_PLACEMENT_NEW 1
+    #define STK_MEMORY_PLACEMENT_NEW (1)
 #endif
 
 #if STK_MEMORY_PLACEMENT_NEW

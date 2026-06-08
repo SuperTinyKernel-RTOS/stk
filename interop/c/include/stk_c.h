@@ -712,7 +712,7 @@ void stk_delay(stk_timeout_t ticks);
 void stk_delay_ms(stk_timeout_t ms);
 
 /*! \brief     Put current task to sleep (non-HRT kernels only).
-    \param[in] ms: Ticks to sleep.
+    \param[in] ticks: Ticks to sleep.
     \note      Unlike stk_delay_ms(), this function does not spin and allows the kernel to
                idle the CPU. When \a KERNEL_TICKLESS is active and all tasks are sleeping,
                the SysTick is suppressed and the CPU enters a low-power WFI state until the
@@ -736,7 +736,7 @@ void stk_sleep(stk_timeout_t ticks);
 void stk_sleep_ms(stk_timeout_t ms);
 
 /*! \brief     Put current task to sleep (non-HRT kernels only).
-    \param[in] ts: Absolute time, a deadline for a sleep period.
+    \param[in] ts: Absolute time (timestamp), a deadline for a sleep period.
     \return    True if sleep succeeded, false otherwise.
     \note      Unlike stk_delay_ms(), this function does not spin and allows the kernel to
                idle the CPU. When \a KERNEL_TICKLESS is active and all tasks are sleeping,
@@ -1160,7 +1160,7 @@ void stk_ef_destroy(stk_ef_t *ef);
 /*! \brief     Set one or more flags.
     \details   Atomically OR-sets the specified bits and wakes all current waiters
                so each can re-evaluate its own predicate.
-    \param[in] ef:EventFlags handle.
+    \param[in] ef: EventFlags handle.
     \param[in] flags: Bitmask of bits to set. Must not be 0 and must not have bit 31 set.
     \return    Flags word value after setting, or \c STK_EF_ERROR_PARAMETER on invalid input.
     \note      ISR-safe.

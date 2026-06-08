@@ -458,16 +458,16 @@ private:
 struct DListCast
 {
     /*! \brief     Safely casts an intrusive list entry to its concrete parent container object type.
-        \param[in] entry: Pointer to the intrusive list entry. Must be a valid pointer or \c nullptr.
+        \param[in] lentry: Pointer to the intrusive list entry. Must be a valid pointer or \c nullptr.
         \return    A pointer converted to the target parent container type \c TargetType, or \c nullptr if the input entry was \c nullptr.
     */
     template <typename TTargetType, typename TSourceType>
-    static __stk_forceinline TTargetType *ListEntryToParent(TSourceType *const node)
+    static __stk_forceinline TTargetType *ListEntryToParent(TSourceType *const lentry)
     {
         STK_STATIC_ASSERT_N(TT, TTargetType::DLEntryTag == 1); // TTargetType must inherit DLEntryType
         STK_STATIC_ASSERT_N(ST, TSourceType::DLEntryTag == 1); // TSourceType must inherit DLEntryType
       
-        return static_cast<TTargetType *>(node);
+        return static_cast<TTargetType *>(lentry);
     }
 };
 
