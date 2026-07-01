@@ -607,6 +607,26 @@ struct STK_ALLOCATE_COUNT
 */
 #define STK_UNUSED(X) static_cast<void>((X))
 
+/*! \def       STK_LIKELY
+    \brief     Provides a compiler hint that the given expression is highly likely to evaluate to true.
+    \param     x The expression to evaluate.
+*/
+/*! \def       STK_UNLIKELY
+    \brief     Provides a compiler hint that the given expression is highly unlikely to evaluate to true
+               (typically used for error handling).
+    \param     x The expression to evaluate.
+*/
+#if __cplusplus >= 202002L
+    #define STK_LIKELY(x)   ([]() { if constexpr (!!(x)) [[likely]] return true; else return false; }())
+    #define STK_UNLIKELY(x) ([]() { if constexpr (!!(x)) return true; else [[unlikely]] return false; }())
+#elif defined(__GNUC__) || defined(__clang__)
+    #define STK_LIKELY(x)   __builtin_expect(!!(x), 1)
+    #define STK_UNLIKELY(x) __builtin_expect(!!(x), 0)
+#else
+    #define STK_LIKELY(x)   (x)
+    #define STK_UNLIKELY(x) (x)
+#endif
+
 /*! \namespace stk
     \brief     Namespace of STK package.
  */

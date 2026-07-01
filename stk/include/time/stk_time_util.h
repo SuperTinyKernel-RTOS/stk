@@ -126,6 +126,91 @@ protected:
     uint32_t m_period; //!< Trigger period in ticks. Modified only by SetPeriod(). Must be > 0.
 };
 
+/*! \struct Stopwatch
+    \brief  Lightweight elapsed-cycle measurement utility.
+
+    Measures the number of CPU cycles (or other monotonic counter units) that
+    have elapsed between successive calls to Update(). The time source is
+    supplied by the caller as a callable (function pointer, lambda, or functor),
+    allowing the stopwatch to remain independent of any particular hardware
+    counter.
+
+    Typical usage:
+    \code
+    stk::time::Stopwatch sw;
+    sw.Start([]() { return stk::hw::HiResClock::GetCycles(); });
+
+    // ... work to be measured ...
+
+    Cycles elapsed = sw.Update([]() { return stk::hw::HiResClock::GetCycles(); });
+    // elapsed holds the number of cycles since the last Start() or Update().
+    \endcode
+
+    \note  Not thread-safe. Intended for use within a single task or ISR context.
+    \note  If Update() is called before Start(), the first call is treated as a
+           start point and returns 0 cycles elapsed.
+    \note  Wrap-around of the underlying counter is handled naturally by
+           unsigned subtraction, provided the elapsed time does not exceed
+           one full counter period.
+*/
+class Stopwatch
+{
+    static constexpr Cycles NOT_STARTED = 0ULL; //!< Value of m_prev meaning that stopwatch is not started.
+
+public:
+    /*! \brief  Construct a Stopwatch.
+        \note   The stopwatch is initially stopped. Call Start() before the
+                first meaningful Update() call; otherwise the first Update()
+                call will implicitly act as the start point and return 0.
+    */
+    Stopwatch() : m_prev(NOT_STARTED)
+    {}
+
+    /*! \brief     Capture the start time.
+        \tparam    Func: Callable type returning a \c Cycles value.
+        \param[in] now_func: Callable invoked with no arguments that returns
+                   the current time as a \c Cycles value (e.g. a CPU cycle counter
+                   read function or a lambda wrapping one).
+        \note      Resets the internal reference point to the current counter value.
+                   The next Update() call will measure elapsed cycles from this moment.
+    */
+    template <typename Func>
+    void Start(Func now_func)
+    {
+        m_prev = static_cast<Cycles>(now_func());
+    }
+
+    /*! \brief     Return the number of cycles elapsed since the last Start() or Update().
+        \tparam    Func: Callable type returning a \c Cycles value.
+        \param[in] now_func: Callable invoked with no arguments that returns
+                   the current time as a \c Cycles value. Must be the same counter
+                   source used in the preceding Start() call.
+        \return    Elapsed \c Cycles since the previous reference point.
+                   Returns \c 0 on the very first call when Start() was not called
+                   beforehand (the call itself becomes the new reference point).
+        \note      Updates the internal reference point to the current counter value,
+                   so each successive call measures the interval since the previous one.
+    */
+    template <typename Func>
+    Cycles Update(Func now_func)
+    {
+        Cycles now = static_cast<Cycles>(now_func());
+
+        if (STK_UNLIKELY(m_prev == NOT_STARTED))
+        {
+            m_prev = now;
+        }
+
+        Cycles diff = now - m_prev;
+        m_prev = now;
+
+        return diff;
+    }
+
+protected:
+    Cycles m_prev; //!< Counter value captured at the last Start() or Update() call.
+};
+
 } // namespace time
 } // namespace stk
 
