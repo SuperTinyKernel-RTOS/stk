@@ -1,6 +1,6 @@
 # STK Time Module (`stk::time`)
 
-**STK Time Module** provides lightweight, zero-allocation time utilities for embedded systems. It includes a single-task periodic polling trigger and a full-featured kernel-backed software timer framework capable of managing many independent timers at constant task overhead.
+**STK Time Module** provides lightweight, zero-allocation time utilities for embedded systems. It includes a single-task periodic polling trigger, a full-featured kernel-backed software timer framework capable of managing many independent timers at constant task overhead, and a lightweight stopwatch for measuring elapsed cycles between events.
 
 ## Features
 
@@ -11,6 +11,7 @@
 - **Atomic Operations**: `Restart()` and `StartOrReset()` perform compound state changes atomically with respect to the tick task, eliminating TOCTOU races.
 - **Low-Power Aware**: The tick task sleeps until the nearest deadline; handler tasks block until a timer expires.
 - **ISR Context**: `PeriodicTrigger` is suitable for use inside a single task or ISR. `TimerHost` commands must be issued from task context.
+- **Source-Agnostic Measurement**: `Stopwatch` measures elapsed counter units (e.g. CPU cycles) between calls using a caller-supplied time source, independent of any particular hardware counter.
 
 ---
 
@@ -94,6 +95,26 @@ Each `Timer` instance may be registered with at most one `TimerHost` at a time.
 
 ---
 
+### 4. Stopwatch (`time::Stopwatch`)
+
+A lightweight elapsed-cycle measurement utility. Measures the number of CPU cycles (or other monotonic counter units) elapsed between successive calls to `Update()`. The time source is supplied by the caller as a callable (function pointer, lambda, or functor), so the stopwatch itself is independent of any particular hardware counter.
+
+- **Usage**: Call `Start()` once with a time-source callable to capture the reference point, then call `Update()` (with the same callable) to retrieve elapsed cycles since the last `Start()`/`Update()` call.
+- **Implicit start**: If `Update()` is called before `Start()`, the first call is treated as the start point and returns 0.
+- **Wrap-around safe**: Counter wrap-around is handled naturally via unsigned subtraction, provided elapsed time doesn't exceed one full counter period.
+
+**Key methods:**
+
+| Method | Description |
+|---|---|
+| `Stopwatch()` | Construct in the stopped state. |
+| `Start(now_func)` | Capture the current reference point using the supplied time-source callable. |
+| `Update(now_func)` | Returns elapsed `Cycles` since the last `Start()`/`Update()` call, and updates the reference point. Returns 0 on the first call if `Start()` was not called beforehand. |
+
+> **Note**: Not thread-safe. Intended for use within a single task or ISR context. `now_func` must return a `Cycles` value and should be the same time source across `Start()`/`Update()` calls in a given measurement.
+
+---
+
 ## Usage Examples
 
 ### `PeriodicTrigger` — Polling-based periodic task
@@ -114,6 +135,24 @@ void TaskRun()
             ReadSensor();
         }
     }
+}
+```
+
+### `Stopwatch` — Measuring elapsed cycles
+
+```cpp
+#include <time/stk_time_util.h>
+
+stk::time::Stopwatch sw;
+
+void MeasureWork()
+{
+    sw.Start([]() { return stk::hw::HiResClock::GetCycles(); });
+
+    DoWork();
+
+    stk::Cycles elapsed = sw.Update([]() { return stk::hw::HiResClock::GetCycles(); });
+    LogCycles(elapsed);
 }
 ```
 

@@ -221,10 +221,10 @@ class MyTask : public stk::Task<256, Mode>
 
 | Function                     | ISR-safe  | Description                              |
 |------------------------------|-----------|------------------------------------------|
-| `GetTid()`                   | No        | Task identifier of the calling task      |
+| `GetTid()`                   | Yes       | Task identifier of the calling task      |
 | `GetTicks()`                 | Yes       | Ticks elapsed since kernel start         |
 | `GetTickResolution()`        | Yes       | Microseconds per tick                    |
-| `GetTicksFromMs(ms)`         | No        | Convert ms → ticks (queries resolution)  |
+| `GetTicksFromMs(ms)`         | Yes       | Convert ms → ticks (queries resolution)  |
 | `GetTicksFromMs(ms, res)`    | Yes       | Convert ms → ticks (explicit resolution) |
 | `GetMsFromTicks(ticks, res)` | Yes       | Convert ticks → ms                       |
 | `GetTimeNowMs()`             | Yes       | Milliseconds since kernel start          |
@@ -313,14 +313,18 @@ Defines `PlatformContext` — the base class inherited by every concrete platfor
 
 **Supported cores:**
 
-| Core                 | ISA              | FPU      | DWT  | Privilege  | TrustZone  |
-|----------------------|------------------|----------|------|------------|------------|
-| Cortex-M0 / M0+ / M1 | ARMv6-M          | No       | No   | No         | No         |
-| Cortex-M3            | ARMv7-M          | No       | Yes  | Yes        | No         |
-| Cortex-M4            | ARMv7-M          | Optional | Yes  | Yes        | No         |
-| Cortex-M7            | ARMv7-M          | Optional | Yes  | Yes        | No         |
-| Cortex-M23           | ARMv8-M Baseline | No       | No   | Yes        | Optional   |
-| Cortex-M33           | ARMv8-M Mainline | Optional | Yes  | Yes        | Optional   |
+| Core                 | ISA                | FPU      | DWT  | Privilege  | TrustZone  |
+|----------------------|--------------------|----------|------|------------|------------|
+| Cortex-M0 / M0+ / M1 | ARMv6-M            | No       | No   | No         | No         |
+| Cortex-M3            | ARMv7-M            | No       | Yes  | Yes        | No         |
+| Cortex-M4            | ARMv7-M            | Optional | Yes  | Yes        | No         |
+| Cortex-M7            | ARMv7-M            | Optional | Yes  | Yes        | No         |
+| Cortex-M23           | ARMv8-M Baseline   | No       | No   | Yes        | Optional   |
+| Cortex-M33           | ARMv8-M Mainline   | Optional | Yes  | Yes        | Optional   |
+| Cortex-M35P          | ARMv8-M Mainline   | Optional | Yes  | Yes        | Optional   |
+| Cortex-M52           | ARMv8.1-M Mainline | Optional | Yes  | Yes        | Optional   |
+| Cortex-M55           | ARMv8.1-M Mainline | Optional | Yes  | Yes        | Optional   |
+| Cortex-M85           | ARMv8.1-M Mainline | Optional | Yes  | Yes        | Optional   |
 
 Context switching uses **SysTick** (tick source) → **PendSV** (lowest-priority, deferred context switch) → **SVC** (scheduler start, privileged critical section entry/exit). The core variant is auto-detected from the CMSIS `__CORTEX_M` macro.
 
