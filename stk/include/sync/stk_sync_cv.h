@@ -134,7 +134,7 @@ inline bool ConditionVariable::Wait(IMutex &mutex, Timeout timeout_ticks)
     {
         STK_ASSERT(!hw::IsInsideISR()); // API contract: caller must not be in ISR if timeout_ticks!=NO_WAIT
         
-        success = !IKernelService::GetInstance()->Wait(this, &mutex, timeout_ticks)->IsTimeout();
+        success = (IKernelService::GetInstance()->Wait(this, &mutex, timeout_ticks) == WAIT_RESULT_SIGNAL);
     }
 
     return success;

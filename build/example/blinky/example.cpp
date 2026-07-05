@@ -50,8 +50,8 @@ public:
 private:
     void Run() override
     {
-        // we switch LEDs with 1s period
-        const stk::Ticks period = stk::GetTicksFromMs(1000);
+        // we switch LEDs with 250ms period
+        const stk::Ticks period = stk::GetTicksFromMs(250);
 
         // get a start of the timeline
         g_Timeline = stk::GetTicks();

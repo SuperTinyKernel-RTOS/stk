@@ -609,10 +609,34 @@ protected:
         */
         bool IsMemoryOfSP(Word SP) const
         {
+            bool is_match = false;
+
             const Word start = hw::PtrToWord(m_user->GetStack());
             const Word end   = start + (m_user->GetStackSize() * sizeof(Word));
 
-            return (SP >= start) && (SP <= end);
+            if ((SP >= start) && (SP <= end))
+            {
+                is_match = true;
+            }
+        #if STK_TZ_SECURE // lookup Secure memory region too when on a Secure side
+            else
+            {
+                IStackMemory *const secure_mem = m_user->GetSecureStackMemory();
+
+                if (secure_mem != nullptr)
+                {
+                    const Word s_start = hw::PtrToWord(secure_mem->GetStack());
+                    const Word s_end   = s_start + (secure_mem->GetStackSize() * sizeof(Word));
+
+                    if ((SP >= s_start) && (SP <= s_end))
+                    {
+                        is_match = true;
+                    }
+                }
+            }
+        #endif
+
+            return is_match;
         }
 
         /*! \brief     Initialize task with HRT info.
@@ -829,7 +853,7 @@ protected:
             m_kernel->m_platform.SwitchToNext();
         }
 
-        IWaitObject *Wait(ISyncObject *sobj, IMutex *mutex, Timeout ticks) override
+        EWaitResult Wait(ISyncObject *sobj, IMutex *mutex, Timeout ticks) override
         {
             if __stk_constexpr_cpp17 (IsSyncMode())
             {
@@ -838,7 +862,7 @@ protected:
             else
             {
                 STK_ASSERT(false);
-                return nullptr;
+                return WAIT_RESULT_FAIL;
             }
         }
 
@@ -1056,7 +1080,7 @@ public:
         }
     }
 
-    /*! \brief     Remove a previously added task from the kernel before Start().
+    /*! \brief     Remove a previously added task from the kernel when it is not started.
         \param[in] user_task: User task to remove. Must not be \c nullptr.
         \note      Only valid before Start() (i.e. while the kernel is not running).
                    To remove tasks after Start() the task should return from its Run function
@@ -1781,7 +1805,7 @@ protected:
         }
     }
 
-    IWaitObject *OnTaskWait(Word caller_SP, ISyncObject *sync_obj, IMutex *mutex, Timeout timeout) override
+    EWaitResult OnTaskWait(Word caller_SP, ISyncObject *sync_obj, IMutex *mutex, Timeout timeout) override
     {
         if __stk_constexpr_cpp17 (IsSyncMode())
         {
@@ -1814,12 +1838,12 @@ protected:
             // re-lock mutex when returning to the task's execution space
             mutex->Lock();
 
-            return task->m_wait_obj;
+            return (task->m_wait_obj->IsTimeout() ? WAIT_RESULT_TIMEOUT : WAIT_RESULT_SIGNAL);
         }
         else
         {
             STK_ASSERT(false);
-            return nullptr;
+            return WAIT_RESULT_FAIL;
         }
     }
 
@@ -2337,7 +2361,7 @@ protected:
             .sName     = task->GetUserTask()->GetTraceName(),
             .Prio      = 0,
             .StackBase = hw::PtrToWord(task->GetUserTask()->GetStack()),
-            .StackSize = task->GetUserTask()->GetStackSizeBytes()
+            .StackSize = task->GetUserTask()->GetStackSize() * sizeof(Word)
         };
         SEGGER_SYSVIEW_SendTaskInfo(&info);
     }

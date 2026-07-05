@@ -438,7 +438,6 @@ struct FrtosTask : public stk::ITask
 
     const stk::Word  *GetStack()     const override { return m_stack; }
     size_t      GetStackSize()       const override { return m_stack_size; }
-    size_t      GetStackSizeBytes()  const override { return m_stack_size * sizeof(stk::Word); }
     stk::EAccessMode GetAccessMode() const override { return stk::ACCESS_PRIVILEGED; }
     int32_t     GetWeight()          const override { return m_weight; }
     const char *GetTraceName()       const override { return m_name; }

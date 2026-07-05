@@ -269,7 +269,7 @@ static struct Context final : public PlatformContext
     void SwitchToNext();
     void Sleep(Timeout ticks);
     bool SleepUntil(Ticks timestamp);
-    IWaitObject *Wait(ISyncObject *sync_obj, IMutex *mutex, Timeout timeout);
+    EWaitResult Wait(ISyncObject *sync_obj, IMutex *mutex, Timeout timeout);
     void Stop();
     Word GetCallerSP() const;
     TId GetTid() const;
@@ -603,7 +603,7 @@ bool Context::SleepUntil(Ticks timestamp)
     return m_handler->OnTaskSleepUntil(GetCallerSP(), timestamp);
 }
 
-IWaitObject *Context::Wait(ISyncObject *sync_obj, IMutex *mutex, Timeout timeout)
+EWaitResult Context::Wait(ISyncObject *sync_obj, IMutex *mutex, Timeout timeout)
 {
     return m_handler->OnTaskWait(GetCallerSP(), sync_obj, mutex, timeout);
 }
@@ -710,7 +710,7 @@ bool PlatformX86Win32::SleepUntil(Ticks timestamp)
     return GetContext().SleepUntil(timestamp);
 }
 
-IWaitObject *PlatformX86Win32::Wait(ISyncObject *sync_obj, IMutex *mutex, Timeout timeout)
+EWaitResult PlatformX86Win32::Wait(ISyncObject *sync_obj, IMutex *mutex, Timeout timeout)
 {
     return GetContext().Wait(sync_obj, mutex, timeout);
 }
@@ -789,6 +789,11 @@ bool stk::hw::SpinLock::TryLock()
 bool stk::hw::IsInsideISR()
 {
     return false;
+}
+
+bool stk::hw::IsContextPrivileged()
+{
+    return true;
 }
 
 Cycles stk::hw::HiResClock::GetCycles()

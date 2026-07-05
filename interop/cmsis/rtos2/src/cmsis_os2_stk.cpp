@@ -220,7 +220,6 @@ public:
     // ---- IStackMemory ----
     const stk::Word *GetStack()      const override { return m_stack; }
     size_t GetStackSize()            const override { return m_stack_size; }
-    size_t GetStackSizeBytes()       const override { return m_stack_size * sizeof(stk::Word); }
 
     // ---- ITask ----
     stk::EAccessMode GetAccessMode() const override { return stk::ACCESS_PRIVILEGED; }
@@ -956,7 +955,7 @@ uint32_t osThreadGetStackSize(osThreadId_t thread_id)
     else
     {
         StkThread *const th = static_cast<StkThread *>(thread_id);
-        result = static_cast<uint32_t>(th->GetStackSizeBytes());
+        result = static_cast<uint32_t>(th->GetStackSize()) * sizeof(stk::Word);
     }
 
     return result;

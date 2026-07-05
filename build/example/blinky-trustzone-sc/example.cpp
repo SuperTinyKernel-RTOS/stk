@@ -1,0 +1,263 @@
+/*
+ * SuperTinyKernel(TM) RTOS: Lightweight High-Performance Deterministic C++ RTOS for Embedded Systems.
+ *
+ * Source: https://github.com/SuperTinyKernel-RTOS
+ *
+ * Copyright (c) 2022-2026 Neutron Code Limited <stk@neutroncode.com>. All Rights Reserved.
+ * License: MIT License, see LICENSE for a full text.
+ */
+
+#include <stk.h>
+#include <arch/arm/cortex-m/stk_arch_arm-tz.h>
+#include <time/stk_time.h>
+#include <sync/stk_sync_pipe.h>
+#include "example.h"
+
+#if (__ARM_FEATURE_CMSE & 1) == 0
+#error "Need ARMv8-M security extensions"
+#elif (__ARM_FEATURE_CMSE & 2) == 0
+#error "Compile with --mcmse"
+#endif
+
+// R2350 requires larger stack due to stack-memory heavy SDK API.
+#ifdef _PICO_H
+enum { TASK_STACK_SIZE = 1024 };
+#else
+enum { TASK_STACK_SIZE = 256 };
+#endif
+
+// Tasks count.
+#define TASK_NS_COUNT (4)
+#define TASK_S_COUNT  (1)
+#define TASK_COUNT    (TASK_NS_COUNT + TASK_S_COUNT)
+
+using namespace bsp;
+using namespace stk;
+
+struct HwCommand
+{
+    enum EId
+    {
+        CMD_NONE   = 0,
+        CMD_LED_ON = 1
+    };
+
+    EId  id;
+    Word param_0;
+};
+static sync::PipeT<HwCommand, 4> s_HwCmdQueue;
+
+// A demo function for exposing some sensible data to Non-Secure state.
+__stk_tz_nsc_entry uint32_t NSC_GetKey(uint8_t key[], uint32_t size)
+{
+    uint32_t result = 0;
+
+    // Verify the entire buffer lies in Non-Secure memory and is writable
+    if (cmse_check_address_range(key, size, CMSE_NONSECURE | CMSE_MPU_READWRITE) != nullptr)
+    {
+        if (size == 4)
+        {
+            key[0] = 1;
+            key[1] = 2;
+            key[2] = 3;
+            key[3] = 4;
+
+            result = 4;
+        }
+    }
+
+    return result;
+}
+
+// A demo function for exposing some sensible data to Non-Secure state.
+__stk_tz_nsc_entry void NSC_bsp_Led_SwitchOnExclusive(bsp::Led::Id led)
+{
+    // You can call hardware directly now, because execution is happening in a
+    // Secure world and Non-Secure task is Privileged.
+    if (hw::IsContextPrivileged())
+    {
+        Led::SwitchOnExclusive(led);
+    }
+    else
+    {
+        // If Non-Secure task is not Privileged - direct hw calls are not possible, let Secure
+        // Privileged task handle all hw calls for such calling contexts.
+        s_HwCmdQueue.Write({ .id = HwCommand::CMD_LED_ON, led });
+    }
+}
+
+extern "C" void isr_hardfault(void)
+{
+    volatile uint32_t SFSR = SAU->SFSR;
+    volatile uint32_t SFAR = SAU->SFAR; // valid if SFSR.SFARVALID set
+
+    SCB;
+
+    STK_UNUSED(SFSR);
+    STK_UNUSED(SFAR);
+
+    while (true)
+    {
+        __BKPT(0);
+    }
+}
+
+extern char __nsc_start[];        // = ORIGIN(FLASH_NSC)
+extern char __nsc_end[];          // = ORIGIN(FLASH_NSC) + LENGTH(FLASH_NSC)
+extern char __ns_ram_start[];     // = ORIGIN(RAM_NS)
+extern char __ns_ram_end[];       // = ORIGIN(RAM_NS) + LENGTH(RAM_NS)
+extern char __ns_flash_start[];   // = __nsc_end
+extern char __ns_flash_end[];     // = ORIGIN(FLASH_NS) + LENGTH(FLASH_NS)
+extern char __ns_scratch_start[]; // = ORIGIN = 0x2007E000
+extern char __ns_scratch_end[];   // = ORIGIN = 0x2007F000
+
+static void Configure_SAU(void)
+{
+    // Disable SAU while programming regions.
+    SAU->CTRL = 0U;
+
+    // Region 0: NSC Gateway.
+    SAU->RNR  = 0U;
+    SAU->RBAR = (uintptr_t)__nsc_start;
+    SAU->RLAR = (((uintptr_t)__nsc_end - 1U) & ~0x1FU) | 2U | 1U; // NSC + ENABLE
+
+    // Region 1: Non-Secure Flash (code + vector table).
+    SAU->RNR  = 1U;
+    SAU->RBAR = (uintptr_t)__ns_flash_start;
+    SAU->RLAR = (((uintptr_t)__ns_flash_end - 1U) & ~0x1FU) | 0U | 1U; // NS + ENABLE
+
+    // Region 2: Non-Secure RAM (TASK STACKS ONLY).
+    SAU->RNR  = 2U;
+    SAU->RBAR = (uintptr_t)__ns_ram_start;   // 0x20040000
+    SAU->RLAR = (((uintptr_t)__ns_scratch_start - 1U) & ~0x1FU) | 0U | 1U; // NS + ENABLE
+
+    // Region 3: SCRATCH RAM (core stacks / special buffers).
+    SAU->RNR  = 3U;
+    SAU->RBAR = (uintptr_t)__ns_scratch_start;
+    SAU->RLAR = (((uintptr_t)__ns_scratch_end - 1U) & ~0x1FU) | 0U | 1U; // NS + ENABLE
+
+    // Clear remaining SAU regions.
+    for (uint32_t i = 4U; i < 8U; ++i)
+    {
+        SAU->RNR  = i;
+        SAU->RBAR = 0U;
+        SAU->RLAR = 0U;
+    }
+
+    // Enable SAU (default = Secure).
+    SAU->CTRL = 1U;
+
+    __DSB();
+    __ISB();
+}
+
+static void ConfigureSecureState()
+{
+    // Enable secure fault reporting.
+    SCB->SHCSR |= SCB_SHCSR_SECUREFAULTENA_Msk;
+    SCB->SHCSR |= SCB_SHCSR_BUSFAULTENA_Msk | SCB_SHCSR_USGFAULTENA_Msk | SCB_SHCSR_MEMFAULTENA_Msk;
+
+    // 1. Configure SAU boundaries before any peripheral writes.
+    Configure_SAU();
+
+    // 2. Do other initializations...
+}
+
+static void InvokeNonSecureState()
+{
+    typedef __stk_tz_ns_call void (* NSFuncT)(void);
+
+    // 1. Init PSP to 0.
+    __TZ_set_PSP_NS(0);
+    __set_PSP(0);
+
+    // 2. Read the initial Stack Pointer dynamically from Word 0 of the NS vector table
+    // (Instead of hardcoding to the start of RAM, this ensures it uses the stack top your NS app expects)
+    uint32_t *ns_vector_table = reinterpret_cast<uint32_t *>(__ns_flash_start);
+    uint32_t initial_msp_ns = ns_vector_table[0];
+    __TZ_set_MSP_NS(initial_msp_ns);
+
+    // 3. Point the NON-SECURE VTOR to the Non-Secure vector table
+    SCB_NS->VTOR = reinterpret_cast<uintptr_t>(__ns_flash_start);
+    __DSB();
+    __ISB();
+
+    // 4. Extract the Reset Handler address (Word 1 of the NS vector table)
+    uint32_t reset_handler_address = ns_vector_table[1];
+
+    // 5. Clear Bit 0 (LSB): required by BLXNS — signals Secure-to-NonSecure transition.
+    //    The vector table stores Thumb addresses (LSB=1), but BLXNS needs LSB=0.
+    NSFuncT ResetHandler_ns = reinterpret_cast<NSFuncT>(reset_handler_address & ~1UL);
+
+    // 6. Jump into the Non-Secure World.
+    ResetHandler_ns();
+}
+
+// Secure task's core.
+template <stk::EAccessMode _AccessMode>
+class SecureHwCommandQueueTask : public stk::Task<TASK_STACK_SIZE, _AccessMode>
+{
+private:
+    void Run() override
+    {
+        while (true)
+        {
+            HwCommand cmd;
+            if (s_HwCmdQueue.Read(cmd))
+            {
+                switch (cmd.id)
+                {
+                case HwCommand::CMD_LED_ON:
+                    Led::SwitchOnExclusive(static_cast<bsp::Led::Id>(cmd.param_0));
+                    break;
+                default:
+                    STK_ASSERT(false);
+                    break;
+                }
+            }
+        }
+    }
+};
+
+static void CreateKernel()
+{
+    Led::InitAll(false);
+
+    // Operating in Static + Sync mode (EventFlags requires KERNEL_SYNC) and optionally tickless.
+    const uint8_t KernelMode = KERNEL_STATIC | KERNEL_SYNC | (STK_TICKLESS_IDLE ? KERNEL_TICKLESS : 0);
+
+    // Allocate scheduling kernel for 3 threads (tasks) with Round-Robin scheduling strategy.
+    static Kernel<KernelMode, TASK_COUNT, SwitchStrategyRR, PlatformDefault> kernel;
+
+    // Init scheduling kernel.
+    kernel.Initialize();
+
+    // Register kernel instance with TrustZone interface.
+    tz::sec::SetKernel(0, &kernel);
+
+    // Add Secure tasks:
+    static SecureHwCommandQueueTask<ACCESS_PRIVILEGED> hw_cmd_task;
+    kernel.AddTask(&hw_cmd_task);
+}
+
+void RunExample()
+{
+    // Init BSP.
+    Led::InitAll(false);
+
+    // Configure Secure state by partitioning FLASH and RAM via SAU. STK does not wrap this functionality
+    // to give more freedom and be less noisy in its API.
+    ConfigureSecureState();
+
+    // Create scheduler and add Secure tasks.
+    CreateKernel();
+
+    // Invoke Non-Secure state which will drive logic further.
+    InvokeNonSecureState();
+
+    // CPU is now executing your Non-Secure application, execution will never return here.
+    while (true)
+    {
+        STK_ASSERT(false);
+    }
+}

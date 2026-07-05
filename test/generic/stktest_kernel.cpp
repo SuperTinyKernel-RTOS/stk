@@ -1312,10 +1312,10 @@ TEST(Kernel, SyncNotEnabledFailsOnWait)
     // test return NULL
     g_TestContext.ExpectAssert(true);
     g_TestContext.RethrowAssertException(false);
-    IWaitObject *wo = IKernelService::GetInstance()->Wait(nullptr, nullptr, 0);
+    EWaitResult wresult = IKernelService::GetInstance()->Wait(nullptr, nullptr, 0);
     g_TestContext.RethrowAssertException(true);
     g_TestContext.ExpectAssert(false);
-    CHECK_TRUE_TEXT(wo == nullptr, "expect NULL");
+    CHECK_EQUAL(WAIT_RESULT_FAIL, wresult);
 
     try
     {
@@ -1332,10 +1332,10 @@ TEST(Kernel, SyncNotEnabledFailsOnWait)
     // test return NULL
     g_TestContext.ExpectAssert(true);
     g_TestContext.RethrowAssertException(false);
-    wo = platform->EventTaskWait(0, nullptr, nullptr, 0);
+    wresult = platform->EventTaskWait(0, nullptr, nullptr, 0);
     g_TestContext.RethrowAssertException(true);
     g_TestContext.ExpectAssert(false);
-    CHECK_TRUE_TEXT(wo == nullptr, "expect NULL");
+    CHECK_EQUAL(WAIT_RESULT_FAIL, wresult);
 }
 
 TEST(Kernel, SyncNoNullSyncObj)
@@ -1526,11 +1526,9 @@ void Test_SyncWait()
 
     MutexMock::ScopedLock guard(mutex);
 
-    IWaitObject *wo = IKernelService::GetInstance()->Wait(&sobj, &mutex, 2);
+    EWaitResult wresult = IKernelService::GetInstance()->Wait(&sobj, &mutex, 2);
 
-    CHECK_EQUAL(GetTid(), wo->GetTid()); // expect the same thread id as WaitObject belongs to the caller's task
-    CHECK_TRUE(wo != nullptr); // expect wait object in return after timeout
-    CHECK_TRUE(wo->IsTimeout()); // expect timeout
+    CHECK_EQUAL(WAIT_RESULT_TIMEOUT, wresult); // expect timeout
     CHECK_EQUAL(2, g_SyncWaitRelaxCpuContext.counter); // expect 2 ticks after timeout
     CHECK_EQUAL(true, mutex.m_locked); // expect locked mutex after Wait return
 }
@@ -1566,16 +1564,14 @@ TEST(Kernel, SyncWaitTicklessDuration)
     MutexMock::ScopedLock guard(mutex);
 
     // sleep_ticks should be equal to 2 on first OnTick call
-    IWaitObject *wo = IKernelService::GetInstance()->Wait(&sobj, &mutex, 3);
+    EWaitResult wresult = IKernelService::GetInstance()->Wait(&sobj, &mutex, 3);
 
     // in total 4 ticks must be elapsed, including sleep ticks
     CHECK_EQUAL(4, platform->m_ticks_count);
 
     // at this stage test should pass successfully by validating sleep_ticks in SyncWaitRelaxCpuContext::Process
 
-    CHECK_EQUAL(GetTid(), wo->GetTid());
-    CHECK_TRUE(wo != nullptr);
-    CHECK_TRUE(wo->IsTimeout());
+    CHECK_EQUAL(WAIT_RESULT_TIMEOUT, wresult); // expect timeout
     CHECK_EQUAL(3, g_SyncWaitRelaxCpuContext.counter);
     CHECK_EQUAL(true, mutex.m_locked);
 }
@@ -1665,9 +1661,9 @@ TEST(Kernel, SyncFindWeightHigherThan)
     MutexMock::ScopedLock guard(mutex);
 
     // sleep_ticks should be equal to 2 on first OnTick call
-    IWaitObject *wo = IKernelService::GetInstance()->Wait(&sobj, &mutex, 5);
+    EWaitResult wresult = IKernelService::GetInstance()->Wait(&sobj, &mutex, 5);
 
-    CHECK_TRUE(wo != nullptr);
+    CHECK_EQUAL(WAIT_RESULT_TIMEOUT, wresult);
     CHECK_EQUAL(true, mutex.m_locked);
 
     // no task is waiting here

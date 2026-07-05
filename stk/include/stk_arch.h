@@ -134,6 +134,12 @@ static constexpr T *WordToPtr(Word value) noexcept
 */
 bool IsInsideISR();
 
+/*! \brief     Check if caller is Privileged.
+    \return    \c true if Privileged; \c false otherwise.
+    \note      ISR-safe itself: may be called from any context.
+*/
+bool IsContextPrivileged();
+
 // Some architectures (e.g. RISC-V with the 'tp' register) can implement TLS access as a
 // single inline instruction. When the back-end header defines STK_INLINE_TLS,
 // GetTls and SetTls are provided as inline functions there and the declarations below
@@ -193,6 +199,123 @@ __stk_forceinline void SetTlsPtr(const _TyTls *tp)
     SetTls(hw::PtrToWord(tp));
 }
 #endif // STK_TLS
+
+/*! \brief     Atomically read a 64-bit volatile value.
+    \tparam    T: Must be exactly 8 bytes wide and at least 4-byte aligned (enforced by static assertions).
+    \param[in] addr: Pointer to the volatile 64-bit memory location.
+    \return    Consistent 64-bit snapshot of the value at \a addr.
+    \note      On 64-bit architectures a single aligned load is inherently atomic, the value is
+               read directly with no additional protocol.
+    \note      On 32-bit architectures uses a lock-free hi-lo retry protocol compatible with
+               WriteVolatile64: reads the high half, then the low half, then re-reads the high
+               half. If the high half changed between the first and second read, a tick occurred
+               between the two 32-bit loads and the pair is retried until a consistent snapshot
+               is obtained. Requires that WriteVolatile64 writes hi before lo (which it does).
+    \note      Requires a \b single writer that uses WriteVolatile64. Safe with multiple concurrent
+               readers. Not C++ memory-model compliant, intended for bare-metal embedded use only.
+    \note      MISRA deviation: [STK-DEV-002] Rule 5-2-7, 5-0-15. Required for lock-free 64-bit I/O
+               on 32-bit architectures using a Hi-Lo retry protocol.
+    \warning   Not safe for read-modify-write operations. Use only for polling a value written
+               atomically by a single producer.
+    \see       WriteVolatile64
+*/
+template <typename T>
+static __stk_forceinline T ReadVolatile64(volatile const T *addr)
+{
+    STK_STATIC_ASSERT_N(sz, sizeof(T) == 8U);  // only 64-bit types permitted
+    STK_STATIC_ASSERT_N(al, alignof(T) >= 4U); // type must be at least 4-byte aligned
+    STK_STATIC_ASSERT_N(ilo, ((STK_ENDIAN_IDX_LO >= 0U) && (STK_ENDIAN_IDX_LO <= 1U)));
+    STK_STATIC_ASSERT_N(ihi, ((STK_ENDIAN_IDX_HI >= 0U) && (STK_ENDIAN_IDX_HI <= 1U)));
+
+    if __stk_constexpr_cpp17 (sizeof(void *) == 8U) // 64-bit arch: aligned 64-bit load is inherently atomic
+    {
+        return (*addr);
+    }
+    else
+    {
+        // 32-bit arch: split the 64-bit address into two 32-bit halves;
+        // writer always updates hi before lo (see WriteVolatile64), so if hi is
+        // the same before and after reading lo, no write straddled the two reads.
+    #if STK_STRICT_COMPLIANCY
+        const Word p_base = hw::PtrToWord(addr);
+        volatile const uint32_t *const plo = hw::WordToPtr<uint32_t>(p_base + (STK_ENDIAN_IDX_LO * sizeof(uint32_t)));
+        volatile const uint32_t *const phi = hw::WordToPtr<uint32_t>(p_base + (STK_ENDIAN_IDX_HI * sizeof(uint32_t)));
+    #else
+        volatile const uint32_t *const p_base = reinterpret_cast<volatile const uint32_t *>(addr);
+        volatile const uint32_t *const plo = &p_base[STK_ENDIAN_IDX_LO];
+        volatile const uint32_t *const phi = &p_base[STK_ENDIAN_IDX_HI];
+    #endif
+
+        uint32_t hi, lo;
+        do
+        {
+            hi = (*phi);
+            __stk_full_memfence();
+
+            lo = (*plo);
+            __stk_full_memfence();
+        }
+        while (hi != (*phi)); // hi changed: a write occurred during the read; retry
+
+        const uint64_t result = (static_cast<uint64_t>(hi) << 32U) | static_cast<uint64_t>(lo);
+
+        return static_cast<T>(result);
+    }
+}
+
+/*! \brief     Atomically write a 64-bit volatile value.
+    \tparam    T: Must be exactly 8 bytes wide and at least 4-byte aligned (enforced by static assertions).
+    \param[in] addr:  Pointer to the volatile 64-bit memory location.
+    \param[in] value: Value to write.
+    \note      On 64-bit architectures a single aligned store is inherently atomic.
+    \note      On 32-bit architectures the value is split into two 32-bit half-writes.
+               The high half is always written \b before the low half. This ordering is the
+               contractual invariant that ReadVolatile64 depends on to detect a mid-write tear:
+               if a reader observes a changed high half, it knows a write occurred and retries.
+               Breaking this order (writing lo before hi) will corrupt concurrent reads.
+    \note      A full memory fence is emitted between the two half-writes to prevent the CPU
+               from reordering the stores.
+    \note      ISR-safe: does not use a critical section.
+    \note      MISRA deviation: [STK-DEV-002] Rule 5-2-7, 5-0-15. Required for lock-free 64-bit I/O
+               on 32-bit architectures using a Hi-Lo retry protocol.
+    \warning   Supports only a \b single writer at a time. Concurrent writers on the same address
+               will corrupt the value. Not safe for read-modify-write operations (e.g. increment);
+               the caller must ensure exclusive write access by other means.
+    \warning   Not C++ memory-model compliant; intended for bare-metal embedded use only.
+    \see       ReadVolatile64
+*/
+template <typename T>
+static __stk_forceinline void WriteVolatile64(volatile T *addr, T value)
+{
+    STK_STATIC_ASSERT_N(sz, sizeof(T) == 8U);  // only 64-bit types permitted
+    STK_STATIC_ASSERT_N(al, alignof(T) >= 4U); // type must be at least 4-byte aligned
+    STK_STATIC_ASSERT_N(ilo, ((STK_ENDIAN_IDX_LO >= 0U) && (STK_ENDIAN_IDX_LO <= 1U)));
+    STK_STATIC_ASSERT_N(ihi, ((STK_ENDIAN_IDX_HI >= 0U) && (STK_ENDIAN_IDX_HI <= 1U)));
+
+    if __stk_constexpr_cpp17 (sizeof(void *) == 8U) // 64-bit arch: aligned 64-bit store is inherently atomic
+    {
+        (*addr) = value;
+    }
+    else
+    {
+    #if STK_STRICT_COMPLIANCY
+        const Word p_base = hw::PtrToWord(addr);
+        volatile uint32_t *const plo = hw::WordToPtr<uint32_t>(p_base + (STK_ENDIAN_IDX_LO * sizeof(uint32_t)));
+        volatile uint32_t *const phi = hw::WordToPtr<uint32_t>(p_base + (STK_ENDIAN_IDX_HI * sizeof(uint32_t)));
+    #else
+        volatile uint32_t *const p_base = reinterpret_cast<volatile uint32_t *>(addr);
+        volatile uint32_t *const plo = &p_base[STK_ENDIAN_IDX_LO];
+        volatile uint32_t *const phi = &p_base[STK_ENDIAN_IDX_HI];
+    #endif
+
+        // write hi first: ReadVolatile64 reads hi twice and retries if it changed,
+        // so writing hi before lo ensures readers can detect a torn write.
+        (*phi) = static_cast<uint32_t>(static_cast<uint64_t>(value) >> 32U);
+        __stk_full_memfence();
+
+        (*plo) = static_cast<uint32_t>(value);
+    }
+}
 
 /*! \class CriticalSection
     \brief Nestable, SMP-safe critical section that combines local interrupt masking with a
@@ -266,7 +389,7 @@ public:
                  the global cross-core spinlock first and then restores local interrupt masking to
                  the state captured at the matching Enter().
         \warning Must only be called after a matching Enter(). Calling Exit() without a prior Enter()
-                 produces undefined behaviour (nesting counter underflow, caught by assertion in
+                 produces undefined behavior (nesting counter underflow, caught by assertion in
                  debug builds).
     */
     static void Exit();
@@ -316,7 +439,7 @@ public:
         \warning Non-recursive. Calling Lock() a second time from the same thread/core while
                  already holding the lock will spin forever (deadlock).
         \warning Calling Lock() from an ISR while the interrupted task holds the same lock will
-                 also deadlock. Prefer CriticalSection for ISR-to-task synchronisation.
+                 also deadlock. Prefer CriticalSection for ISR-to-task synchronization.
     */
     void Lock();
 
@@ -325,7 +448,7 @@ public:
                  it will acquire the lock on its next successful atomic attempt.
         \warning Must only be called by the thread or core that currently holds the lock (via Lock()
                  or a successful TryLock()). Calling Unlock() without a prior acquisition produces
-                 undefined behaviour.
+                 undefined behavior.
     */
     void Unlock();
 
@@ -342,7 +465,7 @@ public:
         \return \c true if the lock is currently held; \c false if it is free.
         \note   The result is a snapshot only. On SMP systems another core may acquire or release
                 the lock between this read and any subsequent action, so IsLocked() must not be
-                used as a synchronisation check. Use TryLock() or Lock() for safe acquisition.
+                used as a synchronization check. Use TryLock() or Lock() for safe acquisition.
     */
     bool IsLocked() const { return (m_lock == LOCKED); }
 
@@ -355,123 +478,6 @@ protected:
     volatile bool m_lock __stk_aligned(8); //!< Lock state (see EState). 8-byte aligned to occupy its own cache line word and avoid false sharing on SMP targets.
 #endif
 };
-
-/*! \brief     Atomically read a 64-bit volatile value.
-    \tparam    T: Must be exactly 8 bytes wide and at least 4-byte aligned (enforced by static assertions).
-    \param[in] addr: Pointer to the volatile 64-bit memory location.
-    \return    Consistent 64-bit snapshot of the value at \a addr.
-    \note      On 64-bit architectures a single aligned load is inherently atomic, the value is
-               read directly with no additional protocol.
-    \note      On 32-bit architectures uses a lock-free hi-lo retry protocol compatible with
-               WriteVolatile64: reads the high half, then the low half, then re-reads the high
-               half. If the high half changed between the first and second read, a tick occurred
-               between the two 32-bit loads and the pair is retried until a consistent snapshot
-               is obtained. Requires that WriteVolatile64 writes hi before lo (which it does).
-    \note      Requires a \b single writer that uses WriteVolatile64. Safe with multiple concurrent
-               readers. Not C++ memory-model compliant, intended for bare-metal embedded use only.
-    \note      MISRA deviation: [STK-DEV-002] Rule 5-2-7, 5-0-15. Required for lock-free 64-bit I/O
-               on 32-bit architectures using a Hi-Lo retry protocol.
-    \warning   Not safe for read-modify-write operations. Use only for polling a value written
-               atomically by a single producer.
-    \see       WriteVolatile64
-*/
-template <typename T>
-static __stk_forceinline T ReadVolatile64(volatile const T *addr)
-{
-    STK_STATIC_ASSERT_N(sz, sizeof(T) == 8U);  // only 64-bit types permitted
-    STK_STATIC_ASSERT_N(al, alignof(T) >= 4U); // type must be at least 4-byte aligned
-    STK_STATIC_ASSERT_N(ilo, ((STK_ENDIAN_IDX_LO >= 0U) && (STK_ENDIAN_IDX_LO <= 1U)));
-    STK_STATIC_ASSERT_N(ihi, ((STK_ENDIAN_IDX_HI >= 0U) && (STK_ENDIAN_IDX_HI <= 1U)));
-
-    if __stk_constexpr_cpp17 (sizeof(void *) == 8U) // 64-bit arch: aligned 64-bit load is inherently atomic
-    {
-        return (*addr);
-    }
-    else
-    {
-        // 32-bit arch: split the 64-bit address into two 32-bit halves;
-        // writer always updates hi before lo (see WriteVolatile64), so if hi is
-        // the same before and after reading lo, no write straddled the two reads.
-    #if STK_STRICT_COMPLIANCY
-        const Word p_base = hw::PtrToWord(addr);
-        volatile const uint32_t *const plo = hw::WordToPtr<uint32_t>(p_base + (STK_ENDIAN_IDX_LO * sizeof(uint32_t)));
-        volatile const uint32_t *const phi = hw::WordToPtr<uint32_t>(p_base + (STK_ENDIAN_IDX_HI * sizeof(uint32_t)));
-    #else
-        volatile const uint32_t *const p_base = reinterpret_cast<volatile const uint32_t *>(addr);
-        volatile const uint32_t *const plo = &p_base[STK_ENDIAN_IDX_LO];
-        volatile const uint32_t *const phi = &p_base[STK_ENDIAN_IDX_HI];  
-    #endif
-
-        uint32_t hi, lo;
-        do
-        {
-            hi = (*phi);
-            __stk_full_memfence();
-
-            lo = (*plo);
-            __stk_full_memfence();
-        }
-        while (hi != (*phi)); // hi changed: a write occurred during the read; retry
-
-        const uint64_t result = (static_cast<uint64_t>(hi) << 32U) | static_cast<uint64_t>(lo);
-        
-        return static_cast<T>(result);
-    }
-}
-
-/*! \brief     Atomically write a 64-bit volatile value.
-    \tparam    T: Must be exactly 8 bytes wide and at least 4-byte aligned (enforced by static assertions).
-    \param[in] addr:  Pointer to the volatile 64-bit memory location.
-    \param[in] value: Value to write.
-    \note      On 64-bit architectures a single aligned store is inherently atomic.
-    \note      On 32-bit architectures the value is split into two 32-bit half-writes.
-               The high half is always written \b before the low half. This ordering is the
-               contractual invariant that ReadVolatile64 depends on to detect a mid-write tear:
-               if a reader observes a changed high half, it knows a write occurred and retries.
-               Breaking this order (writing lo before hi) will corrupt concurrent reads.
-    \note      A full memory fence is emitted between the two half-writes to prevent the CPU
-               from reordering the stores.
-    \note      ISR-safe: does not use a critical section.
-    \note      MISRA deviation: [STK-DEV-002] Rule 5-2-7, 5-0-15. Required for lock-free 64-bit I/O
-               on 32-bit architectures using a Hi-Lo retry protocol.
-    \warning   Supports only a \b single writer at a time. Concurrent writers on the same address
-               will corrupt the value. Not safe for read-modify-write operations (e.g. increment);
-               the caller must ensure exclusive write access by other means.
-    \warning   Not C++ memory-model compliant; intended for bare-metal embedded use only.
-    \see       ReadVolatile64
-*/
-template <typename T>
-static __stk_forceinline void WriteVolatile64(volatile T *addr, T value)
-{
-    STK_STATIC_ASSERT_N(sz, sizeof(T) == 8U);  // only 64-bit types permitted
-    STK_STATIC_ASSERT_N(al, alignof(T) >= 4U); // type must be at least 4-byte aligned
-    STK_STATIC_ASSERT_N(ilo, ((STK_ENDIAN_IDX_LO >= 0U) && (STK_ENDIAN_IDX_LO <= 1U)));
-    STK_STATIC_ASSERT_N(ihi, ((STK_ENDIAN_IDX_HI >= 0U) && (STK_ENDIAN_IDX_HI <= 1U)));
-
-    if __stk_constexpr_cpp17 (sizeof(void *) == 8U) // 64-bit arch: aligned 64-bit store is inherently atomic
-    {
-        (*addr) = value;
-    }
-    else
-    {
-    #if STK_STRICT_COMPLIANCY
-        const Word p_base = hw::PtrToWord(addr);
-        volatile uint32_t *const plo = hw::WordToPtr<uint32_t>(p_base + (STK_ENDIAN_IDX_LO * sizeof(uint32_t)));
-        volatile uint32_t *const phi = hw::WordToPtr<uint32_t>(p_base + (STK_ENDIAN_IDX_HI * sizeof(uint32_t)));
-    #else
-        volatile uint32_t *const p_base = reinterpret_cast<volatile uint32_t *>(addr);
-        volatile uint32_t *const plo = &p_base[STK_ENDIAN_IDX_LO];
-        volatile uint32_t *const phi = &p_base[STK_ENDIAN_IDX_HI];
-    #endif
-
-        // write hi first: ReadVolatile64 reads hi twice and retries if it changed,
-        // so writing hi before lo ensures readers can detect a torn write.
-        (*phi) = static_cast<uint32_t>(static_cast<uint64_t>(value) >> 32U);
-        __stk_full_memfence();
-
-        (*plo) = static_cast<uint32_t>(value);
-    }
-}
 
 /*! \class HiResClock
     \brief High-resolution clock for high-precision measurements.

@@ -63,7 +63,8 @@ STK is an open-source project developed at https://github.com/SuperTinyKernel-RT
 | **Memory API**                            | Deterministic, fragmentation-free allocator in `stk::memory` namespace                                                                                                                                                       |
 | **Thread-Local Storage (TLS)**            | Per-task TLS via a dedicated CPU register via inline zero-overhead helpers                                                                                                                                                   |
 | **Tiny footprint**                        | Minimal code unrelated to scheduling                                                                                                                                                                                         |
-| **Safety-critical systems ready**         | No dynamic heap memory allocation — a required baseline for IEC 61508 / ISO 26262 / DO-178C certification. See [Professional Services](#-professional-services--commercial-licensing) for certification support. |
+| **ARM TrustZone support**                 | Secure-only task scheduling, or Non-Secure + Secure task scheduling with kernel residing in a Secure binary                                                                                                                  |
+| **Safety-critical systems ready**         | No dynamic heap memory allocation — a required baseline for IEC 61508 / ISO 26262 / DO-178C certification. See [Professional Services](#-professional-services--commercial-licensing) for certification support.             |
 | **C++ and C API**                         | Can be used easily in C++ and C projects                                                                                                                                                                                     |
 | **CMSIS-RTOS2 compatible**                | Full CMSIS-RTOS2 wrapper (`cmsis_os2_stk.cpp`) maps the standard ARM CMSIS-RTOS2 C API onto STK, enabling drop-in compatibility with STM32CubeMX, MCUXpresso, and other CMSIS-aware middleware                               |
 | **FreeRTOS compatible**                   | Full FreeRTOS wrapper (`freertos_stk.cpp`) maps the standard FreeRTOS C API onto STK, enabling drop-in migration of existing FreeRTOS codebases with minimal or no application changes                                       |
@@ -184,6 +185,49 @@ class DriverTask : public stk::Task<256, ACCESS_PRIVILEGED> { ... };
 // Application task that parses USB or network data – runs unprivileged
 class ParserTask : public stk::Task<512, ACCESS_USER> { ... };
 ```
+
+---
+
+### ARM TrustZone Support
+
+On ARMv8-M cores with **ARM TrustZone** (Cortex-M23/M33/M35P/M55/M85 and other Armv8-M/Armv8.1-M implementations), STK can run split across the Secure and Non-Secure worlds, giving your application hardware-enforced isolation on top of the scheduler itself.
+
+The open-source Cortex-M architecture driver (`stk_arch_arm-cortex-m.cpp`) already implements the core, low-level TrustZone plumbing needed to run STK on a Secure/Non-Secure split system:
+* Saving and restoring the additional Secure-state register frame (`PSPLIM`, `PSPLIM_NS`, `PSP_NS`, `CONTROL_NS`) on every context switch, so a task can be interrupted and resumed transparently regardless of whether it was executing Secure or Non-Secure code at the time.
+* Secure/Non-Secure FPU lazy-stacking setup (CP10/CP11 access for both states).
+* Detecting which security state a task was running in (S-bit) when a context switch occurs.
+
+This is enough to build a **Secure-only** system, where the kernel and all tasks it schedules reside entirely in the Secure binary. A Non-Secure image may still exist and run on the chip (e.g. bootloader-provided or third-party Non-Secure code) — STK simply does not schedule, wrap, or otherwise manage any tasks running there.
+
+The **full-featured TrustZone interface** — enabling a proper split system where the kernel lives in the Secure binary and schedules both Secure *and* Non-Secure tasks — is available under the [commercial license](#-professional-services--commercial-licensing). This interface (`stk_arch_arm-tz.h` / `stk_arch_arm-tz.cpp`) provides:
+* CMSE (`ARM_CMSE`)-based Non-Secure callable (NSC) gateway functions exposing kernel services (`AddTask`, `RemoveTask`, `SuspendTask`, `ResumeTask`, `Sleep`, `Delay`, `Wait`, `GetTid`, `GetTicks`, critical sections, spinlocks, etc.) to the Non-Secure world.
+* Lightweight `ITask`/`ISyncObject`/`IMutex` wrapper structures (`CmseITaskWrapper`, `CmseISyncObjectWrapper`, `CmseIMutexWrapper`) that bridge Non-Secure task objects and synchronization primitives across the security boundary, so a Non-Secure task looks and behaves like a regular STK task to the Secure-side scheduler.
+* A drop-in Non-Secure `stk::tz::nsec::Kernel` / `KernelService` facade, so Non-Secure application code uses the same familiar STK API (`AddTask`, `Start`, `Sleep`, `Wait`, ...) without needing to know it is actually calling across the Secure boundary.
+
+#### Two supported deployment models
+
+| Model                                     | Description                                                                                                                                                                                                                              |
+|-------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **Secure-only**                           | The STK kernel and all its tasks reside in the Secure binary. A Non-Secure world may be present and running on the chip, but STK does not schedule or manage any tasks in it — only Secure tasks are ever scheduled. Achievable with the open-source Cortex-M driver alone.                                                             |
+| **Non-Secure + Secure (full protection)** | The STK kernel and its trusted tasks reside in the **Secure** binary, while application tasks run in a separate **Non-Secure** binary. The kernel schedules both worlds, but Non-Secure code can only reach the kernel through explicit, CMSE-checked NSC gateway functions — it can never call into, inspect, or corrupt Secure-side kernel state or Secure task memory directly. Requires the commercial full-featured TrustZone interface. |
+
+**Secure-only:** kernel and all scheduled tasks live in one Secure binary. A Non-Secure world may exist on the chip, but STK does not schedule any tasks there.
+
+![STK TrustZone Secure-only mode](docs/img/stk_trustzone_secure-only.svg)
+
+**Non-Secure + Secure (full protection):** the Secure kernel schedules both worlds, but Non-Secure tasks can only reach it through CMSE-checked NSC gateway functions — direct access to Secure memory or kernel state is blocked by hardware.
+
+![STK TrustZone Non-Secure + Secure mode](docs/img/stk_trustzone_ns-plus-secure.svg)
+
+In the Non-Secure + Secure model, the Non-Secure application is **fully protected from the Secure world's perspective**: hardware (SAU/IDAU + MPU) prevents Non-Secure code from ever accessing Secure memory or peripherals, while the kernel itself lives entirely on the trusted, Secure side — so a compromised or buggy Non-Secure task can, at worst, disrupt only the Non-Secure world, never the Secure kernel or Secure tasks.
+
+#### Examples
+
+Ready-to-try TrustZone examples for the Raspberry Pi Pico 2 W (RP2350, Cortex-M33):
+* `build/example/blinky-trustzone-ns` — Non-Secure application example
+* `build/example/blinky-trustzone-sc` — Secure application example
+* `build/example/project/eclipse/rpi/blinky-trustzone-ns-rp2350w` — ready-to-import Eclipse project (Non-Secure side)
+* `build/example/project/eclipse/rpi/blinky-trustzone-sc-rp2350w` — ready-to-import Eclipse project (Secure side)
 
 ---
 

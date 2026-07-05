@@ -244,7 +244,7 @@ inline bool Event::Wait(Timeout timeout_ticks)
     // slow path: block until Set() signals the event or timeout expires
     else if (timeout_ticks != NO_WAIT)
     {
-        success = !IKernelService::GetInstance()->Wait(this, &cs_, timeout_ticks)->IsTimeout();
+        success = (IKernelService::GetInstance()->Wait(this, &cs_, timeout_ticks) == WAIT_RESULT_SIGNAL);
     }
     else
     {
