@@ -16,6 +16,9 @@
 // Use ARM Cortex-M33 cores of RP2350
 #define _STK_ARCH_ARM_CORTEX_M
 
+// Use ARM TrustZone feature
+#define _STK_CORTEX_M_TRUSTZONE
+
 // Define _STK_CPU_COUNT as 2 to use STK on both CPU cores or on CPU1, if 1 then STK can be hosted on CPU0 only
 #define STK_ARCH_CPU_COUNT    (2)
 #define STK_ARCH_GET_CPU_ID() (*(uint32_t *)(SIO_BASE + SIO_CPUID_OFFSET)) // see get_core_num() in pico/platform.h

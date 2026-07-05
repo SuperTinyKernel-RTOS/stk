@@ -53,7 +53,6 @@ public:
 
     const Word *GetStack()      const override { return const_cast<Word *>(m_stack); }
     size_t GetStackSize()       const override { return _StackSize; }
-    size_t GetStackSizeBytes()  const override { return _StackSize * sizeof(Word); }
     EAccessMode GetAccessMode() const override { return _AccessMode; }
 
 protected:
@@ -100,7 +99,6 @@ public:
 
     const Word *GetStack()      const override { return const_cast<Word *>(m_stack); }
     size_t GetStackSize()       const override { return _StackSize; }
-    size_t GetStackSizeBytes()  const override { return _StackSize * sizeof(Word); }
     EAccessMode GetAccessMode() const override { return _AccessMode; }
     Weight GetWeight()          const override { return _Weight; }
 
@@ -163,10 +161,6 @@ public:
     /*! \brief Get number of elements in the wrapped stack array.
     */
     size_t GetStackSize() const override { return _StackSize; }
-
-    /*! \brief Get size of the wrapped stack array in bytes.
-    */
-    size_t GetStackSizeBytes() const override { return (_StackSize * sizeof(Word)); }
 
 private:
     MemoryType *m_stack; //!< Pointer to the externally-owned stack memory array.

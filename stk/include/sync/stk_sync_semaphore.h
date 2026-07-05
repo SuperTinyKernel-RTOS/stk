@@ -146,7 +146,7 @@ inline bool Semaphore::Wait(Timeout timeout_ticks)
 
         // note: after waking, if not a timeout, we effectively own the resource that Signal() produced
         // but didn't put into m_count (see logic of if (m_wait_list.IsEmpty()) in Signal())
-        success = !IKernelService::GetInstance()->Wait(this, &cs_, timeout_ticks)->IsTimeout();
+        success = (IKernelService::GetInstance()->Wait(this, &cs_, timeout_ticks) == WAIT_RESULT_SIGNAL);
     }
     // try lock behavior (timeout_ticks=NO_WAIT)
     else

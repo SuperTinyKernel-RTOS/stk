@@ -90,9 +90,8 @@ public:
     const char *GetTraceName()               const override { return m_tname; }
 
     // IStackMemory
-    const Word *GetStack()     const override { return m_stack; }
-    size_t GetStackSize()      const override { return m_stack_size; }
-    size_t GetStackSizeBytes() const override { return m_stack_size * sizeof(stk_word_t); }
+    const Word *GetStack() const override { return m_stack; }
+    size_t GetStackSize()  const override { return m_stack_size; }
 
     void Initialize(stk_task_entry_t const func, void *user_data, stk_word_t *stack,
         size_t stack_size, EAccessMode mode)

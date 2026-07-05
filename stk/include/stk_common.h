@@ -23,15 +23,26 @@ namespace stk {
 class IKernelService;
 class IKernelTask;
 class ITask;
+class ISyncObject;
+namespace tz { namespace nsec { namespace util {
+    class CmseISyncObjectWrapper;
+}}}
+
+// ARM TrustZone
+#ifdef _STK_CORTEX_M_TRUSTZONE_NON_SECURE
+extern "C" void NSC_stk_ISyncObject_WakeOne(ISyncObject *sobj);
+extern "C" void NSC_stk_ISyncObject_WakeAll(ISyncObject *sobj);
+#endif
 
 /*! \enum    EAccessMode
-    \brief   Hardware access mode by the user task.
-    \warning Type is explicitly 32-bit to be compatible with platform implementations.
+    \brief   Hardware access modes by the task.
+    \note    Can be used as a bit-field.
 */
 enum EAccessMode : uint32_t
 {
-    ACCESS_USER = 0,  //!< Unprivileged access mode (access to some hardware is restricted, see CPU manual for details).
-    ACCESS_PRIVILEGED //!< Privileged access mode (access to hardware is fully unrestricted).
+    ACCESS_USER       = 0,        //!< Unprivileged access mode (access to some hardware is restricted, see CPU manual for details). If compiled as ARM TrustZone, this is also a Non-Secure mode.
+    ACCESS_PRIVILEGED = (1 << 0), //!< Privileged access mode (access to hardware is fully unrestricted).
+    ACCESS_SECURE     = (1 << 1), //!< Secure access mode (ARM TrustZone, Secure binary)
 };
 
 /*! \enum  EKernelMode
@@ -103,6 +114,16 @@ enum ETraceEventId
     TRACE_EVENT_UNKNOWN = 0,        //!< Unknown / uninitialized trace event.
     TRACE_EVENT_SWITCH  = 1000 + 1, //!< Task context switch event (task became active).
     TRACE_EVENT_SLEEP   = 1000 + 2  //!< Task entered sleep / blocked state.
+};
+
+/*! \enum  EWaitResult
+    \brief Wait result (see \c IKernelService::Wait).
+*/
+enum EWaitResult
+{
+    WAIT_RESULT_FAIL    = -1, //!< IKernelService::Wait returned with error without waiting.
+    WAIT_RESULT_SIGNAL  = 0,  //!< The wake was caused by a signal.
+    WAIT_RESULT_TIMEOUT = 1   //!< The wake was caused by a timeout expiry.
 };
 
 /*! \typedef Word
@@ -280,7 +301,7 @@ template <size_t TStackSize> struct StackMemoryDef
 struct Stack
 {
     Word        SP;          //!< Stack Pointer (SP) register (note: must be the first entry in this struct).
-    EAccessMode access_mode; //!< Hardware access mode of the owning task (see \a EAccessMode).
+    uint32_t    access_mode; //!< Bitfield with hardware access mode of the task (see \a EAccessMode).
 #if STK_STACK_NEEDS_TASK_ID
     TId         tid;         //!< Task id (see \a STK_SEGGER_SYSVIEW).
 #endif
@@ -304,10 +325,6 @@ public:
     /*! \brief   Get number of elements of the stack memory array.
     */
     virtual size_t GetStackSize() const = 0;
-
-    /*! \brief   Get size of the memory in bytes.
-    */
-    virtual size_t GetStackSizeBytes() const = 0;
 
     /*! \brief   Get available stack space.
         \return  Number of elements of the stack memory array remaining on the stack (computed via the
@@ -354,7 +371,7 @@ public:
     */
     typedef DLEntryType ListEntryType;
 
-    /*! \brief     Get thread Id of this task.
+    /*! \brief     Get thread Id of the task owning .
         \return    Thread Id.
     */
     virtual TId GetTid() const = 0;
@@ -438,6 +455,7 @@ protected:
 class ISyncObject : public util::DListEntry<ISyncObject, false>
 {
     friend class IKernel;
+    friend class tz::nsec::util::CmseISyncObjectWrapper;
 
 public:
     /*! \typedef   ListHeadType
@@ -452,12 +470,31 @@ public:
 
     /*! \brief     Called by kernel when a new task starts waiting on this event.
         \param[in] wobj: Wait object representing blocked task.
+        \note      Utility for AddWaitObject and ARM TrustZone support.
+    */
+    static inline void AddWaitObject(IWaitObject::ListHeadType &wlist, IWaitObject *wobj)
+    {
+        STK_ASSERT(wobj->GetHead() == nullptr);
+        wlist.LinkBack(wobj);
+    }
+
+    /*! \brief     Called by kernel when a new task starts waiting on this event.
+        \param[in] wobj: Wait object representing blocked task.
         \note      Must be called inside the critical section (see \a hw::CriticalSection, \a sync::ScopedCrticalSection).
     */
     virtual void AddWaitObject(IWaitObject *wobj)
     {
-        STK_ASSERT(wobj->GetHead() == nullptr);
-        m_wait_list.LinkBack(wobj);
+        AddWaitObject(m_wait_list, wobj);
+    }
+
+    /*! \brief     Called by kernel when a waiting task is being removed (timeout expired, wait aborted, task terminated etc.).
+        \param[in] wobj: Wait object to remove from the wait list.
+        \note      Utility for AddWaitObject and ARM TrustZone support.
+    */
+    static inline void RemoveWaitObject(IWaitObject::ListHeadType &wlist, IWaitObject *wobj)
+    {
+        STK_ASSERT(wobj->GetHead() == &wlist);
+        wlist.Unlink(wobj);
     }
 
     /*! \brief     Called by kernel when a waiting task is being removed (timeout expired, wait aborted, task terminated etc.).
@@ -466,8 +503,7 @@ public:
     */
     virtual void RemoveWaitObject(IWaitObject *wobj)
     {
-        STK_ASSERT(wobj->GetHead() == &m_wait_list);
-        m_wait_list.Unlink(wobj);
+        RemoveWaitObject(m_wait_list, wobj);
     }
 
     /*! \brief     Called by kernel on every system tick to handle timeout logic of waiting tasks.
@@ -490,6 +526,34 @@ public:
         \note      Must be called inside the critical section (see \a hw::CriticalSection, \a sync::ScopedCrticalSection).
     */
     Weight FindWeightHigherThan(Weight comp) const;
+    
+    /*! \brief     Wake the first task in the wait list (FIFO order).
+        \note      The woken task is notified with timeout=false, indicating a successful signal
+                   (not a timeout expiry).
+        \note      Does nothing if no tasks are currently waiting.
+        \note      Utility for AddWaitObject and ARM TrustZone support.
+    */
+    static inline void WakeOne(IWaitObject::ListHeadType &wlist)
+    {
+        if (IWaitObject *const obj = util::DListCast::ListEntryToParent<IWaitObject>(wlist.GetFirst()))
+        {
+            obj->Wake(false);
+        }
+    }
+
+    /*! \brief     Wake all tasks currently in the wait list.
+        \note      Each woken task is notified with timeout=false, indicating a successful signal
+                   (not a timeout expiry).
+        \note      Does nothing if no tasks are currently waiting.
+        \note      Utility for AddWaitObject and ARM TrustZone support.
+    */
+    static inline void WakeAll(IWaitObject::ListHeadType &wlist)
+    {
+        while (IWaitObject *const obj = util::DListCast::ListEntryToParent<IWaitObject>(wlist.GetFirst()))
+        {
+            obj->Wake(false);
+        }
+    }
 
 protected:
     /*! \brief     Constructor.
@@ -497,7 +561,7 @@ protected:
     */
     explicit ISyncObject() : m_wait_list()
     {}
-    
+
     /*! \brief Destructor.
         \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
     */
@@ -509,12 +573,13 @@ protected:
         \note      Does nothing if no tasks are currently waiting.
         \note      Must be called inside the critical section (see \a hw::CriticalSection, \a sync::ScopedCrticalSection).
     */
-    void WakeOne()
-    {      
-        if (IWaitObject *const obj = util::DListCast::ListEntryToParent<IWaitObject>(m_wait_list.GetFirst()))
-        {
-            obj->Wake(false);
-        }
+    virtual void WakeOne()
+    {
+    #ifdef _STK_CORTEX_M_TRUSTZONE_NON_SECURE
+        NSC_stk_ISyncObject_WakeOne(this);
+    #else
+        WakeOne(m_wait_list);
+    #endif
     }
 
     /*! \brief     Wake all tasks currently in the wait list.
@@ -523,12 +588,18 @@ protected:
         \note      Does nothing if no tasks are currently waiting.
         \note      Must be called inside the critical section (see \a hw::CriticalSection, \a sync::ScopedCrticalSection).
     */
-    void WakeAll()
+    virtual void WakeAll()
     {
-        while (IWaitObject *const obj = util::DListCast::ListEntryToParent<IWaitObject>(m_wait_list.GetFirst()))
-        {
-            obj->Wake(false);
-        }
+    #ifdef _STK_CORTEX_M_TRUSTZONE_NON_SECURE
+        NSC_stk_ISyncObject_WakeAll(this);
+    #else
+        WakeAll(m_wait_list);
+    #endif
+    }
+
+    IWaitObject::ListHeadType &GetWaitList()
+    {
+        return m_wait_list;
     }
 
     IWaitObject::ListHeadType m_wait_list; //!< tasks blocked on this object
@@ -613,6 +684,12 @@ public:
         \endcode
     */
     virtual void Run() = 0;
+
+    /*! \brief     Get pointer to the stack memory.
+        \note      Optional. ARM TrustZone only.
+        \return    Pointer to the Secure stack memory.
+    */
+    virtual IStackMemory *GetSecureStackMemory() { return nullptr; }
 
     /*! \brief     Get hardware access mode of the user task.
     */
@@ -831,7 +908,7 @@ public:
             \param[in]  mutex: IMutex instance (passed by Wait).
             \param[in]  timeout: Time to sleep (ticks).
         */
-        virtual IWaitObject *OnTaskWait(Word caller_SP, ISyncObject *sync_obj, IMutex *mutex, Timeout timeout) = 0;
+        virtual EWaitResult OnTaskWait(Word caller_SP, ISyncObject *sync_obj, IMutex *mutex, Timeout timeout) = 0;
 
         /*! \brief      Called from the Thread process when for getting task/thread id of the process.
             \param[in]  caller_SP: Value of Stack Pointer (SP) register (for locating the calling process inside the kernel).
@@ -941,7 +1018,7 @@ public:
                    The return value is guaranteed non nullptr and points to a valid IWaitObject.
         \warning   ISR-unsafe.
     */
-    virtual IWaitObject *Wait(ISyncObject *sobj, IMutex *mutex, Timeout timeout) = 0;
+    virtual EWaitResult Wait(ISyncObject *sobj, IMutex *mutex, Timeout timeout) = 0;
 
     /*! \brief     Process one tick.
         \note      Normally system tick is processed by the platform driver implementation.
@@ -1164,7 +1241,7 @@ public:
     */
     virtual void AddTask(ITask *user_task, Timeout periodicity_tc, Timeout deadline_tc, Timeout start_delay_tc) = 0;
 
-    /*! \brief     Remove a previously added task from the kernel before Start().
+    /*! \brief     Remove a previously added task from the kernel when it is not started.
         \param[in] user_task: User task to remove. Must not be \c nullptr.
         \note      Only valid before Start() (i.e. while the kernel is not running).
                    To remove tasks after Start() the task should return from its Run function
@@ -1370,14 +1447,10 @@ public:
         \param[in] sobj: Synchronization object to wait on.
         \param[in] mutex: Mutex protecting the state of the synchronization object.
         \param[in] timeout: Maximum wait time (ticks). Use \c WAIT_INFINITE to block indefinitely, use \c NO_WAIT to poll without blocking.
-        \return    Pointer to the wait object representing this wait operation (always non-NULL).
-                   The caller must check IWaitObject::IsTimeout() after this function returns to determine whether
-                   the wake was caused by a signal or by timeout expiry. The returned pointer is valid until
-                   the calling task re-enters a wait or the wait object is explicitly released by the kernel.
-                   The return value is guaranteed non nullptr and points to a valid IWaitObject.
+        \return    Wait result (see \c EWaitResult).
         \warning   ISR-unsafe.
     */
-    virtual IWaitObject *Wait(ISyncObject *sobj, IMutex *mutex, Timeout timeout) = 0;
+    virtual EWaitResult Wait(ISyncObject *sobj, IMutex *mutex, Timeout timeout) = 0;
 
     /*! \brief     Suspend scheduling.
         \return    Number of ticks available for the suspension period, as determined by the

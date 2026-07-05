@@ -2015,7 +2015,7 @@ bool PlatformRiscV::SleepUntil(Ticks timestamp)
     return GetContext().m_handler->OnTaskSleepUntil(HW_GetCallerSP(), timestamp);
 }
 
-IWaitObject *PlatformRiscV::Wait(ISyncObject *sync_obj, IMutex *mutex, Timeout timeout)
+EWaitResult PlatformRiscV::Wait(ISyncObject *sync_obj, IMutex *mutex, Timeout timeout)
 {
     return GetContext().m_handler->OnTaskWait(HW_GetCallerSP(), sync_obj, mutex, timeout);
 }
@@ -2131,6 +2131,12 @@ bool stk::hw::SpinLock::TryLock()
 bool stk::hw::IsInsideISR()
 {
     return HW_IsHandlerMode();
+}
+
+bool stk::hw::IsContextPrivileged()
+{
+    // Always Privileged on RISC-V.
+    return true;
 }
 
 Cycles stk::hw::HiResClock::GetCycles()

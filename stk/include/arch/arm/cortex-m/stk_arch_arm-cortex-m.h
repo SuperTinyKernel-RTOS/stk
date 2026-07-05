@@ -11,6 +11,9 @@
 #define STK_ARCH_ARM_CORTEX_M_H_
 
 #include "stk_common.h"
+#if defined(__ARM_FEATURE_CMSE) && (__ARM_FEATURE_CMSE != 0)
+    #include <arm_cmse.h> // for ARM TrustZone
+#endif
 
 /*! \file  stk_arch_arm-cortex-m.h
     \brief Platform port for ARM Cortex-M.
@@ -39,7 +42,7 @@ public:
     void SwitchToNext() override;
     void Sleep(Timeout ticks) override;
     bool SleepUntil(Ticks timestamp) override;
-    IWaitObject *Wait(ISyncObject *sync_obj, IMutex *mutex, Timeout timeout) override;
+    EWaitResult Wait(ISyncObject *sync_obj, IMutex *mutex, Timeout timeout) override;
     void ProcessTick() override;
     void ProcessHardFault() override;
     void SetEventOverrider(IEventOverrider *overrider) override;
@@ -105,10 +108,53 @@ static __stk_forceinline void SetTls(Word tp)
 */
 static __stk_forceinline void __stk_dmb() { __asm volatile("dmb sy" ::: "memory"); }
 
+/*! \def   STK_TZ_SECURE
+    \brief ARM TrustZone: Defines Secure (1) build.
+*/
+#if defined(__ARM_FEATURE_CMSE) && (__ARM_FEATURE_CMSE == 3)
+    #define STK_TZ_SECURE (1)
+#else
+    #define STK_TZ_SECURE (0)
+#endif
+
+/*! \def   STK_TZ_NON_SECURE
+    \brief ARM TrustZone: Defines Non-Secure (1) build.
+*/
+#if defined(__ARM_FEATURE_CMSE) && (__ARM_FEATURE_CMSE == 1)
+    #define STK_TZ_NON_SECURE (1)
+#else
+    #define STK_TZ_NON_SECURE (0)
+#endif
+
 /*! \def   __stk_tz_nsc_entry
-    \brief TrustZone: attribute for Non-Secure callable gateway functions.
+    \brief ARM TrustZone: attribute for Non-Secure callable gateway functions.
     \note  Places the function in the .nsc_entry section mapped to the NSC region.
 */
-#define __stk_tz_nsc_entry __attribute__((cmse_nonsecure_entry))
+#if defined(__ARM_FEATURE_CMSE) && (__ARM_FEATURE_CMSE == 3)
+    #define __stk_tz_nsc_entry __attribute__((cmse_nonsecure_entry))
+#else
+    #define __stk_tz_nsc_entry
+#endif
+
+/*! \def   __stk_tz_ns_call
+    \brief ARM TrustZone: attribute for calling Non-Secure functions from Secure state.
+*/
+#if defined(__ARM_FEATURE_CMSE) && (__ARM_FEATURE_CMSE == 3)
+    #define __stk_tz_ns_call __attribute__((cmse_nonsecure_call))
+#else
+    #define __stk_tz_ns_call
+#endif
+
+/*! \def   STK_NSC_GATEWAY
+    \brief ARM TrustZone: Non-secure gateway to Secure API.
+*/
+#define STK_TZ_NSC_GATEWAY extern "C" __stk_tz_nsc_entry
+
+// ARM TrustZone Non-Secure binary configuration validation.
+#ifdef _STK_CORTEX_M_TRUSTZONE_NON_SECURE
+#if !STK_TZ_NON_SECURE
+    #error "Switch of -cmse compiler flag for Non-Secure binary!"
+#endif
+#endif
 
 #endif /* STK_ARCH_ARM_CORTEX_M_H_ */

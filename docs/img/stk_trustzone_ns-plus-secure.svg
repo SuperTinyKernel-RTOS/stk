@@ -1,0 +1,91 @@
+<svg viewBox="0 0 820 470" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+
+  <!-- Background -->
+  <rect x="0" y="0" width="820" height="470" fill="#ffffff"/>
+
+  <!-- MCU outer boundary -->
+  <rect x="20" y="20" width="780" height="430" rx="14" fill="#fafafa" stroke="#94a3b8" stroke-width="2"/>
+  <text x="40" y="48" font-size="15" font-weight="700" fill="#334155">Cortex-M33 / Armv8-M MCU (TrustZone-enabled)</text>
+
+  <!-- Secure World box (left) -->
+  <rect x="45" y="72" width="330" height="345" rx="12" fill="#e0ecff" stroke="#2f6fdb" stroke-width="2"/>
+  <text x="65" y="100" font-size="15" font-weight="700" fill="#173a70">Secure World — Secure Binary</text>
+
+  <!-- Kernel box -->
+  <rect x="75" y="120" width="270" height="56" rx="8" fill="#2f6fdb" stroke="#173a70" stroke-width="1.5"/>
+  <text x="210" y="144" font-size="13.5" font-weight="700" fill="#ffffff" text-anchor="middle">STK Kernel</text>
+  <text x="210" y="162" font-size="11" fill="#dbe8ff" text-anchor="middle">(Secure — schedules both worlds)</text>
+
+  <!-- Secure task box -->
+  <rect x="75" y="192" width="270" height="42" rx="8" fill="#ffffff" stroke="#2f6fdb" stroke-width="1.5"/>
+  <text x="210" y="217" font-size="12.5" fill="#173a70" text-anchor="middle">Secure Tasks (trusted)</text>
+
+  <!-- NSC gateway box (secure side) -->
+  <rect x="75" y="248" width="270" height="60" rx="8" fill="#c7d9fb" stroke="#2f6fdb" stroke-width="1.5"/>
+  <text x="210" y="272" font-size="12" font-weight="700" fill="#173a70" text-anchor="middle">NSC Gateway Functions</text>
+  <text x="210" y="288" font-size="10.5" fill="#1e3a63" text-anchor="middle">(CMSE-checked entry points, Secure side)</text>
+
+  <!-- note box -->
+  <rect x="75" y="325" width="270" height="76" rx="8" fill="#ffffff" stroke="#2f6fdb" stroke-width="1" stroke-dasharray="4 3"/>
+  <text x="90" y="346" font-size="11.5" fill="#334155">Kernel state, Secure task memory, and</text>
+  <text x="90" y="362" font-size="11.5" fill="#334155">peripherals are only reachable through</text>
+  <text x="90" y="378" font-size="11.5" fill="#334155">the explicit NSC gateways — never</text>
+  <text x="90" y="394" font-size="11.5" fill="#334155">directly from Non-Secure code.</text>
+
+  <!-- SAU/IDAU boundary -->
+  <line x1="395" y1="72" x2="395" y2="417" stroke="#dc2626" stroke-width="2.5" stroke-dasharray="7 5"/>
+  <text x="395" y="435" font-size="12" font-weight="700" fill="#b91c1c" text-anchor="middle">SAU / IDAU boundary</text>
+
+  <!-- Non-Secure World box (right) -->
+  <rect x="415" y="72" width="360" height="345" rx="12" fill="#fdecd2" stroke="#d9822b" stroke-width="2"/>
+  <text x="435" y="100" font-size="15" font-weight="700" fill="#7c4a12">Non-Secure World — Non-Secure Binary</text>
+
+  <!-- NS task boxes -->
+  <rect x="445" y="130" width="300" height="46" rx="8" fill="#ffffff" stroke="#d9822b" stroke-width="1.5"/>
+  <text x="595" y="158" font-size="12.5" fill="#7c4a12" text-anchor="middle">Non-Secure Application Task 1</text>
+
+  <rect x="445" y="186" width="300" height="46" rx="8" fill="#ffffff" stroke="#d9822b" stroke-width="1.5"/>
+  <text x="595" y="214" font-size="12.5" fill="#7c4a12" text-anchor="middle">Non-Secure Application Task 2</text>
+
+  <rect x="445" y="242" width="300" height="46" rx="8" fill="#ffffff" stroke="#d9822b" stroke-width="1.5"/>
+  <text x="595" y="270" font-size="12.5" fill="#7c4a12" text-anchor="middle">Non-Secure Application Task N</text>
+
+  <!-- note box for NS side -->
+  <rect x="445" y="303" width="300" height="98" rx="8" fill="#ffffff" stroke="#d9822b" stroke-width="1" stroke-dasharray="4 3"/>
+  <text x="460" y="324" font-size="11.5" fill="#4a2f0d" font-weight="600">stk::tz::nsec::Kernel / KernelService</text>
+  <text x="460" y="342" font-size="11" fill="#5a3d16">Familiar STK API (AddTask, Sleep, Wait, ...)</text>
+  <text x="460" y="358" font-size="11" fill="#5a3d16">under the hood, every call is routed through</text>
+  <text x="460" y="374" font-size="11" fill="#5a3d16">an NSC gateway into the Secure kernel — the</text>
+  <text x="460" y="390" font-size="11" fill="#5a3d16">Non-Secure app never touches Secure memory.</text>
+
+  <!-- Arrow: NS tasks -> NSC gateway (allowed call path), aligned with NSC Gateway box, well below the blocked path -->
+  <path d="M 445 278 L 350 278" stroke="#15803d" stroke-width="2.4" fill="none" marker-end="url(#arrowGreen)"/>
+  <text x="395" y="266" font-size="10.5" fill="#15803d" font-weight="700" text-anchor="middle">allowed call</text>
+  <text x="395" y="296" font-size="9.5" fill="#166534" text-anchor="middle">(via NSC gateway)</text>
+
+  <!-- Blocked direct access, aligned with Secure Tasks box, well above the allowed path -->
+  <path d="M 445 175 L 360 175" stroke="#b91c1c" stroke-width="1.8" fill="none" stroke-dasharray="4 3" marker-end="url(#arrowRed)"/>
+  <circle cx="395" cy="175" r="11" fill="#ffffff" stroke="#b91c1c" stroke-width="2"/>
+  <text x="395" y="180" font-size="13" fill="#b91c1c" text-anchor="middle" font-weight="700">✕</text>
+  <text x="395" y="155" font-size="10" fill="#b91c1c" text-anchor="middle">direct access blocked (hardware)</text>
+
+  <!-- Legend -->
+  <rect x="45" y="435" width="14" height="14" fill="#2f6fdb"/>
+  <text x="65" y="446" font-size="11" fill="#334155">Secure state</text>
+  <rect x="170" y="435" width="14" height="14" fill="#e59a3f"/>
+  <text x="190" y="446" font-size="11" fill="#334155">Non-Secure state</text>
+  <line x1="300" y1="442" x2="320" y2="442" stroke="#15803d" stroke-width="2.2"/>
+  <text x="326" y="446" font-size="11" fill="#334155">NSC gateway call</text>
+  <line x1="460" y1="442" x2="480" y2="442" stroke="#b91c1c" stroke-width="1.8" stroke-dasharray="4 3"/>
+  <text x="486" y="446" font-size="11" fill="#334155">blocked by hardware</text>
+
+  <defs>
+    <marker id="arrowGreen" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L6,3 z" fill="#15803d"/>
+    </marker>
+    <marker id="arrowRed" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L6,3 z" fill="#b91c1c"/>
+    </marker>
+  </defs>
+
+</svg>

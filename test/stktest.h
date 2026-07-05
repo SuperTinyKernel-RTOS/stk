@@ -175,7 +175,7 @@ public:
         return m_event_handler->OnTaskSleepUntil(GetCallerSP(), timestamp);
     }
 
-    IWaitObject *Wait(ISyncObject *sobj, IMutex *mutex, Timeout timeout)
+    EWaitResult Wait(ISyncObject *sobj, IMutex *mutex, Timeout timeout)
     {
         return m_event_handler->OnTaskWait(GetCallerSP(), sobj, mutex, timeout);
     }
@@ -228,7 +228,7 @@ public:
         m_event_handler->OnTaskSleep(caller_SP, sleep_ticks);
     }
 
-    IWaitObject *EventTaskWait(size_t caller_SP, ISyncObject *sync_obj, IMutex *mutex, Timeout timeout)
+    EWaitResult EventTaskWait(size_t caller_SP, ISyncObject *sync_obj, IMutex *mutex, Timeout timeout)
     {
         return m_event_handler->OnTaskWait(caller_SP, sync_obj, mutex, timeout);
     }
@@ -347,12 +347,12 @@ public:
         m_switch_to_next = true;
     }
 
-    IWaitObject *Wait(ISyncObject *sobj, IMutex *mutex, Timeout timeout) override
+    EWaitResult Wait(ISyncObject *sobj, IMutex *mutex, Timeout timeout) override
     {
         (void)sobj;
         (void)mutex;
         (void)timeout;
-        return nullptr;
+        return WAIT_RESULT_FAIL;
     }
 
     Timeout Suspend() override

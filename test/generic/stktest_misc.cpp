@@ -91,15 +91,6 @@ TEST(UserTask, GetStackSize)
     CHECK_EQUAL(TaskMock<ACCESS_USER>::STACK_SIZE, taskw.GetStackSize());
 }
 
-TEST(UserTask, GetStackSizeBytes)
-{
-    TaskMock<ACCESS_USER> task;
-    TaskMockW<1, ACCESS_USER> taskw;
-
-    CHECK_EQUAL(TaskMock<ACCESS_USER>::STACK_SIZE * sizeof(Word), task.GetStackSizeBytes());
-    CHECK_EQUAL(TaskMock<ACCESS_USER>::STACK_SIZE * sizeof(Word), taskw.GetStackSizeBytes());
-}
-
 TEST(UserTask, GetStackSpace)
 {
     Kernel<KERNEL_STATIC, 1, SwitchStrategyRR, PlatformTestMock> kernel;
@@ -159,6 +150,14 @@ TEST(UserTask, GetIdAndName)
     CHECK_EQUAL((const char *)NULL, taskw.GetTraceName());
 }
 
+TEST(UserTask, NonTZ_GetSecureStackMemory)
+{
+    TaskMock<ACCESS_USER> task;
+
+    // non-TrustZone task shall not provide anything than null
+    CHECK_TRUE(nullptr == task.GetSecureStackMemory());
+}
+
 TEST_GROUP(StackMemoryWrapper)
 {
     void setup() {}
@@ -181,15 +180,6 @@ TEST(StackMemoryWrapper, GetStackSize)
 
     CHECK_EQUAL(STACK_SIZE_MIN, wrapper.GetStackSize());
     CHECK_EQUAL(sizeof(memory) / sizeof(Word), wrapper.GetStackSize());
-}
-
-TEST(StackMemoryWrapper, GetStackSizeBytes)
-{
-    StackMemoryWrapper<STACK_SIZE_MIN>::MemoryType memory;
-    StackMemoryWrapper<STACK_SIZE_MIN> wrapper(&memory);
-
-    CHECK_EQUAL(STACK_SIZE_MIN * sizeof(Word), wrapper.GetStackSizeBytes());
-    CHECK_EQUAL(sizeof(memory), wrapper.GetStackSizeBytes());
 }
 
 TEST_GROUP(DList)

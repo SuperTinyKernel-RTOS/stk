@@ -10,14 +10,7 @@
 #ifndef EXAMPLE_H_
 #define EXAMPLE_H_
 
-#include <assert.h>
 #include "../driver/led.h"
-
-#ifdef __cplusplus
-    #define STK_EXTERN extern "C"
-#else
-    #define STK_EXTERN extern
-#endif
 
 STK_EXTERN void RunExample();
 

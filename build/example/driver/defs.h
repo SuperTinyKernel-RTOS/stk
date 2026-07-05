@@ -13,9 +13,11 @@
 #ifdef __cplusplus
     #include <cstdbool>
     #include <cstdint>
+    #include <cassert>
 #else
     #include <stdbool.h>
     #include <stdint.h>
+    #include <assert.h>
 #endif
 
 #ifdef __cplusplus
