@@ -44,12 +44,15 @@ using namespace stk;
 //! If (1), manage Link Register (LR) per task.
 #define STK_CORTEX_M_MANAGE_LR (__CORTEX_M >= 3U)
 
+//! If (1), enable Pointer Authentication Code (PAC) security for Armv8.1-M+.
+#define STK_CORTEX_M_PAC (__ARM_FEATURE_PA_BITS && (__CORTEX_M >= 85U))
+
 //! Exception return token.
 #define STK_CORTEX_M_EXC_RETURN_THREAD_PSP (0xFFFFFFFDU) // Thread mode, PSP, basic
 
 // ISR priorities:
-#define STK_CORTEX_M_ISR_PRIORITY_HIGHEST  (0U)
-#define STK_CORTEX_M_ISR_PRIORITY_LOWEST   (0xFFU)
+#define STK_CORTEX_M_ISR_PRIORITY_HIGHEST (0U)
+#define STK_CORTEX_M_ISR_PRIORITY_LOWEST  (0xFFU)
 
 //! Number of registers kept in stack.
 #if STK_CORTEX_M_MANAGE_LR
@@ -100,13 +103,18 @@ using namespace stk;
     #define STK_ASM_ALIGN_2             ".align 2                    \n"
 #endif
 
+//! Enables SVC_FORCE_SWITCH.
+//#define STK_CORTEX_M_FORCE_SWITCH
+
 //! SVC commands.
 enum ESvcCommandId : uint8_t
 {
     SVC_START_SCHEDULING = 0U,
     SVC_ENTER_CRITICAL,
     SVC_EXIT_CRITICAL,
-    //SVC_FORCE_SWITCH
+#ifdef STK_CORTEX_M_FORCE_SWITCH
+    SVC_FORCE_SWITCH
+#endif
 };
 
 //! ARM Cortex-M Program Counter (PC) register helpers.
@@ -250,8 +258,8 @@ struct TaskFrame
 };
 
 // Shortcuts:
-#define STK_ASM_EXIT_FROM_HANDLER  "BX LR"  // use in naked exception/ISR handlers
-#define STK_ASM_EXIT_FROM_FUNCTION "BX LR"  // use in naked C-callable wrapper functions
+#define STK_ASM_EXIT_FROM_HANDLER  "BX lr"  // use in naked exception/ISR handlers
+#define STK_ASM_EXIT_FROM_FUNCTION "BX lr"  // use in naked C-callable wrapper functions
 #define STK_ASM_DISABLE_INTERRUPTS "CPSID i"
 #define STK_ASM_ENABLE_INTERRUPTS  "CPSIE i"
 
@@ -275,7 +283,7 @@ static __stk_forceinline void HW_StartScheduler()
 
 /*! \brief     Force an immediate context switch.
 */
-#ifdef SVC_FORCE_SWITCH
+#ifdef STK_CORTEX_M_FORCE_SWITCH
 static __stk_forceinline void HW_ForceContextSwitch()
 {
     __asm volatile("SVC %0"
@@ -673,10 +681,13 @@ static __stk_forceinline void HW_SpinLockLock(volatile bool &lock)
 struct JmpFrame
 {
     Word R4, R5, R6, R7, R8, R9, R10, R11; //!< Callee-saved general-purpose registers.
-    Word SP;    //!< Stack pointer of the SaveJmp call site (r13).
-    Word LR;    //!< Return address of the SaveJmp call site (r14).
+    Word SP;      //!< Stack pointer of the SaveJmp call site (r13).
+    Word LR;      //!< Return address of the SaveJmp call site (r14).
 #if STK_CORTEX_M_FPU
-    Word FPSCR; //!< Floating-point status and control register (rounding mode + exception flags).
+    Word FPSCR;   //!< Floating-point status and control register (rounding mode + exception flags).
+#endif
+#if STK_CORTEX_M_PAC
+    Word PAC_R12; //!< PAC signature for the LR register.
 #endif
 };
 
@@ -729,6 +740,16 @@ int32_t SaveJmp(JmpFrame &/*f*/)
     "VMRS r1,  FPSCR                \n"
     "STR  r1,  [r0, #40]            \n"
 #endif
+
+#if STK_CORTEX_M_PAC
+    "PAC   r12, lr, sp              \n" // sign LR using SP as modifier -> R12
+#if STK_CORTEX_M_FPU
+    "STR  r12, [r0, #44]            \n" // offset 44 if FPU is present
+#else
+    "STR  r12, [r0, #40]            \n" // offset 40 if FPU is absent
+#endif
+#endif
+
     "MOVS r0,  #0                   \n"
     "BX   lr                        \n");
     
@@ -767,11 +788,28 @@ void RestoreJmp(JmpFrame &/*f*/, int32_t /*val*/)
 #if (__CORTEX_M >= 3U)
     // Cortex-M3/M4/M7: LDMIA loads r4-r11 from offsets 0-28
     "LDR   sp,  [r0, #32]           \n" // restore SP
+
 #if STK_CORTEX_M_FPU
     "LDR   r2,  [r0, #40]           \n" // load saved FPSCR
     "VMSR  FPSCR, r2                \n" // restore rounding mode + flags
 #endif
+
+#if STK_CORTEX_M_PAC
+#if STK_CORTEX_M_FPU
+    "LDR   r12, [r0, #44]           \n" // load saved PAC signature into R12
+#else
+    "LDR   r12, [r0, #40]           \n"
+#endif
+#endif
+
     "LDR   r2,  [r0, #36]           \n" // load saved LR into r2
+
+#if STK_CORTEX_M_PAC
+    "MOV   lr,  r2                  \n" // move to LR for authentication
+    "AUT   r12, lr, sp              \n" // authenticate LR using current SP and R12
+    "MOV   r2,  lr                  \n" // move validated address back to r2
+#endif
+
     "LDMIA r0,  {r4-r11}            \n" // restore r4-r11, no writeback
     "MOV   r0,  r1                  \n" // return val
     "BX    r2                       \n"
@@ -1019,13 +1057,6 @@ static __stk_forceinline uint32_t HW_DWTGetCounter()
 #else
     return 0U;
 #endif
-}
-
-// Implement these in your ARM TrustZone helper:
-extern "C" __stk_weak
-Word NS_stk_util_GetOnTaskExitAddr()
-{
-    return hw::PtrToWord(&OnTaskExit);
 }
 
 //! Global lock to synchronize critical sections of multiple cores.
@@ -1905,9 +1936,11 @@ extern "C" __stk_attr_used void SVC_Handler_Main(Word *svc_args)
         }
         break; }
 
-    /*case SVC_FORCE_SWITCH: {
+#ifdef STK_CORTEX_M_FORCE_SWITCH
+    case SVC_FORCE_SWITCH: {
         HW_ScheduleContextSwitch();
-        break; }*/
+        break; }
+#endif
 
 #ifdef CONTROL_nPRIV_Msk
     case SVC_ENTER_CRITICAL: {
@@ -2043,10 +2076,21 @@ void OnTaskExit()
 
     HW_CriticalSectionEnd(cs);
 
-    for (;;)
+    if (HW_IsPrivilegedThreadMode())
     {
-        // enter standby mode until time slot expires
-        HW_EnterSleepMode();
+        for (;;)
+        {
+            // enter standby mode until time slot expires
+            HW_EnterSleepMode();
+        }
+    }
+    else
+    {
+        for (;;)
+        {
+            // can only busy-wait when non-Privileged
+            __stk_relax_cpu();
+        }
     }
 }
 
@@ -2143,17 +2187,8 @@ void PlatformArmCortexM::InitStack(EStackType stack_type, Stack *stack, IStackMe
     switch (stack_type)
     {
     case STACK_USER_TASK: {
-    #ifdef _STK_CORTEX_M_TRUSTZONE
-        if (is_non_secure_task)
-        {
-            task_frame->exc.LR = NS_stk_util_GetOnTaskExitAddr();
-        }
-        else
-    #endif
-        {
-            task_frame->exc.LR = hw::PtrToWord(&OnTaskExit);
-        }
         task_frame->exc.PC = hw::PtrToWord(&OnTaskRun);
+        task_frame->exc.LR = hw::PtrToWord(&OnTaskExit);
         task_frame->exc.R0 = hw::PtrToWord(user_task);
         break; }
 
@@ -2240,14 +2275,6 @@ void PlatformArmCortexM::InitStack(EStackType stack_type, Stack *stack, IStackMe
 // ARMv8-M TrustZone Non-Secure callable (NSC) gateway veneers.
 // ---------------------------------------------------------------------------
 #ifdef _STK_CORTEX_M_TRUSTZONE
-
-/*! \brief  NSC gateway: OnTaskExit.
-*/
-STK_TZ_NSC_GATEWAY
-void NSC_stk_Kernel_OnTaskExit()
-{
-    OnTaskExit();
-}
 
 /*! \brief  NSC gateway: hw::CriticalSection::Enter.
 */
