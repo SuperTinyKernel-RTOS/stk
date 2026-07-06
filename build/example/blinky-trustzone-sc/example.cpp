@@ -7,6 +7,8 @@
  * License: MIT License, see LICENSE for a full text.
  */
 
+#include <setjmp.h>
+
 #include <stk.h>
 #include <arch/arm/cortex-m/stk_arch_arm-tz.h>
 #include <time/stk_time.h>
@@ -31,9 +33,16 @@ enum { TASK_STACK_SIZE = 256 };
 #define TASK_S_COUNT  (1)
 #define TASK_COUNT    (TASK_NS_COUNT + TASK_S_COUNT)
 
+// Kernel type.
+#define KERNEL_TYPE   KERNEL_STATIC
+
 using namespace bsp;
 using namespace stk;
 
+// Allocate a global jump buffer in Secure memory.
+static jmp_buf s_NsExitEnv;
+
+// Hw commands.
 struct HwCommand
 {
     enum EId
@@ -46,6 +55,14 @@ struct HwCommand
     Word param_0;
 };
 static sync::PipeT<HwCommand, 4> s_HwCmdQueue;
+
+// This is your NSC exit function.
+__stk_tz_nsc_entry void NSC_OnExitNs(void)
+{
+    // Jump back to the point right before BLXNS happened,
+    // passing '1' as the return value for setjmp.
+    longjmp(s_NsExitEnv, 1);
+}
 
 // A demo function for exposing some sensible data to Non-Secure state.
 __stk_tz_nsc_entry uint32_t NSC_GetKey(uint8_t key[], uint32_t size)
@@ -189,8 +206,25 @@ static void InvokeNonSecureState()
     //    The vector table stores Thumb addresses (LSB=1), but BLXNS needs LSB=0.
     NSFuncT ResetHandler_ns = reinterpret_cast<NSFuncT>(reset_handler_address & ~1UL);
 
-    // 6. Jump into the Non-Secure World.
-    ResetHandler_ns();
+    // Save the current Secure CPU state.
+    // The first time setjmp executes, it returns 0.
+    if (setjmp(s_NsExitEnv) == 0)
+    {
+        // 6. Jump into the Non-Secure World.
+        ResetHandler_ns();
+    }
+    else
+    {
+        // --- WE ARE BACK IN SECURE MODE PERMANENTLY ---
+
+        // The Non-Secure binary called NSC_Secure_HandleNSExit(), which triggered longjmp(),
+        // bypassing the standard C function return mechanism.
+
+        // Continue your Secure-only main loop or application logic here.
+
+        // Reset PSP_NS.
+        __TZ_set_PSP_NS(0);
+    }
 }
 
 // Secure task's core.
@@ -224,7 +258,7 @@ static void CreateKernel()
     Led::InitAll(false);
 
     // Operating in Static + Sync mode (EventFlags requires KERNEL_SYNC) and optionally tickless.
-    const uint8_t KernelMode = KERNEL_STATIC | KERNEL_SYNC | (STK_TICKLESS_IDLE ? KERNEL_TICKLESS : 0);
+    const uint8_t KernelMode = KERNEL_TYPE | KERNEL_SYNC | (STK_TICKLESS_IDLE ? KERNEL_TICKLESS : 0);
 
     // Allocate scheduling kernel for 3 threads (tasks) with Round-Robin scheduling strategy.
     static Kernel<KernelMode, TASK_COUNT, SwitchStrategyRR, PlatformDefault> kernel;
@@ -258,6 +292,10 @@ void RunExample()
     // CPU is now executing your Non-Secure application, execution will never return here.
     while (true)
     {
+        // KERNEL_STATIC does not support exit from scheduling, while it is possible with KERNEL_DYNAMIC
+        // when all tasks exit on both sides Non-secure and Secure.
+    #if (KERNEL_TYPE == KERNEL_STATIC)
         STK_ASSERT(false);
+    #endif
     }
 }

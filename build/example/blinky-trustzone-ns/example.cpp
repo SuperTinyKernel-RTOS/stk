@@ -21,6 +21,7 @@
 
 #include "pico/unique_id.h"
 
+void NSC_OnExitNs(void);
 uint32_t NSC_GetKey(uint8_t key[], uint32_t size);
 void NSC_bsp_Led_SwitchOnExclusive(bsp::Led::Id led);
 
@@ -36,7 +37,7 @@ using namespace bsp;
 
 // R2350 requires larger stack due to stack-memory heavy SDK API
 #ifdef _PICO_H
-enum { TASK_STACK_SIZE = 2048 };
+enum { TASK_STACK_SIZE = 1024 };
 #else
 enum { TASK_STACK_SIZE = 256 };
 #endif
@@ -110,7 +111,7 @@ void RunExample()
     uint8_t key[4] = {0};
     NSC_GetKey(key, 4);
 
-    // note: using ACCESS_PRIVILEGED as Cortex-M3+ may not allow writing to GPIO from a less secure user thread
+    // Note: using ACCESS_PRIVILEGED as Cortex-M3+ may not allow writing to GPIO from a less secure user thread.
     static MyTask<ACCESS_USER> task1(LED_RED);
     static MyTask<ACCESS_USER> task2(LED_ORANGE);
     static MyTask<ACCESS_PRIVILEGED> task3(LED_GREEN); // made ACCESS_PRIVILEGED as an example, see NSC_bsp_Led_SwitchOnExclusive on secure side
@@ -120,15 +121,16 @@ void RunExample()
 
     kernel.Initialize(0);
 
-    // register threads (tasks)
+    // Register threads (tasks).
     kernel.AddTask(&task1);
     kernel.AddTask(&task2);
     kernel.AddTask(&task3);
     kernel.AddTask(&task4);
 
-    // start scheduler (it will start threads added by AddTask), execution in main() will be blocked on this line
+    // Start scheduler (it will start threads added by AddTask), execution in main() will be blocked on this line.
     kernel.Start();
 
-    // shall not reach here after Start() was called
-    STK_ASSERT(false);
+    // Return back to Secure binary. Note: kernel.Start() will exit only if Secure side initialized Kernel instance
+    // with KERNEL_DYNAMIC mode and when all tasks exited on both sides.
+    NSC_OnExitNs();
 }
