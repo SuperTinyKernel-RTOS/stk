@@ -108,9 +108,9 @@
            callee-saved register, silently overwriting the TLS pointer after a
            context switch. See stk_arch_arm-cortex-m.h for the full explanation.
     \note  **RISC-V:** uses the \c tp (x4) register, which is reserved for TLS by
-           the RISC-V psABI. STK_TLS_PREFER_REGISTER is forced to 1 on RISC-V
-           regardless of this setting; no additional compiler flags are needed.
-    \note  When set to 1 on Cortex-M, stk::Stack gains no \c tls member, reducing
+           the RISC-V psABI. STK_TLS_PREFER_REGISTER is set to 1 on RISC-V;
+           no additional compiler flags are needed. Can be overridden to 0 safely.
+    \note  When set to 1 the stk::Stack gains no \c tls member, reducing
            per-task RAM by one \c Word. On targets with many tasks this saving can
            be significant.
     \note  Default: 0 (disabled). Leave at 0 if \c -ffixed-r9 cannot be applied
@@ -124,7 +124,11 @@
     \see   STK_TLS, stk::hw::GetTlsPtr, stk::hw::SetTlsPtr
 */
 #ifndef STK_TLS_PREFER_REGISTER
-    #define STK_TLS_PREFER_REGISTER (0)
+    #ifdef _STK_ARCH_RISC_V
+        #define STK_TLS_PREFER_REGISTER (1)
+    #else
+        #define STK_TLS_PREFER_REGISTER (0)
+    #endif
 #endif
 
 /*! \def   STK_STACK_NEEDS_TASK_ID
