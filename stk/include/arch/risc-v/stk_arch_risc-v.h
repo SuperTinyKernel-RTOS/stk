@@ -69,9 +69,8 @@ public:
 */
 typedef PlatformRiscV PlatformDefault;
 
-// Enforce inline TLS because RISC-V always provides x5/tp register for riscv-none-elf-gcc or similar.
-#undef STK_TLS_PREFER_REGISTER
-#define STK_TLS_PREFER_REGISTER 1
+// Inline TLS via x4/tp. Active when both STK_TLS and STK_TLS_PREFER_REGISTER are enabled.
+#if STK_TLS && STK_TLS_PREFER_REGISTER
 
 /*! \brief  Get thread-local storage (TLS).
     \return TLS value.
@@ -95,6 +94,8 @@ static __stk_forceinline void SetTls(Word tp)
 
 // Notify stk_arch.h that we defined inline versions of GetTls/SetTls.
 #define STK_INLINE_TLS 1
+
+#endif // STK_TLS && STK_TLS_PREFER_REGISTER
 
 } // namespace stk
 

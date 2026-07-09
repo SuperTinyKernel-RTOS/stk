@@ -300,15 +300,13 @@ template <size_t TStackSize> struct StackMemoryDef
 */
 struct Stack
 {
-    Word        SP;          //!< Stack Pointer (SP) register (note: must be the first entry in this struct).
-    uint32_t    access_mode; //!< Bitfield with hardware access mode of the task (see \a EAccessMode).
+    Word        SP;          //!< Stack Pointer (SP) register (note: must be the first entry in this struct). Offset is fixed at 0 bytes, required by the driver.
+    uint32_t    access_mode; //!< Bitfield with hardware access mode of the task (see \a EAccessMode). Offset is fixed at 4 bytes, required by the driver.
+#if STK_TLS && !STK_TLS_PREFER_REGISTER
+    Word        tls;         //!< Thread-local storage if not using ARM Cortex-M R9 register for a fast inline access to TLS.
+#endif
 #if STK_STACK_NEEDS_TASK_ID
     TId         tid;         //!< Task id (see \a STK_SEGGER_SYSVIEW).
-#endif
-#ifdef _STK_ARCH_ARM_CORTEX_M
-#if STK_TLS && !STK_TLS_PREFER_REGISTER
-    Word        tls;        //!< Thread-local storage if not using ARM Cortex-M R9 register for a fast inline access to TLS.
-#endif
 #endif
 };
 
