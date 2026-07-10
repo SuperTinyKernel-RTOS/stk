@@ -170,19 +170,19 @@ enum class ERegMask : Word
 };
 
 //! Make unprivileged.
-static inline Word SetUnprivileged(Word REG_CONTROL) noexcept
+__stk_attr_unused static inline Word SetUnprivileged(Word REG_CONTROL) noexcept
 {
     return (REG_CONTROL | static_cast<Word>(ERegMask::MASK_nPRIV));
 }
 
 //! Make privileged.
-static inline Word SetPrivileged(Word REG_CONTROL) noexcept
+__stk_attr_unused static inline Word SetPrivileged(Word REG_CONTROL) noexcept
 {
     return (REG_CONTROL & ~static_cast<Word>(ERegMask::MASK_nPRIV));
 }
 
 //! Set Stack Pointer selection to PSP.
-static inline Word SetSPSelectionToPSP(Word REG_CONTROL) noexcept
+__stk_attr_unused static inline Word SetSPSelectionToPSP(Word REG_CONTROL) noexcept
 {
     return (REG_CONTROL | static_cast<Word>(ERegMask::MASK_SPSEL));
 }
@@ -1529,13 +1529,8 @@ extern "C" void STK_SYSTICK_HANDLER()
         __set_CONTROL(__get_CONTROL() | CONTROL_nPRIV_Msk)
 */
 
-#ifdef __ICCARM__
-    #define STK_ASM_BLOCK_PRIVILEGE_MODE_LOAD_ACTIVE_STACK\
+#define STK_ASM_BLOCK_PRIVILEGE_MODE_LOAD_ACTIVE_STACK\
     "MOV        r1, %[st_active]\n" /* r1 = Stack* (already in register) */
-#else
-    #define STK_ASM_BLOCK_PRIVILEGE_MODE_LOAD_ACTIVE_STACK\
-    "LDR        r1, %[st_active]\n" /* r1 = Stack* (m_stack_active) */      
-#endif
 
 #define STK_ASM_BLOCK_PRIVILEGE_MODE\
     STK_ASM_BLOCK_PRIVILEGE_MODE_LOAD_ACTIVE_STACK\
@@ -1556,6 +1551,22 @@ extern "C" void STK_SYSTICK_HANDLER()
 
 extern "C" __stk_attr_naked void STK_PENDSV_HANDLER()
 {
+#if (STK_ARCH_CPU_COUNT > 1U)
+    // Optimize register utilization and prevent compiler from using r4-r11
+    // registers before they are saved. Use r12 IPC scratch register for that
+    // and calculate offset for p_ctx only once. Instruct assembler to use
+    // r3, r2 for holding pointers to Idle and Active stacks.
+#ifdef __ICCARM__
+    register Context *p_ctx       = &GetContext();
+    register Stack   *p_st_idle   = p_ctx->m_stack_idle;
+    register Stack   *p_st_active = p_ctx->m_stack_active;
+#else
+    register Context *p_ctx       __asm("r12") = &GetContext();
+    register Stack   *p_st_idle   __asm("r3")  = p_ctx->m_stack_idle;
+    register Stack   *p_st_active __asm("r2")  = p_ctx->m_stack_active;
+#endif
+#endif
+
     __asm volatile(
     STK_ASM_SYNTAX_UNIFIED
 
@@ -1574,7 +1585,7 @@ extern "C" __stk_attr_naked void STK_PENDSV_HANDLER()
     "TST        LR, #16          \n" /* test LR for 0xffffffe_, e.g. Thread mode with FP data */
 
     "IT         EQ               \n" /* if result is positive */
-    "VMOVEQ     s0, s0           \n" /* force hardware lazy state preservation */
+    "VMOVEQ.F32 s0, s0           \n" /* force hardware lazy state preservation */
 
     "IT         EQ               \n" /* if result is positive */
     "VSTMDBEQ   r0!, {s16-s31}   \n" /* store 16 SP registers */
@@ -1607,22 +1618,21 @@ extern "C" __stk_attr_naked void STK_PENDSV_HANDLER()
     // PSP_NS captures the task's Non-Secure stack mid-execution (may be inside an
     // NS call that was interrupted); CONTROL_NS preserves NS privilege / stack-select.
 #if STK_CORTEX_M_TRUSTZONE_FRAME
-    "MRS        r2, PSPLIM       \n" /* Secure PSPLIM */
-    "MRS        r3, PSPLIM_NS    \n" /* Non-Secure PSPLIM */
-    "STMDB      r0!, {r2, r3}    \n" /* push PSPLIM, PSPLIM_NS */
+    // push PSPLIM, PSPLIM_NS  (equivalent to STMDB r0!, {PSPLIM, PSPLIM_NS})
+    "MRS        r12, PSPLIM_NS   \n"
+    "STR        r12, [r0, #-4]! \n"
+    "MRS        r12, PSPLIM     \n"
+    "STR        r12, [r0, #-4]! \n"
 
-    "MRS        r2, PSP_NS       \n" /* Non-Secure PSP (mid-execution value) */
-    "MRS        r3, CONTROL_NS   \n" /* Non-Secure CONTROL (nPRIV, SPSEL) */
-    "STMDB      r0!, {r2, r3}    \n" /* push PSP_NS, CONTROL_NS */
+    // push PSP_NS, CONTROL_NS  (equivalent to STMDB r0!, {PSP_NS, CONTROL_NS})
+    "MRS        r12, CONTROL_NS \n"
+    "STR        r12, [r0, #-4]! \n"
+    "MRS        r12, PSP_NS     \n"
+    "STR        r12, [r0, #-4]! \n"
 #endif
 
     // Store in GetContext().m_stack_idle.
-#ifdef __ICCARM__
     "STR        r0, [%[st_idle]] \n" /* store the first member (Stack::SP) from r0 */
-#else
-    "LDR        r1, %[st_idle]   \n"
-    "STR        r0, [r1]         \n" /* store the first member (Stack::SP) from r0 */
-#endif
 
     // Set privileged/unprivileged mode for the active stack.
 #ifdef CONTROL_nPRIV_Msk
@@ -1630,12 +1640,7 @@ extern "C" __stk_attr_naked void STK_PENDSV_HANDLER()
 #endif
 
     // Load stack of the active task from GetContext().m_stack_active (note: keep in sync with OnTaskStart).
-#ifdef __ICCARM__
     "LDR        r0, [%[st_active]]\n" /* load the first member of Stack (Stack::SP) into r0 */
-#else
-    "LDR        r1, %[st_active] \n"
-    "LDR        r0, [r1]         \n"  /* load the first member of Stack (Stack::SP) into r0 */
-#endif
 
     // ARMv8-M TrustZone: restore TrustZoneFrame fields in reverse push order.
     // Pop order: PSP_NS + CONTROL_NS first (pushed last), then PSPLIM + PSPLIM_NS.
@@ -1646,13 +1651,15 @@ extern "C" __stk_attr_naked void STK_PENDSV_HANDLER()
     // EXC_RETURN in LR (restored by LDMIA below) carries the S-bit that tells
     // the CPU which world to return to on "BX LR" - no explicit branch needed.
 #if STK_CORTEX_M_TRUSTZONE_FRAME
-    "LDMIA      r0!, {r2, r3}    \n" /* pop PSP_NS, CONTROL_NS */
-    "MSR        PSP_NS, r2       \n" /* restore Non-Secure PSP */
-    "MSR        CONTROL_NS, r3   \n" /* restore Non-Secure CONTROL */
+    "LDR        r12, [r0], #4   \n" /* PSP_NS */
+    "MSR        PSP_NS, r12     \n"
+    "LDR        r12, [r0], #4   \n" /* CONTROL_NS */
+    "MSR        CONTROL_NS, r12 \n"
 
-    "LDMIA      r0!, {r2, r3}    \n" /* pop PSPLIM, PSPLIM_NS */
-    "MSR        PSPLIM, r2       \n" /* restore Secure PSPLIM */
-    "MSR        PSPLIM_NS, r3    \n" /* restore Non-Secure PSPLIM */
+    "LDR        r12, [r0], #4   \n" /* PSPLIM */
+    "MSR        PSPLIM, r12     \n"
+    "LDR        r12, [r0], #4   \n" /* PSPLIM_NS */
+    "MSR        PSPLIM_NS, r12  \n"
 #endif
 
     // Restore registers of active task's CPU context:
@@ -1685,20 +1692,22 @@ extern "C" __stk_attr_naked void STK_PENDSV_HANDLER()
     STK_ASM_EXIT_FROM_HANDLER " \n"
 
     : /* output: none */
+#if (STK_ARCH_CPU_COUNT > 1U)
 #ifdef __ICCARM__
+    : [st_idle]   "r3" (p_st_idle),
+      [st_active] "r2" (p_st_active),
+#else
+    : [st_idle]   "r" (p_st_idle),
+      [st_active] "r" (p_st_active),
+#endif
+#else
     : [st_idle]   "r" (GetContext().m_stack_idle),
       [st_active] "r" (GetContext().m_stack_active),
-#else
-    : [st_idle]   "m" (GetContext().m_stack_idle),
-      [st_active] "m" (GetContext().m_stack_active),
 #endif
       [priv_val]  "i" (ACCESS_PRIVILEGED)
-    : "r0", "r1" /* used as a scratchpad */
+    : "r0", "r1" /* used as a scratchpad */, "memory"
 #if STK_CORTEX_M_TRUSTZONE_FRAME
-     , "r2", "r3"
-#endif
-#if defined(__ICCARM__)
-     , "memory"
+    , "cc", "r12"
 #endif
      );
 }
@@ -1706,7 +1715,7 @@ extern "C" __stk_attr_naked void STK_PENDSV_HANDLER()
 __stk_attr_naked void OnTaskStart()
 {
     // Note: HW_DisableInterrupts() must be called prior calling this function.
-  
+
     __asm volatile(
     STK_ASM_SYNTAX_UNIFIED
 
@@ -1717,12 +1726,7 @@ __stk_attr_naked void OnTaskStart()
 
     // Load stack of the active task from GetContext().m_stack_active (Note: keep
     // in sync with OnTaskStart).
-#ifdef __ICCARM__
-    "LDR        r0, [%[st_active]]\n" /* IAR: load the first member of Stack (Stack::SP) into r0, %[st_active] is a pointer value register */
-#else
-    "LDR        r1, %[st_active] \n"  /* GCC: %[st_active] is a memory address pointing to Stack* */
-    "LDR        r0, [r1]         \n"  /* GCC: load the first member of Stack (Stack::SP) into r0 */
-#endif
+    "LDR        r0, [%[st_active]]\n" /* load the first member of Stack (Stack::SP) into r0, %[st_active] is a pointer value register */
 
     // ARMv8-M TrustZone: restore TrustZoneFrame fields in reverse push order (see STK_PENDSV_HANDLER).
     // Pop order: PSP_NS + CONTROL_NS first, then PSPLIM + PSPLIM_NS.
@@ -1772,18 +1776,14 @@ __stk_attr_naked void OnTaskStart()
     STK_ASM_EXIT_FROM_HANDLER " \n"
 
     : /* output: none */
-#ifdef __ICCARM__
     : [st_active] "r" (GetContext().m_stack_active),
-#else
-    : [st_active] "m" (GetContext().m_stack_active),
-#endif
       [priv_val]  "i" (ACCESS_PRIVILEGED)
 #if !STK_CORTEX_M_MANAGE_LR
     , [exc_ret]   "i" (STK_CORTEX_M_EXC_RETURN_THREAD_PSP)
 #endif
     : "r0", "r1" /* used as a scratchpad */
 #if STK_CORTEX_M_TRUSTZONE_FRAME
-    , "r2", "r3"
+     , "cc", "r2", "r3"
 #endif
 #if defined(__ICCARM__)
      , "memory"
