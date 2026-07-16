@@ -56,8 +56,8 @@ static void IncrementWithCS(void *)
 {
     for (int32_t i = 0; i < ITERATIONS_MAX; ++i)
     {
-        stk::hw::CriticalSection::ScopedLock __cs1;
-        stk::hw::CriticalSection::ScopedLock __cs2; // STK supports nesting of critical sections
+        stk::hw::ScopedCriticalSection __cs1;
+        stk::hw::ScopedCriticalSection __cs2; // STK supports nesting of critical sections
 
         // you can also use sync::ScopedCriticalSection instead of hw::CriticalSection
 

@@ -826,15 +826,43 @@ void stk_tls_set(void *ptr);
 
 // ----- Critical Section ------------------------------------------------------
 
+/*! \brief     A memory size (multiples of stk_word_t) required for CriticalSection instance.
+*/
+#define STK_CS_IMPL_SIZE (1U)
+
+/*! \brief     Opaque memory container for a CriticalSection instance.
+*/
+typedef struct stk_cs_mem_t {
+    stk_word_t data[STK_CS_IMPL_SIZE] __stk_c_aligned;
+} stk_cs_mem_t;
+
+/*! \brief     Opaque handle to a CriticalSection instance.
+*/
+typedef struct stk_cs_t stk_cs_t;
+
+/*! \brief     Create a CriticalSection (using provided memory).
+    \param[in] membuf: Pointer to static memory container.
+    \param[in] membuf_size: Size of the container (must be >= sizeof(stk_cs_mem_t)).
+    \return    CriticalSection handle.
+*/
+stk_cs_t *stk_cs_create(stk_cs_mem_t *const membuf, uint32_t membuf_size);
+
+/*! \brief     Destroy a CriticalSection.
+    \param[in] cs: CriticalSection handle.
+*/
+void stk_cs_destroy(stk_cs_t *cs);
+
 /*! \brief     Enter critical section - disable context switches on current core.
     \note      Supports nesting (number of enter calls must match number of exit calls).
+    \param[in] cs: CriticalSection handle.
 */
-void stk_critical_section_enter(void);
+void stk_cs_enter(stk_cs_t *cs);
 
 /*! \brief     Leave critical section - re-enable context switches.
-    \note      Must be called once for each previous stk_critical_section_enter().
+    \note      Must be called once for each previous stk_cs_enter().
+    \param[in] cs: CriticalSection handle.
 */
-void stk_critical_section_exit(void);
+void stk_cs_exit(stk_cs_t *cs);
 
 // ----- Mutex -----------------------------------------------------------------
 

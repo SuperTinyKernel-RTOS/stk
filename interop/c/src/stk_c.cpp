@@ -645,16 +645,43 @@ void stk_tls_set(void *ptr)
 #endif
 
 // -----------------------------------------------------------------------------
-// Critical Section - Manual Enter/Exit
+// Critical Section
 // -----------------------------------------------------------------------------
-void stk_critical_section_enter(void)
+
+struct stk_cs_t
 {
-    hw::CriticalSection::Enter();
+    hw::CriticalSection handle;
+};
+
+stk_cs_t *stk_cs_create(stk_cs_mem_t *const membuf, uint32_t membuf_size)
+{
+    STK_ASSERT(membuf != nullptr);
+    STK_ASSERT(membuf_size >= sizeof(stk_cs_mem_t));
+    STK_STATIC_ASSERT_N((sizeof(stk_cs_t) <= sizeof(stk_cs_mem_t)),
+        "stk_cs_mem_t is too small to hold stk_cs_t");
+
+    return new (membuf) stk_cs_t();
 }
 
-void stk_critical_section_exit(void)
+void stk_cs_destroy(stk_cs_t *cs)
 {
-    hw::CriticalSection::Exit();
+    STK_ASSERT(cs != nullptr);
+
+    cs->~stk_cs_t();
+}
+
+void stk_cs_enter(stk_cs_t *cs)
+{
+    STK_ASSERT(cs != nullptr);
+
+    cs->handle.Enter();
+}
+
+void stk_cs_exit(stk_cs_t *cs)
+{
+    STK_ASSERT(cs != nullptr);
+
+    cs->handle.Exit();
 }
 
 // =============================================================================

@@ -36,6 +36,8 @@ stk_mutex_t *stk_mutex_create(stk_mutex_mem_t *const membuf, uint32_t membuf_siz
 {
     STK_ASSERT(membuf != nullptr);
     STK_ASSERT(membuf_size >= sizeof(stk_mutex_t));
+    STK_STATIC_ASSERT_N((sizeof(stk_mutex_t) <= sizeof(stk_mutex_mem_t)),
+        "stk_mutex_mem_t is too small to hold stk_mutex_t");
 
     stk_mutex_t *result = nullptr;
     if (membuf_size >= sizeof(stk_mutex_t))
@@ -94,6 +96,8 @@ stk_spinlock_t *stk_spinlock_create(stk_spinlock_mem_t *const membuf, uint32_t m
 {
     STK_ASSERT(membuf != nullptr);
     STK_ASSERT(membuf_size >= sizeof(stk_spinlock_t));
+    STK_STATIC_ASSERT_N((sizeof(stk_spinlock_t) <= sizeof(stk_spinlock_mem_t)),
+        "stk_spinlock_mem_t is too small to hold stk_spinlock_t");
 
     stk_spinlock_t *result = nullptr;
     if (membuf_size >= sizeof(stk_spinlock_t))
@@ -142,6 +146,8 @@ stk_cv_t *stk_cv_create(stk_cv_mem_t *const membuf, uint32_t membuf_size)
 {
     STK_ASSERT(membuf != nullptr);
     STK_ASSERT(membuf_size >= sizeof(stk_cv_t));
+    STK_STATIC_ASSERT_N((sizeof(stk_cv_t) <= sizeof(stk_cv_mem_t)),
+        "stk_cv_mem_t is too small to hold stk_cv_t");
 
     stk_cv_t *result = nullptr;
     if (membuf_size >= sizeof(stk_cv_t))
@@ -199,6 +205,8 @@ stk_event_t *stk_event_create(stk_event_mem_t *const membuf,
 {
     STK_ASSERT(membuf != nullptr);
     STK_ASSERT(membuf_size >= sizeof(stk_event_t));
+    STK_STATIC_ASSERT_N((sizeof(stk_event_t) <= sizeof(stk_event_mem_t)),
+        "stk_event_mem_t is too small to hold stk_event_t");
 
     stk_event_t *result = nullptr;
     if (membuf_size >= sizeof(stk_event_t))
@@ -273,6 +281,8 @@ stk_sem_t *stk_sem_create(stk_sem_mem_t *const membuf,
     STK_ASSERT(membuf != nullptr);
     STK_ASSERT(membuf_size >= sizeof(stk_sem_t));
     STK_ASSERT(initial_count < (max_count == 0U ? Semaphore::COUNT_MAX : max_count));
+    STK_STATIC_ASSERT_N((sizeof(stk_sem_t) <= sizeof(stk_sem_mem_t)),
+        "stk_sem_mem_t is too small to hold stk_sem_t");
 
     stk_sem_t *result = nullptr;
     if (membuf_size >= sizeof(stk_sem_t))
@@ -337,6 +347,8 @@ stk_ef_t *stk_ef_create(stk_ef_mem_t *const membuf,
 {
     STK_ASSERT(membuf != nullptr);
     STK_ASSERT(membuf_size >= sizeof(stk_ef_t));
+    STK_STATIC_ASSERT_N((sizeof(stk_ef_t) <= sizeof(stk_ef_mem_t)),
+        "stk_ef_mem_t is too small to hold stk_ef_t");
 
     stk_ef_t *result = nullptr;
     if (membuf_size >= sizeof(stk_ef_t))
@@ -415,6 +427,8 @@ stk_pipe_t *stk_pipe_create(stk_pipe_mem_t *const membuf,
     STK_ASSERT(element_size >= 1U);
     STK_ASSERT(membuf_size  >= sizeof(stk_pipe_t));
     STK_ASSERT(buf_size     >= capacity * element_size);
+    STK_STATIC_ASSERT_N((sizeof(stk_pipe_t) <= sizeof(stk_pipe_mem_t)),
+        "stk_pipe_mem_t is too small to hold stk_pipe_t");
 
     stk_pipe_t *result = nullptr;
     if ((membuf_size >= sizeof(stk_pipe_t)) && (buf_size >= (capacity * element_size)))
@@ -592,6 +606,8 @@ stk_msgq_t *stk_msgq_create(stk_msgq_mem_t *const membuf,
     STK_ASSERT(msg_size >= 1U);
     STK_ASSERT(membuf_size >= sizeof(stk_msgq_t));
     STK_ASSERT(buf_size >= capacity * msg_size);
+    STK_STATIC_ASSERT_N((sizeof(stk_msgq_t) <= sizeof(stk_msgq_mem_t)),
+        "stk_msgq_mem_t is too small to hold stk_msgq_t");
 
     stk_msgq_t *result = nullptr;
     if ((membuf_size >= sizeof(stk_msgq_t)) && (buf_size >= (capacity * msg_size)))
@@ -765,6 +781,8 @@ stk_rwmutex_t *stk_rwmutex_create(stk_rwmutex_mem_t *const membuf, uint32_t memb
 {
     STK_ASSERT(membuf != nullptr);
     STK_ASSERT(membuf_size >= sizeof(stk_rwmutex_t));
+    STK_STATIC_ASSERT_N((sizeof(stk_rwmutex_t) <= sizeof(stk_rwmutex_mem_t)),
+        "stk_rwmutex_mem_t is too small to hold stk_rwmutex_t");
 
     stk_rwmutex_t *result = nullptr;
     if (membuf_size >= sizeof(stk_rwmutex_t))

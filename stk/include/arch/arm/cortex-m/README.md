@@ -251,7 +251,7 @@ STK allocates per-core kernel context instances indexed by core ID. On Cortex-M 
 
 | Define | Default | Description |
 |--------|---------|-------------|
-| `STK_CRITICAL_SECTION_NESTINGS_MAX` | `16` | Maximum allowable nesting depth for `hw::CriticalSection`. Exceeding this triggers `KERNEL_PANIC_CS_NESTING_OVERFLOW`. |
+| `stk_cs_NESTINGS_MAX` | `16` | Maximum allowable nesting depth for `hw::CriticalSection`. Exceeding this triggers `KERNEL_PANIC_CS_NESTING_OVERFLOW`. |
 | `STK_SEGGER_SYSVIEW` | `0` | Enable SEGGER SystemView trace integration. Automatically enables `STK_NEED_TASK_ID` and `STK_SYNC_DEBUG_NAMES`. When enabled, `Initialize()` calls `SEGGER_SYSVIEW_Init()` and the SysTick/PendSV handlers emit trace records. |
 | `STK_SYNC_DEBUG_NAMES` | `0` | Attach string names to synchronization primitives for trace tools. |
 

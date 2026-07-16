@@ -119,6 +119,7 @@ extern "C" void isr_hardfault(void)
     }
 }
 
+extern "C" {
 extern char __nsc_start[];        // = ORIGIN(FLASH_NSC)
 extern char __nsc_end[];          // = ORIGIN(FLASH_NSC) + LENGTH(FLASH_NSC)
 extern char __ns_ram_start[];     // = ORIGIN(RAM_NS)
@@ -127,6 +128,7 @@ extern char __ns_flash_start[];   // = __nsc_end
 extern char __ns_flash_end[];     // = ORIGIN(FLASH_NS) + LENGTH(FLASH_NS)
 extern char __ns_scratch_start[]; // = ORIGIN = 0x2007E000
 extern char __ns_scratch_end[];   // = ORIGIN = 0x2007F000
+}
 
 static void Configure_SAU(void)
 {

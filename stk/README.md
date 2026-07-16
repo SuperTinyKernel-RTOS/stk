@@ -101,7 +101,7 @@ This is the lowest-level header. It includes `stk_config.h` first, making all us
 - **Assertion macros** — `STK_ASSERT(cond)` (debug), `STK_STATIC_ASSERT(cond)`, `STK_STATIC_ASSERT_DESC(cond, msg)`.
 - **Feature-flag defaults** — `STK_TICKLESS_IDLE` (0), `STK_TICKLESS_USE_ARM_DWT` (1), `STK_TICKLESS_TICKS_MAX` (1000), `STK_ARCH_CPU_COUNT` (1), `STK_SEGGER_SYSVIEW` (0), `STK_SYNC_DEBUG_NAMES` (0).
 - **Stack constants** — `STK_STACK_SIZE_MIN` (arch-dependent: 32 on Cortex-M, 256–512+ on RISC-V), `STK_SLEEP_TRAP_STACK_SIZE`, `STK_STACK_MEMORY_ALIGN`, `STK_STACK_MEMORY_FILLER`.
-- **Critical section limit** — `STK_CRITICAL_SECTION_NESTINGS_MAX` (16).
+- **Critical section limit** — `stk_cs_NESTINGS_MAX` (16).
 - **Utility macros** — `STK_NONCOPYABLE_CLASS(TYPE)`, `STK_UNUSED(X)`, `STK_ALLOCATE_COUNT(MODE,FLAG,ONTRUE,ONFALSE)`, endian index macros `STK_ENDIAN_IDX_HI`/`STK_ENDIAN_IDX_LO`.
 - **`stk::Min`/`Max`** — constexpr compile-time min/max templates.
 
@@ -687,7 +687,7 @@ All macros below can be defined in `stk_config.h`. Macros marked **required** mu
 | `STK_STACK_SIZE_MIN`                | arch-dependent       | Minimum stack size in `Word` elements                       |
 | `STK_SLEEP_TRAP_STACK_SIZE`         | `STK_STACK_SIZE_MIN` | Sleep trap stack size                                       |
 | `STK_STACK_MEMORY_ALIGN`            | arch-dependent       | Required stack buffer alignment (bytes)                     |
-| `STK_CRITICAL_SECTION_NESTINGS_MAX` | `16`                 | Maximum critical section nesting depth                      |
+| `stk_cs_NESTINGS_MAX` | `16`                 | Maximum critical section nesting depth                      |
 | `STK_SEGGER_SYSVIEW`                | `0`                  | `1` = enable SEGGER SystemView tracing                      |
 | `STK_SYNC_DEBUG_NAMES`              | `0`                  | `1` = enable debug names for sync objects                   |
 | `STK_SYSTICK_HANDLER`               | `SysTick_Handler`    | ARM: SysTick ISR symbol name                                |

@@ -623,7 +623,7 @@ private:
 
             // Atomically switch the active LED.
             {
-                stk::hw::CriticalSection::ScopedLock __guard;
+                stk::hw::ScopedCriticalSection __guard;
                 SwitchOnLED(static_cast<LedId>(m_task_id));
             }
 

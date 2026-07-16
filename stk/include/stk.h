@@ -177,7 +177,7 @@ protected:
         /*! \brief  Check whether this task is currently sleeping (waiting for a tick or a wake event).
             \return \c true if m_time_sleep < 0 (negative value encodes remaining sleep ticks).
         */
-        bool IsSleeping() const override { return (m_time_sleep < 0); }
+        __stk_forceinline bool IsSleeping() const override { return (m_time_sleep < 0); }
 
         /*! \brief  Get task identifier.
             \return TId derived from the bound ITask pointer address (unique per task instance).
@@ -540,7 +540,7 @@ protected:
             m_stack.access_mode = user_task->GetAccessMode();
 
             // set task id for tracking purpose
-        #if STK_NEED_TASK_ID
+        #if STK_STACK_NEEDS_TASK_ID
             m_stack.tid = user_task->GetId();
         #endif
 
@@ -763,8 +763,8 @@ protected:
         Stack             m_stack;      //!< Stack descriptor (SP register value + access mode + optional tid).
         volatile uint32_t m_state;      //!< Bitmask of EStateFlags. Written by task thread, read/cleared by kernel tick.
         volatile Timeout  m_time_sleep; //!< Sleep countdown: negative while sleeping (absolute value = ticks remaining), zero when awake.
-        SrtInfo           m_srt[STK_ALLOCATE_COUNT<TMode, KERNEL_HRT, 0U, 1U>::Value];       //!< SRT metadata. Zero-size (no memory) in KERNEL_HRT mode.
-        HrtInfo           m_hrt[STK_ALLOCATE_COUNT<TMode, KERNEL_HRT, 1U, 0U>::Value];       //!< HRT metadata. Zero-size (no memory) in non-HRT mode.
+        SrtInfo           m_srt[STK_ALLOCATE_COUNT<TMode, KERNEL_HRT, 0U, 1U>::Value]; //!< SRT metadata. Zero-size (no memory) in KERNEL_HRT mode.
+        HrtInfo           m_hrt[STK_ALLOCATE_COUNT<TMode, KERNEL_HRT, 1U, 0U>::Value]; //!< HRT metadata. Zero-size (no memory) in non-HRT mode.
         Weight            m_rt_weight[STK_ALLOCATE_COUNT<TStrategy::WEIGHT_API, 1U, 1U, 0U>::Value]; //!< Run-time weight for weighted-round-robin scheduling. Zero-size for unweighted strategies.
         WaitObject        m_wait_obj[STK_ALLOCATE_COUNT<TMode, KERNEL_SYNC, 1U, 0U>::Value]; //!< Embedded wait object for synchronization. Zero-size (no memory) if KERNEL_SYNC is not set.
     };
@@ -863,6 +863,25 @@ protected:
             {
                 STK_ASSERT(false);
                 return WAIT_RESULT_FAIL;
+            }
+        }
+
+        void Wake(ISyncObject *sobj, bool all)
+        {
+            if __stk_constexpr_cpp17 (IsSyncMode())
+            {
+                if (all)
+                {
+                    ISyncObject::WakeAll(sobj->GetWaitList());
+                }
+                else
+                {
+                    ISyncObject::WakeOne(sobj->GetWaitList());
+                }
+            }
+            else
+            {
+                STK_ASSERT(false);
             }
         }
 
@@ -1120,7 +1139,7 @@ public:
             STK_ASSERT(user_task != nullptr);
             STK_ASSERT(IsStarted());
 
-            const hw::CriticalSection::ScopedLock cs_;
+            const hw::ScopedCriticalSection cs_;
 
             KernelTask *const task = FindTaskByUserTask(user_task);
             if (task != nullptr)
@@ -1149,7 +1168,7 @@ public:
 
         // avoid race with OnTick
         {
-            const hw::CriticalSection::ScopedLock cs_;
+            const hw::ScopedCriticalSection cs_;
 
             KernelTask *const task = FindTaskByUserTask(user_task);
             STK_ASSERT(task != nullptr);
@@ -1183,7 +1202,7 @@ public:
         STK_ASSERT(user_task != nullptr);
 
         // avoid race with OnTick
-        const hw::CriticalSection::ScopedLock cs_;
+        const hw::ScopedCriticalSection cs_;
 
         KernelTask *const task = FindTaskByUserTask(user_task);
         STK_ASSERT(task != nullptr);
@@ -1204,7 +1223,7 @@ public:
        const size_t limit = Min(tasks.GetSize(), TASKS_MAX);
 
        // avoid race with OnTick
-       const hw::CriticalSection::ScopedLock cs_;
+       const hw::ScopedCriticalSection cs_;
 
        for (size_t i = 0U; i < limit; ++i)
        {
@@ -1228,7 +1247,7 @@ public:
         const size_t limit = Min(user_tasks.GetSize(), TASKS_MAX);
 
         // avoid race with OnTick
-        const hw::CriticalSection::ScopedLock cs_;
+        const hw::ScopedCriticalSection cs_;
 
         for (size_t i = 0U; i < limit; ++i)
         {
@@ -1350,7 +1369,7 @@ protected:
 
             SleepTrapStackMemory wrapper(&sleep.memory);
             sleep.stack.access_mode = ACCESS_PRIVILEGED;
-        #if STK_NEED_TASK_ID
+        #if STK_STACK_NEEDS_TASK_ID
             sleep.stack.tid  = SYS_TASK_ID_SLEEP;
         #endif
 
@@ -1364,7 +1383,7 @@ protected:
 
             ExitTrapStackMemory wrapper(&exit.memory);
             exit.stack.access_mode = ACCESS_PRIVILEGED;
-        #if STK_NEED_TASK_ID
+        #if STK_STACK_NEEDS_TASK_ID
             exit.stack.tid  = SYS_TASK_ID_EXIT;
         #endif
 
@@ -1727,7 +1746,7 @@ protected:
 
         // make change to HRT state and sleep time atomic
         {
-            const hw::CriticalSection::ScopedLock cs_;
+            const hw::ScopedCriticalSection cs_;
 
             if __stk_constexpr_cpp17 (IsHrtMode())
             {
@@ -1753,7 +1772,7 @@ protected:
 
         // make change to HRT state and sleep time atomic
         {
-            const hw::CriticalSection::ScopedLock cs_;
+            const hw::ScopedCriticalSection cs_;
 
             // calculate signed delta (handles wrap-around correctly)
             const Ticks delta = timestamp - m_service.m_ticks;
@@ -1779,7 +1798,7 @@ protected:
         KernelTask *const task = FindTaskByUserTask(GetUserTaskFromTid(task_id));
         if (task != nullptr)
         {
-            const hw::CriticalSection::ScopedLock cs_;
+            const hw::ScopedCriticalSection cs_;
 
             if (task->IsSleeping())
             {
@@ -2342,7 +2361,7 @@ protected:
     */
     void ScheduleAddTask()
     {
-        const hw::CriticalSection::ScopedLock cs_;
+        const hw::ScopedCriticalSection cs_;
         m_request |= REQ_ADD_TASK;
     }
 

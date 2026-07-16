@@ -23,6 +23,9 @@
 
 #define STK_MAX_NS_TASKS      (4U)
 
+#define STK_MPU               (1)
+#define STK_MPU_STACK_GUARD   (1)
+
 // Define _STK_CPU_COUNT as 2 to use STK on both CPU cores or on CPU1, if 1 then STK can be hosted on CPU0 only
 #define STK_ARCH_CPU_COUNT    (2U)
 #define STK_ARCH_GET_CPU_ID() (*(uint32_t *)(SIO_BASE + SIO_CPUID_OFFSET)) // see get_core_num() in pico/platform.h

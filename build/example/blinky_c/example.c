@@ -26,6 +26,10 @@ static const uint32_t FLAGS_ALL[] = {
 static stk_ef_mem_t g_TaskFlagsMem;
 static stk_ef_t    *g_TaskFlags;
 
+// CriticalSection object and its backing memory
+static stk_cs_mem_t g_CritSecMem;
+static stk_cs_t    *g_CritSec;
+
 // Stack of the tasks
 STK_DEFINE_STACK_POOL(g_Stack, STK_C_KERNEL_MAX_TASKS, STACK_SIZE);
 
@@ -51,9 +55,9 @@ void TaskFunc(void *arg)
 
         // change LED state
         {
-            stk_critical_section_enter();
+            stk_cs_enter(g_CritSec);
             Led_SwitchOnExclusive((LedId)a->task_id);
-            stk_critical_section_exit();
+            stk_cs_exit(g_CritSec);
         }
 
         // sleep 1s and delegate work to the next task
@@ -79,6 +83,10 @@ void RunExample()
     // create EventFlags with the RED task's flag pre-set so it runs first
     g_TaskFlags = stk_ef_create(&g_TaskFlagsMem, sizeof(g_TaskFlagsMem), FLAGS_ALL[LED_RED]);
     STK_C_ASSERT(g_TaskFlags != NULL);
+
+    // create CriticalSection used to guard exclusive LED access from tasks
+    g_CritSec = stk_cs_create(&g_CritSecMem, sizeof(g_CritSecMem));
+    STK_C_ASSERT(g_CritSec != NULL);
 
     // allocate scheduling kernel (KERNEL_SYNC required for EventFlags)
     stk_kernel_t *k = stk_kernel_create(0);

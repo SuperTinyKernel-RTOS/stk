@@ -68,7 +68,7 @@ enum EKernelPanicId : uint32_t
     KERNEL_PANIC_ASSERT              = 3U,  //!< Internal assertion failed (maps from STK_ASSERT).
     KERNEL_PANIC_HRT_HARD_FAULT      = 4U,  //!< Kernel running in KERNEL_HRT mode reported deadline failure of the task.
     KERNEL_PANIC_CPU_EXCEPTION       = 5U,  //!< CPU reported an exception and halted execution.
-    KERNEL_PANIC_CS_NESTING_OVERFLOW = 6U,  //!< Critical section nesting limit exceeded: violation of STK_CRITICAL_SECTION_NESTINGS_MAX.
+    KERNEL_PANIC_CS_NESTING_OVERFLOW = 6U,  //!< Critical section nesting limit exceeded: violation of stk_cs_NESTINGS_MAX.
     KERNEL_PANIC_UNKNOWN_SVC         = 7U,  //!< Unknown service command received by SVC handler.
     KERNEL_PANIC_BAD_STATE           = 8U,  //!< Kernel entered unexpected (bad) state.
     KERNEL_PANIC_BAD_MODE            = 9U,  //!< Kernel is in bad/unsupported mode for the current operation.
@@ -79,7 +79,7 @@ enum EKernelPanicId : uint32_t
     \brief Stack type.
     \see   IPlatform::InitStack
 */
-enum EStackType
+enum EStackType : uint8_t
 {
     STACK_USER_TASK = 0, //!< Stack of the user task.
     STACK_SLEEP_TRAP,    //!< Stack of the Sleep trap.
@@ -89,7 +89,7 @@ enum EStackType
 /*! \enum  EConsts
     \brief Constants.
 */
-enum EConsts
+enum EConsts : uint32_t
 {
     PERIODICITY_MAX      = 99000,             //!< Maximum periodicity (microseconds), 99 milliseconds (note: this value is the highest working on a real hardware and QEMU).
     PERIODICITY_DEFAULT  = 1000,              //!< Default periodicity (microseconds), 1 millisecond.
@@ -99,7 +99,7 @@ enum EConsts
 /*! \enum  ESystemTaskId
     \brief System task id.
 */
-enum ESystemTaskId
+enum ESystemTaskId : uint32_t
 {
     SYS_TASK_ID_SLEEP = 0xFFFFFFFF, //!< Sleep trap.
     SYS_TASK_ID_EXIT  = 0xFFFFFFFE  //!< Exit trap.
@@ -109,7 +109,7 @@ enum ESystemTaskId
     \brief Trace event identifiers for tracing task suspension and resume with debugging tools (e.g. SEGGER SystemView).
     \note  Values are offset by 1000 to avoid collisions with the host tool's built-in system event range (0–999).
 */
-enum ETraceEventId
+enum ETraceEventId : uint32_t
 {
     TRACE_EVENT_UNKNOWN = 0,        //!< Unknown / uninitialized trace event.
     TRACE_EVENT_SWITCH  = 1000 + 1, //!< Task context switch event (task became active).
@@ -119,7 +119,7 @@ enum ETraceEventId
 /*! \enum  EWaitResult
     \brief Wait result (see \c IKernelService::Wait).
 */
-enum EWaitResult
+enum EWaitResult : int8_t
 {
     WAIT_RESULT_FAIL    = -1, //!< IKernelService::Wait returned with error without waiting.
     WAIT_RESULT_SIGNAL  = 0,  //!< The wake was caused by a signal.
@@ -275,33 +275,50 @@ private:
     size_t m_size; //!< Total number of elements in the view.
 };
 
-/*! \class StackMemoryDef
-    \brief Stack memory type definition.
-    \note  This descriptor provides an encapsulated type only on basis of which you can declare
-           your memory array variable.
-
-    Usage example:
-    \code
-    StackMemoryDef<128>::Type my_memory_array;
-    \endcode
+/*! \class   MpuRegion
+    \brief   MPU region descriptor.
+    \warning Referenced by driver, member offsets must not change.
 */
-template <size_t TStackSize> struct StackMemoryDef
+#if STK_MPU
+struct MpuRegion
 {
-    enum { SIZE = TStackSize };
-
-    /*! \typedef Type
-        \brief   Stack memory type.
-    */
-    typedef __stk_aligned(STK_STACK_MEMORY_ALIGN) Word Type[TStackSize];
+    Word addr; //!< Base address (ARMv7-M/ARMv8-M MPU: MPU->RBAR value).
+    Word attr; //!< Address attributes (ARMv7-M: MPU->RASR value; ARMv8-M: MPU->RLAR value).
 };
+#endif
+
+/*! \class   TaskMpu
+    \brief   MPU descriptor of the task.
+    \warning Referenced by driver, member offsets must not change.
+*/
+#if STK_MPU && STK_MPU_STACK_GUARD
+struct TaskMpu
+{
+    /*! \var     TASK_MPU_REGIONS
+        \brief   Number of MPU regions per task.
+    */
+    static constexpr uint8_t NUM_REGIONS = 4;
+
+    //! Address of (&MPU->RBAR or &MPU_NS->RBAR).
+    //! Offset 8 of the Stack descriptor. See \a STK_ASM_BLOCK_MPU_STACK_GUARD.
+    Word mpu_start_addr;
+
+    //! Array of MPU regions of size NUM_REGIONS.
+    MpuRegion region[NUM_REGIONS];
+};
+#endif
 
 /*! \class Stack
     \brief Stack descriptor.
+    \note  Fields marked with 'Offset' have static position in the structure and can't move (driver dependent).
 */
 struct Stack
 {
-    Word        SP;          //!< Stack Pointer (SP) register (note: must be the first entry in this struct). Offset is fixed at 0 bytes, required by the driver.
-    uint32_t    access_mode; //!< Bitfield with hardware access mode of the task (see \a EAccessMode). Offset is fixed at 4 bytes, required by the driver.
+    Word        SP;          //!< Offset 0: Stack Pointer (SP) register.
+    uint32_t    access_mode; //!< Offset 4: Bitfield with hardware access mode of the task (see \a EAccessMode).
+#if STK_MPU && STK_MPU_STACK_GUARD
+    TaskMpu     mpu;         //!< Offset 8: MPU regions of the task.
+#endif
 #if STK_TLS && !STK_TLS_PREFER_REGISTER
     Word        tls;         //!< Thread-local storage if not using ARM Cortex-M R9 register for a fast inline access to TLS.
 #endif
@@ -553,6 +570,13 @@ public:
         }
     }
 
+    /*! \brief     Get list of tasks blocked on this object.
+    */
+    IWaitObject::ListHeadType &GetWaitList()
+    {
+        return m_wait_list;
+    }
+
 protected:
     /*! \brief     Constructor.
         \note      Can not be standalone object, must be inherited by the implementation.
@@ -571,14 +595,7 @@ protected:
         \note      Does nothing if no tasks are currently waiting.
         \note      Must be called inside the critical section (see \a hw::CriticalSection, \a sync::ScopedCrticalSection).
     */
-    virtual void WakeOne()
-    {
-    #ifdef _STK_CORTEX_M_TRUSTZONE_NON_SECURE
-        NSC_stk_ISyncObject_WakeOne(this);
-    #else
-        WakeOne(m_wait_list);
-    #endif
-    }
+    virtual void WakeOne();
 
     /*! \brief     Wake all tasks currently in the wait list.
         \note      Each woken task is notified with timeout=false, indicating a successful signal
@@ -586,21 +603,9 @@ protected:
         \note      Does nothing if no tasks are currently waiting.
         \note      Must be called inside the critical section (see \a hw::CriticalSection, \a sync::ScopedCrticalSection).
     */
-    virtual void WakeAll()
-    {
-    #ifdef _STK_CORTEX_M_TRUSTZONE_NON_SECURE
-        NSC_stk_ISyncObject_WakeAll(this);
-    #else
-        WakeAll(m_wait_list);
-    #endif
-    }
+    virtual void WakeAll();
 
-    IWaitObject::ListHeadType &GetWaitList()
-    {
-        return m_wait_list;
-    }
-
-    IWaitObject::ListHeadType m_wait_list; //!< tasks blocked on this object
+    IWaitObject::ListHeadType m_wait_list; //!< Tasks blocked on this object.
 };
 
 /*! \class IMutex
@@ -688,6 +693,60 @@ public:
         \return    Pointer to the Secure stack memory.
     */
     virtual IStackMemory *GetSecureStackMemory() { return nullptr; }
+
+    /*! \brief     Get up to 3 application-defined MPU regions for this task.
+        \details   When \c STK_MPU_STACK_GUARD is enabled, each task owns 4 hardware
+                   MPU region slots. Slot 0 is always the automatic stack guard,
+                   computed by the driver from the task's own stack memory
+                   (see IStackMemory::GetStack/GetStackSize). This hook supplies the
+                   remaining 3 slots, letting an application additionally sandbox a
+                   task to e.g. a private data buffer, a specific peripheral block, or
+                   a shared IPC region -- on top of its stack guard.
+        \param[out] out_count: Number of valid entries returned (0..3). Set to 0 by
+                   the default implementation, meaning no extra regions are configured.
+        \return    Pointer to an array of up to 3 region descriptors, or \c nullptr if
+                   \a out_count is 0. Array element \c i is applied at task-relative
+                   region index \a i \c +1 (i.e. the 3 slots following the stack guard).
+        \note      Optional. Only consulted when \c STK_MPU_STACK_GUARD is enabled; a
+                   no-op on platforms/builds without MPU stack-guard support.
+        \note      Read once, when the task is bound via Kernel::AddTask() (through
+                   IPlatform::InitStack()), not re-evaluated on every context switch.
+                   Return a pointer with static/member storage duration (e.g. a
+                   \c static const array); a stack-local temporary is invalid once this
+                   function returns.
+        \warning   Any \c region_idx set by the application on the returned entries is
+                   ignored, the driver always assigns them to task-relative slots
+                   +1..+3 by array position. Only \c addr / \c size / \c access_perm /
+                   \c mem_type / \c exec are consumed.
+        \warning   \a out_count greater than 3 is clamped by the driver (STK_ASSERT
+                   fires in debug builds); only the first 3 entries are ever applied.
+        \code
+        class MyTask : public stk::Task<256, stk::ACCESS_USER>
+        {
+            static constexpr stk::MpuRegionConfig s_extra_regions[] =
+            {
+                { .addr = MY_BUFFER_ADDR, .size = MY_BUFFER_SIZE,
+                  .access_perm = stk::hw::mpu::ACCESS_FULL,
+                  .mem_type    = stk::hw::mpu::TYPE_NORMAL_CACHEABLE,
+                  .exec        = stk::hw::mpu::EXEC_NEVER },
+            };
+
+            const stk::MpuRegionConfig *GetMpuRegions(uint8_t &out_count) override
+            {
+                out_count = 1U;
+                return s_extra_regions;
+            }
+
+            void Run() override { ... }
+        };
+        \endcode
+        \see       TaskMpu::Configure, IPlatform::InitStack
+    */
+    virtual const struct MpuRegionConfig *GetMpuRegions(uint8_t &out_count)
+    {
+        out_count = 0U;
+        return nullptr;
+    }
 
     /*! \brief     Get hardware access mode of the user task.
     */
@@ -930,13 +989,36 @@ public:
         /*! \brief  Called by the Kernel when it is entering a sleep mode.
             \return True if event is handled otherwise False to let driver handle it.
         */
-        virtual bool OnSleep(Timeout sleep_ticks) { STK_UNUSED(sleep_ticks); return false; }
+        virtual bool OnSleep(Timeout sleep_ticks)
+        {
+        	STK_UNUSED(sleep_ticks);
+        	return false;
+        }
 
         /*! \brief  Called by Kernel when hard fault happens.
             \note   Normally called by Kernel when one of the scheduled tasks missed its deadline (see stk::KERNEL_HRT, IPlatform::HardFault).
             \return True if event is handled otherwise False to let driver handle it.
         */
-        virtual bool OnHardFault() { return false; }
+        virtual bool OnHardFault()
+        {
+        	return false;
+        }
+
+        virtual const struct MpuRegionConfig *OnConfigureMpu(uint8_t &out_count)
+        {
+            out_count = 0U;
+            return nullptr;
+        }
+
+        /*! \brief  Called by platform driver when memory management exception occurred.
+            \note   Normally called by Kernel when one of the scheduled tasks missed its deadline (see stk::KERNEL_HRT, IPlatform::HardFault).
+            \return True if event is handled otherwise False to let driver handle it.
+        */
+        virtual bool OnExceptionMemManage(TId tid)
+        {
+        	STK_UNUSED(tid);
+        	return false;
+        }
     };
 
     /*! \brief     Initialize scheduler's context.
@@ -1366,7 +1448,7 @@ class IKernelService
 public:
     /*! \brief     Get CPU-local instance of the kernel service.
     */
-    static IKernelService *GetInstance();
+	static IKernelService *GetInstance();
 
     /*! \brief     Get thread Id of the currently running task.
         \return    Thread Id.
@@ -1450,6 +1532,8 @@ public:
     */
     virtual EWaitResult Wait(ISyncObject *sobj, IMutex *mutex, Timeout timeout) = 0;
 
+    virtual void Wake(ISyncObject *sobj, bool all) = 0;
+
     /*! \brief     Suspend scheduling.
         \return    Number of ticks available for the suspension period, as determined by the
                    nearest pending wake-up. The caller may program a hardware timer with
@@ -1493,6 +1577,24 @@ protected:
     */
     ~IKernelService() = default;
 };
+
+inline void ISyncObject::WakeOne()
+{
+#ifdef _STK_CORTEX_M_TRUSTZONE_NON_SECURE
+    NSC_stk_ISyncObject_WakeOne(this);
+#else
+    IKernelService::GetInstance()->Wake(this, false);
+#endif
+}
+
+inline void ISyncObject::WakeAll()
+{
+#ifdef _STK_CORTEX_M_TRUSTZONE_NON_SECURE
+    NSC_stk_ISyncObject_WakeAll(this);
+#else
+    IKernelService::GetInstance()->Wake(this, true);
+#endif
+}
 
 } // namespace stk
 

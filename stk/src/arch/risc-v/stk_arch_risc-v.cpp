@@ -987,7 +987,7 @@ static struct Context final : public PlatformContext
         }
 
         // increase nesting count within a limit
-        if (++m_csu_nesting > STK_CRITICAL_SECTION_NESTINGS_MAX)
+        if (++m_csu_nesting > stk_cs_NESTINGS_MAX)
         {
             // invariant violated: exceeded max allowed number of recursions
             STK_KERNEL_PANIC(KERNEL_PANIC_CS_NESTING_OVERFLOW);
@@ -2153,9 +2153,9 @@ bool stk::hw::IsInsideISR()
     return HW_IsHandlerMode();
 }
 
-bool stk::hw::IsContextPrivileged()
+bool stk::hw::IsPrivilegedContext()
 {
-    // Always Privileged on RISC-V.
+    // always Privileged on RISC-V
     return true;
 }
 

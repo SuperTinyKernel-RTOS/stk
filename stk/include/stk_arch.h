@@ -134,11 +134,11 @@ static constexpr T *WordToPtr(Word value) noexcept
 */
 bool IsInsideISR();
 
-/*! \brief     Check if caller is Privileged.
+/*! \brief     Check if caller context is Privileged.
     \return    \c true if Privileged; \c false otherwise.
     \note      ISR-safe itself: may be called from any context.
 */
-bool IsContextPrivileged();
+bool IsPrivilegedContext();
 
 // Some architectures (e.g. RISC-V with the 'tp' register) can implement TLS access as a
 // single inline instruction. When the back-end header defines STK_INLINE_TLS,
@@ -364,15 +364,30 @@ public:
     public:
         /*! \brief Enter the critical section.
         */
-        explicit ScopedLock() { CriticalSection::Enter(); }
+        explicit ScopedLock(CriticalSection &cs) : m_cs(cs)
+        {
+            m_cs.Enter();
+        }
 
         /*! \brief Exit the critical section.
         */
-        ~ScopedLock() { CriticalSection::Exit(); }
+        ~ScopedLock()
+        {
+            m_cs.Exit();
+        }
 
     private:
         STK_NONCOPYABLE_CLASS(ScopedLock);
+        CriticalSection &m_cs; //!< reference to the critical section instance
     };
+
+    /*! \brief Default constructor.
+    */
+    explicit CriticalSection()
+#ifdef _STK_ARCH_ARM_CORTEX_M
+    : m_npriv_context(false)
+#endif
+    {}
 
     /*! \brief   Enter a critical section.
         \note    Masks local interrupts on this core and, at nesting depth 0, acquires the global
@@ -381,8 +396,9 @@ public:
         \warning Every Enter() must be paired with exactly one Exit(). A missing Exit() leaves
                  local interrupts masked and the global spinlock held permanently, stalling all
                  other cores and the scheduler. Prefer ScopedLock to avoid mismatched pairs.
+        \return  True if privileged context, False otherwise.
     */
-    static void Enter();
+    void Enter();
 
     /*! \brief   Exit a critical section.
         \note    Decrements the nesting counter. When it reaches zero (outermost Exit()), releases
@@ -392,11 +408,49 @@ public:
                  produces undefined behavior (nesting counter underflow, caught by assertion in
                  debug builds).
     */
-    static void Exit();
+    void Exit();
 
 private:
-    explicit CriticalSection() {}
     STK_NONCOPYABLE_CLASS(CriticalSection);
+
+#ifdef _STK_ARCH_ARM_CORTEX_M
+    bool m_npriv_context; //!< true if locking context is non-Privileged, false otherwise
+#endif
+};
+
+/*! \class ScopedCriticalSection
+    \brief RAII instance that enters the critical section on construction and exits it on destruction.
+    \note  Guarantees Exit() is always called even if an early return or exception unwinds the scope.
+
+    Usage example:
+    \code
+    {
+        ScopedCriticalSection lock;
+
+        // shared resource access protected here
+    } // CriticalSection::Exit() called automatically
+    \endcode
+*/
+class ScopedCriticalSection
+{
+public:
+    /*! \brief Enter the critical section.
+    */
+    explicit ScopedCriticalSection() : m_cs()
+    {
+        m_cs.Enter();
+    }
+
+    /*! \brief Exit the critical section.
+    */
+    ~ScopedCriticalSection()
+    {
+        m_cs.Exit();
+    }
+
+private:
+    STK_NONCOPYABLE_CLASS(ScopedCriticalSection);
+    CriticalSection m_cs; //!< instance of critical section
 };
 
 /*! \class     SpinLock
@@ -479,8 +533,9 @@ protected:
 #endif
 };
 
-/*! \class HiResClock
-    \brief High-resolution clock for high-precision measurements.
+/*! \class   HiResClock
+    \brief   High-resolution clock for high-precision measurements.
+    \warning Not available for non-Privileged or non-Secure contexts.
 */
 struct HiResClock
 {

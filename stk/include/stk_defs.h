@@ -121,6 +121,7 @@
            and any library code those tasks call. A single TU compiled without
            the flag is sufficient to cause intermittent, hard-to-reproduce TLS
            corruption.
+    \warning STK_TLS_PREFER_REGISTER=0 is not supported in non-Privileged context.
     \see   STK_TLS, stk::hw::GetTlsPtr, stk::hw::SetTlsPtr
 */
 #ifndef STK_TLS_PREFER_REGISTER
@@ -131,6 +132,20 @@
     #endif
 #endif
 
+/*! \def   STK_MPU
+    \brief If 1, enable MPU support.
+*/
+#ifndef STK_MPU
+    #define STK_MPU (0)
+#endif
+
+/*! \def   STK_MPU_STACK_GUARD
+    \brief If 1, reprogram one MPU region to the active task's own stack on every switch.
+*/
+#ifndef STK_MPU_STACK_GUARD
+    #define STK_MPU_STACK_GUARD (0)
+#endif
+
 /*! \def   STK_STACK_NEEDS_TASK_ID
     \brief When defined as 1, the Stack descriptor (stk::Stack) carries a \c tid field
            used by the SEGGER SystemView trace back-end to identify tasks during context switches.
@@ -139,8 +154,10 @@
            manually; enable STK_SEGGER_SYSVIEW instead.
     \see   STK_SEGGER_SYSVIEW, stk::Stack
 */
-#if STK_SEGGER_SYSVIEW
-    #define STK_STACK_NEEDS_TASK_ID (1)
+#if STK_SEGGER_SYSVIEW || STK_MPU_STACK_GUARD
+	#ifndef STK_STACK_NEEDS_TASK_ID
+		#define STK_STACK_NEEDS_TASK_ID (1)
+	#endif
 #endif
 
 /*! \def   STK_SYNC_DEBUG_NAMES
@@ -473,7 +490,7 @@
     #endif
 #endif
 
-/*! \def   STK_CRITICAL_SECTION_NESTINGS_MAX
+/*! \def   stk_cs_NESTINGS_MAX
     \brief Maximum allowable recursion depth for critical section entry (default: 16).
     \note  Establishes a hard deterministic bound for nested calls to Context::EnterCriticalSection()
            and Context::UnprivEnterCriticalSection(). This limit is mandatory for safety-critical
@@ -483,8 +500,8 @@
            KERNEL_PANIC_CS_NESTING_OVERFLOW to transition the system into a Safe State.
            Can be overridden in stk_config.h based on Worst-Case Stack Usage (WCSU) analysis.
 */
-#ifndef STK_CRITICAL_SECTION_NESTINGS_MAX
-    #define STK_CRITICAL_SECTION_NESTINGS_MAX (16U)
+#ifndef stk_cs_NESTINGS_MAX
+    #define stk_cs_NESTINGS_MAX (16U)
 #endif
 
 /*! \def   STK_ARCH_CPU_COUNT
@@ -631,6 +648,13 @@ struct STK_ALLOCATE_COUNT
     #define STK_UNLIKELY(x) (x)
 #endif
 
+/*! \def       STK_STATIC_ARRAY_SIZE
+    \brief     Get size of the static array.
+    \param[in] ARRAY: Pointer to the array.
+    \warning   Array must be static.
+*/
+#define STK_STATIC_ARRAY_SIZE(ARRAY) static_cast<size_t>(sizeof(ARRAY) / sizeof(ARRAY[0]))
+
 /*! \namespace stk
     \brief     Namespace of STK package.
  */
@@ -640,13 +664,42 @@ namespace stk {
     \note  Arguments are evaluated exactly once, safe for any expression type.
 */
 template <typename T>
-static constexpr T Min(T a, T b) { return ((a < b) ? a : b); }
+static constexpr T Min(T a, T b) noexcept { return ((a < b) ? a : b); }
 
 /*! \brief Compile-time maximum of two values.
     \note  Arguments are evaluated exactly once, safe for any expression type.
 */
 template <typename T>
-static constexpr T Max(T a, T b) { return ((a > b) ? a : b); }
+static constexpr T Max(T a, T b) noexcept { return ((a > b) ? a : b); }
+
+/*! \brief     Count leading zeros.
+    \param[in] value: Value must be non 0.
+    \warning   Undefined behavior if temp_val is 0, but guaranteed safe by upstream checks.
+*/
+static __stk_forceinline uint32_t CountLeadingZeros(const uint32_t value) noexcept
+{
+    uint32_t ret_val;
+    uint32_t temp_val = value;
+
+#if defined(__GNUC__) || defined(__clang__)
+    ret_val = static_cast<uint32_t>(__builtin_clz(temp_val));
+#elif defined(__ICCARM__)
+    ret_val = static_cast<uint32_t>(__CLZ(temp_val));
+#else
+    uint32_t count = 0U;
+
+    // note: Binary search requires temp_val > 0 to resolve to a max of 31 leading zeros safely.
+    if (temp_val <= 0x0000FFFFU) { count += 16U; temp_val = temp_val << 16U; } else { }
+    if (temp_val <= 0x00FFFFFFU) { count += 8U;  temp_val = temp_val << 8U;  } else { }
+    if (temp_val <= 0x0FFFFFFFU) { count += 4U;  temp_val = temp_val << 4U;  } else { }
+    if (temp_val <= 0x3FFFFFFFU) { count += 2U;  temp_val = temp_val << 2U;  } else { }
+    if (temp_val <= 0x7FFFFFFFU) { count += 1U; } else { }
+
+    ret_val = count;
+#endif
+
+    return ret_val;
+}
 
 /*! \namespace stk::util
     \brief     Internal utility namespace containing data structure helpers (linked lists, etc.)

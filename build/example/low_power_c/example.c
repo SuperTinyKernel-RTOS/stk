@@ -76,6 +76,10 @@ static const uint32_t FLAGS_ALL[3] = { FLAG_RED, FLAG_GREEN, FLAG_ORANGE };
 static stk_ef_mem_t  s_TaskFlagsMem;
 static stk_ef_t     *g_TaskFlags;
 
+/* CriticalSection - guards exclusive LED access from the LED tasks */
+static stk_cs_mem_t  s_CritSecMem;
+static stk_cs_t      *g_CritSec;
+
 /* Precise LED timeline - replaces stk::Ticks g_Timeline */
 static stk_tick_t g_Timeline = 0;
 
@@ -419,11 +423,11 @@ static void LedTaskEntry(void *arg)
             continue;
 
         /* Atomically switch the active LED. */
-        stk_critical_section_enter();
+        stk_cs_enter(g_CritSec);
         LedSet(LED_RED,    ctx->task_id == 0);
         LedSet(LED_GREEN,  ctx->task_id == 1);
         LedSet(LED_ORANGE, ctx->task_id == 2);
-        stk_critical_section_exit();
+        stk_cs_exit(g_CritSec);
 
         /* Drift-free 1 s sleep. */
         stk_sleep_until(g_Timeline += stk_ticks_from_ms(1000));
@@ -530,6 +534,9 @@ void RunExample(void)
     /* --- Sync objects ------------------------------------------------------- */
     /* EventFlags: start with RED task's flag set so it runs first. */
     g_TaskFlags = stk_ef_create(&s_TaskFlagsMem, sizeof(s_TaskFlagsMem), FLAG_RED);
+
+    /* CriticalSection: guards exclusive LED access from the LED tasks. */
+    g_CritSec = stk_cs_create(&s_CritSecMem, sizeof(s_CritSecMem));
 
     /* Pipe for AdcSample structs, capacity 8. */
     g_AdcPipe = stk_pipe_create(&s_AdcPipeMem, sizeof(s_AdcPipeMem),

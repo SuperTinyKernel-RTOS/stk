@@ -368,6 +368,8 @@ stk_periodic_trigger_t *stk_periodic_trigger_create(stk_periodic_trigger_mem_t *
 {
     STK_ASSERT(membuf != nullptr);
     STK_ASSERT(membuf_size >= sizeof(stk_periodic_trigger_t));
+    STK_STATIC_ASSERT_N((sizeof(stk_periodic_trigger_t) <= sizeof(stk_periodic_trigger_mem_t)),
+        "stk_periodic_trigger_mem_t is too small to hold stk_periodic_trigger_t");
 
     stk_periodic_trigger_t *result = nullptr;
     if (membuf_size >= sizeof(stk_periodic_trigger_t))

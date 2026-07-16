@@ -141,7 +141,7 @@ These defines are shared with all STK ports and apply normally in simulation:
 
 | Define | Default | Description |
 |--------|---------|-------------|
-| `STK_CRITICAL_SECTION_NESTINGS_MAX` | `16` | Maximum nesting depth for `hw::CriticalSection`. Exceeding this triggers `KERNEL_PANIC_CS_NESTING_OVERFLOW`. |
+| `stk_cs_NESTINGS_MAX` | `16` | Maximum nesting depth for `hw::CriticalSection`. Exceeding this triggers `KERNEL_PANIC_CS_NESTING_OVERFLOW`. |
 | `STK_TICKLESS_IDLE` | `0` | Tickless idle is **not supported** on Win32. The timer thread always fires at the configured interval. Setting this to `1` has no effect. |
 | `STK_SEGGER_SYSVIEW` | `0` | SEGGER SystemView integration. Can be enabled on Win32 for trace-level testing if the SystemView host application is connected. |
 | `STK_SYNC_DEBUG_NAMES` | `0` | Attach string names to synchronization primitives. Useful for debugging simulated task interactions. |

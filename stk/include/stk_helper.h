@@ -19,6 +19,39 @@
 
 namespace stk {
 
+/*! \class StackMemoryDef
+    \brief Stack memory type definition.
+    \note  This descriptor provides an encapsulated type only on basis of which you can declare
+           your memory array variable.
+
+    Usage example:
+    \code
+    StackMemoryDef<128>::Type my_memory_array;
+    \endcode
+*/
+template <size_t TStackSize> struct StackMemoryDef
+{
+    enum EConsts : size_t
+    {
+        SIZE = TStackSize
+    };
+
+    /*! \typedef Type
+        \brief   Stack memory type.
+    */
+#if STK_MPU_STACK_GUARD
+    #if STK_ARCH_ARMV8_M
+        // ARMv8-M alignment is 32 bytes.
+        typedef __stk_aligned(32U) Word Type[SIZE];
+    #else
+        // ARMv7-M alignment is a size of the memory region.
+        typedef __stk_aligned(TStackSize * sizeof(Word)) Word Type[SIZE];
+    #endif
+#else
+    typedef __stk_aligned(STK_STACK_MEMORY_ALIGN) Word Type[SIZE];
+#endif
+};
+
 /*! \class Task
     \brief Partial implementation of the user task.
 
@@ -74,7 +107,7 @@ protected:
     STK_VIRT_DTOR ~Task() = default;
 
 private:
-    typename StackMemoryDef<_StackSize>::Type m_stack; //!< Stack memory region, 16-byte aligned.
+    typename StackMemoryDef<_StackSize>::Type m_stack; //!< Stack memory region, STK_STACK_MEMORY_ALIGN-byte aligned.
 };
 
 /*! \class TaskW
@@ -184,7 +217,7 @@ inline bool ISyncObject::Tick(Timeout elapsed_ticks)
     // each core may call Tick() concurrently for the same Semaphore instance,
     // and ISyncObject::Tick() is not re-entrant.
 #if (STK_ARCH_CPU_COUNT > 1)
-    hw::CriticalSection::ScopedLock cs_;
+    hw::ScopedCriticalSection cs_;
 #endif
 
     IWaitObject *itr = util::DListCast::ListEntryToParent<IWaitObject>(m_wait_list.GetFirst());

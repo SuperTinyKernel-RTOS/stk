@@ -87,7 +87,7 @@ private:
 
             // change active LED
             {
-                stk::hw::CriticalSection::ScopedLock __guard;
+                stk::hw::ScopedCriticalSection __guard;
                 NSC_bsp_Led_SwitchOnExclusive(static_cast<LedId>(m_task_id));
             }
 
