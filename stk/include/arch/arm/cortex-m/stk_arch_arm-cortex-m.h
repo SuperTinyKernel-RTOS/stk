@@ -30,12 +30,58 @@
     #endif
 #endif
 
-/*! \def   STK_CORTEX_M_MPU_TASK_REGION_IDX
-    \brief MPU region index reserved for the per-task stack guard (must not collide
-           with any statically-configured regions, e.g. flash/RAM/peripheral/null-guard).
+/*! \def   STK_TZ_SECURE
+    \brief ARM TrustZone: Defines Secure (1) build.
 */
-#ifndef STK_CORTEX_M_MPU_TASK_REGION_IDX
-    #define STK_CORTEX_M_MPU_TASK_REGION_IDX (4U)
+#if defined(__ARM_FEATURE_CMSE) && (__ARM_FEATURE_CMSE == 3)
+    #define STK_TZ_SECURE (1)
+#else
+    #define STK_TZ_SECURE (0)
+#endif
+
+/*! \def   STK_TZ_NON_SECURE
+    \brief ARM TrustZone: Defines Non-Secure (1) build.
+*/
+#if defined(__ARM_FEATURE_CMSE) && (__ARM_FEATURE_CMSE == 1)
+    #define STK_TZ_NON_SECURE (1)
+#else
+    #define STK_TZ_NON_SECURE (0)
+#endif
+
+/*! \def   __stk_tz_nsc_entry
+    \brief ARM TrustZone: attribute for Non-Secure callable gateway functions.
+    \note  Places the function in the .nsc_entry section mapped to the NSC region.
+*/
+#if defined(__ARM_FEATURE_CMSE) && (__ARM_FEATURE_CMSE == 3)
+    #define __stk_tz_nsc_entry __attribute__((cmse_nonsecure_entry))
+#else
+    #define __stk_tz_nsc_entry
+#endif
+
+/*! \def   __stk_tz_ns_call
+    \brief ARM TrustZone: attribute for calling Non-Secure functions from Secure state.
+*/
+#if defined(__ARM_FEATURE_CMSE) && (__ARM_FEATURE_CMSE == 3)
+    #define __stk_tz_ns_call __attribute__((cmse_nonsecure_call))
+#else
+    #define __stk_tz_ns_call
+#endif
+
+/*! \def   STK_NSC_GATEWAY
+    \brief ARM TrustZone: Non-secure gateway to Secure API.
+*/
+#define STK_TZ_NSC_GATEWAY extern "C" __stk_tz_nsc_entry
+
+// ARM TrustZone Non-Secure binary configuration validation.
+#ifdef _STK_CORTEX_M_TRUSTZONE_NON_SECURE
+#if !STK_TZ_NON_SECURE
+    #error "Do not use -cmse compiler flag for Non-Secure binary compilation!"
+#endif
+#endif
+
+// Task MPU is supported only when MPU is enabled globally.
+#if STK_MPU_STACK_GUARD && !STK_MPU
+    #error "Enable MPU support (STK_MPU=1) to use per-task MPU feature (STK_MPU_STACK_GUARD=1)!"
 #endif
 
 /*! \def   STK_CORTEX_M_MPU_REGIONS_MAX
@@ -44,6 +90,19 @@
 #ifndef STK_CORTEX_M_MPU_REGIONS_MAX
     #define STK_CORTEX_M_MPU_REGIONS_MAX (8U)
 #endif
+
+/*! \def   STK_CORTEX_M_MPU_TASK_REGION_IDX
+    \brief MPU region index reserved for the per-task stack guard (must not collide
+           with any statically-configured regions, e.g. flash/RAM/peripheral/null-guard).
+    \note  Last 4 regions are reserved for a per-task MPU.
+*/
+#ifndef STK_CORTEX_M_MPU_TASK_REGION_IDX
+    #define STK_CORTEX_M_MPU_TASK_REGION_IDX (STK_CORTEX_M_MPU_REGIONS_MAX - 4U)
+#endif
+
+/*! \brief Hardware memory barrier: ensures visibility across cores and bus masters.
+*/
+static __stk_forceinline void __stk_dmb() { __asm volatile("dmb sy" ::: "memory"); }
 
 /*! \file  stk_arch_arm-cortex-m.h
     \brief Platform port for ARM Cortex-M.
@@ -136,6 +195,25 @@ static __stk_forceinline void SetTls(Word tp)
 #endif // STK_TLS_PREFER_REGISTER
 // =============================================================================
 
+namespace hw {
+
+/*! \struct ExceptionFrame
+    \brief  ARMv7-M/ARMv8-M hardware exception frame (8 words, highest address on the stack).
+*/
+struct ExceptionFrame
+{
+    Word R0;
+    Word R1;
+    Word R2;
+    Word R3;
+    Word R12;
+    Word LR;
+    Word PC;
+    Word xPSR;
+};
+
+} // namespace hw
+
 // =============================================================================
 #if STK_MPU
 // =============================================================================
@@ -158,12 +236,12 @@ namespace mpu {
 */
 enum EMpuAccess : uint32_t
 {
-    ACCESS_NONE             = 0xFFFFFFFFU,  //!< Programmatic sentinel to disable this region slot completely, do not apply to hardware register
+    ACCESS_NONE             = 0xFFFFFFFFU,  //!< Programmatic sentinel to disable this region slot completely, do not apply to hardware register.
 
-    ACCESS_PRIV_RW_USER_NO  = (0x0U << 1U), //!< Privileged Read/Write, Unprivileged No Access
-    ACCESS_FULL             = (0x1U << 1U), //!< Privileged Read/Write, Unprivileged Read/Write
-    ACCESS_PRIV_RO_USER_NO  = (0x2U << 1U), //!< Privileged Read-Only, Unprivileged No Access
-    ACCESS_PRIV_RO_USER_RO  = (0x3U << 1U)  //!< Privileged Read-Only, Unprivileged Read-Only
+    ACCESS_PRIV_RW_USER_NO  = (0x0U << 1U), //!< Privileged Read/Write, Unprivileged No Access.
+    ACCESS_FULL             = (0x1U << 1U), //!< Privileged Read/Write, Unprivileged Read/Write.
+    ACCESS_PRIV_RO_USER_NO  = (0x2U << 1U), //!< Privileged Read-Only, Unprivileged No Access.
+    ACCESS_PRIV_RO_USER_RO  = (0x3U << 1U)  //!< Privileged Read-Only, Unprivileged Read-Only.
 };
 
 /*! \enum    EMpuExec
@@ -179,13 +257,38 @@ enum EMpuExec : uint32_t
 /*! \enum    EMpuType
     \brief   MPU Memory attribute index mappings for ARMv8-M (PMSAv8).
              Maps directly to the allocated index positions within the global MAIR registers.
+    \see     MAIR0_PMSAV8_INIT
 */
 enum EMpuType : uint32_t
 {
-    TYPE_STRONGLY_ORDERED   = 0U, //!< Index targeting MAIR memory profile for strict ordering
-    TYPE_DEVICE             = 1U, //!< Index targeting MAIR memory profile for peripheral registers
-    TYPE_NORMAL_NON_CACHE   = 2U, //!< Index targeting MAIR memory profile for non-cacheable spaces (DMA)
-    TYPE_NORMAL_CACHEABLE   = 3U  //!< Index targeting MAIR memory profile for standard cached memory (SRAM)
+    TYPE_STRONGLY_ORDERED   = 0U, //!< Index targeting MAIR0 memory profile for strict ordering (Attr0=0x00).
+    TYPE_DEVICE             = 1U, //!< Index targeting MAIR0 memory profile for peripheral registers (Attr1=0x04).
+    TYPE_NORMAL_NON_CACHE   = 2U, //!< Index targeting MAIR0 memory profile for non-cacheable spaces (DMA) (Attr2=0x44).
+    TYPE_NORMAL_CACHEABLE   = 3U  //!< Index targeting MAIR0 memory profile for standard cached memory (SRAM) (Attr3=0xFF).
+};
+
+/*! \var     MAIR0_PMSAV8_INIT.
+    \brief   MPU MAIR0 register configuration: Attr3=0xFF, Attr2=0x44, Attr1=0x04, Attr0=0x00.
+    \see     EMpuType
+*/
+static constexpr uint32_t MAIR0_PMSAV8_INIT = 0xFF440400U;
+
+/*! \var     MAIR1_PMSAV8_INIT.
+    \brief   MPU MAIR1 register configuration: Reserved/Unused by EMpuType indices.
+    \see     EMpuType
+*/
+static constexpr uint32_t MAIR1_PMSAV8_INIT = 0x00000000U;
+
+/*! \enum    EMpuShare
+    \brief   MPU Shareability (SH) configuration for ARMv8-M (PMSAv8).
+             Controls hardware data coherency across observers via RBAR bits [4:3].
+    \note    Only effective when applied to Normal memory types. Ignored for Device memory.
+*/
+enum EMpuShare : uint32_t
+{
+    SHARE_NON               = (0x0U << 3U), //!< Non-shareable (Private to core, maximum cache performance).
+    SHARE_OUTER             = (0x2U << 3U), //!< Outer Shareable (Coherent with DMA, GPU, external masters).
+    SHARE_INNER             = (0x3U << 3U)  //!< Inner Shareable (Coherent across multi-core CPU clusters).
 };
 
 static constexpr Word RLAR_ENABLE_FLAG = (1U << 0U);
@@ -202,14 +305,14 @@ static constexpr Word RLAR_DISABLED_REGION = 0U;
 */
 enum EMpuAccess : uint32_t
 {
-	ACCESS_NONE             = 0xFFFFFFFFU,   //!< Programmatic sentinel to disable this region slot completely, do not apply to hardware register
+	ACCESS_NONE             = 0xFFFFFFFFU,   //!< Programmatic sentinel to disable this region slot completely, do not apply to hardware register.
 
-    ACCESS_HW_NO_ACCESS     = (0x0U << 24U), //!< No access permitted (incompatible with ARMv8-M, actual hardware bits for an ACTIVE region with NO access permissions)
-    ACCESS_PRIV_RW_USER_NO  = (0x1U << 24U), //!< Privileged Read/Write, Unprivileged No Access
-    ACCESS_PRIV_RW_USER_RO  = (0x2U << 24U), //!< Privileged Read/Write, Unprivileged Read-Only (incompatible with ARMv8-M)
-    ACCESS_FULL             = (0x3U << 24U), //!< Privileged Read/Write, Unprivileged Read/Write
-    ACCESS_PRIV_RO_USER_NO  = (0x5U << 24U), //!< Privileged Read-Only, Unprivileged No Access
-    ACCESS_PRIV_RO_USER_RO  = (0x6U << 24U)  //!< Privileged Read-Only, Unprivileged Read-Only
+    ACCESS_HW_NO_ACCESS     = (0x0U << 24U), //!< No access permitted (incompatible with ARMv8-M, actual hardware bits for an ACTIVE region with NO access permissions).
+    ACCESS_PRIV_RW_USER_NO  = (0x1U << 24U), //!< Privileged Read/Write, Unprivileged No Access.
+    ACCESS_PRIV_RW_USER_RO  = (0x2U << 24U), //!< Privileged Read/Write, Unprivileged Read-Only (incompatible with ARMv8-M).
+    ACCESS_FULL             = (0x3U << 24U), //!< Privileged Read/Write, Unprivileged Read/Write.
+    ACCESS_PRIV_RO_USER_NO  = (0x5U << 24U), //!< Privileged Read-Only, Unprivileged No Access.
+    ACCESS_PRIV_RO_USER_RO  = (0x6U << 24U)  //!< Privileged Read-Only, Unprivileged Read-Only.
 };
 
 /*! \enum    EMpuExec
@@ -226,10 +329,23 @@ enum EMpuExec : uint32_t
 */
 enum EMpuType : uint32_t
 {
-    TYPE_STRONGLY_ORDERED   = 0x000000U, //!< TEX=000,C=0,B=0 -> Strongly ordered
-    TYPE_DEVICE             = 0x010000U, //!< TEX=000,C=0,B=1 -> Device, Shareable
-    TYPE_NORMAL_NON_CACHE   = 0x080000U, //!< TEX=001,C=0,B=0 -> Normal, non-cacheable (DMA buffers and etc)
-    TYPE_NORMAL_CACHEABLE   = 0x030000U  //!< TEX=000,C=1,B=1 -> Normal, Write-Back no-write-allocate
+    TYPE_STRONGLY_ORDERED   = 0x000000U, //!< TEX=000,C=0,B=0 -> Strongly ordered.
+    TYPE_DEVICE             = 0x010000U, //!< TEX=000,C=0,B=1 -> Device, Shareable.
+    TYPE_NORMAL_NON_CACHE   = 0x080000U, //!< TEX=001,C=0,B=0 -> Normal, non-cacheable (DMA buffers and etc).
+    TYPE_NORMAL_CACHEABLE   = 0x030000U  //!< TEX=000,C=1,B=1 -> Normal, Write-Back no-write-allocate.
+};
+
+/*! \enum    EMpuShare
+    \brief   MPU Shareability (S) configuration for ARMv7-M (PMSAv7).
+             Controls hardware data coherency across observers via RASR bit [18].
+    \note    Only effective when applied to Normal memory types. Ignored for Device and Strongly-ordered memory.
+             ARMv7-M treats INNER and OUTER identically as a single Shareable attribute.
+*/
+enum EMpuShare : uint32_t
+{
+    SHARE_NON               = (0x0U << 18U), //!< Non-shareable (Private to the local core).
+    SHARE_OUTER             = (0x1U << 18U), //!< Maps to Shareable on ARMv7-M.
+    SHARE_INNER             = (0x1U << 18U)  //!< Maps to Shareable on ARMv7-M.
 };
 
 static constexpr Word RASR_ENABLE_FLAG = (1U << 0U);
@@ -354,6 +470,7 @@ struct MpuRegionConfig
     size_t              size;        //!< Size of the memory region.
     hw::mpu::EMpuAccess access_perm; //!< MPU Access Permissions.
     hw::mpu::EMpuType   mem_type;    //!< MPU Memory attributes.
+    hw::mpu::EMpuShare  share;       //!< MPU Memory shareability.
     hw::mpu::EMpuExec   exec;        //!< MPU Execute-Never.
 };
 
@@ -375,7 +492,7 @@ struct MpuRegionConfig
               .region_idx  = 1,
               .addr        = hw::PtrToWord(__stk_mpu_shared_code_start),
               .size        = hw::PtrToWord(__stk_mpu_shared_code_end) - hw::PtrToWord(__stk_mpu_shared_code_start),
-              .access_perm = hw::mpu::ACCESS_PRIV_RW_USER_RO,
+              .access_perm = hw::mpu::ACCESS_PRIV_RO_USER_RO,
               .mem_type    = hw::mpu::TYPE_NORMAL_CACHEABLE,
               .exec        = hw::mpu::EXEC_ALLOWED
             },
@@ -403,85 +520,71 @@ struct MpuRegionConfig
     write access (\a ACCESS_FULL) to both privileged and unprivileged user tasks, while explicitly
     blocking code execution (\a EXEC_NEVER).
 */
-#define STK_MPU_SHARED_DATA_SECTION   __attribute__((section(".stk_mpu_shared_data")))
+#define STK_MPU_SHARED_DATA_SECTION __attribute__((section(".stk_mpu_shared_data")))
 
 /*! \def   STK_MPU_SHARED_CODE_SECTION
     \brief Attribute macro to place functions into the shared MPU executable code section.
 
     Any functions tagged with this macro are placed in the \a .stk_mpu_shared_code region.
     According to the recommended MPU configuration, this specialized region allows execution
-    privileges (\a EXEC_ALLOWED) and read-only access for unprivileged user tasks
-    (\a ACCESS_PRIV_RW_USER_RO) to facilitate secure system entry points like proxy handlers.
+    privileges (\a EXEC_ALLOWED) and read-only access for privileged and unprivileged user tasks
+    (\a ACCESS_PRIV_RO_USER_RO) to facilitate secure system entry points.
 */
-#define STK_MPU_SHARED_CODE_SECTION   __attribute__((section(".stk_mpu_shared_code")))
+#define STK_MPU_SHARED_CODE_SECTION __attribute__((section(".stk_mpu_shared_code")))
+
+/*! \def   STK_MPU_SHARED_BSS_SECTION
+    \brief Attribute macro to place zero-initialized global or static variables into the shared
+           MPU data memory section without consuming flash storage.
+
+    Any variables tagged with this macro are placed in the \a .stk_mpu_shared_bss region, a
+    zero-initialized subrange nested inside the same \a .stk_mpu_shared_data MPU region. As such,
+    it carries the same access permissions as \ref STK_MPU_SHARED_DATA_SECTION - full read and
+    write access (\a ACCESS_FULL) to both privileged and unprivileged user tasks, with code
+    execution explicitly blocked (\a EXEC_NEVER).
+
+    Unlike \ref STK_MPU_SHARED_DATA_SECTION, variables placed here must not have a non-zero
+    initializer: the linker stores no image for this region, and startup code zero-fills it at
+    boot instead of copying it from flash. Prefer this macro over \ref STK_MPU_SHARED_DATA_SECTION
+    for large or scratch shared buffers to avoid wasting flash space on a stored image of zeros.
+*/
+#define STK_MPU_SHARED_BSS_SECTION __attribute__((section(".stk_mpu_shared_bss")))
 
 #else
 
 #define STK_MPU_SHARED_DATA_SECTION
 #define STK_MPU_SHARED_CODE_SECTION
+#define STK_MPU_SHARED_BSS_SECTION
 
 // =============================================================================
 #endif // STK_MPU
 // =============================================================================
 
+/*! \struct FaultContext
+    \brief  ARMv7-M/ARMv8-M fault context.
+*/
+struct FaultContext
+{
+    struct Mpu
+    {
+        struct Region
+        {
+            Word RNR, RBAR, ATTR;
+        };
+
+        Word   CTRL, MAIR0, MAIR1;
+        Region regions[STK_CORTEX_M_MPU_REGIONS_MAX];
+    };
+
+    hw::ExceptionFrame frame;
+    Word               CFSR, HFSR, MMFAR, BFAR, AFSR;
+    Word               CONTROL;
+    Word               EXC_RETURN;
+    Mpu                mpu;
+    bool               mmfar_valid, bfar_valid;
+
+    void Fill(const Word *stacked_regs, Word exc_return);
+};
+
 } // namespace stk
-
-/*! \brief Hardware memory barrier: ensures visibility across cores and bus masters.
-*/
-static __stk_forceinline void __stk_dmb() { __asm volatile("dmb sy" ::: "memory"); }
-
-/*! \def   STK_TZ_SECURE
-    \brief ARM TrustZone: Defines Secure (1) build.
-*/
-#if defined(__ARM_FEATURE_CMSE) && (__ARM_FEATURE_CMSE == 3)
-    #define STK_TZ_SECURE (1)
-#else
-    #define STK_TZ_SECURE (0)
-#endif
-
-/*! \def   STK_TZ_NON_SECURE
-    \brief ARM TrustZone: Defines Non-Secure (1) build.
-*/
-#if defined(__ARM_FEATURE_CMSE) && (__ARM_FEATURE_CMSE == 1)
-    #define STK_TZ_NON_SECURE (1)
-#else
-    #define STK_TZ_NON_SECURE (0)
-#endif
-
-/*! \def   __stk_tz_nsc_entry
-    \brief ARM TrustZone: attribute for Non-Secure callable gateway functions.
-    \note  Places the function in the .nsc_entry section mapped to the NSC region.
-*/
-#if defined(__ARM_FEATURE_CMSE) && (__ARM_FEATURE_CMSE == 3)
-    #define __stk_tz_nsc_entry __attribute__((cmse_nonsecure_entry))
-#else
-    #define __stk_tz_nsc_entry
-#endif
-
-/*! \def   __stk_tz_ns_call
-    \brief ARM TrustZone: attribute for calling Non-Secure functions from Secure state.
-*/
-#if defined(__ARM_FEATURE_CMSE) && (__ARM_FEATURE_CMSE == 3)
-    #define __stk_tz_ns_call __attribute__((cmse_nonsecure_call))
-#else
-    #define __stk_tz_ns_call
-#endif
-
-/*! \def   STK_NSC_GATEWAY
-    \brief ARM TrustZone: Non-secure gateway to Secure API.
-*/
-#define STK_TZ_NSC_GATEWAY extern "C" __stk_tz_nsc_entry
-
-// ARM TrustZone Non-Secure binary configuration validation.
-#ifdef _STK_CORTEX_M_TRUSTZONE_NON_SECURE
-#if !STK_TZ_NON_SECURE
-    #error "Do not use -cmse compiler flag for Non-Secure binary compilation!"
-#endif
-#endif
-
-// Task MPU is supported only when MPU is enabled globally.
-#if STK_MPU_STACK_GUARD && !STK_MPU
-    #error "Enable MPU support (STK_MPU=1) to use per-task MPU feature (STK_MPU_STACK_GUARD=1)!"
-#endif
 
 #endif /* STK_ARCH_ARM_CORTEX_M_H_ */

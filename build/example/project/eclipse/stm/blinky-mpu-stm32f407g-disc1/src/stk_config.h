@@ -18,6 +18,7 @@
 // Use tickless mode for battery-powered devices or when max power saving is required
 #define STK_TICKLESS_IDLE (0)
 
+// Enable MPU support
 #define STK_MPU             (1)
 #define STK_MPU_STACK_GUARD (1)
 

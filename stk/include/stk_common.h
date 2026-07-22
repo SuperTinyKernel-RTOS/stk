@@ -72,7 +72,8 @@ enum EKernelPanicId : uint32_t
     KERNEL_PANIC_UNKNOWN_SVC         = 7U,  //!< Unknown service command received by SVC handler.
     KERNEL_PANIC_BAD_STATE           = 8U,  //!< Kernel entered unexpected (bad) state.
     KERNEL_PANIC_BAD_MODE            = 9U,  //!< Kernel is in bad/unsupported mode for the current operation.
-    KERNEL_PANIC_BAD_STACK_TYPE      = 10U  //!< Stack type is unknown.
+    KERNEL_PANIC_BAD_STACK_TYPE      = 10U, //!< Stack type is unknown.
+    KERNEL_PANIC_NS_ACCESS           = 11U  //!< Non-secure access to protected resource.
 };
 
 /*! \enum  EStackType
@@ -124,6 +125,15 @@ enum EWaitResult : int8_t
     WAIT_RESULT_FAIL    = -1, //!< IKernelService::Wait returned with error without waiting.
     WAIT_RESULT_SIGNAL  = 0,  //!< The wake was caused by a signal.
     WAIT_RESULT_TIMEOUT = 1   //!< The wake was caused by a timeout expiry.
+};
+
+/*! \enum  EHwException
+    \brief Hardware exception id (see \c IPlatform::IEventOverrider::OnException).
+*/
+enum EHwException : int8_t
+{
+    HW_EXCEPT_FATAL     = 0, //!< HardFault on ARM / Unhandled Fatal Trap on RISC-V.
+    HW_EXCEPT_MEMACCESS = 1  //!< MemManage on ARM / Page Fault or PMP violation on RISC-V.
 };
 
 /*! \typedef Word
@@ -190,34 +200,34 @@ typedef int32_t Weight;
            against this constant directly.
     \see   IsIsrTid()
 */
-constexpr TId TID_ISR_N = static_cast<TId>(0xFFFFF000U);
+static constexpr TId TID_ISR_N = static_cast<TId>(0xFFFFF000U);
 
 /*! \var     TID_NONE
     \brief   Reserved task/thread id representing zero/none thread id.
 */
-constexpr TId TID_NONE = static_cast<TId>(0U);
+static constexpr TId TID_NONE = static_cast<TId>(0U);
 
 /*! \var     WAIT_INFINITE
     \brief   Timeout value: block indefinitely until the synchronization object is signaled.
     \note    Pass as the \a timeout argument to IKernelService::Wait().
 */
-constexpr Timeout WAIT_INFINITE = INT32_MAX;
+static constexpr Timeout WAIT_INFINITE = INT32_MAX;
 
 /*! \var     NO_WAIT
     \brief   Timeout value: return immediately if the synchronization object is not yet signaled (non-blocking poll).
     \note    Pass as the \a timeout argument to IKernelService::Wait().
 */
-constexpr Timeout NO_WAIT = 0;
+static constexpr Timeout NO_WAIT = 0;
 
 /*! \var     NO_WEIGHT
     \brief   Weight value: weight is not set.
 */
-constexpr Weight NO_WEIGHT = -1;
+static constexpr Weight NO_WEIGHT = -1;
 
 /*! \var     DEFAULT_WEIGHT
     \brief   Weight value: default weight of value (1) (see \c SwitchStrategySmoothWeightedRoundRobin).
 */
-constexpr Weight DEFAULT_WEIGHT = 1;
+static constexpr Weight DEFAULT_WEIGHT = 1;
 
 /*! \brief     Test whether a task identifier represents an ISR context.
 
@@ -289,7 +299,7 @@ struct MpuRegion
 
 /*! \class   TaskMpu
     \brief   MPU descriptor of the task.
-    \warning Referenced by driver, member offsets must not change.
+    \warning Fields marked with 'Offset' have static position in the structure and can't move (driver dependent).
 */
 #if STK_MPU && STK_MPU_STACK_GUARD
 struct TaskMpu
@@ -299,18 +309,14 @@ struct TaskMpu
     */
     static constexpr uint8_t NUM_REGIONS = 4;
 
-    //! Address of (&MPU->RBAR or &MPU_NS->RBAR).
-    //! Offset 8 of the Stack descriptor. See \a STK_ASM_BLOCK_MPU_STACK_GUARD.
-    Word mpu_start_addr;
-
-    //! Array of MPU regions of size NUM_REGIONS.
-    MpuRegion region[NUM_REGIONS];
+    Word      mpu_start_addr;      //!< Offset 8: Address of (&MPU->RBAR or &MPU_NS->RBAR). See \a STK_ASM_BLOCK_MPU_STACK_GUARD.
+    MpuRegion region[NUM_REGIONS]; //!< Offset 12: Array of MPU regions of size NUM_REGIONS.
 };
 #endif
 
-/*! \class Stack
-    \brief Stack descriptor.
-    \note  Fields marked with 'Offset' have static position in the structure and can't move (driver dependent).
+/*! \class   Stack
+    \brief   Stack descriptor.
+    \warning Fields marked with 'Offset' have static position in the structure and can't move (driver dependent).
 */
 struct Stack
 {
@@ -1010,13 +1016,20 @@ public:
             return nullptr;
         }
 
-        /*! \brief  Called by platform driver when memory management exception occurred.
-            \note   Normally called by Kernel when one of the scheduled tasks missed its deadline (see stk::KERNEL_HRT, IPlatform::HardFault).
-            \return True if event is handled otherwise False to let driver handle it.
+        /*! \brief     Called by platform driver when hardware exception occurred.
+            \param[in] exc_id: Hardware exception id, see \a EHwException.
+            \param[in] tid: \c TId of the currently active task.
+            \param[in] ctx: FaultContext which includes hardware exception frame captured at
+                       fault entry (see \a hw::ExceptionFrame). PC is the true faulting
+                       instruction address; may be nullptr if unavailable.
+            \return    True if event is handled otherwise False to let driver handle it.
+            \see       EHwException
         */
-        virtual bool OnExceptionMemManage(TId tid)
+        virtual bool OnException(EHwException exc_id, TId tid, const struct FaultContext *const ctx)
         {
+            STK_UNUSED(exc_id);
         	STK_UNUSED(tid);
+        	STK_UNUSED(ctx);
         	return false;
         }
     };

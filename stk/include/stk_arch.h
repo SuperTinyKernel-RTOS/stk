@@ -592,7 +592,7 @@ static constexpr ITask *GetUserTaskFromTid(TId task_id) noexcept { return hw::Wo
     \note      Can be overridden by defining _STK_CUSTOM_MEMCPY in system configuration.
 */
 #ifndef _STK_CUSTOM_MEMCPY
-static __stk_forceinline void STK_MEMCPY(void *const dest, const void *const src, const size_t size)
+static inline void STK_MEMCPY(void *const dest, const void *const src, const size_t size)
 {
     using namespace stk;
 
@@ -620,6 +620,39 @@ static __stk_forceinline void STK_MEMCPY(void *const dest, const void *const src
             const uint8_t *const p_s = static_cast<const uint8_t *>(src);
 
             STK_UNUSED(std::copy_n(p_s, size, p_d));
+        }
+    }
+}
+#endif
+
+/*! \brief     A wrapper for a built-in memset, redefine to your own if required.
+    \note      Can be overridden by defining _STK_CUSTOM_MEMSET in system configuration.
+*/
+#ifndef _STK_CUSTOM_MEMSET
+static inline void STK_MEMSET(void *const dest, const uint8_t value, const size_t size)
+{
+    using namespace stk;
+
+    if ((dest != nullptr) && (size != 0U))
+    {
+        const Word dest_addr = hw::PtrToWord(dest);
+
+        // fast path: destination and size are 4-byte aligned, fill in 4-byte chunks
+        if (((dest_addr & 0x03U) == 0U) &&
+            ((size      & 0x03U) == 0U))
+        {
+            uint32_t *const p_d32  = static_cast<uint32_t *>(dest);
+            const uint32_t  word   = static_cast<uint32_t>(value) * 0x01010101U;
+            const size_t    words  = (size >> 2U);
+
+            STK_UNUSED(std::fill_n(p_d32, words, word));
+        }
+        // slow path
+        else
+        {
+            uint8_t *const p_d = static_cast<uint8_t *>(dest);
+
+            STK_UNUSED(std::fill_n(p_d, size, value));
         }
     }
 }

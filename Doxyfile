@@ -1464,7 +1464,7 @@ GENERATE_DOCSET        = YES
 # The default value is: Doxygen generated docs.
 # This tag requires that the tag GENERATE_DOCSET is set to YES.
 
-DOCSET_FEEDNAME        = "Neutron Audio Engine Docs"
+DOCSET_FEEDNAME        = "SuperTinyKernel RTOS"
 
 # This tag determines the URL of the docset feed. A documentation feed provides
 # an umbrella under which multiple documentation sets from a single provider
@@ -1479,7 +1479,7 @@ DOCSET_FEEDURL         =
 # The default value is: org.doxygen.Project.
 # This tag requires that the tag GENERATE_DOCSET is set to YES.
 
-DOCSET_BUNDLE_ID       = com.neutroncode.NAudio
+DOCSET_BUNDLE_ID       = com.neutroncode.stk
 
 # The DOCSET_PUBLISHER_ID tag specifies a string that should uniquely identify
 # the documentation publisher. This should be a reverse domain-name style
@@ -1487,7 +1487,7 @@ DOCSET_BUNDLE_ID       = com.neutroncode.NAudio
 # The default value is: org.doxygen.Publisher.
 # This tag requires that the tag GENERATE_DOCSET is set to YES.
 
-DOCSET_PUBLISHER_ID    = com.neutroncode.NAudio.Current
+DOCSET_PUBLISHER_ID    = com.neutroncode.stk.current
 
 # The DOCSET_PUBLISHER_NAME tag identifies the documentation publisher.
 # The default value is: Publisher.
@@ -1522,7 +1522,7 @@ GENERATE_HTMLHELP      = NO
 # written to the html output directory.
 # This tag requires that the tag GENERATE_HTMLHELP is set to YES.
 
-CHM_FILE               = naudio.chm
+CHM_FILE               = supertinykernel.chm
 
 # The HHC_LOCATION tag can be used to specify the location (absolute path
 # including file name) of the HTML help compiler (hhc.exe). If non-empty,

@@ -8,6 +8,7 @@
  */
 
 #include <stdio.h>
+#include <new>
 
 #include <stk.h>
 #include <sync/stk_sync.h>
@@ -35,6 +36,13 @@ STK_MPU_SHARED_DATA_SECTION static stk::sync::EventFlags g_TaskFlags(FLAGS_ALL[L
 
 // Timeline for a precise LED switching
 STK_MPU_SHARED_DATA_SECTION static stk::Ticks g_Timeline = 0;
+
+// Variable residing in Secure memory region accessible by only Secure tasks.
+static uint32_t g_SecureCounter = 0;
+
+// Non-Secure task memory (on ARMv7-M must be aligned to its size).
+static constexpr uint32_t TASK_MEMORY_SIZE = 4096;
+static uint8_t s_LedTaskMem[4][TASK_MEMORY_SIZE] __stk_aligned(TASK_MEMORY_SIZE);
 
 // Hw commands.
 struct HwCommand
@@ -95,6 +103,10 @@ private:
 
             // hand off to the next task
             g_TaskFlags.Set(m_next_flag);
+
+            // uncommenting this will cause MemManage exception due to access of Secure
+            // memory region by Non-Secure task
+            //++g_SecureCounter;
         }
     }
 
@@ -107,14 +119,17 @@ private:
         extern char __stk_mpu_shared_data_start[];
         extern char __stk_mpu_shared_data_end[];
 
-        static const MpuRegionConfig s_mpu_shared_regions[] =
+        static MpuRegionConfig s_mpu_shared_regions[] =
         {
+            // region_idx = 0 is reserved by kernel for a stack memory
+
             {
               .region_idx  = 1,
               .addr        = hw::PtrToWord(__stk_mpu_shared_code_start),
               .size        = hw::PtrToWord(__stk_mpu_shared_code_end) - hw::PtrToWord(__stk_mpu_shared_code_start),
-              .access_perm = hw::mpu::ACCESS_PRIV_RW_USER_RO,
+              .access_perm = hw::mpu::ACCESS_PRIV_RO_USER_RO,
               .mem_type    = hw::mpu::TYPE_NORMAL_CACHEABLE,
+              .share       = hw::mpu::SHARE_NON,
               .exec        = hw::mpu::EXEC_ALLOWED
             },
             {
@@ -123,9 +138,23 @@ private:
               .size        = hw::PtrToWord(__stk_mpu_shared_data_end) - hw::PtrToWord(__stk_mpu_shared_data_start),
               .access_perm = hw::mpu::ACCESS_FULL,
               .mem_type    = hw::mpu::TYPE_NORMAL_CACHEABLE,
-              .exec        = hw::mpu::EXEC_NEVER
+              .share       = hw::mpu::SHARE_NON,
+              .exec        = hw::mpu::EXEC_ALLOWED
             },
+            {
+              .region_idx  = 3,
+              .addr        = 0,
+              .size        = TASK_MEMORY_SIZE, // cover whole allocated region of the task instance
+              .access_perm = hw::mpu::ACCESS_FULL,
+              .mem_type    = hw::mpu::TYPE_NORMAL_CACHEABLE,
+              .share       = hw::mpu::SHARE_NON,
+              .exec        = hw::mpu::EXEC_NEVER
+            }
         };
+
+        // note: dynamic entry, we have 4 instances and need to allow every instance an access to self
+        // where 'this' is pointing to the start of the task's memory region of TASK_MEMORY_SIZE size
+        s_mpu_shared_regions[2].addr = hw::PtrToWord(this);
 
         out_count = STK_STATIC_ARRAY_SIZE(s_mpu_shared_regions);
         return s_mpu_shared_regions;
@@ -146,12 +175,15 @@ private:
             {
                 switch (cmd.id)
                 {
-                case HwCommand::CMD_LED_ON:
+                case HwCommand::CMD_LED_ON: {
                     Led::SwitchOnExclusive(static_cast<bsp::Led::Id>(cmd.param_0));
-                    break;
-                default:
+
+                    // counter is accessed by a Safe task, no MemManage exception in this case
+                    ++g_SecureCounter;
+                    break; }
+                default: {
                     STK_ASSERT(false);
-                    break;
+                    break; }
                 }
             }
         }
@@ -195,12 +227,13 @@ class PlatformEventHandler final : public stk::IPlatform::IEventOverrider
         // register math or CMSIS ARM_MPU_* helper involved.
         static const stk::MpuRegionConfig mpu_table[] =
         {
-            {   // REGION 0: Flash - Privileged RW / User RO, executable, cacheable
+            {   // REGION 0: Flash - Privileged RO / User RO, executable, cacheable
                 .region_idx  = 0U,
                 .addr        = FLASH_BASE_ADDR,
                 .size        = FLASH_SIZE_BYTES,
-                .access_perm = ACCESS_PRIV_RW_USER_RO,
+                .access_perm = ACCESS_PRIV_RO_USER_RO,
                 .mem_type    = TYPE_NORMAL_CACHEABLE,
+                .share       = SHARE_NON,
                 .exec        = EXEC_ALLOWED
             },
             {   // REGION 1: SRAM - full RW, execute-never (blocks code injection into RAM)
@@ -209,23 +242,26 @@ class PlatformEventHandler final : public stk::IPlatform::IEventOverrider
                 .size        = SRAM_SIZE_BYTES,
                 .access_perm = ACCESS_PRIV_RW_USER_NO,
                 .mem_type    = TYPE_NORMAL_CACHEABLE,
+                .share       = SHARE_NON,
                 .exec        = EXEC_NEVER
             },
-            {   // REGION 2: Peripherals - Privileged-only RW, execute-never, Device memory
+            {   // REGION 2: NULL guard - first 256 bytes, no access at all
                 .region_idx  = 2U,
-                .addr        = PERIPH_BASE_ADDR,
-                .size        = PERIPH_SIZE_BYTES,
-                .access_perm = ACCESS_PRIV_RW_USER_NO,
-                .mem_type    = TYPE_DEVICE,
+                .addr        = 0x00000000UL,
+                .size        = 256U,
+                .access_perm = ACCESS_HW_NO_ACCESS,
+                .mem_type    = TYPE_STRONGLY_ORDERED,
+                .share       = SHARE_NON,
                 .exec        = EXEC_NEVER
             },
             {   // REGION 3: NULL guard - first 256 bytes, no access at all
                 .region_idx  = 3U,
-                .addr        = 0x00000000UL,
-                .size        = 256U,
+                .addr        = 0U,
+                .size        = 0U,
                 .access_perm = ACCESS_NONE,
                 .mem_type    = TYPE_STRONGLY_ORDERED,
-                .exec        = EXEC_NEVER
+                .share       = SHARE_NON,
+                .exec        = EXEC_ALLOWED
             }
         };
 
@@ -271,11 +307,14 @@ void RunExample()
     static PlatformEventHandler event_overrider;
     kernel.GetPlatform()->SetEventOverrider(&event_overrider);
 
-    // note: using ACCESS_PRIVILEGED as Cortex-M3+ may not allow writing to GPIO from a less secure user thread
-    STK_MPU_SHARED_DATA_SECTION static NonSecureLedTask<ACCESS_USER> led_task1(LED_RED);
-    STK_MPU_SHARED_DATA_SECTION static NonSecureLedTask<ACCESS_USER> led_task2(LED_ORANGE);
-    STK_MPU_SHARED_DATA_SECTION static NonSecureLedTask<ACCESS_USER> led_task3(LED_GREEN);
-    STK_MPU_SHARED_DATA_SECTION static NonSecureLedTask<ACCESS_USER> led_task4(LED_BLUE);
+    // make sure memory is enough
+    STK_STATIC_ASSERT(sizeof(NonSecureLedTask<ACCESS_USER>) <= TASK_MEMORY_SIZE);
+
+    // Non-Secure tasks
+    NonSecureLedTask<ACCESS_USER> *led_task1 = new (s_LedTaskMem[0]) NonSecureLedTask<ACCESS_USER>(LED_RED);
+    NonSecureLedTask<ACCESS_USER> *led_task2 = new (s_LedTaskMem[1]) NonSecureLedTask<ACCESS_USER>(LED_ORANGE);
+    NonSecureLedTask<ACCESS_USER> *led_task3 = new (s_LedTaskMem[2]) NonSecureLedTask<ACCESS_USER>(LED_GREEN);
+    NonSecureLedTask<ACCESS_USER> *led_task4 = new (s_LedTaskMem[3]) NonSecureLedTask<ACCESS_USER>(LED_BLUE);
 
     static SecureHwCommandQueueTask<ACCESS_PRIVILEGED> hw_cmd_proc;
 
@@ -283,10 +322,10 @@ void RunExample()
     kernel.Initialize();
 
     // register non-secure threads (LED tasks)
-    kernel.AddTask(&led_task1);
-    kernel.AddTask(&led_task2);
-    kernel.AddTask(&led_task3);
-    kernel.AddTask(&led_task4);
+    kernel.AddTask(led_task1);
+    kernel.AddTask(led_task2);
+    kernel.AddTask(led_task3);
+    kernel.AddTask(led_task4);
 
     // register secure thread which will interact with hardware
     kernel.AddTask(&hw_cmd_proc);

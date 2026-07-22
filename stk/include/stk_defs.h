@@ -672,6 +672,24 @@ static constexpr T Min(T a, T b) noexcept { return ((a < b) ? a : b); }
 template <typename T>
 static constexpr T Max(T a, T b) noexcept { return ((a > b) ? a : b); }
 
+/*! \brief Aligns a value towards the next larger size multiple.
+    \note  Arguments are evaluated exactly once, safe for any expression type.
+*/
+template <typename T>
+static constexpr T Align(T v, T align) noexcept
+{
+    return ((v + align - static_cast<T>(1U)) / align) * align;
+}
+
+/*! \brief Fast compile-time alignment for power-of-two boundaries.
+    \note  Arguments are evaluated exactly once. The 'align' parameter MUST be a power of two.
+*/
+template <typename T>
+static constexpr T AlignPow2(T v, T align) noexcept
+{
+    return (v + align - static_cast<T>(1U)) & ~(align - static_cast<T>(1U));
+}
+
 /*! \brief     Count leading zeros.
     \param[in] value: Value must be non 0.
     \warning   Undefined behavior if temp_val is 0, but guaranteed safe by upstream checks.

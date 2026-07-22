@@ -130,6 +130,11 @@ using namespace stk;
 #ifndef STK_MEMMANAGE_HANDLER
     #define STK_MEMMANAGE_HANDLER MemManage_Handler
 #endif
+
+//! HardFault_Handler
+#ifndef STK_HARDFAULT_HANDLER
+    #define STK_HARDFAULT_HANDLER HardFault_Handler
+#endif
       
 // Inline ASM helpers:
 #ifdef __ICCARM__
@@ -285,21 +290,6 @@ struct PrivilegeFrame
 };
 #endif // STK_CORTEX_M_PRIVILEGE_FRAME
 
-/*! \struct ExceptionFrame
-    \brief  ARMv7-M hardware exception frame (8 words, highest address on the stack).
-*/
-struct ExceptionFrame
-{
-    Word R0;
-    Word R1;
-    Word R2;
-    Word R3;
-    Word R12;
-    Word LR;
-    Word PC;
-    Word PSR;
-};
-
 /*! \struct TaskFrame
     \brief  Full initial task frame laid out at the top of a new stack.
 
@@ -314,9 +304,9 @@ struct ExceptionFrame
 struct TaskFrame
 {
 #if STK_CORTEX_M_MANAGE_LR
-    Word           EXC_RETURN; //!< Exception return value (LR), loaded by LDMIA in OnTaskStart.
+    Word               EXC_RETURN; //!< Exception return value (LR), loaded by LDMIA in OnTaskStart.
 #endif
-    ExceptionFrame exc;        //!< ARMv7-M hardware exception frame.
+    hw::ExceptionFrame exc;        //!< ARMv7-M hardware exception frame.
 };
 
 // Shortcuts:
@@ -326,8 +316,8 @@ struct TaskFrame
 #define STK_ASM_ENABLE_INTERRUPTS  "CPSIE i"
 
 // Local static functions:
-static void OnTaskRun(ITask *runnable);
-static void OnTaskExit();
+extern void OnTaskRun(ITask *runnable);
+extern void OnTaskExit();
 static void OnSchedulerSleep();
 static void OnSchedulerSleepOverride();
 static void OnSchedulerExit();
@@ -362,7 +352,7 @@ static __stk_forceinline void HW_ForceContextSwitch()
                hardware spinlock safely within Handler mode.
     \note      Unprivileged thread mode only. In handler mode or privileged thread
                mode, use the privileged API directly to avoid SVC exception overhead.
-    \see       HW_UnprivExitCriticalSection, SVC_Handler_Main
+    \see       HW_UnprivExitCriticalSection, StkSVCHandlerMain
 */
 static __stk_forceinline void HW_UnprivEnterCriticalSection()
 {
@@ -380,7 +370,7 @@ static __stk_forceinline void HW_UnprivEnterCriticalSection()
                \c BASEPRI is restored, re-enabling interrupts.
     \note      Unprivileged thread mode only. Must be paired with a preceding
                \c HW_UnprivEnterCriticalSection() call on the same thread context.
-    \see       HW_UnprivEnterCriticalSection, SVC_Handler_Main
+    \see       HW_UnprivEnterCriticalSection, StkSVCHandlerMain
 */
 static __stk_forceinline void HW_UnprivExitCriticalSection()
 {
@@ -1149,7 +1139,8 @@ struct ScopedPrivilegeBoost
               execution context is securely bound within the shared code boundaries to eliminate
               boundary-skipping attacks.
 */
-STK_MPU_SHARED_CODE_SECTION ScopedPrivilegeBoost::ScopedPrivilegeBoost()
+STK_MPU_SHARED_CODE_SECTION
+ScopedPrivilegeBoost::ScopedPrivilegeBoost()
 {
     // boost privilege via SVC SVC_BOOST_PRIV handler
     __asm volatile(
@@ -1178,6 +1169,8 @@ STK_MPU_SHARED_CODE_SECTION ScopedPrivilegeBoost::ScopedPrivilegeBoost()
 #if STK_MPU
 extern char __stk_mpu_shared_code_start[];
 extern char __stk_mpu_shared_code_end[];
+extern char __stk_mpu_shared_data_start[];
+extern char __stk_mpu_shared_data_end[];
 #endif
 
 //! Global lock to synchronize critical sections of multiple cores.
@@ -1206,7 +1199,15 @@ static struct Context final : public PlatformContext
         STK_STATIC_ASSERT_DESC_N(SP, offsetof(Stack, SP) == 0U,
             "expect Stack::mode member at offset of 0 (first member)");
         STK_STATIC_ASSERT_DESC_N(mode, offsetof(Stack, access_mode) == 4U,
-            "expect Stack::mode member at offset of 4 (second member)");        
+            "expect Stack::mode member at offset of 4 (second member)");
+    #if STK_MPU
+        STK_STATIC_ASSERT_DESC_N(mpu, (STK_CORTEX_M_MPU_TASK_REGION_IDX % 4U) == 0U,
+            "STK_CORTEX_M_MPU_TASK_REGION_IDX must be 4-region aligned for the RNR-relative alias burst write");
+        // make sure linker declares __stk_mpu_shared_xxx regions correctly, i.e. code and data
+        // sections must contain data
+        STK_ASSERT(hw::PtrToWord(__stk_mpu_shared_code_end) - hw::PtrToWord(__stk_mpu_shared_code_start) > 0U);
+        STK_ASSERT(hw::PtrToWord(__stk_mpu_shared_data_end) - hw::PtrToWord(__stk_mpu_shared_data_start) > 0U);
+    #endif
 
         m_csu            = 0U;
         m_csu_nesting    = 0U;
@@ -1641,7 +1642,7 @@ extern "C" void STK_SYSTICK_HANDLER()
 */
 #define STK_ASM_BLOCK_MPU_STACK_GUARD\
     STK_ASM_BLOCK_LOAD_ACTIVE_STACK_TO_R1\
-    "LDR   r0, [r1, #8]      \n" /* r0 = m_stack_active->mpu.mpu_target_base */\
+    "LDR   r0, [r1, #8]      \n" /* r0 = m_stack_active->mpu.mpu_start_addr, i.e. &MPU->RBAR */\
     "ADD   r1, r1, #12       \n" /* Point to mpu.region[0].addr at offset 12 */\
     "LDMIA r1!, {r4-r11}     \n" /* Burst load all 8 continuous words into r4-r11 */\
     "STMIA r0!, {r4-r11}     \n" /* Burst write values directly into target MPU bank registers */
@@ -2034,7 +2035,7 @@ void Context::Resume(Timeout elapsed_ticks)
 #endif
 
 // __stk_attr_used required for Link-Time Optimization (-flto)
-extern "C" __stk_attr_used void SVC_Handler_Main(Word *svc_args)
+extern "C" __stk_attr_used void StkSVCHandlerMain(Word *svc_args)
 {
     // Word is typedef uintptr_t (stk_common.h) - the only integer type the Standard
     // blesses for lossless pointer round-trips (MISRA C++ 5-2-8, CERT INT36-C)
@@ -2047,7 +2048,7 @@ extern "C" __stk_attr_used void SVC_Handler_Main(Word *svc_args)
         "NVIC priority bit width exceeds safe shift range");
 
     // 'volatile': R0 is written back to stacked memory, compiler must not eliminate the store
-    volatile ExceptionFrame *const frame = reinterpret_cast<volatile ExceptionFrame *>(svc_args);
+    volatile hw::ExceptionFrame *const frame = reinterpret_cast<volatile hw::ExceptionFrame *>(svc_args);
 
     // details: https://developer.arm.com/documentation/ka004005/latest
     // Thumb SVC encoding: [15:8] = 0xDF, [7:0] = imm8
@@ -2087,6 +2088,10 @@ extern "C" __stk_attr_used void SVC_Handler_Main(Word *svc_args)
         {
             __set_CONTROL(__get_CONTROL() & ~CONTROL_nPRIV_Msk);
         }
+        else
+        {
+            STK_KERNEL_PANIC(KERNEL_PANIC_NS_ACCESS);
+        }
         break; }
 #endif
 
@@ -2118,113 +2123,166 @@ extern "C" __stk_attr_used void SVC_Handler_Main(Word *svc_args)
     }
 }
 
+#ifdef _STK_CORTEX_M_TRUSTZONE
+/* ARMv8-M TrustZone (Cortex-M33 / Mainline)
+   EXC_RETURN bit layout (ARMv8-M ARM B1.5.8):
+     bit 6 (0x40): 1 = Secure stack, 0 = Non-Secure stack.  <-- S-bit
+     bit 2 (0x04): 1 = PSP,          0 = MSP.
+   We test bit 6 first to select the correct world's stack pointer,
+   then bit 2 to choose MSP vs PSP within that world. */
+#if (__CORTEX_M >= 33U)
+/* -----------------------------------------------------------------
+   Cortex-M33 and later (ARMv8-M Mainline) -- IT/ITE available.
+   ----------------------------------------------------------------- */
+#define STK_ASM_EXTRACT_STACK_POINTER_TO_R0 \
+    "TST    LR, #4              \n" /* bit 2: 0 = MSP, 1 = PSP */ \
+    "BNE    1f                  \n" \
+    /* --- MSP branch --- */ \
+    "TST    LR, #64             \n" /* bit 6 (S-bit): 1 = Secure, 0 = Non-Secure */ \
+    "ITE    NE                  \n" \
+    "MRSNE  r0, MSP             \n" /* r0 = Secure MSP */ \
+    "MRSEQ  r0, MSP_NS          \n" /* r0 = Non-Secure MSP */ \
+    "B      2f                  \n" \
+    "1:                         \n" \
+    "TST    LR, #64             \n" /* bit 6 (S-bit): 1 = Secure, 0 = Non-Secure */ \
+    "ITE    NE                  \n" \
+    "MRSNE  r0, PSP             \n" /* r0 = Secure PSP */ \
+    "MRSEQ  r0, PSP_NS          \n" /* r0 = Non-Secure PSP */ \
+    "2:                         \n"
+#else
+/* -----------------------------------------------------------------
+   Cortex-M23 (ARMv8-M Baseline) -- no IT instructions, limited ISA.
+   Shift bits into the sign position and use BMI (Branch if Minus).
+     bit 2 -> sign: LSLS r1, #29  (32 - 3 = 29)
+     bit 6 -> sign: LSLS r1, #25  (32 - 7 = 25)
+   ----------------------------------------------------------------- */
+#define STK_ASM_EXTRACT_STACK_POINTER_TO_R0 \
+    "MOV    r1, LR              \n" \
+    "LSLS   r1, r1, #29         \n" /* shift bit 2 into sign */ \
+    "BMI    3f                  \n" /* bit 2 set  -> PSP branch */ \
+    /* --- MSP branch --- */ \
+    "MOV    r1, LR              \n" \
+    "LSLS   r1, r1, #25         \n" /* shift bit 6 (S-bit) into sign */ \
+    "BMI    4f                  \n" /* S=1 -> Secure MSP */ \
+    "MRS    r0, MSP_NS          \n" /* S=0 -> Non-Secure MSP */ \
+    "B      2f                  \n" \
+    "4:                         \n" \
+    "MRS    r0, MSP             \n" /* r0 = Secure MSP */ \
+    "B      2f                  \n" \
+    "3:                         \n" \
+    "MOV    r1, LR              \n" \
+    "LSLS   r1, r1, #25         \n" /* shift bit 6 (S-bit) into sign */ \
+    "BMI    5f                  \n" /* S=1 -> Secure PSP */ \
+    "MRS    r0, PSP_NS          \n" /* S=0 -> Non-Secure PSP */ \
+    "B      2f                  \n" \
+    "5:                         \n" \
+    "MRS    r0, PSP             \n" /* r0 = Secure PSP */ \
+    "2:                         \n"
+#endif
+#elif (__CORTEX_M >= 3U)
+/* Cortex-M3/M4/M7 */
+#define STK_ASM_EXTRACT_STACK_POINTER_TO_R0 \
+    "TST    LR, #4              \n" /* check EXC_RETURN bit 2 */ \
+    "ITE    EQ                  \n" \
+    "MRSEQ  r0, MSP             \n" /* r0 = MSP */ \
+    "MRSNE  r0, PSP             \n" /* else r0 = PSP */
+#else
+/* Cortex-M0/M0+ (limited ISA) */
+#define STK_ASM_EXTRACT_STACK_POINTER_TO_R0 \
+    "MOV    r0, LR              \n" /* r0 = LR */ \
+    "LSLS   r0, r0, #29         \n" /* if (r0 & 4) */ \
+    "BMI    6f                  \n" /* else */ \
+    "MRS    r0, MSP             \n" /* r0 = MSP */ \
+    "B      7f                  \n" \
+    "6:                         \n" \
+    "MRS    r0, PSP             \n" /* else r0 = PSP */ \
+    "7:                         \n"
+#endif
+
 // details: "How to Write an SVC Function", https://developer.arm.com/documentation/ka004005/latest
 extern "C" __stk_attr_naked void STK_SVC_HANDLER()
 {
     __asm volatile(
     STK_ASM_SYNTAX_UNIFIED
 #ifndef __ICCARM__
-    ".global SVC_Handler_Main   \n"
+    ".global StkSVCHandlerMain     \n"
 #endif
     STK_ASM_ALIGN_2 // ensure the entry point is aligned
 
-#ifdef _STK_CORTEX_M_TRUSTZONE
-    // ARMv8-M TrustZone (Cortex-M33 / Mainline)
-    // EXC_RETURN bit layout (ARMv8-M ARM B1.5.8):
-    //   bit 6 (0x40): 1 = Secure stack, 0 = Non-Secure stack.  <-- S-bit
-    //   bit 2 (0x04): 1 = PSP,          0 = MSP.
-    // We test bit 6 first to select the correct world's stack pointer,
-    // then bit 2 to choose MSP vs PSP within that world.
-    #if (__CORTEX_M >= 33U)
-    // -----------------------------------------------------------------
-    // Cortex-M33 and later (ARMv8-M Mainline) -- IT/ITE available.
-    // -----------------------------------------------------------------
-    "TST    LR, #4              \n" // bit 2: 0 = MSP, 1 = PSP
-    "BNE    .use_psp            \n"
-    // --- MSP branch ---
-    "TST    LR, #64             \n" // bit 6 (S-bit): 1 = Secure, 0 = Non-Secure
-    "ITE    NE                  \n"
-    "MRSNE  r0, MSP             \n" // r0 = Secure MSP
-    "MRSEQ  r0, MSP_NS          \n" // r0 = Non-Secure MSP
-    "B      .call_main          \n"
-
-    ".use_psp:                  \n"
-    "TST    LR, #64             \n" // bit 6 (S-bit): 1 = Secure, 0 = Non-Secure
-    "ITE    NE                  \n"
-    "MRSNE  r0, PSP             \n" // r0 = Secure PSP
-    "MRSEQ  r0, PSP_NS          \n" // r0 = Non-Secure PSP
-    #else
-    // -----------------------------------------------------------------
-    // Cortex-M23 (ARMv8-M Baseline) -- no IT instructions, limited ISA.
-    // Shift bits into the sign position and use BMI (Branch if Minus).
-    //   bit 2 -> sign: LSLS r1, #29  (32 - 3 = 29)
-    //   bit 6 -> sign: LSLS r1, #25  (32 - 7 = 25)
-    // -----------------------------------------------------------------
-    "MOV    r1, LR              \n"
-    "LSLS   r1, r1, #29         \n" // shift bit 2 into sign
-    "BMI    .use_psp_v8m_b      \n" // bit 2 set  -> PSP branch
-    // --- MSP branch ---
-    "MOV    r1, LR              \n"
-    "LSLS   r1, r1, #25         \n" // shift bit 6 (S-bit) into sign
-    "BMI    .use_msp_s          \n" // S=1 -> Secure MSP
-    "MRS    r0, MSP_NS          \n" // S=0 -> Non-Secure MSP
-    "B      .call_main          \n"
-
-    ".use_msp_s:                \n"
-    "MRS    r0, MSP             \n" // r0 = Secure MSP
-    "B      .call_main          \n"
-
-    ".use_psp_v8m_b:            \n"
-    "MOV    r1, LR              \n"
-    "LSLS   r1, r1, #25         \n" // shift bit 6 (S-bit) into sign
-    "BMI    .use_psp_s          \n" // S=1 -> Secure PSP
-    "MRS    r0, PSP_NS          \n" // S=0 -> Non-Secure PSP
-    "B      .call_main          \n"
-
-    ".use_psp_s:                \n"
-    "MRS    r0, PSP             \n" // r0 = Secure PSP
-    #endif
-
-    ".call_main:                \n"
-#elif (__CORTEX_M >= 3U)
-    // Cortex-M3/M4/M7
-    "TST    LR, #4              \n" // check EXC_RETURN bit 2
-    "ITE    EQ                  \n"
-    "MRSEQ  r0, MSP             \n" // r0 = MSP
-    "MRSNE  r0, PSP             \n" // else r0 = PSP
-#else
-    // Cortex-M0/M0+ (limited ISA)
-    "MOV    r0, LR              \n" // r0 = LR
-    "LSLS   r0, r0, #29         \n" // if (r0 & 4)
-    "BMI    .use_psp_m0         \n" // else
-    "MRS    r0, MSP             \n" // r0 = MSP
-    "B      .call_main_m0       \n"
-
-    ".use_psp_m0:               \n"
-    "MRS    r0, PSP             \n" // else r0 = PSP
-
-    ".call_main_m0:             \n"
-#endif
+    STK_ASM_EXTRACT_STACK_POINTER_TO_R0
 
     // even on Cortex-M3+, a long jump is safer when using LTO, we load address into register to allow far jump (>2KB)
-    "LDR    r1, =SVC_Handler_Main \n"
-    "BX     r1                  \n"
+    "LDR    r1, =StkSVCHandlerMain \n"
+    "BX     r1                     \n"
 
     STK_ASM_ALIGN_2  // ensure literal pool is aligned
     STK_ASM_POOL     // ensure literal pool is reachable
     );
 }
 
-#if STK_MPU_STACK_GUARD
-extern "C" void STK_MEMMANAGE_HANDLER()
+void FaultContext::Fill(const Word *stacked_regs, Word exc_return)
 {
+    this->frame.R0    = stacked_regs[0];
+    this->frame.R1    = stacked_regs[1];
+    this->frame.R2    = stacked_regs[2];
+    this->frame.R3    = stacked_regs[3];
+    this->frame.R12   = stacked_regs[4];
+    this->frame.LR    = stacked_regs[5];
+    this->frame.PC    = stacked_regs[6];
+    this->frame.xPSR  = stacked_regs[7];
+
+    this->EXC_RETURN  = exc_return;
+
+    this->CFSR        = SCB->CFSR;
+    this->HFSR        = SCB->HFSR;
+    this->AFSR        = SCB->AFSR;
+    this->mmfar_valid = ((this->CFSR & SCB_CFSR_MMARVALID_Msk) != 0);
+    this->bfar_valid  = ((this->CFSR & SCB_CFSR_BFARVALID_Msk) != 0);
+    this->MMFAR       = (this->mmfar_valid ? SCB->MMFAR : 0);
+    this->BFAR        = (this->bfar_valid ? SCB->BFAR : 0);
+
+    this->CONTROL     = __get_CONTROL();
+
+#if STK_MPU
+    this->mpu.CTRL    = MPU->CTRL;
+    this->mpu.MAIR0   = MPU->MAIR0;
+    this->mpu.MAIR1   = MPU->MAIR1;
+
+    Word saved_rnr = MPU->RNR;
+    for (size_t i = 0U; i < STK_STATIC_ARRAY_SIZE(this->mpu.regions); ++i)
+    {
+        MPU->RNR = i;
+        __DSB();
+        __ISB();
+        this->mpu.regions[i].RNR  = i;
+        this->mpu.regions[i].RBAR = MPU->RBAR;
+    #if STK_ARCH_ARMV8_M
+        this->mpu.regions[i].ATTR = MPU->RLAR;
+    #else
+        this->mpu.regions[i].ATTR = MPU->RASR;
+    #endif
+    }
+    MPU->RNR = saved_rnr;
+#endif
+}
+
+#if defined(STK_MEMMANAGE_HANDLER) || defined(STK_HARDFAULT_HANDLER)
+extern "C" __stk_attr_used
+void StkExceptionHandlerMain(const Word *stacked_regs, Word exc_id)
+{
+    Word exc_return;
+    __asm volatile ("mov %0, lr" : "=r" (exc_return)); // EXC_RETURN, if not already clobbered
+
     Context &ctx = GetContext();
 
     if (ctx.m_overrider != nullptr)
     {
         const TId tid = (ctx.m_stack_active != nullptr ? ctx.m_stack_active->tid : TID_NONE);
 
-        if (!ctx.m_overrider->OnExceptionMemManage(tid))
+        static FaultContext fault_ctx;
+        fault_ctx.Fill(stacked_regs, exc_return);
+
+        if (!ctx.m_overrider->OnException(static_cast<EHwException>(exc_id), tid, &fault_ctx))
         {
             // Default handler of memory management exception:
 
@@ -2238,12 +2296,64 @@ extern "C" void STK_MEMMANAGE_HANDLER()
 }
 #endif
 
+#ifdef STK_MEMMANAGE_HANDLER
+extern "C" __stk_attr_naked void STK_MEMMANAGE_HANDLER()
+{
+    __asm volatile(
+    STK_ASM_SYNTAX_UNIFIED
+#ifndef __ICCARM__
+    ".global StkExceptionHandlerMain     \n"
+#endif
+    STK_ASM_ALIGN_2
+
+    STK_ASM_EXTRACT_STACK_POINTER_TO_R0
+
+    "MOVS   r1, %0                       \n"
+    "LDR    r2, =StkExceptionHandlerMain \n"
+    "BX     r2                           \n"
+
+    STK_ASM_ALIGN_2
+    STK_ASM_POOL
+    :  /* no output */
+    : "i" (HW_EXCEPT_MEMACCESS)
+    :  /* no clobber */
+    );
+}
+#endif // STK_MPU_STACK_GUARD
+
+#ifdef STK_HARDFAULT_HANDLER
+extern "C" __stk_attr_naked void STK_HARDFAULT_HANDLER()
+{
+    __asm volatile(
+    STK_ASM_SYNTAX_UNIFIED
+#ifndef __ICCARM__
+    ".global StkExceptionHandlerMain     \n"
+#endif
+    STK_ASM_ALIGN_2
+
+    STK_ASM_EXTRACT_STACK_POINTER_TO_R0
+
+    "MOVS   r1, %0                       \n"
+    "LDR    r2, =StkExceptionHandlerMain \n"
+    "BX     r2                           \n"
+
+    STK_ASM_ALIGN_2
+    STK_ASM_POOL
+    :  /* no output */
+    : "i" (HW_EXCEPT_FATAL)
+    :  /* no clobber */
+    );
+}
+#endif
+
+STK_MPU_SHARED_CODE_SECTION
 void OnTaskRun(ITask *runnable)
 {
     STK_ASSERT(runnable != nullptr);
     runnable->Run();
 }
 
+STK_MPU_SHARED_CODE_SECTION
 void OnTaskExit()
 {
     Context &ctx = GetContext();
@@ -2345,6 +2455,7 @@ static void ConfigureTaskMpu(Stack *stack, IStackMemory *stack_memory, ITask *us
             .size        = stack_memory->GetStackSize() * sizeof(Word),
             .access_perm = hw::mpu::EMpuAccess::ACCESS_FULL,
             .mem_type    = hw::mpu::EMpuType::TYPE_NORMAL_CACHEABLE,
+            .share       = hw::mpu::EMpuShare::SHARE_NON,
             .exec        = hw::mpu::EMpuExec::EXEC_NEVER
         },
         {
@@ -2353,7 +2464,8 @@ static void ConfigureTaskMpu(Stack *stack, IStackMemory *stack_memory, ITask *us
             .size        = 0U,
             .access_perm = hw::mpu::EMpuAccess::ACCESS_NONE,
             .mem_type    = hw::mpu::EMpuType::TYPE_STRONGLY_ORDERED,
-            .exec        = hw::mpu::EMpuExec::EXEC_NEVER
+            .share       = hw::mpu::EMpuShare::SHARE_NON,
+            .exec        = hw::mpu::EMpuExec::EXEC_ALLOWED
         },
         {
             .region_idx  = STK_CORTEX_M_MPU_TASK_REGION_IDX + 2U,
@@ -2361,7 +2473,8 @@ static void ConfigureTaskMpu(Stack *stack, IStackMemory *stack_memory, ITask *us
             .size        = 0U,
             .access_perm = hw::mpu::EMpuAccess::ACCESS_NONE,
             .mem_type    = hw::mpu::EMpuType::TYPE_STRONGLY_ORDERED,
-            .exec        = hw::mpu::EMpuExec::EXEC_NEVER
+            .share       = hw::mpu::EMpuShare::SHARE_NON,
+            .exec        = hw::mpu::EMpuExec::EXEC_ALLOWED
         },
         {
             .region_idx  = STK_CORTEX_M_MPU_TASK_REGION_IDX + 3U,
@@ -2369,7 +2482,8 @@ static void ConfigureTaskMpu(Stack *stack, IStackMemory *stack_memory, ITask *us
             .size        = 0U,
             .access_perm = hw::mpu::EMpuAccess::ACCESS_NONE,
             .mem_type    = hw::mpu::EMpuType::TYPE_STRONGLY_ORDERED,
-            .exec        = hw::mpu::EMpuExec::EXEC_NEVER
+            .share       = hw::mpu::EMpuShare::SHARE_NON,
+            .exec        = hw::mpu::EMpuExec::EXEC_ALLOWED
         }
     };
 
@@ -2456,7 +2570,7 @@ static void ConfigureTaskTrustZone(Stack *stack, IStackMemory *secure_stack_memo
 
 void PlatformArmCortexM::InitStack(EStackType stack_type, Stack *stack, IStackMemory *stack_memory, ITask *user_task)
 {
-    STK_STATIC_ASSERT_DESC_N(ExceptionFrame, (sizeof(ExceptionFrame) == (8 * sizeof(Word))),
+    STK_STATIC_ASSERT_DESC_N(hw::ExceptionFrame, (sizeof(hw::ExceptionFrame) == (8 * sizeof(Word))),
         "ExceptionFrame layout must match the ARMv7-M hardware exception frame exactly");
     STK_ASSERT(stack_memory->GetStackSize() > STK_CORTEX_M_TOTAL_REGISTER_COUNT);
 
@@ -2518,7 +2632,7 @@ void PlatformArmCortexM::InitStack(EStackType stack_type, Stack *stack, IStackMe
 
     // initialize the Execution Program Status Register (EPSR) with the T-bit enabled,
     // which is required for all ARM Cortex-M processors to execute instructions
-    task_frame->exc.PSR = hw::reg::XPSR::SetThumbExecution(stk::hw::reg::XPSR::DEFAULT_INIT);
+    task_frame->exc.xPSR = hw::reg::XPSR::SetThumbExecution(stk::hw::reg::XPSR::DEFAULT_INIT);
 
 #if STK_CORTEX_M_MANAGE_LR
     // set the EXC_RETURN value to target Thread Mode using the Process Stack Pointer (PSP)
@@ -2791,7 +2905,8 @@ void PlatformArmCortexM::Resume(Timeout elapsed_ticks)
           This proxy allows user-space tasks to invoke kernel APIs safely. The privilege elevation
           occurs only for the duration of the targeted kernel service execution.
 */
-STK_MPU_SHARED_DATA_SECTION static class KernelServiceSvcProxy final : public stk::IKernelService
+STK_MPU_SHARED_DATA_SECTION
+static class KernelServiceSvcProxy final : public stk::IKernelService
 {
 public:
     /*! \brief Default constructor.
@@ -2905,7 +3020,8 @@ public:
 s_StkKernelServiceUnprivProxy;
 #endif // STK_MPU
 
-STK_MPU_SHARED_CODE_SECTION IKernelService *IKernelService::GetInstance()
+STK_MPU_SHARED_CODE_SECTION
+IKernelService *IKernelService::GetInstance()
 {
 #if STK_MPU
     if (HW_IsPrivilegedContext() || HW_IsHandlerMode())
@@ -2980,12 +3096,14 @@ bool stk::hw::SpinLock::TryLock()
     return HW_SpinLockTryLock(m_lock);
 }
 
-STK_MPU_SHARED_CODE_SECTION bool stk::hw::IsInsideISR()
+STK_MPU_SHARED_CODE_SECTION
+bool stk::hw::IsInsideISR()
 {
     return HW_IsHandlerMode();
 }
 
-STK_MPU_SHARED_CODE_SECTION bool stk::hw::IsPrivilegedContext()
+STK_MPU_SHARED_CODE_SECTION
+bool stk::hw::IsPrivilegedContext()
 {
     return HW_IsPrivilegedContext();
 }
@@ -3020,47 +3138,57 @@ void hw::mpu::ConfigureRegion(MpuRegion &reg, const struct MpuRegionConfig &cfg)
 #if STK_ARCH_ARMV8_M
     if ((cfg.size != 0U) && (cfg.access_perm != EMpuAccess::ACCESS_NONE))
     {
-        // Hardware Rules: both Base and Limit addresses must be 32-byte aligned.
+        // hardware rules: both Base and Limit addresses must be 32-byte aligned.
         STK_ASSERT((cfg.addr & 31U) == 0U);
         STK_ASSERT((cfg.size & 31U) == 0U);
 
-        // ARMv8-M Base layout: addr up to bit 5 | AP permissions | Execution state
-        reg.addr = (cfg.addr & ~31U) | static_cast<uint32_t>(cfg.access_perm) | static_cast<uint32_t>(cfg.exec);
+        // calculate RBAR: Base address | Shareability [4:3] | AP permissions [2:1] | Execution state [0]
+        reg.addr = (cfg.addr & ~31U) |
+            static_cast<uint32_t>(cfg.share) |
+            static_cast<uint32_t>(cfg.access_perm) |
+            static_cast<uint32_t>(cfg.exec);
 
-        // ARMv8-M Limit layout: limit_addr up to bit 5 | MAIR allocation index shifted | Enable Flag
-        const uint32_t limit_addr = cfg.addr + cfg.size - 1U;
-        reg.attr = (limit_addr & ~31U) | (static_cast<uint32_t>(cfg.mem_type) << 1U) | hw::mpu::RLAR_ENABLE_FLAG;
+        // calculate RLAR: Final 32-byte chunk base address | MAIR allocation index [3:1] | Enable Flag [0]
+        // find the absolute last byte address within the protected region
+        const uint32_t end_byte_addr = cfg.addr + cfg.size - 1U;
+        // clear the bottom 5 bits to isolate the base of the final 32-byte window
+        const uint32_t limit_addr = end_byte_addr & ~31U;
+        reg.attr = limit_addr | (static_cast<uint32_t>(cfg.mem_type) << 1U) | hw::mpu::RLAR_ENABLE_FLAG;
     }
     else
     {
-        // Disabled region.
+        // disabled region
         reg.addr = hw::mpu::RBAR_DISABLED_REGION(cfg.region_idx);
         reg.attr = hw::mpu::RLAR_DISABLED_REGION;
     }
 #else
-    // Legacy ARMv7-M Attribute layout
+    // legacy ARMv7-M Attribute layout
     if ((cfg.size != 0U) && (cfg.access_perm != EMpuAccess::ACCESS_NONE))
     {
-        // Hardware Rules: must be a strict power-of-two size, naturally aligned.
+        // hardware rules: must be a strict power-of-two size, naturally aligned
         STK_ASSERT((cfg.size & (cfg.size - 1U)) == 0U);
         STK_ASSERT((cfg.addr & (cfg.size - 1U)) == 0U);
 
-        // Active ARMv7-M Base layout: masked completely by its structural size constraint.
+        // active ARMv7-M Base layout: masked completely by its structural size constraint
         reg.addr = (cfg.addr & ~(cfg.size - 1U)) | (1U << 4U) | (cfg.region_idx & 0xFU);
 
-        // Active Region
+        // active Region
         const uint32_t size_field = static_cast<uint32_t>(31U - CountLeadingZeros(cfg.size)) - 1U;
 
-        // Defensive masking: Protect bits [26:24] against sentinel values or dirty enum extensions
+        // defensive masking: Protect bits [26:24] against sentinel values or dirty enum extensions
         const uint32_t ap_bits = static_cast<uint32_t>(cfg.access_perm) & 0x07000000U;
 
-        const uint32_t attr = (ap_bits | static_cast<uint32_t>(cfg.mem_type) | static_cast<uint32_t>(cfg.exec));
+        const uint32_t attr = (ap_bits |
+                static_cast<uint32_t>(cfg.share) |
+                static_cast<uint32_t>(cfg.mem_type) |
+                static_cast<uint32_t>(cfg.exec));
+
         reg.attr = attr | (size_field << 1U) | hw::mpu::RASR_ENABLE_FLAG;
     }
     else
     {
-        // Disabled region: clear out base address entirely to prevent false matches,
-        // point to the target hardware index slot and strip the RASR enable flag.
+        // disabled region: clear out base address entirely to prevent false matches,
+        // point to the target hardware index slot and strip the RASR enable flag
         reg.addr = hw::mpu::RBAR_DISABLED_REGION(cfg.region_idx);
         reg.attr = hw::mpu::RASR_DISABLED_REGION;
     }
@@ -3069,14 +3197,17 @@ void hw::mpu::ConfigureRegion(MpuRegion &reg, const struct MpuRegionConfig &cfg)
 
 void hw::mpu::ApplyRegion(const MpuRegion &reg, uint32_t index, bool non_secure)
 {
-#if STK_ARCH_ARMV8_M
+#if STK_ARCH_ARMV8_M && !STK_TZ_NON_SECURE
     MPU_Type *const MPU_ptr = (non_secure ? MPU_NS : MPU);
 #else
     MPU_Type *const MPU_ptr = MPU;
     STK_UNUSED(non_secure);
 #endif
 
-    MPU_ptr->RNR  = index;
+    MPU_ptr->RNR = index;
+    __DSB();
+    __ISB();
+
     MPU_ptr->RBAR = reg.addr;
 #if STK_ARCH_ARMV8_M
     MPU_ptr->RLAR = reg.attr;
@@ -3089,7 +3220,7 @@ void hw::mpu::Enable(bool enable, uint32_t control_flags, bool non_secure)
 {
     __DMB();
 
-#if STK_ARCH_ARMV8_M
+#if STK_ARCH_ARMV8_M && !STK_TZ_NON_SECURE
     MPU_Type *const MPU_ptr = (non_secure ? MPU_NS : MPU);
     SCB_Type *const SCB_ptr = (non_secure ? SCB_NS : SCB);
 #else
@@ -3119,7 +3250,7 @@ void hw::mpu::Enable(bool enable, uint32_t control_flags, bool non_secure)
 
 void hw::mpu::DisableRegion(uint32_t index, bool non_secure)
 {
-#if STK_ARCH_ARMV8_M
+#if STK_ARCH_ARMV8_M && !STK_TZ_NON_SECURE
     MPU_Type *const MPU_ptr = (non_secure ? MPU_NS : MPU);
 #else
     MPU_Type *const MPU_ptr = MPU;
@@ -3138,7 +3269,8 @@ void hw::mpu::DisableRegion(uint32_t index, bool non_secure)
 void hw::mpu::ConfigureTable(const MpuRegionConfig cfg_list[], size_t cfg_count,
     uint32_t control_flags, bool non_secure)
 {
-    STK_ASSERT((cfg_list != nullptr) || (cfg_count == 0U));
+    STK_ASSERT(cfg_list != nullptr);
+    STK_ASSERT(cfg_count == STK_CORTEX_M_MPU_TASK_REGION_IDX);
 
     Enable(false, 0U, non_secure);
 
@@ -3151,6 +3283,22 @@ void hw::mpu::ConfigureTable(const MpuRegionConfig cfg_list[], size_t cfg_count,
         ApplyRegion(reg, cfg.region_idx, non_secure);
     }
 
+#if STK_ARCH_ARMV8_M
+#if !STK_TZ_NON_SECURE
+    MPU_Type *const MPU_ptr = (non_secure ? MPU_NS : MPU);
+#else
+    MPU_Type *const MPU_ptr = MPU;
+    STK_UNUSED(non_secure); // no Secure/Non-Secure MPU alias on ARMv7-M
+#endif
+
+    // configure memory attributes
+    MPU->MAIR0 = MAIR0_PMSAV8_INIT;
+    MPU->MAIR1 = MAIR1_PMSAV8_INIT;
+
+    // point to the start of the per-task config area
+    MPU_ptr->RNR = STK_CORTEX_M_MPU_TASK_REGION_IDX;
+#endif
+
     Enable(true, control_flags, non_secure);
 }
 
@@ -3158,12 +3306,18 @@ void hw::mpu::ConfigureTask(TaskMpu &task_mpu, const struct MpuRegionConfig cfg_
     bool non_secure)
 {
 // Store the exact target base address register slot for this specific task
-#if STK_ARCH_ARMV8_M
-    task_mpu.mpu_start_addr = hw::PtrToWord(non_secure ? &MPU_NS->RBAR : &MPU->RBAR);
+#if STK_ARCH_ARMV8_M && !STK_TZ_NON_SECURE
+    MPU_Type *const MPU_ptr = (non_secure ? MPU_NS : MPU);
 #else
-    task_mpu.mpu_start_addr = hw::PtrToWord(&MPU->RBAR);
+    MPU_Type *const MPU_ptr = MPU;
     STK_UNUSED(non_secure);
 #endif
+
+    // point to the start of per-task config area
+    MPU_ptr->RNR = STK_CORTEX_M_MPU_TASK_REGION_IDX;
+    __DSB();
+    __ISB();
+    task_mpu.mpu_start_addr = hw::PtrToWord(&MPU->RBAR);
 
     for (size_t i = 0; i < cfg_count; ++i)
     {
