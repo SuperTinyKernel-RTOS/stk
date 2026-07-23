@@ -864,6 +864,16 @@ void stk_cs_enter(stk_cs_t *cs);
 */
 void stk_cs_exit(stk_cs_t *cs);
 
+/*! \brief     Enter global critical section - disable context switches on current core.
+    \note      Supports nesting (number of enter calls must match number of exit calls).
+*/
+void stk_critical_section_enter(void);
+
+/*! \brief     Leave global critical section - re-enable context switches.
+    \note      Must be called once for each previous stk_critical_section_enter().
+*/
+void stk_critical_section_exit(void);
+
 // ----- Mutex -----------------------------------------------------------------
 
 /*! \brief     A memory size (multiples of stk_word_t) required for Mutex instance.

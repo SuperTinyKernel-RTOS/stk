@@ -490,7 +490,7 @@
     #endif
 #endif
 
-/*! \def   stk_cs_NESTINGS_MAX
+/*! \def   STK_CS_NESTINGS_MAX
     \brief Maximum allowable recursion depth for critical section entry (default: 16).
     \note  Establishes a hard deterministic bound for nested calls to Context::EnterCriticalSection()
            and Context::UnprivEnterCriticalSection(). This limit is mandatory for safety-critical
@@ -500,8 +500,8 @@
            KERNEL_PANIC_CS_NESTING_OVERFLOW to transition the system into a Safe State.
            Can be overridden in stk_config.h based on Worst-Case Stack Usage (WCSU) analysis.
 */
-#ifndef stk_cs_NESTINGS_MAX
-    #define stk_cs_NESTINGS_MAX (16U)
+#ifndef STK_CS_NESTINGS_MAX
+    #define STK_CS_NESTINGS_MAX (16U)
 #endif
 
 /*! \def   STK_ARCH_CPU_COUNT

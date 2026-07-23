@@ -37,10 +37,15 @@ namespace stk
         void SwitchToNext() override {}
         EWaitResult Wait(ISyncObject *sobj, IMutex *mutex, Timeout timeout) override
         {
-            (void)sobj;
-            (void)mutex;
-            (void)timeout;
+            STK_UNUSED(sobj);
+            STK_UNUSED(mutex);
+            STK_UNUSED(timeout);
             return WAIT_RESULT_FAIL;
+        }
+        void Wake(ISyncObject *sobj, bool all)
+        {
+            STK_UNUSED(sobj);
+            STK_UNUSED(all);
         }
         Timeout Suspend() override { return 1; }
         void Resume(Timeout elapsed_ticks) override { (void)elapsed_ticks; }

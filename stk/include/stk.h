@@ -872,11 +872,11 @@ protected:
             {
                 if (all)
                 {
-                    ISyncObject::WakeAll(sobj->GetWaitList());
+                    ISyncObject::WakeAll(GetWaitList(sobj));
                 }
                 else
                 {
-                    ISyncObject::WakeOne(sobj->GetWaitList());
+                    ISyncObject::WakeOne(GetWaitList(sobj));
                 }
             }
             else

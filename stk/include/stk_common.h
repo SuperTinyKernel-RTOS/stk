@@ -28,12 +28,6 @@ namespace tz { namespace nsec { namespace util {
     class CmseISyncObjectWrapper;
 }}}
 
-// ARM TrustZone
-#ifdef _STK_CORTEX_M_TRUSTZONE_NON_SECURE
-extern "C" void NSC_stk_ISyncObject_WakeOne(ISyncObject *sobj);
-extern "C" void NSC_stk_ISyncObject_WakeAll(ISyncObject *sobj);
-#endif
-
 /*! \enum    EAccessMode
     \brief   Hardware access modes by the task.
     \note    Can be used as a bit-field.
@@ -68,7 +62,7 @@ enum EKernelPanicId : uint32_t
     KERNEL_PANIC_ASSERT              = 3U,  //!< Internal assertion failed (maps from STK_ASSERT).
     KERNEL_PANIC_HRT_HARD_FAULT      = 4U,  //!< Kernel running in KERNEL_HRT mode reported deadline failure of the task.
     KERNEL_PANIC_CPU_EXCEPTION       = 5U,  //!< CPU reported an exception and halted execution.
-    KERNEL_PANIC_CS_NESTING_OVERFLOW = 6U,  //!< Critical section nesting limit exceeded: violation of stk_cs_NESTINGS_MAX.
+    KERNEL_PANIC_CS_NESTING_OVERFLOW = 6U,  //!< Critical section nesting limit exceeded: violation of STK_CS_NESTINGS_MAX.
     KERNEL_PANIC_UNKNOWN_SVC         = 7U,  //!< Unknown service command received by SVC handler.
     KERNEL_PANIC_BAD_STATE           = 8U,  //!< Kernel entered unexpected (bad) state.
     KERNEL_PANIC_BAD_MODE            = 9U,  //!< Kernel is in bad/unsupported mode for the current operation.
@@ -475,7 +469,7 @@ protected:
 */
 class ISyncObject : public util::DListEntry<ISyncObject, false>
 {
-    friend class IKernel;
+    friend class IKernelService;
     friend class tz::nsec::util::CmseISyncObjectWrapper;
 
 public:
@@ -577,8 +571,9 @@ public:
     }
 
     /*! \brief     Get list of tasks blocked on this object.
+        \note      Read-only access for diagnostics / telemetry.
     */
-    IWaitObject::ListHeadType &GetWaitList()
+    const IWaitObject::ListHeadType &GetWaitList() const
     {
         return m_wait_list;
     }
@@ -610,6 +605,13 @@ protected:
         \note      Must be called inside the critical section (see \a hw::CriticalSection, \a sync::ScopedCrticalSection).
     */
     virtual void WakeAll();
+
+    /*! \brief     Get list of tasks blocked on this object.
+    */
+    IWaitObject::ListHeadType &GetWaitList()
+    {
+        return m_wait_list;
+    }
 
     IWaitObject::ListHeadType m_wait_list; //!< Tasks blocked on this object.
 };
@@ -1125,7 +1127,7 @@ public:
     virtual void ProcessTick() = 0;
 
     /*! \brief     Cause a hard fault of the system.
-        \note      Normally called by the Kernel when one of the scheduled tasks missed its deadline (see stk::KERNEL_HRT).
+        \note      Called by the Kernel when task missed its deadline in HRT mode (see stk::KERNEL_HRT).
     */
     virtual void ProcessHardFault() = 0;
 
@@ -1534,17 +1536,28 @@ public:
     */
     virtual void SwitchToNext() = 0;
 
-    /*! \brief     Put calling process into a waiting state until synchronization object is signaled or timeout occurs.
-        \note      This function implements core blocking logic using the Monitor pattern to ensure atomicity between state check and suspension.
-        \note      The kernel automatically unlocks the provided \a mutex before the task is suspended and re-locks it before this function returns.
+    /*! \brief     Put calling process into a waiting state until synchronization object is
+                   signaled or timeout occurs.
+        \note      This function implements core blocking logic using the Monitor pattern to
+                   ensure atomicity between state check and suspension.
+        \note      The kernel automatically unlocks the provided \a mutex before the task is
+                   suspended and re-locks it before this function returns.
         \param[in] sobj: Synchronization object to wait on.
         \param[in] mutex: Mutex protecting the state of the synchronization object.
-        \param[in] timeout: Maximum wait time (ticks). Use \c WAIT_INFINITE to block indefinitely, use \c NO_WAIT to poll without blocking.
+        \param[in] timeout: Maximum wait time (ticks). Use \c WAIT_INFINITE to block indefinitely,
+                   use \c NO_WAIT to poll without blocking.
         \return    Wait result (see \c EWaitResult).
         \warning   ISR-unsafe.
     */
     virtual EWaitResult Wait(ISyncObject *sobj, IMutex *mutex, Timeout timeout) = 0;
 
+    /*! \brief     Wake one or all tasks currently waiting on a synchronization object.
+        \param[in] sobj: Synchronization object whose waiting queue will be notified.
+        \param[in] all: If \c true, unblocks all waiting tasks (broadcast mode); if \c false,
+                   unblocks only the next waiting task (signal mode).
+        \see       Wait
+        \warning   ISR-unsafe.
+    */
     virtual void Wake(ISyncObject *sobj, bool all) = 0;
 
     /*! \brief     Suspend scheduling.
@@ -1589,24 +1602,23 @@ protected:
     /*! \brief Destructor.
     */
     ~IKernelService() = default;
+
+    /*! \brief IWaitObject::GetWaitList() access helper.
+    */
+    static __stk_forceinline IWaitObject::ListHeadType &GetWaitList(ISyncObject *sobj)
+    {
+        return sobj->GetWaitList();
+    }
 };
 
 inline void ISyncObject::WakeOne()
 {
-#ifdef _STK_CORTEX_M_TRUSTZONE_NON_SECURE
-    NSC_stk_ISyncObject_WakeOne(this);
-#else
     IKernelService::GetInstance()->Wake(this, false);
-#endif
 }
 
 inline void ISyncObject::WakeAll()
 {
-#ifdef _STK_CORTEX_M_TRUSTZONE_NON_SECURE
-    NSC_stk_ISyncObject_WakeAll(this);
-#else
     IKernelService::GetInstance()->Wake(this, true);
-#endif
 }
 
 } // namespace stk

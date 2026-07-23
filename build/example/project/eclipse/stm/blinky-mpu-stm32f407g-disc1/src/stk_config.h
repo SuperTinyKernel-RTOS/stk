@@ -22,6 +22,10 @@
 #define STK_MPU             (1)
 #define STK_MPU_STACK_GUARD (1)
 
+// Let STK process MemManage and HardFault ISRs
+#define STK_USE_MEMMANAGE_HANDLER (1)
+#define STK_USE_HARDFAULT_HANDLER (1)
+
 #ifdef _STK_ARCH_ARM_CORTEX_M
     // Redefine if SysTick handler name is different from SysTick_Handler
     //#define STK_SYSTICK_HANDLER SysTick_Handler

@@ -158,6 +158,23 @@ TEST(UserTask, NonTZ_GetSecureStackMemory)
     CHECK_TRUE(nullptr == task.GetSecureStackMemory());
 }
 
+TEST(UserTask, MPU_GetMpuRegions)
+{
+    TaskMock<ACCESS_USER> task;
+
+    uint8_t regions = -1;
+
+    // by default Mpu configuration is not provided by the task
+    CHECK_TRUE(nullptr == task.GetMpuRegions(regions));
+
+    // must clear regions count
+    CHECK_EQUAL(0U, regions);
+}
+
+// ============================================================================ //
+// ======================= StackMemoryWrapper ================================= //
+// ============================================================================ //
+
 TEST_GROUP(StackMemoryWrapper)
 {
     void setup() {}

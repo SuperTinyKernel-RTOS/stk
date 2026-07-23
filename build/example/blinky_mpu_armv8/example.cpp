@@ -22,7 +22,7 @@ using namespace bsp;
 #ifdef _PICO_H
 static constexpr size_t TASK_STACK_SIZE = 1024U;
 #else
-static constexpr size_t TASK_STACK_SIZE = 256;
+static constexpr size_t TASK_STACK_SIZE = 256U;
 #endif
 
 // One flag bit per LED task; task 0 (RED) goes first
@@ -164,7 +164,7 @@ private:
 
             // uncommenting this will cause MemManage exception due to access of Secure
             // memory region by Non-Secure task
-            ++g_SecureCounter;
+            //++g_SecureCounter;
         }
     }
 
@@ -248,7 +248,7 @@ private:
 class PlatformEventHandler final : public stk::IPlatform::IEventOverrider
 {
 #if STK_MPU
-    const stk::MpuRegionConfig *OnConfigureMpu(uint8_t &out_count)
+    const stk::MpuRegionConfig *OnConfigureMpu(uint8_t &out_count) override
     {
         using namespace stk;
 
@@ -325,7 +325,7 @@ class PlatformEventHandler final : public stk::IPlatform::IEventOverrider
     }
 #endif
 
-    bool OnException(stk::EHwException exc_id, stk::TId tid, const struct stk::FaultContext *const ctx)
+    bool OnException(stk::EHwException exc_id, stk::TId tid, const struct stk::FaultContext *const ctx) override
     {
         if (exc_id == stk::HW_EXCEPT_MEMACCESS)
         {
@@ -352,7 +352,10 @@ class PlatformEventHandler final : public stk::IPlatform::IEventOverrider
         printf("CONTROL: 0x%08X (nPRIV=%u)\r\n", (unsigned int)ctx->CONTROL, (unsigned int)(ctx->CONTROL & 1U));
 
         printf("--- MPU Status & Config ---\r\n");
-        printf("CTRL: 0x%08X    MAIR0: 0x%08X    MAIR1: 0x%08X\r\n", (unsigned int)ctx->mpu.CTRL, (unsigned int)ctx->mpu.MAIR0, (unsigned int)ctx->mpu.MAIR1);
+        printf("CTRL:  0x%08X\r\n", (unsigned int)ctx->mpu.CTRL);
+    #if STK_ARCH_ARMV8_M
+        printf("MAIR0: 0x%08X    MAIR1: 0x%08X\r\n", (unsigned int)ctx->mpu.MAIR0, (unsigned int)ctx->mpu.MAIR1);
+    #endif
 
         printf("--- MPU Regions Configuration ---\r\n");
         for (size_t i = 0U; i < 8U; i++)
@@ -383,6 +386,7 @@ void RunExample()
     // allocate scheduling kernel for 3 threads (tasks) with Round-Robin scheduling strategy
     static Kernel<KernelMode, 5, SwitchStrategyRR, PlatformDefault> kernel;
 
+    // for MPU configuration and MemFault/HardFault exceptions processing
     static PlatformEventHandler event_overrider;
     kernel.GetPlatform()->SetEventOverrider(&event_overrider);
 

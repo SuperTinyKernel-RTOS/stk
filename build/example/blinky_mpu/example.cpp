@@ -16,12 +16,8 @@
 
 using namespace bsp;
 
-// R2350 requires larger stack due to stack-memory heavy SDK API
-#ifdef _PICO_H
-enum { TASK_STACK_SIZE = 1024 };
-#else
-enum { TASK_STACK_SIZE = 256 };
-#endif
+// Size of the task's stack (number of stk::Word)
+static constexpr size_t TASK_STACK_SIZE = 256U;
 
 // One flag bit per LED task; task 0 (RED) goes first
 static constexpr uint32_t FLAGS_ALL[] = {
@@ -192,7 +188,7 @@ private:
 
 class PlatformEventHandler final : public stk::IPlatform::IEventOverrider
 {
-    const stk::MpuRegionConfig *OnConfigureMpu(uint8_t &out_count)
+    const stk::MpuRegionConfig *OnConfigureMpu(uint8_t &out_count) override
     {
         using namespace stk::hw::mpu;
 
@@ -269,25 +265,49 @@ class PlatformEventHandler final : public stk::IPlatform::IEventOverrider
         return mpu_table;
     }
 
-    bool OnExceptionMemManage(stk::TId tid)
+    bool OnException(stk::EHwException exc_id, stk::TId tid, const struct stk::FaultContext *const ctx) override
     {
-        volatile uint32_t MMFAR = SCB->MMFAR;
-        volatile uint32_t MMFSR = SCB->CFSR & 0x000000FFU;
-        volatile uint32_t ctrl  = __get_CONTROL();
-
-        printf("MemManage exception:\n");
-        printf("    MMFAR   = 0x%08x\n", (unsigned int)MMFAR);
-        printf("    MMFSR   = 0x%08x\n", (unsigned int)MMFSR);
-        printf("    CONTROL = 0x%08x (nPRIV=%u)\n", (unsigned int)ctrl, (unsigned int)(ctrl & 1U));
-        printf("    ITask * = 0x%08x:\n", (unsigned int)tid);
-
-        for (uint32_t region = 0; region < STK_CORTEX_M_MPU_REGIONS_MAX; ++region)
+        if (exc_id == stk::HW_EXCEPT_MEMACCESS)
         {
-            MPU->RNR = region;
-            printf("    Region %u: RBAR=0x%08x RASR=0x%08x\n",
-               (unsigned int)region, (unsigned int)MPU->RBAR, (unsigned int)MPU->RASR);
+            printf("\r\n================ MEMMANAGE FAULT DETECTED ================\r\n");
+        }
+        else
+        {
+            printf("\r\n================== HARD FAULT DETECTED ===================\r\n");
         }
 
+        printf("ITask *: 0x%08X:\r\n", (unsigned int)tid);
+
+        printf("EXC_RETURN: 0x%08X\r\n\r\n", (unsigned int)ctx->EXC_RETURN);
+
+        printf("--- Stacked CPU Registers ---\r\n");
+        printf("R0:   0x%08X    R1:   0x%08X    R2:   0x%08X\r\n", (unsigned int)ctx->frame.R0, (unsigned int)ctx->frame.R1, (unsigned int)ctx->frame.R2);
+        printf("R3:   0x%08X    R12:  0x%08X    LR:   0x%08X\r\n", (unsigned int)ctx->frame.R3, (unsigned int)ctx->frame.R12, (unsigned int)ctx->frame.LR);
+        printf("PC:   0x%08X    xPSR: 0x%08X\r\n\r\n", (unsigned int)ctx->frame.PC, (unsigned int)ctx->frame.xPSR);
+
+        printf("--- System Control Registers ---\r\n");
+        printf("CFSR: 0x%08X    HFSR: 0x%08X    AFSR: 0x%08X\r\n", (unsigned int)ctx->CFSR, (unsigned int)ctx->HFSR, (unsigned int)ctx->AFSR);
+        printf("MMFAR: 0x%08X (%s)\r\n", (unsigned int)ctx->MMFAR, ctx->mmfar_valid ? "VALID" : "INVALID");
+        printf("BFAR:  0x%08X (%s)\r\n\r\n", (unsigned int)ctx->BFAR, ctx->bfar_valid ? "VALID" : "INVALID");
+        printf("CONTROL: 0x%08X (nPRIV=%u)\r\n", (unsigned int)ctx->CONTROL, (unsigned int)(ctx->CONTROL & 1U));
+
+        printf("--- MPU Status & Config ---\r\n");
+        printf("CTRL:  0x%08X\r\n", (unsigned int)ctx->mpu.CTRL);
+    #if STK_ARCH_ARMV8_M
+        printf("MAIR0: 0x%08X    MAIR1: 0x%08X\r\n", (unsigned int)ctx->mpu.MAIR0, (unsigned int)ctx->mpu.MAIR1);
+    #endif
+
+        printf("--- MPU Regions Configuration ---\r\n");
+        for (size_t i = 0U; i < 8U; i++)
+        {
+            printf("  Region %u -> RBAR: 0x%08X    RLAR: 0x%08X\r\n",
+                   (unsigned int)i,
+                   (unsigned int)ctx->mpu.regions[i].RBAR,
+                   (unsigned int)ctx->mpu.regions[i].ATTR);
+        }
+        printf("=====================================================\r\n");
+
+        __stk_debug_break();
         return false;
     }
 };
@@ -304,6 +324,7 @@ void RunExample()
     // allocate scheduling kernel for 3 threads (tasks) with Round-Robin scheduling strategy
     static Kernel<KernelMode, 5, SwitchStrategyRR, PlatformDefault> kernel;
 
+    // for MPU configuration and MemFault/HardFault exceptions processing
     static PlatformEventHandler event_overrider;
     kernel.GetPlatform()->SetEventOverrider(&event_overrider);
 

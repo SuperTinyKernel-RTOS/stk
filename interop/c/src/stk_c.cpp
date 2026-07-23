@@ -648,6 +648,8 @@ void stk_tls_set(void *ptr)
 // Critical Section
 // -----------------------------------------------------------------------------
 
+static hw::CriticalSection s_GlobalCriticalSection;
+
 struct stk_cs_t
 {
     hw::CriticalSection handle;
@@ -682,6 +684,16 @@ void stk_cs_exit(stk_cs_t *cs)
     STK_ASSERT(cs != nullptr);
 
     cs->handle.Exit();
+}
+
+void stk_critical_section_enter(void)
+{
+    s_GlobalCriticalSection.Enter();
+}
+
+void stk_critical_section_exit(void)
+{
+    s_GlobalCriticalSection.Exit();
 }
 
 // =============================================================================

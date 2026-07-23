@@ -349,10 +349,16 @@ public:
 
     EWaitResult Wait(ISyncObject *sobj, IMutex *mutex, Timeout timeout) override
     {
-        (void)sobj;
-        (void)mutex;
-        (void)timeout;
+        STK_UNUSED(sobj);
+        STK_UNUSED(mutex);
+        STK_UNUSED(timeout);
         return WAIT_RESULT_FAIL;
+    }
+
+    void Wake(ISyncObject *sobj, bool all) override
+    {
+        STK_UNUSED(sobj);
+        STK_UNUSED(all);
     }
 
     Timeout Suspend() override

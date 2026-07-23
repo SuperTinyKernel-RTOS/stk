@@ -15,8 +15,38 @@
     #include <arm_cmse.h> // for ARM TrustZone
 #endif
 
+/*! \def   STK_ARCH_ARMV6_M
+    \brief ARMv6-M platform (Cortex-M0, Cortex-M0+, Cortex-M1).
+*/
+#ifndef STK_ARCH_ARMV6_M
+    #if defined(__ARM_ARCH_6M__)
+        #define STK_ARCH_ARMV6_M (1)
+    #else
+        #define STK_ARCH_ARMV6_M (0)
+    #endif
+#else
+    #if (STK_ARCH_ARMV6_M == 0) && defined(__ARM_ARCH_6M__)
+        #error "STK_ARCH_ARMV6_M must be defined as 1 on ARMv6-M platform!"
+    #endif
+#endif
+
+/*! \def   STK_ARCH_ARMV7_M
+    \brief ARMv7-M platform (Cortex-M3, Cortex-M4, Cortex-M7).
+*/
+#ifndef STK_ARCH_ARMV7_M
+    #if defined(__ARM_ARCH_7M__) || defined(__ARM_ARCH_7EM__)
+        #define STK_ARCH_ARMV7_M (1)
+    #else
+        #define STK_ARCH_ARMV7_M (0)
+    #endif
+#else
+    #if (STK_ARCH_ARMV7_M == 0) && (defined(__ARM_ARCH_7M__) || defined(__ARM_ARCH_7EM__))
+        #error "STK_ARCH_ARMV7_M must be defined as 1 on ARMv7-M platform!"
+    #endif
+#endif
+
 /*! \def   STK_ARCH_ARMV8_M
-    \brief ARMv8-M platform.
+    \brief ARMv8-M platform (Cortex-M23, Cortex-M33, Cortex-M55, Cortex-M85).
 */
 #ifndef STK_ARCH_ARMV8_M
     #if defined(__ARM_ARCH_8M_MAIN__) || defined(__ARM_ARCH_8M_BASE__)
@@ -25,9 +55,19 @@
         #define STK_ARCH_ARMV8_M (0)
     #endif
 #else
-    #if defined(__ARM_ARCH_8M_MAIN__) || defined(__ARM_ARCH_8M_BASE__)
-        #error "STK_ARCH_ARMV8_M must be defined on ARMv8-M platform!"
+    #if (STK_ARCH_ARMV8_M == 0) && (defined(__ARM_ARCH_8M_MAIN__) || defined(__ARM_ARCH_8M_BASE__))
+        #error "STK_ARCH_ARMV8_M must be defined as 1 on ARMv8-M platform!"
     #endif
+#endif
+
+// Expect at least one supported target architecture.
+#if !STK_ARCH_ARMV6_M && !STK_ARCH_ARMV7_M && !STK_ARCH_ARMV8_M
+    #error "Unsupported ARM architecture target!"
+#endif
+
+// Enforce single active target architecture state.
+#if (STK_ARCH_ARMV6_M + STK_ARCH_ARMV7_M + STK_ARCH_ARMV8_M) > 1
+    #error "Multiple STK_ARCH_ARMvX flags active simultaneously! Check build environment definitions."
 #endif
 
 /*! \def   STK_TZ_SECURE
@@ -571,7 +611,10 @@ struct FaultContext
             Word RNR, RBAR, ATTR;
         };
 
-        Word   CTRL, MAIR0, MAIR1;
+        Word   CTRL;
+    #if STK_ARCH_ARMV8_M
+        Word   MAIR0, MAIR1;
+    #endif
         Region regions[STK_CORTEX_M_MPU_REGIONS_MAX];
     };
 

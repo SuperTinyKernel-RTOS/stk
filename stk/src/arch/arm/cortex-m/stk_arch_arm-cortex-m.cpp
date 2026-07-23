@@ -126,14 +126,24 @@ using namespace stk;
     #define STK_SVC_HANDLER SVC_Handler
 #endif
 
-//! MemManage_Handler
-#ifndef STK_MEMMANAGE_HANDLER
-    #define STK_MEMMANAGE_HANDLER MemManage_Handler
+//! MemManage_Handler (not processed by default, define STK_USE_MEMMANAGE_HANDLER=1 to process it by STK).
+#ifndef STK_USE_MEMMANAGE_HANDLER
+#define STK_USE_MEMMANAGE_HANDLER (0)
+#endif
+#if STK_USE_MEMMANAGE_HANDLER
+    #ifndef STK_MEMMANAGE_HANDLER
+        #define STK_MEMMANAGE_HANDLER MemManage_Handler
+    #endif
 #endif
 
-//! HardFault_Handler
-#ifndef STK_HARDFAULT_HANDLER
-    #define STK_HARDFAULT_HANDLER HardFault_Handler
+//! HardFault_Handler (not processed by default, define STK_USE_HARDFAULT_HANDLER=1 to process it by STK).
+#ifndef STK_USE_HARDFAULT_HANDLER
+#define STK_USE_HARDFAULT_HANDLER (0)
+#endif
+#if STK_USE_HARDFAULT_HANDLER
+    #ifndef STK_HARDFAULT_HANDLER
+        #define STK_HARDFAULT_HANDLER HardFault_Handler
+    #endif
 #endif
       
 // Inline ASM helpers:
@@ -310,14 +320,13 @@ struct TaskFrame
 };
 
 // Shortcuts:
-#define STK_ASM_EXIT_FROM_HANDLER  "BX lr"  // use in naked exception/ISR handlers
-#define STK_ASM_EXIT_FROM_FUNCTION "BX lr"  // use in naked C-callable wrapper functions
+#define STK_ASM_EXIT_FROM_HANDLER  "BX LR"  // use in naked exception/ISR handlers
 #define STK_ASM_DISABLE_INTERRUPTS "CPSID i"
 #define STK_ASM_ENABLE_INTERRUPTS  "CPSIE i"
 
 // Local static functions:
-extern void OnTaskRun(ITask *runnable);
-extern void OnTaskExit();
+static void OnTaskRun(ITask *runnable);
+static void OnTaskExit();
 static void OnSchedulerSleep();
 static void OnSchedulerSleepOverride();
 static void OnSchedulerExit();
@@ -421,23 +430,26 @@ static __stk_forceinline bool HW_InterruptsDisabled()
 /*! \brief     Enter critical section.
     \return    Session value which has to be supplied to HW_ExitCriticalSection().
 */
-static __stk_forceinline void HW_CriticalSectionStart(uint32_t &SES)
+static __stk_forceinline uint32_t HW_CriticalSectionStart()
 {
-    SES = __get_PRIMASK();
+    const uint32_t ses = __get_PRIMASK();
     HW_DisableInterrupts();
+
     // ensure the disable is recognized before subsequent code
     __DSB();
     __ISB();
+
+    return ses;
 }
 
 /*! \brief     Exit critical section.
     \param[in] ses: Session value obtained by HW_EnterCriticalSection().
 */
-static __stk_forceinline void HW_CriticalSectionEnd(uint32_t SES)
+static __stk_forceinline void HW_CriticalSectionEnd(uint32_t ses)
 {
     // ensure all memory work is finished before re-enabling
     __DSB();
-    __set_PRIMASK(SES);
+    __set_PRIMASK(ses);
     // synchronization point: any pending interrupt can be serviced immediately at this boundary
     __ISB();
 }
@@ -600,8 +612,7 @@ static __stk_forceinline void HW_SpinLockUnlock(volatile bool &lock)
 */
 static __stk_forceinline bool HW_SpinLockTryLock(volatile bool &lock)
 {
-    uint32_t ses;
-    HW_CriticalSectionStart(ses);
+    const uint32_t ses = HW_CriticalSectionStart();
 
     if (lock)
     {
@@ -1289,14 +1300,14 @@ static struct Context final : public PlatformContext
         }
 
         // increase nesting count within a limit
-        if (++m_csu_nesting > stk_cs_NESTINGS_MAX)
+        if (++m_csu_nesting > STK_CS_NESTINGS_MAX)
         {
             // invariant violated: exceeded max allowed number of recursions
             STK_KERNEL_PANIC(KERNEL_PANIC_CS_NESTING_OVERFLOW);
         }
     }
 
-    __stk_forceinline bool OnExitCriticalSection(Word &restore_ses)
+    __stk_forceinline bool OnExitCriticalSection(uint32_t &restore_ses)
     {
         bool released = false;
 
@@ -1319,16 +1330,14 @@ static struct Context final : public PlatformContext
 
     __stk_forceinline void EnterCriticalSection()
     {
-        // disable local interrupts first to prevent self-deadlock
-        uint32_t current_ses;
-        HW_CriticalSectionStart(current_ses);
+        const uint32_t current_ses = HW_CriticalSectionStart();
 
         OnEnterCriticalSection(current_ses);
     }
 
     __stk_forceinline void ExitCriticalSection()
     {
-        Word restore_ses;
+        uint32_t restore_ses;
         if (OnExitCriticalSection(restore_ses))
         {
             HW_CriticalSectionEnd(restore_ses);
@@ -1418,7 +1427,7 @@ static struct Context final : public PlatformContext
     Timeout       m_sleep_ticks;    //!< sleep ticks of the current session
     uint32_t      m_sleep_error;    //!< sleep error which is accounted in the next sleep
 #endif
-    Word          m_csu;            //!< user critical session
+    uint32_t      m_csu;            //!< user critical session
     uint8_t       m_csu_nesting;    //!< depth of user critical session nesting
     volatile bool m_started;        //!< 'true' when in started state
     bool          m_exiting;        //!< 'true' when is exiting the scheduling process
@@ -2083,6 +2092,8 @@ extern "C" __stk_attr_used void StkSVCHandlerMain(Word *svc_args)
 
 #if STK_MPU
     case SVC_BOOST_PRIV: {
+        // limit access to Privilege escalation to STK_MPU_SHARED_CODE_SECTION functions only
+        // which are read-only and immutable
         if ((frame->PC >= hw::PtrToWord(__stk_mpu_shared_code_start)) &&
             (frame->PC <= hw::PtrToWord(__stk_mpu_shared_code_end)))
         {
@@ -2097,7 +2108,7 @@ extern "C" __stk_attr_used void StkSVCHandlerMain(Word *svc_args)
 
 #ifdef CONTROL_nPRIV_Msk
     case SVC_ENTER_CRITICAL: {
-        const Word saved_basepri = __get_BASEPRI();
+        const uint32_t saved_basepri = __get_BASEPRI();
         __set_BASEPRI(static_cast<uint32_t>(1U) << __NVIC_PRIO_BITS); // mask all configurable-priority interrupts
         __DSB(); // BASEPRI write visible to bus before SVC return
         __ISB(); // pipeline flush: mask in effect at first caller instruction
@@ -2106,7 +2117,7 @@ extern "C" __stk_attr_used void StkSVCHandlerMain(Word *svc_args)
         break; }
 
     case SVC_EXIT_CRITICAL: {
-        Word saved_basepri;
+        uint32_t saved_basepri;
         if (GetContext().OnExitCriticalSection(saved_basepri))
         {
             __DSB();                      // drain pending stores before widening interrupt window
@@ -2232,29 +2243,42 @@ void FaultContext::Fill(const Word *stacked_regs, Word exc_return)
     this->frame.xPSR  = stacked_regs[7];
 
     this->EXC_RETURN  = exc_return;
+    this->CONTROL     = __get_CONTROL();
 
+#if STK_ARCH_ARMV6_M
+    // ARMv6-M (Cortex-M0/M0+) does not have CFSR, HFSR, AFSR, MMFAR, or BFAR.
+    this->CFSR        = 0U;
+    this->HFSR        = 0U;
+    this->AFSR        = 0U;
+    this->mmfar_valid = false;
+    this->bfar_valid  = false;
+    this->MMFAR       = 0U;
+    this->BFAR        = 0U;
+#else
+    // ARMv7-M / ARMv8-M
     this->CFSR        = SCB->CFSR;
     this->HFSR        = SCB->HFSR;
     this->AFSR        = SCB->AFSR;
-    this->mmfar_valid = ((this->CFSR & SCB_CFSR_MMARVALID_Msk) != 0);
-    this->bfar_valid  = ((this->CFSR & SCB_CFSR_BFARVALID_Msk) != 0);
-    this->MMFAR       = (this->mmfar_valid ? SCB->MMFAR : 0);
-    this->BFAR        = (this->bfar_valid ? SCB->BFAR : 0);
-
-    this->CONTROL     = __get_CONTROL();
+    this->mmfar_valid = ((this->CFSR & SCB_CFSR_MMARVALID_Msk) != 0U);
+    this->bfar_valid  = ((this->CFSR & SCB_CFSR_BFARVALID_Msk) != 0U);
+    this->MMFAR       = (this->mmfar_valid ? SCB->MMFAR : 0U);
+    this->BFAR        = (this->bfar_valid ? SCB->BFAR : 0U);
+#endif
 
 #if STK_MPU
     this->mpu.CTRL    = MPU->CTRL;
+#if STK_ARCH_ARMV8_M
     this->mpu.MAIR0   = MPU->MAIR0;
     this->mpu.MAIR1   = MPU->MAIR1;
+#endif
 
-    Word saved_rnr = MPU->RNR;
+    const Word saved_rnr = MPU->RNR;
     for (size_t i = 0U; i < STK_STATIC_ARRAY_SIZE(this->mpu.regions); ++i)
     {
-        MPU->RNR = i;
+        MPU->RNR = static_cast<Word>(i);
         __DSB();
         __ISB();
-        this->mpu.regions[i].RNR  = i;
+        this->mpu.regions[i].RNR  = static_cast<Word>(i);
         this->mpu.regions[i].RBAR = MPU->RBAR;
     #if STK_ARCH_ARMV8_M
         this->mpu.regions[i].ATTR = MPU->RLAR;
@@ -2266,7 +2290,8 @@ void FaultContext::Fill(const Word *stacked_regs, Word exc_return)
 #endif
 }
 
-#if defined(STK_MEMMANAGE_HANDLER) || defined(STK_HARDFAULT_HANDLER)
+#if (STK_USE_MEMMANAGE_HANDLER && defined(STK_MEMMANAGE_HANDLER)) ||\
+    (STK_USE_HARDFAULT_HANDLER && defined(STK_HARDFAULT_HANDLER))
 extern "C" __stk_attr_used
 void StkExceptionHandlerMain(const Word *stacked_regs, Word exc_id)
 {
@@ -2277,7 +2302,11 @@ void StkExceptionHandlerMain(const Word *stacked_regs, Word exc_id)
 
     if (ctx.m_overrider != nullptr)
     {
+    #if STK_STACK_NEEDS_TASK_ID
         const TId tid = (ctx.m_stack_active != nullptr ? ctx.m_stack_active->tid : TID_NONE);
+    #else
+        const TId tid = TID_NONE;
+    #endif
 
         static FaultContext fault_ctx;
         fault_ctx.Fill(stacked_regs, exc_return);
@@ -2296,7 +2325,7 @@ void StkExceptionHandlerMain(const Word *stacked_regs, Word exc_id)
 }
 #endif
 
-#ifdef STK_MEMMANAGE_HANDLER
+#if STK_USE_MEMMANAGE_HANDLER && defined(STK_MEMMANAGE_HANDLER)
 extern "C" __stk_attr_naked void STK_MEMMANAGE_HANDLER()
 {
     __asm volatile(
@@ -2321,7 +2350,7 @@ extern "C" __stk_attr_naked void STK_MEMMANAGE_HANDLER()
 }
 #endif // STK_MPU_STACK_GUARD
 
-#ifdef STK_HARDFAULT_HANDLER
+#if STK_USE_HARDFAULT_HANDLER && defined(STK_HARDFAULT_HANDLER)
 extern "C" __stk_attr_naked void STK_HARDFAULT_HANDLER()
 {
     __asm volatile(
@@ -2358,8 +2387,7 @@ void OnTaskExit()
 {
     Context &ctx = GetContext();
 
-    uint32_t cs;
-    HW_CriticalSectionStart(cs);
+    const uint32_t cs = HW_CriticalSectionStart();
 
     ctx.m_handler->OnTaskExit(ctx.m_stack_active);
 
@@ -2682,17 +2710,23 @@ void PlatformArmCortexM::InitStack(EStackType stack_type, Stack *stack, IStackMe
 /*! \brief  NSC gateway: hw::CriticalSection::Enter.
 */
 STK_TZ_NSC_GATEWAY
-void NSC_stk_hw_CriticalSection_Enter()
+void NSC_stk_hw_CriticalSection_Enter(hw::CriticalSection *cs)
 {
-    hw::CriticalSection::Enter();
+    if ((cs != nullptr) && (cmse_check_pointed_object(cs,  CMSE_NONSECURE) != nullptr))
+    {
+        cs->Enter();
+    }
 }
 
 /*! \brief  NSC gateway: hw::CriticalSection::Exit.
 */
 STK_TZ_NSC_GATEWAY
-void NSC_stk_hw_CriticalSection_Exit()
+void NSC_stk_hw_CriticalSection_Exit(hw::CriticalSection *cs)
 {
-    hw::CriticalSection::Exit();
+    if ((cs != nullptr) && (cmse_check_pointed_object(cs,  CMSE_NONSECURE) != nullptr))
+    {
+        cs->Exit();
+    }
 }
 
 /*! \brief  NSC gateway: hw::SpinLock::Lock.
@@ -2919,105 +2953,138 @@ public:
     */
     STK_VIRT_DTOR ~KernelServiceSvcProxy() = default;
 
-    stk::TId GetTid() const override
-    {
-        ScopedPrivilegeBoost pb;
-        return GetContext().m_service->GetTid();
-    }
-
-    stk::Ticks GetTicks() const override
-    {
-        ScopedPrivilegeBoost pb;
-        return GetContext().m_service->GetTicks();
-    }
-
-    uint32_t GetTickResolution() const override
-    {
-        ScopedPrivilegeBoost pb;
-        return GetContext().m_tick_resolution;
-    }
-
-    stk::Cycles GetSysTimerCount() const override
-    {
-        ScopedPrivilegeBoost pb;
-        return GetContext().m_service->GetSysTimerCount();
-    }
-
-    uint32_t GetSysTimerFrequency() const override
-    {
-        ScopedPrivilegeBoost pb;
-        return GetContext().m_service->GetSysTimerFrequency();
-    }
-
-    void Delay(stk::Timeout ticks) override
-    {
-        ScopedPrivilegeBoost pb;
-        GetContext().m_service->Delay(ticks);
-    }
-
-    void Sleep(stk::Timeout ticks) override
-    {
-        ScopedPrivilegeBoost pb;
-        GetContext().m_service->Sleep(ticks);
-    }
-
-    bool SleepUntil(stk::Ticks timestamp) override
-    {
-        ScopedPrivilegeBoost pb;
-        return GetContext().m_service->SleepUntil(timestamp);
-    }
-
-    void SleepCancel(stk::TId task_id) override
-    {
-        ScopedPrivilegeBoost pb;
-        GetContext().m_service->SleepCancel(task_id);
-    }
-
-    void SwitchToNext() override
-    {
-        ScopedPrivilegeBoost pb;
-        GetContext().m_service->SwitchToNext();
-    }
-
-    stk::EWaitResult Wait(stk::ISyncObject *sobj, stk::IMutex *mutex, stk::Timeout timeout) override
-    {
-        ScopedPrivilegeBoost pb;
-        return GetContext().m_service->Wait(sobj, mutex, timeout);
-    }
-
-    void Wake(ISyncObject *sobj, bool all)
-    {
-        ScopedPrivilegeBoost pb;
-        return GetContext().m_service->Wake(sobj, all);
-    }
-
-    stk::Timeout Suspend() override
-    {
-        return 0; // not allowed for non-privileged process
-    }
-
-    void Resume(stk::Timeout elapsed_ticks) override
-    {
-        // not allowed for non-privileged process
-        STK_UNUSED(elapsed_ticks);
-    }
-
-    void InheritWeight(stk::TId tid, stk::Weight weight) override
-    {
-        ScopedPrivilegeBoost pb;
-        GetContext().m_service->InheritWeight(tid, weight);
-    }
-
-    void RestoreWeight(stk::TId tid, stk::ISyncObject *sobj = nullptr) override
-    {
-        ScopedPrivilegeBoost pb;
-        GetContext().m_service->RestoreWeight(tid, sobj);
-    }
+    stk::TId GetTid() const override;
+    stk::Ticks GetTicks() const override;
+    uint32_t GetTickResolution() const override;
+    stk::Cycles GetSysTimerCount() const override;
+    uint32_t GetSysTimerFrequency() const override;
+    void Delay(stk::Timeout ticks) override;
+    void Sleep(stk::Timeout ticks) override;
+    bool SleepUntil(stk::Ticks timestamp) override;
+    void SleepCancel(stk::TId task_id) override;
+    void SwitchToNext() override;
+    stk::EWaitResult Wait(stk::ISyncObject *sobj, stk::IMutex *mutex, stk::Timeout timeout) override;
+    void Wake(stk::ISyncObject *sobj, bool all);
+    stk::Timeout Suspend() override;
+    void Resume(stk::Timeout elapsed_ticks) override;
+    void InheritWeight(stk::TId tid, stk::Weight weight) override;
+    void RestoreWeight(stk::TId tid, stk::ISyncObject *sobj) override;
 }
 /*! \var s_KernelServiceSvcProxy
     \brief Shared static proxy instance exposed to unprivileged context calls.
 */
 s_StkKernelServiceUnprivProxy;
+
+STK_MPU_SHARED_CODE_SECTION
+stk::TId KernelServiceSvcProxy::GetTid() const
+{
+    ScopedPrivilegeBoost pb;
+    return GetContext().m_service->GetTid();
+}
+
+STK_MPU_SHARED_CODE_SECTION
+stk::Ticks KernelServiceSvcProxy::GetTicks() const
+{
+    ScopedPrivilegeBoost pb;
+    return GetContext().m_service->GetTicks();
+}
+
+STK_MPU_SHARED_CODE_SECTION
+uint32_t KernelServiceSvcProxy::GetTickResolution() const
+{
+    ScopedPrivilegeBoost pb;
+    return GetContext().m_tick_resolution;
+}
+
+STK_MPU_SHARED_CODE_SECTION
+stk::Cycles KernelServiceSvcProxy::GetSysTimerCount() const
+{
+    ScopedPrivilegeBoost pb;
+    return GetContext().m_service->GetSysTimerCount();
+}
+
+STK_MPU_SHARED_CODE_SECTION
+uint32_t KernelServiceSvcProxy::GetSysTimerFrequency() const
+{
+    ScopedPrivilegeBoost pb;
+    return GetContext().m_service->GetSysTimerFrequency();
+}
+
+STK_MPU_SHARED_CODE_SECTION
+void KernelServiceSvcProxy::Delay(stk::Timeout ticks)
+{
+    ScopedPrivilegeBoost pb;
+    GetContext().m_service->Delay(ticks);
+}
+
+STK_MPU_SHARED_CODE_SECTION
+void KernelServiceSvcProxy::Sleep(stk::Timeout ticks)
+{
+    ScopedPrivilegeBoost pb;
+    GetContext().m_service->Sleep(ticks);
+}
+
+STK_MPU_SHARED_CODE_SECTION
+bool KernelServiceSvcProxy::SleepUntil(stk::Ticks timestamp)
+{
+    ScopedPrivilegeBoost pb;
+    return GetContext().m_service->SleepUntil(timestamp);
+}
+
+STK_MPU_SHARED_CODE_SECTION
+void KernelServiceSvcProxy::SleepCancel(stk::TId task_id)
+{
+    ScopedPrivilegeBoost pb;
+    GetContext().m_service->SleepCancel(task_id);
+}
+
+STK_MPU_SHARED_CODE_SECTION
+void KernelServiceSvcProxy::SwitchToNext()
+{
+    ScopedPrivilegeBoost pb;
+    GetContext().m_service->SwitchToNext();
+}
+
+STK_MPU_SHARED_CODE_SECTION
+stk::EWaitResult KernelServiceSvcProxy::Wait(stk::ISyncObject *sobj, stk::IMutex *mutex, stk::Timeout timeout)
+{
+    ScopedPrivilegeBoost pb;
+    return GetContext().m_service->Wait(sobj, mutex, timeout);
+}
+
+STK_MPU_SHARED_CODE_SECTION
+void KernelServiceSvcProxy::Wake(stk::ISyncObject *sobj, bool all)
+{
+    ScopedPrivilegeBoost pb;
+    GetContext().m_service->Wake(sobj, all);
+}
+
+STK_MPU_SHARED_CODE_SECTION
+stk::Timeout KernelServiceSvcProxy::Suspend()
+{
+    return 0; // not allowed for non-privileged process
+}
+
+STK_MPU_SHARED_CODE_SECTION
+void KernelServiceSvcProxy::Resume(stk::Timeout elapsed_ticks)
+{
+    // not allowed for non-privileged process
+    STK_UNUSED(elapsed_ticks);
+}
+
+STK_MPU_SHARED_CODE_SECTION
+void KernelServiceSvcProxy::InheritWeight(stk::TId tid, stk::Weight weight)
+{
+    ScopedPrivilegeBoost pb;
+    GetContext().m_service->InheritWeight(tid, weight);
+}
+
+STK_MPU_SHARED_CODE_SECTION
+void KernelServiceSvcProxy::RestoreWeight(stk::TId tid, stk::ISyncObject *sobj)
+{
+    ScopedPrivilegeBoost pb;
+    GetContext().m_service->RestoreWeight(tid, sobj);
+}
 #endif // STK_MPU
 
 STK_MPU_SHARED_CODE_SECTION

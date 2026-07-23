@@ -300,7 +300,7 @@ static struct Context final : public PlatformContext
         }
 
         // increase nesting count within a limit
-        if (++m_csu_nesting > stk_cs_NESTINGS_MAX)
+        if (++m_csu_nesting > STK_CS_NESTINGS_MAX)
         {
             // invariant violated: exceeded max allowed number of recursions
             STK_KERNEL_PANIC(KERNEL_PANIC_CS_NESTING_OVERFLOW);

@@ -20,6 +20,10 @@
 #define STK_MPU             (1)
 #define STK_MPU_STACK_GUARD (1)
 
+// Let STK process MemManage and HardFault ISRs
+#define STK_USE_MEMMANAGE_HANDLER (1)
+#define STK_USE_HARDFAULT_HANDLER (1)
+
 // Define _STK_CPU_COUNT as 2 to use STK on both CPU cores or on CPU1, if 1 then STK can be hosted on CPU0 only
 #define STK_ARCH_CPU_COUNT    (2)
 #define STK_ARCH_GET_CPU_ID() (*(uint32_t *)(SIO_BASE + SIO_CPUID_OFFSET)) // see get_core_num() in pico/platform.h
@@ -28,7 +32,7 @@
 #define STK_SYSTICK_HANDLER   isr_systick
 #define STK_PENDSV_HANDLER    isr_pendsv
 #define STK_SVC_HANDLER       isr_svcall
-#define STK_MEMMANAGE_HANDLER isr_memmanage  // optional
-#define STK_HARDFAULT_HANDLER isr_hardfault  // optional
+#define STK_MEMMANAGE_HANDLER isr_memmanage  // optional, see STK_USE_MEMMANAGE_HANDLER
+#define STK_HARDFAULT_HANDLER isr_hardfault  // optional, see STK_USE_HARDFAULT_HANDLER
 
 #endif /* STK_CONFIG_H_ */
