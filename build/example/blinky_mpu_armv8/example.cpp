@@ -176,9 +176,12 @@ private:
         // Pico SDK places __aeabi_ldivmod, __aeabi_uldivmod, __aeabi_idiv0 into RAM for a
         // faster execution. We must allow this memory region for access by non-priviliged tasks
         // to support basic math operations.
-        // Check .map file for __aeabi_ldivmod location and limit required region more precisely.
-        const stk::Word sdk_addr = (0x20000848UL / 32) * 32;
-        const size_t sdk_len = stk::Align<size_t>(0x20000C78UL - sdk_addr, 32);
+        extern char __stk_mpu_ram_text_start[];
+        extern char __stk_mpu_ram_text_end[];
+
+        const uint32_t ram_text_start = hw::PtrToWord(__stk_mpu_ram_text_start);
+        const uint32_t ram_text_end   = hw::PtrToWord(__stk_mpu_ram_text_end);
+        const uint32_t ram_text_size  = stk::Align<uint32_t>(ram_text_end - ram_text_start, 32U);
 
         static MpuRegionConfig s_mpu_shared_regions[] =
         {
@@ -195,8 +198,8 @@ private:
             },
             { // REGION 6: TASK INSTANCE DATA WINDOW - RO for all
                 .region_idx  = 2U, // STK_CORTEX_M_MPU_TASK_REGION_IDX + region_idx (2) = REGION 6
-                .addr        = sdk_addr,
-                .size        = sdk_len,
+                .addr        = hw::PtrToWord(__stk_mpu_ram_text_start),
+                .size        = ram_text_size,
                 .access_perm = hw::mpu::ACCESS_PRIV_RO_USER_RO,
                 .mem_type    = hw::mpu::TYPE_NORMAL_CACHEABLE,
                 .share       = hw::mpu::SHARE_NON,

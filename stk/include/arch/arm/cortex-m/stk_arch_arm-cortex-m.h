@@ -290,26 +290,29 @@ enum EMpuAccess : uint32_t
 */
 enum EMpuExec : uint32_t
 {
-    EXEC_ALLOWED            = (0x0U << 0U),
-    EXEC_NEVER              = (0x1U << 0U)
+    EXEC_ALLOWED            = (0x0U << 0U), //!< XN = 0 (Execution Allowed)
+    EXEC_NEVER              = (0x1U << 0U)  //!< XN = 1 (Execute-Never)
 };
 
 /*! \enum    EMpuType
     \brief   MPU Memory attribute index mappings for ARMv8-M (PMSAv8).
-             Maps directly to the allocated index positions within the global MAIR registers.
+             Maps directly to the allocated index positions within the global MAIR memory profile registers.
     \see     MAIR0_PMSAV8_INIT
 */
 enum EMpuType : uint32_t
 {
-    TYPE_STRONGLY_ORDERED   = 0U, //!< Index targeting MAIR0 memory profile for strict ordering (Attr0=0x00).
-    TYPE_DEVICE             = 1U, //!< Index targeting MAIR0 memory profile for peripheral registers (Attr1=0x04).
-    TYPE_NORMAL_NON_CACHE   = 2U, //!< Index targeting MAIR0 memory profile for non-cacheable spaces (DMA) (Attr2=0x44).
-    TYPE_NORMAL_CACHEABLE   = 3U  //!< Index targeting MAIR0 memory profile for standard cached memory (SRAM) (Attr3=0xFF).
+    TYPE_STRONGLY_ORDERED   = 0U, //!< MAIR0 index for strict ordering (Attr0=0x00 -> Device-nGnRnE).
+    TYPE_DEVICE             = 1U, //!< MAIR0 index for peripheral registers (Attr1=0x04 -> Device-nGnRE (or Normal Non-Cacheable)).
+    TYPE_NORMAL_NON_CACHE   = 2U, //!< MAIR0 index for non-cacheable spaces (DMA) (Attr2=0x44 -> Normal, Outer/Inner Write-Through Non-Transient).
+    TYPE_NORMAL_CACHEABLE   = 3U  //!< MAIR0 index for standard cached memory (SRAM) (Attr3=0xFF -> Normal, Outer/Inner Write-Back Read/Write-Allocate).
 };
 
 /*! \var     MAIR0_PMSAV8_INIT.
-    \brief   MPU MAIR0 register configuration: Attr3=0xFF, Attr2=0x44, Attr1=0x04, Attr0=0x00.
-    \see     EMpuType
+    \brief   ARM MAIR0 memory profile attribute map:
+             Attr0 [7:0]   = 0x00 (Device-nGnRnE)
+             Attr1 [15:8]  = 0x04 (Device-nGnRE / Normal Non-Cacheable)
+             Attr2 [23:16] = 0x44 (Normal Write-Through Cacheable)
+             Attr3 [31:24] = 0xFF (Normal Write-Back Cacheable)
 */
 static constexpr uint32_t MAIR0_PMSAV8_INIT = 0xFF440400U;
 

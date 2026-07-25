@@ -346,14 +346,36 @@ static __stk_forceinline void WriteVolatile64(volatile T *addr, T value)
 class CriticalSection
 {
 public:
+    /*! \enum  ESessionFlags
+        \brief Collection of session flags.
+    */
+    enum ESessionFlags : uint8_t
+    {
+        SESSION_FLAG_NONE  = 0,        //!< None.
+        SESSION_FLAG_NPRIV = (1 << 0), //!< Calling context is non-Priviliged.
+    };
+
+    /*! \brief   Opaque session token returned by Enter() and consumed by Exit().
+        \note    Encodes the privileged/unprivileged handling path taken by Enter(), so that
+                 the matching Exit() can restore state correctly without re-detecting context.
+    */
+    typedef uint8_t Session;
+
+    /*! \brief   Default session value passed to Enter()/Exit() when the caller does not need
+                 to force a specific handling path.
+        \note    With this value, Enter() auto-detects whether the calling context is
+                 privileged or unprivileged.
+    */
+    static constexpr Session DEFAULT_SESSION = SESSION_FLAG_NONE;
+
     /*! \class ScopedLock
-        \brief RAII guard that enters the critical section on construction and exits it on destruction.
+        \brief RAII instance that enters the critical section on construction and exits it on destruction.
         \note  Guarantees Exit() is always called even if an early return or exception unwinds the scope.
 
         Usage example:
         \code
         {
-            CriticalSection::ScopedLock lock;
+            CriticalSection::ScopedLock guard;
 
             // shared resource access protected here
         } // CriticalSection::Exit() called automatically
@@ -364,30 +386,20 @@ public:
     public:
         /*! \brief Enter the critical section.
         */
-        explicit ScopedLock(CriticalSection &cs) : m_cs(cs)
-        {
-            m_cs.Enter();
-        }
+        explicit ScopedLock() : m_ses(CriticalSection::Enter())
+        {}
 
         /*! \brief Exit the critical section.
         */
         ~ScopedLock()
         {
-            m_cs.Exit();
+            CriticalSection::Exit(m_ses);
         }
 
     private:
         STK_NONCOPYABLE_CLASS(ScopedLock);
-        CriticalSection &m_cs; //!< reference to the critical section instance
+        CriticalSection::Session m_ses;
     };
-
-    /*! \brief Default constructor.
-    */
-    explicit CriticalSection()
-#ifdef _STK_ARCH_ARM_CORTEX_M
-    : m_npriv_context(false)
-#endif
-    {}
 
     /*! \brief   Enter a critical section.
         \note    Masks local interrupts on this core and, at nesting depth 0, acquires the global
@@ -396,9 +408,11 @@ public:
         \warning Every Enter() must be paired with exactly one Exit(). A missing Exit() leaves
                  local interrupts masked and the global spinlock held permanently, stalling all
                  other cores and the scheduler. Prefer ScopedLock to avoid mismatched pairs.
+        \param[in] ses: DEFAULT_SESSION to auto-detect the calling context's privilege level,
+                 or an explicit Session to force a specific handling path.
         \return  True if privileged context, False otherwise.
     */
-    void Enter();
+    static Session Enter(const Session ses = DEFAULT_SESSION);
 
     /*! \brief   Exit a critical section.
         \note    Decrements the nesting counter. When it reaches zero (outermost Exit()), releases
@@ -407,50 +421,17 @@ public:
         \warning Must only be called after a matching Enter(). Calling Exit() without a prior Enter()
                  produces undefined behavior (nesting counter underflow, caught by assertion in
                  debug builds).
+        \param[in] ses: Session value returned by the matching Enter() call.
     */
-    void Exit();
+    static void Exit(const Session ses = DEFAULT_SESSION);
 
 private:
     STK_NONCOPYABLE_CLASS(CriticalSection);
 
-#ifdef _STK_ARCH_ARM_CORTEX_M
-    bool m_npriv_context; //!< true if locking context is non-Privileged, false otherwise
-#endif
-};
-
-/*! \class ScopedCriticalSection
-    \brief RAII instance that enters the critical section on construction and exits it on destruction.
-    \note  Guarantees Exit() is always called even if an early return or exception unwinds the scope.
-
-    Usage example:
-    \code
-    {
-        ScopedCriticalSection lock;
-
-        // shared resource access protected here
-    } // CriticalSection::Exit() called automatically
-    \endcode
-*/
-class ScopedCriticalSection
-{
-public:
-    /*! \brief Enter the critical section.
+    /*! \brief Protected constructor (instantiation is prohibited).
     */
-    explicit ScopedCriticalSection() : m_cs()
-    {
-        m_cs.Enter();
-    }
-
-    /*! \brief Exit the critical section.
-    */
-    ~ScopedCriticalSection()
-    {
-        m_cs.Exit();
-    }
-
-private:
-    STK_NONCOPYABLE_CLASS(ScopedCriticalSection);
-    CriticalSection m_cs; //!< instance of critical section
+    explicit CriticalSection()
+    {}
 };
 
 /*! \class     SpinLock
@@ -480,6 +461,40 @@ public:
     {
         UNLOCKED = 0, //!< Lock is free and available for acquisition.
         LOCKED        //!< Lock is held by a thread or core.
+    };
+
+    /*! \class ScopedLock
+        \brief RAII guard that the spin lock is locked on construction and unlocked it on destruction.
+
+        Usage example:
+        \code
+        {
+            SpinLock::ScopedLock lock;
+
+            // shared resource access protected here
+        } // SpinLock::Unlock() called automatically
+        \endcode
+    */
+    class ScopedLock
+    {
+    public:
+        /*! \brief Lock a spin lock instance.
+        */
+        explicit ScopedLock(SpinLock &sl) : m_sl(sl)
+        {
+            sl.Lock();
+        }
+
+        /*! \brief Unlock a spin lock instance.
+        */
+        ~ScopedLock()
+        {
+            m_sl.Unlock();
+        }
+
+    private:
+        STK_NONCOPYABLE_CLASS(ScopedLock);
+        SpinLock &m_sl;
     };
 
     /*! \brief Construct a SpinLock (unlocked by default).

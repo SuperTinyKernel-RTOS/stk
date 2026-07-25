@@ -826,53 +826,38 @@ void stk_tls_set(void *ptr);
 
 // ----- Critical Section ------------------------------------------------------
 
-/*! \brief     A memory size (multiples of stk_word_t) required for CriticalSection instance.
+/*! \brief     Session of Critical Section.
 */
-#define STK_CS_IMPL_SIZE (1U)
+typedef uint8_t stk_cs_session_t;
 
-/*! \brief     Opaque memory container for a CriticalSection instance.
+/*! \brief     Default session value for stk_critical_section_enter_ex()/stk_critical_section_exit_ex(),
+               letting the call auto-detect the calling context's privilege level.
 */
-typedef struct stk_cs_mem_t {
-    stk_word_t data[STK_CS_IMPL_SIZE] __stk_c_aligned;
-} stk_cs_mem_t;
+#define STK_DEFAULT_CS_SESSION (0U)
 
-/*! \brief     Opaque handle to a CriticalSection instance.
-*/
-typedef struct stk_cs_t stk_cs_t;
-
-/*! \brief     Create a CriticalSection (using provided memory).
-    \param[in] membuf: Pointer to static memory container.
-    \param[in] membuf_size: Size of the container (must be >= sizeof(stk_cs_mem_t)).
-    \return    CriticalSection handle.
-*/
-stk_cs_t *stk_cs_create(stk_cs_mem_t *const membuf, uint32_t membuf_size);
-
-/*! \brief     Destroy a CriticalSection.
-    \param[in] cs: CriticalSection handle.
-*/
-void stk_cs_destroy(stk_cs_t *cs);
-
-/*! \brief     Enter critical section - disable context switches on current core.
+/*! \brief     Enter global critical section - disable context switches on current core.
     \note      Supports nesting (number of enter calls must match number of exit calls).
-    \param[in] cs: CriticalSection handle.
+    \param[in] ses: STK_DEFAULT_CS_SESSION to auto-detect the calling context's privilege level,
+               or an explicit session value to force a specific handling path.
+    \return    Session value that must be supplied to the matching stk_critical_section_exit_ex().
 */
-void stk_cs_enter(stk_cs_t *cs);
+stk_cs_session_t stk_critical_section_enter_ex(stk_cs_session_t ses /*= STK_DEFAULT_CS_SESSION*/);
 
-/*! \brief     Leave critical section - re-enable context switches.
-    \note      Must be called once for each previous stk_cs_enter().
-    \param[in] cs: CriticalSection handle.
+/*! \brief     Leave global critical section - re-enable context switches.
+    \note      Must be called once for each previous stk_critical_section_enter().
+    \param[in] ses: Session value returned by the matching stk_critical_section_enter_ex() call.
 */
-void stk_cs_exit(stk_cs_t *cs);
+void stk_critical_section_exit_ex(stk_cs_session_t ses /*= STK_DEFAULT_CS_SESSION*/);
 
 /*! \brief     Enter global critical section - disable context switches on current core.
     \note      Supports nesting (number of enter calls must match number of exit calls).
 */
-void stk_critical_section_enter(void);
+void stk_critical_section_enter();
 
 /*! \brief     Leave global critical section - re-enable context switches.
     \note      Must be called once for each previous stk_critical_section_enter().
 */
-void stk_critical_section_exit(void);
+void stk_critical_section_exit();
 
 // ----- Mutex -----------------------------------------------------------------
 

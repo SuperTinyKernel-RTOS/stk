@@ -71,12 +71,16 @@ IKernelService *IKernelService::GetInstance()
     return g_KernelService;
 }
 
-void stk::hw::CriticalSection::Enter()
+stk::hw::CriticalSection::Session stk::hw::CriticalSection::Enter(CriticalSection::Session is_npriv)
 {
+    STK_UNUSED(is_npriv);
+
     ++g_CriticalSectionState;
 }
-void stk::hw::CriticalSection::Exit()
+void stk::hw::CriticalSection::Exit(CriticalSection::Session is_npriv)
 {
+    STK_UNUSED(is_npriv);
+
     --g_CriticalSectionState;
 
     CHECK_TRUE(g_CriticalSectionState >= 0);

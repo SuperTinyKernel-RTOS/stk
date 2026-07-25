@@ -217,7 +217,7 @@ inline bool ISyncObject::Tick(Timeout elapsed_ticks)
     // each core may call Tick() concurrently for the same Semaphore instance,
     // and ISyncObject::Tick() is not re-entrant.
 #if (STK_ARCH_CPU_COUNT > 1)
-    hw::ScopedCriticalSection cs_;
+    const hw::CriticalSection::ScopedLock cs_;
 #endif
 
     IWaitObject *itr = util::DListCast::ListEntryToParent<IWaitObject>(m_wait_list.GetFirst());

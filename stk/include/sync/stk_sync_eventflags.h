@@ -238,7 +238,7 @@ inline uint32_t EventFlags::Set(uint32_t flags)
         final_result = m_flags;
 
         // wake all waiters: each task will re-evaluate its own predicate
-        m_cv.NotifyAll();
+        m_cv.NotifyAll_CS();
     }
 
     return final_result;

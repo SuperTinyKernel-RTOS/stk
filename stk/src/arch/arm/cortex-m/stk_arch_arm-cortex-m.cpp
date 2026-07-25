@@ -1363,7 +1363,7 @@ static struct Context final : public PlatformContext
 #if STK_TLS && !STK_INLINE_TLS
     Word GetTls()
     {
-        hw::ScopedCriticalSection cs_;
+        hw::CriticalSection::ScopedLock cs_;
 
         STK_ASSERT(m_stack_active != nullptr);
 
@@ -1372,7 +1372,7 @@ static struct Context final : public PlatformContext
 
     void SetTls(Word tp)
     {
-        hw::ScopedCriticalSection cs_;
+        hw::CriticalSection::ScopedLock cs_;
 
         STK_ASSERT(m_stack_active != nullptr);
 
@@ -2710,23 +2710,17 @@ void PlatformArmCortexM::InitStack(EStackType stack_type, Stack *stack, IStackMe
 /*! \brief  NSC gateway: hw::CriticalSection::Enter.
 */
 STK_TZ_NSC_GATEWAY
-void NSC_stk_hw_CriticalSection_Enter(hw::CriticalSection *cs)
+hw::CriticalSection::Session NSC_stk_hw_CriticalSection_Enter(const hw::CriticalSection::Session ses)
 {
-    if ((cs != nullptr) && (cmse_check_pointed_object(cs,  CMSE_NONSECURE) != nullptr))
-    {
-        cs->Enter();
-    }
+    return hw::CriticalSection::Enter(ses);
 }
 
 /*! \brief  NSC gateway: hw::CriticalSection::Exit.
 */
 STK_TZ_NSC_GATEWAY
-void NSC_stk_hw_CriticalSection_Exit(hw::CriticalSection *cs)
+void NSC_stk_hw_CriticalSection_Exit(const hw::CriticalSection::Session ses)
 {
-    if ((cs != nullptr) && (cmse_check_pointed_object(cs,  CMSE_NONSECURE) != nullptr))
-    {
-        cs->Exit();
-    }
+    hw::CriticalSection::Exit(ses);
 }
 
 /*! \brief  NSC gateway: hw::SpinLock::Lock.
@@ -2978,84 +2972,84 @@ s_StkKernelServiceUnprivProxy;
 STK_MPU_SHARED_CODE_SECTION
 stk::TId KernelServiceSvcProxy::GetTid() const
 {
-    ScopedPrivilegeBoost pb;
+    const ScopedPrivilegeBoost pb;
     return GetContext().m_service->GetTid();
 }
 
 STK_MPU_SHARED_CODE_SECTION
 stk::Ticks KernelServiceSvcProxy::GetTicks() const
 {
-    ScopedPrivilegeBoost pb;
+    const ScopedPrivilegeBoost pb;
     return GetContext().m_service->GetTicks();
 }
 
 STK_MPU_SHARED_CODE_SECTION
 uint32_t KernelServiceSvcProxy::GetTickResolution() const
 {
-    ScopedPrivilegeBoost pb;
+    const ScopedPrivilegeBoost pb;
     return GetContext().m_tick_resolution;
 }
 
 STK_MPU_SHARED_CODE_SECTION
 stk::Cycles KernelServiceSvcProxy::GetSysTimerCount() const
 {
-    ScopedPrivilegeBoost pb;
+    const ScopedPrivilegeBoost pb;
     return GetContext().m_service->GetSysTimerCount();
 }
 
 STK_MPU_SHARED_CODE_SECTION
 uint32_t KernelServiceSvcProxy::GetSysTimerFrequency() const
 {
-    ScopedPrivilegeBoost pb;
+    const ScopedPrivilegeBoost pb;
     return GetContext().m_service->GetSysTimerFrequency();
 }
 
 STK_MPU_SHARED_CODE_SECTION
 void KernelServiceSvcProxy::Delay(stk::Timeout ticks)
 {
-    ScopedPrivilegeBoost pb;
+    const ScopedPrivilegeBoost pb;
     GetContext().m_service->Delay(ticks);
 }
 
 STK_MPU_SHARED_CODE_SECTION
 void KernelServiceSvcProxy::Sleep(stk::Timeout ticks)
 {
-    ScopedPrivilegeBoost pb;
+    const ScopedPrivilegeBoost pb;
     GetContext().m_service->Sleep(ticks);
 }
 
 STK_MPU_SHARED_CODE_SECTION
 bool KernelServiceSvcProxy::SleepUntil(stk::Ticks timestamp)
 {
-    ScopedPrivilegeBoost pb;
+    const ScopedPrivilegeBoost pb;
     return GetContext().m_service->SleepUntil(timestamp);
 }
 
 STK_MPU_SHARED_CODE_SECTION
 void KernelServiceSvcProxy::SleepCancel(stk::TId task_id)
 {
-    ScopedPrivilegeBoost pb;
+    const ScopedPrivilegeBoost pb;
     GetContext().m_service->SleepCancel(task_id);
 }
 
 STK_MPU_SHARED_CODE_SECTION
 void KernelServiceSvcProxy::SwitchToNext()
 {
-    ScopedPrivilegeBoost pb;
+    const ScopedPrivilegeBoost pb;
     GetContext().m_service->SwitchToNext();
 }
 
 STK_MPU_SHARED_CODE_SECTION
 stk::EWaitResult KernelServiceSvcProxy::Wait(stk::ISyncObject *sobj, stk::IMutex *mutex, stk::Timeout timeout)
 {
-    ScopedPrivilegeBoost pb;
+    const ScopedPrivilegeBoost pb;
     return GetContext().m_service->Wait(sobj, mutex, timeout);
 }
 
 STK_MPU_SHARED_CODE_SECTION
 void KernelServiceSvcProxy::Wake(stk::ISyncObject *sobj, bool all)
 {
-    ScopedPrivilegeBoost pb;
+    const ScopedPrivilegeBoost pb;
     GetContext().m_service->Wake(sobj, all);
 }
 
@@ -3075,14 +3069,14 @@ void KernelServiceSvcProxy::Resume(stk::Timeout elapsed_ticks)
 STK_MPU_SHARED_CODE_SECTION
 void KernelServiceSvcProxy::InheritWeight(stk::TId tid, stk::Weight weight)
 {
-    ScopedPrivilegeBoost pb;
+    const ScopedPrivilegeBoost pb;
     GetContext().m_service->InheritWeight(tid, weight);
 }
 
 STK_MPU_SHARED_CODE_SECTION
 void KernelServiceSvcProxy::RestoreWeight(stk::TId tid, stk::ISyncObject *sobj)
 {
-    ScopedPrivilegeBoost pb;
+    const ScopedPrivilegeBoost pb;
     GetContext().m_service->RestoreWeight(tid, sobj);
 }
 #endif // STK_MPU
@@ -3101,44 +3095,31 @@ IKernelService *IKernelService::GetInstance()
 #endif
 }
 
-void stk::hw::CriticalSection::Enter()
+STK_MPU_SHARED_CODE_SECTION
+stk::hw::CriticalSection::Session stk::hw::CriticalSection::Enter(const CriticalSection::Session ses)
 {
-    bool is_privileged = false;
-  
-    // if we are in Handler or Privileged Thread Mode, we can skip the SVC and take the fast path,
-    // if the same instance of critical section is calling Enter again, preserve its privilege context
-    if (!m_npriv_context)
-    {
-        if (HW_IsPrivilegedContext())
-        {
-            is_privileged = true;
-        }
-        else if (HW_IsHandlerMode())
-        {
-            is_privileged = true;
-        }
-        else
-        {
-            // not privileged path
-        }
-    }
+    stk::hw::CriticalSection::Session ret;
 
-    if (is_privileged)
+    const bool is_priv = ((ses & SESSION_FLAG_NPRIV) == 0U) && (HW_IsPrivilegedContext() || HW_IsHandlerMode());
+
+    if (is_priv)
     {
         GetContext().EnterCriticalSection();
+        ret = SESSION_FLAG_NONE;
     }
     else
     {
         HW_UnprivEnterCriticalSection();
+        ret = SESSION_FLAG_NPRIV;
     }
 
-    m_npriv_context = !is_privileged;
+    return ret;
 }
 
-void stk::hw::CriticalSection::Exit()
+STK_MPU_SHARED_CODE_SECTION
+void stk::hw::CriticalSection::Exit(const CriticalSection::Session ses)
 {
-    // preserve the same path on exit
-    if (!m_npriv_context)
+    if ((ses & SESSION_FLAG_NPRIV) == 0U)
     {
         GetContext().ExitCriticalSection();
     }
@@ -3148,16 +3129,19 @@ void stk::hw::CriticalSection::Exit()
     }
 }
 
+STK_MPU_SHARED_CODE_SECTION
 void stk::hw::SpinLock::Lock()
 {
     HW_SpinLockLock(m_lock);
 }
 
+STK_MPU_SHARED_CODE_SECTION
 void stk::hw::SpinLock::Unlock()
 {
     HW_SpinLockUnlock(m_lock);
 }
 
+STK_MPU_SHARED_CODE_SECTION
 bool stk::hw::SpinLock::TryLock()
 {
     return HW_SpinLockTryLock(m_lock);

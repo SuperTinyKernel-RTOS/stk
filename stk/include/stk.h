@@ -1139,7 +1139,7 @@ public:
             STK_ASSERT(user_task != nullptr);
             STK_ASSERT(IsStarted());
 
-            const hw::ScopedCriticalSection cs_;
+            const hw::CriticalSection::ScopedLock cs_;
 
             KernelTask *const task = FindTaskByUserTask(user_task);
             if (task != nullptr)
@@ -1168,7 +1168,7 @@ public:
 
         // avoid race with OnTick
         {
-            const hw::ScopedCriticalSection cs_;
+            const hw::CriticalSection::ScopedLock cs_;
 
             KernelTask *const task = FindTaskByUserTask(user_task);
             STK_ASSERT(task != nullptr);
@@ -1202,7 +1202,7 @@ public:
         STK_ASSERT(user_task != nullptr);
 
         // avoid race with OnTick
-        const hw::ScopedCriticalSection cs_;
+        const hw::CriticalSection::ScopedLock cs_;
 
         KernelTask *const task = FindTaskByUserTask(user_task);
         STK_ASSERT(task != nullptr);
@@ -1223,7 +1223,7 @@ public:
        const size_t limit = Min(tasks.GetSize(), TASKS_MAX);
 
        // avoid race with OnTick
-       const hw::ScopedCriticalSection cs_;
+       const hw::CriticalSection::ScopedLock cs_;
 
        for (size_t i = 0U; i < limit; ++i)
        {
@@ -1247,7 +1247,7 @@ public:
         const size_t limit = Min(user_tasks.GetSize(), TASKS_MAX);
 
         // avoid race with OnTick
-        const hw::ScopedCriticalSection cs_;
+        const hw::CriticalSection::ScopedLock cs_;
 
         for (size_t i = 0U; i < limit; ++i)
         {
@@ -1746,7 +1746,7 @@ protected:
 
         // make change to HRT state and sleep time atomic
         {
-            const hw::ScopedCriticalSection cs_;
+            const hw::CriticalSection::ScopedLock cs_;
 
             if __stk_constexpr_cpp17 (IsHrtMode())
             {
@@ -1772,7 +1772,7 @@ protected:
 
         // make change to HRT state and sleep time atomic
         {
-            const hw::ScopedCriticalSection cs_;
+            const hw::CriticalSection::ScopedLock cs_;
 
             // calculate signed delta (handles wrap-around correctly)
             const Ticks delta = timestamp - m_service.m_ticks;
@@ -1798,7 +1798,7 @@ protected:
         KernelTask *const task = FindTaskByUserTask(GetUserTaskFromTid(task_id));
         if (task != nullptr)
         {
-            const hw::ScopedCriticalSection cs_;
+            const hw::CriticalSection::ScopedLock cs_;
 
             if (task->IsSleeping())
             {
@@ -2361,7 +2361,7 @@ protected:
     */
     void ScheduleAddTask()
     {
-        const hw::ScopedCriticalSection cs_;
+        const hw::CriticalSection::ScopedLock cs_;
         m_request |= REQ_ADD_TASK;
     }
 

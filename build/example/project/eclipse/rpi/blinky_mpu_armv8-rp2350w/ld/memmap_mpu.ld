@@ -182,7 +182,19 @@ SECTIONS
         *(.time_critical*)
 
         /* remaining .text and .rodata; i.e. stuff we exclude above because we want it in RAM */
-        *(.text*)
+                
+        /* ========================================================= */
+        /* ISOLATED RAM CODE BLOCK FOR MPU                           */
+        /* ========================================================= */
+        . = ALIGN(32);                  /* MPU alignment requirement */
+        __stk_mpu_ram_text_start = .;   /* Marker 1: START           */
+
+        *(.text*)                        /* Excluded text/libgcc code */
+
+        . = ALIGN(32);                  /* MPU alignment requirement */
+        __stk_mpu_ram_text_end = .;     /* Marker 2: END             */
+        /* ========================================================= */
+        
         . = ALIGN(4);
         *(.rodata*)
         . = ALIGN(4);

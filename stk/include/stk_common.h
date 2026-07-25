@@ -573,7 +573,7 @@ public:
     /*! \brief     Get list of tasks blocked on this object.
         \note      Read-only access for diagnostics / telemetry.
     */
-    const IWaitObject::ListHeadType &GetWaitList() const
+    virtual const IWaitObject::ListHeadType &GetWaitList() const
     {
         return m_wait_list;
     }
@@ -608,7 +608,7 @@ protected:
 
     /*! \brief     Get list of tasks blocked on this object.
     */
-    IWaitObject::ListHeadType &GetWaitList()
+    virtual IWaitObject::ListHeadType &GetWaitList()
     {
         return m_wait_list;
     }

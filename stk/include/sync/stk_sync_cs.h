@@ -22,7 +22,7 @@ namespace sync {
 /*! \class ScopedCriticalSection
     \brief RAII-style low-level synchronization primitive for atomic code execution.
            Used as building brick for other stk::sync classes, consider using
-           hw::ScopedCriticalSection implementation instead.
+           hw::CriticalSection::ScopedLock implementation instead.
 
     Disables interrupts on caller's CPU core and guards from access by another CPU
     core in case of multi-core system. Enters a critical section upon construction
@@ -63,7 +63,7 @@ class ScopedCriticalSection final : public IMutex
 public:
     /*! \brief Enters critical section.
     */
-    explicit ScopedCriticalSection() : m_cs()
+    explicit ScopedCriticalSection() : m_ses(hw::CriticalSection::DEFAULT_SESSION)
     {
         Lock();
     }
@@ -81,15 +81,15 @@ private:
 
     void Lock() override
     {
-        m_cs.Enter();
+        m_ses = hw::CriticalSection::Enter(m_ses);
     }
 
     void Unlock() override
     {
-        m_cs.Exit();
+        hw::CriticalSection::Exit(m_ses);
     }
 
-    hw::CriticalSection m_cs; //!< instance of hw::CriticalSection
+    hw::CriticalSection::Session m_ses; //!< current session of hw::CriticalSection
 };
 
 } // namespace sync

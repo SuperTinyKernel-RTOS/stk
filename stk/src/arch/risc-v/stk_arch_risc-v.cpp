@@ -2123,13 +2123,16 @@ IKernelService *IKernelService::GetInstance()
     return GetContext().m_service;
 }
 
-void stk::hw::CriticalSection::Enter()
+stk::hw::CriticalSection::Session stk::hw::CriticalSection::Enter(CriticalSection::Session is_npriv)
 {
+    STK_UNUSED(is_npriv);
     GetContext().EnterCriticalSection();
+    return DEFAULT_SESSION;
 }
 
-void stk::hw::CriticalSection::Exit()
+void stk::hw::CriticalSection::Exit(CriticalSection::Session is_npriv)
 {
+    STK_UNUSED(is_npriv);
     GetContext().ExitCriticalSection();
 }
 

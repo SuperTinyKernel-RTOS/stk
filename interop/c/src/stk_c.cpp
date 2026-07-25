@@ -648,52 +648,24 @@ void stk_tls_set(void *ptr)
 // Critical Section
 // -----------------------------------------------------------------------------
 
-static hw::CriticalSection s_GlobalCriticalSection;
-
-struct stk_cs_t
+stk_cs_session_t stk_critical_section_enter_ex(stk_cs_session_t ses)
 {
-    hw::CriticalSection handle;
-};
-
-stk_cs_t *stk_cs_create(stk_cs_mem_t *const membuf, uint32_t membuf_size)
-{
-    STK_ASSERT(membuf != nullptr);
-    STK_ASSERT(membuf_size >= sizeof(stk_cs_mem_t));
-    STK_STATIC_ASSERT_N((sizeof(stk_cs_t) <= sizeof(stk_cs_mem_t)),
-        "stk_cs_mem_t is too small to hold stk_cs_t");
-
-    return new (membuf) stk_cs_t();
+    return hw::CriticalSection::Enter(ses);
 }
 
-void stk_cs_destroy(stk_cs_t *cs)
+void stk_critical_section_exit_ex(stk_cs_session_t ses)
 {
-    STK_ASSERT(cs != nullptr);
-
-    cs->~stk_cs_t();
+    hw::CriticalSection::Exit(ses);
 }
 
-void stk_cs_enter(stk_cs_t *cs)
+void stk_critical_section_enter()
 {
-    STK_ASSERT(cs != nullptr);
-
-    cs->handle.Enter();
+    STK_UNUSED(hw::CriticalSection::Enter(hw::CriticalSection::DEFAULT_SESSION));
 }
 
-void stk_cs_exit(stk_cs_t *cs)
+void stk_critical_section_exit()
 {
-    STK_ASSERT(cs != nullptr);
-
-    cs->handle.Exit();
-}
-
-void stk_critical_section_enter(void)
-{
-    s_GlobalCriticalSection.Enter();
-}
-
-void stk_critical_section_exit(void)
-{
-    s_GlobalCriticalSection.Exit();
+    hw::CriticalSection::Exit(hw::CriticalSection::DEFAULT_SESSION);
 }
 
 // =============================================================================

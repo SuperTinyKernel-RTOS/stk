@@ -97,7 +97,7 @@ private:
             // switch LED on/off
             {
                 // we do not want preemption during IO with hardware
-                stk::hw::ScopedCriticalSection __cs;
+                stk::hw::CriticalSection::ScopedLock __cs;
 
                 Led::Set(cmd.led, cmd.on);
             }
