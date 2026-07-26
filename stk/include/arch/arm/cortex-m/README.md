@@ -19,10 +19,13 @@ This document is the configuration and porting reference for the ARM Cortex-M ar
   - [High-Resolution Clock](#high-resolution-clock)
   - [Tickless Idle](#tickless-idle)
   - [Privilege Modes](#privilege-modes)
+  - [Thread-Local Storage (TLS)](#thread-local-storage-tls)
   - [TrustZone (Cortex-M33 / ARMv8-M)](#trustzone-cortex-m33--armv8-m)
+  - [Memory Protection (MPU)](#memory-protection-mpu)
   - [Multi-Core (SMP)](#multi-core-smp)
   - [Stack Configuration](#stack-configuration)
   - [Kernel Tuning](#kernel-tuning)
+  - [Fault Handling](#fault-handling)
   - [STM32 HAL Integration](#stm32-hal-integration)
 - [Platform Examples](#platform-examples)
   - [RP2350 (Raspberry Pi Pico 2, Cortex-M33)](#rp2350-raspberry-pi-pico-2-cortex-m33)
@@ -44,19 +47,24 @@ The Cortex-M port targets both privileged and unprivileged thread modes. Context
 - Single-core and SMP (dual-core) configurations
 - Tickless idle with DWT-based drift correction on M3+
 - Two high-resolution clock backends: DWT CYCCNT (M3+) and SysTick-based (M0/M0+)
+- Optional MPU support (PMSAv7/PMSAv8) with per-task stack-guard regions, auto-detected via `__MPU_PRESENT`
+- Optional register-based thread-local storage (r9) with a memory-based fallback
+- Optional MemManage/HardFault trapping with a captured fault context (registers, MPU state, fault status registers)
 
 ---
 
 ## Supported Cores
 
-| Core | ISA | FPU | DWT | Privilege | TrustZone |
-|------|-----|-----|-----|-----------|-----------|
-| Cortex-M0 / M0+ / M1 | ARMv6-M (Thumb-1) | No | No | No | No |
-| Cortex-M3 | ARMv7-M | No | Yes | Yes | No |
-| Cortex-M4 | ARMv7-M | Optional | Yes | Yes | No |
-| Cortex-M7 | ARMv7-M | Optional | Yes | Yes | No |
-| Cortex-M23 | ARMv8-M Baseline | No | No | Yes | Optional |
-| Cortex-M33 | ARMv8-M Mainline | Optional | Yes | Yes | Optional |
+| Core | ISA | FPU | DWT | Privilege | TrustZone | MPU |
+|------|-----|-----|-----|-----------|-----------|-----|
+| Cortex-M0 / M0+ / M1 | ARMv6-M (Thumb-1) | No | No | No | No | No |
+| Cortex-M3 | ARMv7-M | No | Yes | Yes | No | Optional (PMSAv7) |
+| Cortex-M4 | ARMv7-M | Optional | Yes | Yes | No | Optional (PMSAv7) |
+| Cortex-M7 | ARMv7-M | Optional | Yes | Yes | No | Optional (PMSAv7) |
+| Cortex-M23 | ARMv8-M Baseline | No | No | Yes | Optional | Optional (PMSAv8) |
+| Cortex-M33 | ARMv8-M Mainline | Optional | Yes | Yes | Optional | Optional (PMSAv8) |
+
+MPU presence is auto-detected from CMSIS's `__MPU_PRESENT`; `STK_MPU`/`STK_MPU_STACK_GUARD` only need to be defined to turn the feature on, not to select the register layout.
 
 The core variant is auto-detected from the `__CORTEX_M` macro provided by CMSIS. No manual selection is needed.
 
@@ -196,20 +204,79 @@ No user-facing define is required to enable this feature. It is automatically ac
 
 ---
 
+### Thread-Local Storage (TLS)
+
+STK can give each task a private TLS pointer, accessed through `stk::hw::GetTls()` / `stk::hw::SetTls()`.
+
+| Define | Default | Description |
+|--------|---------|-------------|
+| `STK_TLS` | `0` | Set to `1` to enable per-task TLS storage. |
+| `STK_TLS_PREFER_REGISTER` | `0` | When `1` (together with `STK_TLS=1`), TLS is kept in register `r9` (the ARM EABI "platform register", AAPCS §5.2.2) instead of a memory slot. `GetTls()`/`SetTls()` become inline `MOV` instructions, and `r9` is saved/restored by PendSV on every context switch. |
+
+```cpp
+#define STK_TLS                  1
+#define STK_TLS_PREFER_REGISTER  1
+```
+
+> **Requires `-ffixed-r9`** on every translation unit that contains task code (including any library code a task calls that touches `r9`) when `STK_TLS_PREFER_REGISTER` is enabled. Without this flag, the compiler treats `r9` as an ordinary callee-saved register — it may spill it to the stack, overwrite it with an intermediate value (e.g. during 64-bit arithmetic), and restore it in the function epilogue, silently corrupting the TLS pointer. If `-ffixed-r9` is unavailable or undesirable, leave `STK_TLS_PREFER_REGISTER` at `0`; STK falls back to a memory-based TLS slot with a small additional load/store per access.
+
+---
+
 ### TrustZone (Cortex-M33 / ARMv8-M)
 
 STK includes optional TrustZone-aware SVC handling for Cortex-M33 (ARMv8-M Mainline) and Cortex-M23 (ARMv8-M Baseline) targets.
 
 | Define | Default | Description |
 |--------|---------|-------------|
-| `STK_CORTEX_M_TRUSTZONE` | *(undefined / disabled)* | Define to enable TrustZone-aware SVC dispatch. When enabled, the SVC handler inspects `LR` bits to determine whether the call originated from Secure or Non-Secure state and reads the correct stack pointer (`MSP`/`PSP`/`MSP_NS`/`PSP_NS`) accordingly. |
+| `_STK_CORTEX_M_TRUSTZONE` | *(undefined / disabled)* | Define to enable TrustZone-aware SVC dispatch. When enabled, the SVC handler inspects `LR` bits to determine whether the call originated from Secure or Non-Secure state and reads the correct stack pointer (`MSP`/`PSP`/`MSP_NS`/`PSP_NS`) accordingly. Also grows the per-task stack frame by 4 words (`PSPLIM`, `PSPLIM_NS`, `PSP_NS`, `CONTROL_NS`) to preserve Non-Secure state across context switches. |
+| `_STK_CORTEX_M_TRUSTZONE_NON_SECURE` | *(undefined)* | Define **only** when building the Non-Secure binary of a TrustZone project (i.e. compiled without `-mcmse`). STK validates this against `__ARM_FEATURE_CMSE` at compile time and raises a `#error` if the binary is accidentally compiled as Secure while this is set. |
 
 ```cpp
-// In stk_config.h, or uncomment in stk_arch_arm-cortex-m.cpp:
-#define STK_CORTEX_M_TRUSTZONE
+// In stk_config.h:
+#define _STK_CORTEX_M_TRUSTZONE
 ```
 
-> Only define `STK_CORTEX_M_TRUSTZONE` if your application genuinely uses TrustZone with Secure/Non-Secure state transitions. Enabling it on a non-TrustZone project (or a project where all code runs in the Secure state) adds unnecessary SVC dispatch overhead without benefit.
+> **Note:** the define carries a leading underscore (`_STK_CORTEX_M_TRUSTZONE`), matching the naming used by `_STK_ARCH_ARM_CORTEX_M`. It is checked with `#ifdef`, so any non-empty definition (or none at all) enables it — there is no `0`/`1` value to set.
+
+> Only define `_STK_CORTEX_M_TRUSTZONE` if your application genuinely uses TrustZone with Secure/Non-Secure state transitions. Enabling it on a non-TrustZone project (or a project where all code runs in the Secure state) adds unnecessary SVC dispatch overhead and a larger per-task stack frame without benefit.
+
+---
+
+### Memory Protection (MPU)
+
+STK includes optional MPU support for both the legacy ARMv7-M/PMSAv7 layout (Cortex-M3/M4/M7) and the ARMv8-M/PMSAv8 layout (Cortex-M23/M33), auto-selected from `STK_ARCH_ARMV8_M`. It covers static, boot-time regions (flash/RAM/peripheral/null-guard) as well as a per-task stack-guard region applied on every context switch.
+
+| Define | Default | Description |
+|--------|---------|-------------|
+| `STK_MPU` | `0` | Set to `1` to enable MPU support. Requires an MPU to actually be present (`__MPU_PRESENT == 1` from CMSIS) — enabling it on a core without an MPU is a build-time `#error`. |
+| `STK_MPU_STACK_GUARD` | `0` | Set to `1` to additionally enable a per-task stack-guard MPU region, reconfigured on every context switch from each task's `TaskMpu` state. Requires `STK_MPU=1` (a build-time `#error` otherwise). |
+| `STK_CORTEX_M_MPU_REGIONS_MAX` | `8` | Number of MPU regions supported by the MPU peripheral. Override if your device has more or fewer than 8 regions. |
+| `STK_CORTEX_M_MPU_TASK_REGION_IDX` | `STK_CORTEX_M_MPU_REGIONS_MAX - 4` | First MPU region index reserved for per-task regions (the stack guard and any per-task `GetMpuRegions()` entries occupy the last 4 regions). Must not collide with your statically-configured regions. |
+
+The MPU API lives in `stk::hw::mpu` and is only compiled when `STK_MPU=1`:
+
+| Function | Purpose |
+|----------|---------|
+| `ConfigureRegion(reg, cfg)` | Pure computation: translates a byte-address/byte-size `MpuRegionConfig` into the raw `MpuRegion` register pair, without touching hardware. |
+| `ConfigureTable(cfg_list, cfg_count, control_flags, non_secure=false)` | One-shot boot-time setup: disables the MPU, writes every entry of `cfg_list` to its target region, then re-enables the MPU with `control_flags` (e.g. `MPU_CTRL_PRIVDEFENA_Msk`). |
+| `ConfigureTask(task_mpu, cfg_list, cfg_count, non_secure=false)` | Populates a task's `TaskMpu` per-task region shadow table, applied automatically on every context switch when `STK_MPU_STACK_GUARD=1`. |
+| `ApplyRegion(reg, index, non_secure=false)` | Writes a single precomputed region descriptor into a live MPU region slot. No barrier handling of its own — bracket batches with `Enable(false, ...)` / `Enable(true, ...)`. |
+| `DisableRegion(index, non_secure=false)` | Disables a single MPU region without touching any other region. |
+| `Enable(enable, control_flags, non_secure=false)` | Enables/disables the MPU as a whole, together with `SCB->SHCSR.MEMFAULTENA` so MPU violations raise a MemManage fault instead of escalating to HardFault. |
+
+A task opts into a per-task region set by overriding `GetMpuRegions()` and returning an array of `MpuRegionConfig` entries (region index, address, size, access permission, memory type, shareability, execute-never). See the class docs in `stk_arch_arm-cortex-m.h` for a worked example, including the recommended shared-region layout below.
+
+Three attribute macros place code/data in regions shared between privileged and unprivileged tasks:
+
+| Macro | Section | Access |
+|-------|---------|--------|
+| `STK_MPU_SHARED_DATA_SECTION` | `.stk_mpu_shared_data` | Read/write for privileged and unprivileged tasks, execute-never. |
+| `STK_MPU_SHARED_CODE_SECTION` | `.stk_mpu_shared_code` | Read-only + executable for privileged and unprivileged tasks (used for system entry points such as privilege-escalation trampolines). |
+| `STK_MPU_SHARED_BSS_SECTION` | `.stk_mpu_shared_bss` | Same permissions as `STK_MPU_SHARED_DATA_SECTION`, but zero-initialized at boot instead of copied from flash — use for large scratch buffers that don't need a non-zero initializer, to avoid wasting flash on a stored image of zeros. |
+
+> On ARMv8-M TrustZone builds, every MPU function takes a `non_secure` parameter to target the Non-Secure MPU/SCB register aliases (`MPU_NS`/`SCB_NS`) instead of the Secure ones; it is ignored on ARMv7-M/PMSAv7.
+
+> MPU configuration functions are not accessible from non-privileged, non-Secure contexts.
 
 ---
 
@@ -254,6 +321,32 @@ STK allocates per-core kernel context instances indexed by core ID. On Cortex-M 
 | `stk_cs_NESTINGS_MAX` | `16` | Maximum allowable nesting depth for `hw::CriticalSection`. Exceeding this triggers `KERNEL_PANIC_CS_NESTING_OVERFLOW`. |
 | `STK_SEGGER_SYSVIEW` | `0` | Enable SEGGER SystemView trace integration. Automatically enables `STK_NEED_TASK_ID` and `STK_SYNC_DEBUG_NAMES`. When enabled, `Initialize()` calls `SEGGER_SYSVIEW_Init()` and the SysTick/PendSV handlers emit trace records. |
 | `STK_SYNC_DEBUG_NAMES` | `0` | Attach string names to synchronization primitives for trace tools. |
+
+---
+
+### Fault Handling
+
+STK can optionally trap the `MemManage` and `HardFault` exceptions itself and hand a captured `FaultContext` to your application instead of leaving the default CMSIS weak handler (typically an infinite loop) in place.
+
+| Define | Default | Description |
+|--------|---------|-------------|
+| `STK_USE_MEMMANAGE_HANDLER` | `0` | Set to `1` to have STK provide `STK_MEMMANAGE_HANDLER`. Not processed by STK by default. |
+| `STK_MEMMANAGE_HANDLER` | `MemManage_Handler` | Symbol name STK defines when `STK_USE_MEMMANAGE_HANDLER=1`. Override if your vector table expects a different name. |
+| `STK_USE_HARDFAULT_HANDLER` | `0` | Set to `1` to have STK provide `STK_HARDFAULT_HANDLER`. Not processed by STK by default. |
+| `STK_HARDFAULT_HANDLER` | `HardFault_Handler` | Symbol name STK defines when `STK_USE_HARDFAULT_HANDLER=1`. Override if your vector table expects a different name. |
+
+When either handler fires and an `IEventOverrider` is registered (via `SetEventOverrider()`), STK builds a `FaultContext` and calls `IEventOverrider::OnException()` with the exception kind, the active task's ID (when `STK_NEED_TASK_ID` is enabled), and a pointer to the context. `FaultContext` captures:
+
+- The 8-word hardware exception frame (`R0`–`R3`, `R12`, `LR`, `PC`, `xPSR`)
+- `EXC_RETURN` and the current `CONTROL` register
+- On ARMv7-M/ARMv8-M only: `CFSR`, `HFSR`, `AFSR`, and `MMFAR`/`BFAR` together with their valid-bit flags (ARMv6-M has none of these registers, so they read back as zero/invalid)
+- When `STK_MPU=1`: a full snapshot of `MPU->CTRL` (plus `MAIR0`/`MAIR1` on ARMv8-M) and every configured region's `RBAR`/`RASR` (or `RBAR`/`RLAR` on ARMv8-M)
+
+If `OnException()` returns `false` (or no overrider is registered), STK breaks into the debugger (if attached) and then issues `NVIC_SystemReset()` — there is no return path from a trapped fault.
+
+`PlatformArmCortexM::ProcessHardFault()` is also available as a public API entry point for application code that wants to trigger the same fault-reporting path outside of the two hardware handlers above.
+
+> Enabling these handlers only replaces the fault ISR — it does not by itself recover execution. Use `OnException()` for logging, persisting a crash record, or a controlled shutdown before the reset.
 
 ---
 
@@ -452,3 +545,23 @@ Ensure `STK_SVC_HANDLER` has higher priority than `STK_PENDSV_HANDLER` (SVC must
 **Stack overflow or memory corruption on first context switch**
 
 On Cortex-M the minimum stack (`STK_STACK_SIZE_MIN = 32`) covers the hardware exception frame (8 words) plus callee-saved registers and optional EXC_RETURN / FPU slots. If your task stack is smaller than this, the first context switch will corrupt adjacent memory silently. Always allocate task stacks larger than `STK_STACK_SIZE_MIN`.
+
+**Build error: "MPU is not present on this platform, STK_MPU feature is not supported!"**
+
+`STK_MPU` (or `STK_MPU_STACK_GUARD`) is defined as `1` but CMSIS reports `__MPU_PRESENT == 0` (or the macro is missing) for your device header. Confirm your target actually has an MPU and that the correct CMSIS device header is included before `stk_config.h` takes effect.
+
+**Build error: "Enable MPU support (STK_MPU=1) to use per-task MPU feature (STK_MPU_STACK_GUARD=1)!"**
+
+`STK_MPU_STACK_GUARD` requires `STK_MPU` to also be `1` — the stack guard is implemented on top of the general MPU API. Set both, or disable the stack guard.
+
+**MemManage/HardFault still falls into the default infinite-loop handler**
+
+`STK_USE_MEMMANAGE_HANDLER` / `STK_USE_HARDFAULT_HANDLER` default to `0` — STK does not touch these vectors unless explicitly enabled. Set the relevant define to `1`, and if your SDK's vector table expects a different symbol name, override `STK_MEMMANAGE_HANDLER` / `STK_HARDFAULT_HANDLER` accordingly. Register an `IEventOverrider` and implement `OnException()` to receive the `FaultContext` before the automatic `NVIC_SystemReset()`.
+
+**Corrupted or wrong TLS value on task switch after enabling `STK_TLS_PREFER_REGISTER`**
+
+Some translation unit containing task code (or a library it calls) was compiled without `-ffixed-r9`, so the compiler reused `r9` as a normal scratch/callee-saved register. Add `-ffixed-r9` to the build flags of every such translation unit, or disable `STK_TLS_PREFER_REGISTER` and use the memory-based TLS fallback instead.
+
+**Old `stk_config.h` defines `STK_CORTEX_M_TRUSTZONE` but TrustZone dispatch doesn't activate**
+
+The define was renamed to `_STK_CORTEX_M_TRUSTZONE` (leading underscore, matching `_STK_ARCH_ARM_CORTEX_M`). Update `stk_config.h` to use the new name.

@@ -453,10 +453,10 @@ struct MutexMock : public IMutex
     }
 };
 
-struct SyncObjectMock : public ISyncObject
+struct SyncObjectMock : public SyncObjectBase
 {
-    void WakeOne() { ISyncObject::WakeOne(); }
-    void WakeAll() { ISyncObject::WakeAll(); }
+    void WakeOne() override { SyncObjectBase::WakeOne(); }
+    void WakeAll() override { SyncObjectBase::WakeAll(); }
 };
 
 } // namespace test
