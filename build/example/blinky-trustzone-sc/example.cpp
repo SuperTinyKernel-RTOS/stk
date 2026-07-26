@@ -8,6 +8,9 @@
  */
 
 #include <setjmp.h>
+#include <stdio.h>
+#include <pico/runtime.h>
+#include <pico/stdio.h>
 
 #include <stk.h>
 #include <arch/arm/cortex-m/stk_arch_arm-tz.h>
@@ -21,16 +24,17 @@
 #error "Compile with --mcmse"
 #endif
 
-// R2350 requires larger stack due to stack-memory heavy SDK API.
+// Size of the task's stack (number of stk::Word)
+// R2350 requires larger stack due to stack-memory heavy SDK API
 #ifdef _PICO_H
-enum { TASK_STACK_SIZE = 1024 };
+static constexpr size_t TASK_STACK_SIZE = 1024U;
 #else
-enum { TASK_STACK_SIZE = 256 };
+static constexpr size_t TASK_STACK_SIZE = 256U;
 #endif
 
 // Tasks count.
-#define TASK_NS_COUNT (4)
-#define TASK_S_COUNT  (1)
+#define TASK_NS_COUNT (4U)
+#define TASK_S_COUNT  (1U)
 #define TASK_COUNT    (TASK_NS_COUNT + TASK_S_COUNT)
 
 // Kernel type.
@@ -91,7 +95,7 @@ __stk_tz_nsc_entry void NSC_bsp_Led_SwitchOnExclusive(bsp::Led::Id led)
 {
     // You can call hardware directly now, because execution is happening in a
     // Secure world and Non-Secure task is Privileged.
-    if (hw::IsContextPrivileged())
+    if (hw::IsPrivilegedContext())
     {
         Led::SwitchOnExclusive(led);
     }
@@ -103,33 +107,17 @@ __stk_tz_nsc_entry void NSC_bsp_Led_SwitchOnExclusive(bsp::Led::Id led)
     }
 }
 
-extern "C" void isr_hardfault(void)
-{
-    volatile uint32_t SFSR = SAU->SFSR;
-    volatile uint32_t SFAR = SAU->SFAR; // valid if SFSR.SFARVALID set
-
-    SCB;
-
-    STK_UNUSED(SFSR);
-    STK_UNUSED(SFAR);
-
-    while (true)
-    {
-        __BKPT(0);
-    }
-}
-
-extern char __nsc_start[];        // = ORIGIN(FLASH_NSC)
-extern char __nsc_end[];          // = ORIGIN(FLASH_NSC) + LENGTH(FLASH_NSC)
-extern char __ns_ram_start[];     // = ORIGIN(RAM_NS)
-extern char __ns_ram_end[];       // = ORIGIN(RAM_NS) + LENGTH(RAM_NS)
-extern char __ns_flash_start[];   // = __nsc_end
-extern char __ns_flash_end[];     // = ORIGIN(FLASH_NS) + LENGTH(FLASH_NS)
-extern char __ns_scratch_start[]; // = ORIGIN = 0x2007E000
-extern char __ns_scratch_end[];   // = ORIGIN = 0x2007F000
-
 static void Configure_SAU(void)
 {
+    extern char __nsc_start[];        // = ORIGIN(FLASH_NSC)
+    extern char __nsc_end[];          // = ORIGIN(FLASH_NSC) + LENGTH(FLASH_NSC)
+    extern char __ns_ram_start[];     // = ORIGIN(RAM_NS)
+    //extern char __ns_ram_end[];       // = ORIGIN(RAM_NS) + LENGTH(RAM_NS)
+    extern char __ns_flash_start[];   // = __nsc_end
+    extern char __ns_flash_end[];     // = ORIGIN(FLASH_NS) + LENGTH(FLASH_NS)
+    extern char __ns_scratch_start[]; // = ORIGIN = 0x2007E000
+    extern char __ns_scratch_end[];   // = ORIGIN = 0x2007F000
+
     // Disable SAU while programming regions.
     SAU->CTRL = 0U;
 
@@ -171,8 +159,10 @@ static void Configure_SAU(void)
 static void ConfigureSecureState()
 {
     // Enable secure fault reporting.
-    SCB->SHCSR |= SCB_SHCSR_SECUREFAULTENA_Msk;
-    SCB->SHCSR |= SCB_SHCSR_BUSFAULTENA_Msk | SCB_SHCSR_USGFAULTENA_Msk | SCB_SHCSR_MEMFAULTENA_Msk;
+    SCB->SHCSR |= SCB_SHCSR_SECUREFAULTENA_Msk |
+                  SCB_SHCSR_BUSFAULTENA_Msk |
+                  SCB_SHCSR_USGFAULTENA_Msk |
+                  SCB_SHCSR_MEMFAULTENA_Msk;
 
     // 1. Configure SAU boundaries before any peripheral writes.
     Configure_SAU();
@@ -183,6 +173,8 @@ static void ConfigureSecureState()
 static void InvokeNonSecureState()
 {
     typedef __stk_tz_ns_call void (* NSFuncT)(void);
+
+    extern char __ns_flash_start[];   // = __nsc_end
 
     // 1. Init PSP to 0.
     __TZ_set_PSP_NS(0);
@@ -253,6 +245,55 @@ private:
     }
 };
 
+class PlatformEventHandler final : public stk::IPlatform::IEventOverrider
+{
+    bool OnException(stk::EHwException exc_id, stk::TId tid, const struct stk::FaultContext *const ctx) override
+    {
+        if (exc_id == stk::HW_EXCEPT_MEMACCESS)
+        {
+            printf("\r\n================ MEMMANAGE FAULT DETECTED ================\r\n");
+        }
+        else
+        {
+            printf("\r\n================== HARD FAULT DETECTED ===================\r\n");
+        }
+
+        printf("ITask *: 0x%08X:\r\n", (unsigned int)tid);
+
+        printf("EXC_RETURN: 0x%08X\r\n\r\n", (unsigned int)ctx->EXC_RETURN);
+
+        printf("--- Stacked CPU Registers ---\r\n");
+        printf("R0:   0x%08X    R1:   0x%08X    R2:   0x%08X\r\n", (unsigned int)ctx->frame.R0, (unsigned int)ctx->frame.R1, (unsigned int)ctx->frame.R2);
+        printf("R3:   0x%08X    R12:  0x%08X    LR:   0x%08X\r\n", (unsigned int)ctx->frame.R3, (unsigned int)ctx->frame.R12, (unsigned int)ctx->frame.LR);
+        printf("PC:   0x%08X    xPSR: 0x%08X\r\n\r\n", (unsigned int)ctx->frame.PC, (unsigned int)ctx->frame.xPSR);
+
+        printf("--- System Control Registers ---\r\n");
+        printf("CFSR: 0x%08X    HFSR: 0x%08X    AFSR: 0x%08X\r\n", (unsigned int)ctx->CFSR, (unsigned int)ctx->HFSR, (unsigned int)ctx->AFSR);
+        printf("MMFAR: 0x%08X (%s)\r\n", (unsigned int)ctx->MMFAR, ctx->mmfar_valid ? "VALID" : "INVALID");
+        printf("BFAR:  0x%08X (%s)\r\n\r\n", (unsigned int)ctx->BFAR, ctx->bfar_valid ? "VALID" : "INVALID");
+        printf("CONTROL: 0x%08X (nPRIV=%u)\r\n", (unsigned int)ctx->CONTROL, (unsigned int)(ctx->CONTROL & 1U));
+
+        printf("--- MPU Status & Config ---\r\n");
+        printf("CTRL:  0x%08X\r\n", (unsigned int)ctx->mpu.CTRL);
+    #if STK_ARCH_ARMV8_M
+        printf("MAIR0: 0x%08X    MAIR1: 0x%08X\r\n", (unsigned int)ctx->mpu.MAIR0, (unsigned int)ctx->mpu.MAIR1);
+    #endif
+
+        printf("--- MPU Regions Configuration ---\r\n");
+        for (size_t i = 0U; i < 8U; i++)
+        {
+            printf("  Region %u -> RBAR: 0x%08X    RLAR: 0x%08X\r\n",
+                   (unsigned int)i,
+                   (unsigned int)ctx->mpu.regions[i].RBAR,
+                   (unsigned int)ctx->mpu.regions[i].ATTR);
+        }
+        printf("=====================================================\r\n");
+
+        __stk_debug_break();
+        return false;
+    }
+};
+
 static void CreateKernel()
 {
     Led::InitAll(false);
@@ -262,6 +303,10 @@ static void CreateKernel()
 
     // Allocate scheduling kernel for 3 threads (tasks) with Round-Robin scheduling strategy.
     static Kernel<KernelMode, TASK_COUNT, SwitchStrategyRR, PlatformDefault> kernel;
+
+    // for MPU configuration and MemFault/HardFault exceptions processing
+    static PlatformEventHandler event_overrider;
+    kernel.GetPlatform()->SetEventOverrider(&event_overrider);
 
     // Init scheduling kernel.
     kernel.Initialize();

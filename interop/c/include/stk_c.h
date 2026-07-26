@@ -826,15 +826,38 @@ void stk_tls_set(void *ptr);
 
 // ----- Critical Section ------------------------------------------------------
 
-/*! \brief     Enter critical section - disable context switches on current core.
+/*! \brief     Session of Critical Section.
+*/
+typedef uint8_t stk_cs_session_t;
+
+/*! \brief     Default session value for stk_critical_section_enter_ex()/stk_critical_section_exit_ex(),
+               letting the call auto-detect the calling context's privilege level.
+*/
+#define STK_DEFAULT_CS_SESSION (0U)
+
+/*! \brief     Enter global critical section - disable context switches on current core.
+    \note      Supports nesting (number of enter calls must match number of exit calls).
+    \param[in] ses: STK_DEFAULT_CS_SESSION to auto-detect the calling context's privilege level,
+               or an explicit session value to force a specific handling path.
+    \return    Session value that must be supplied to the matching stk_critical_section_exit_ex().
+*/
+stk_cs_session_t stk_critical_section_enter_ex(stk_cs_session_t ses /*= STK_DEFAULT_CS_SESSION*/);
+
+/*! \brief     Leave global critical section - re-enable context switches.
+    \note      Must be called once for each previous stk_critical_section_enter().
+    \param[in] ses: Session value returned by the matching stk_critical_section_enter_ex() call.
+*/
+void stk_critical_section_exit_ex(stk_cs_session_t ses /*= STK_DEFAULT_CS_SESSION*/);
+
+/*! \brief     Enter global critical section - disable context switches on current core.
     \note      Supports nesting (number of enter calls must match number of exit calls).
 */
-void stk_critical_section_enter(void);
+void stk_critical_section_enter();
 
-/*! \brief     Leave critical section - re-enable context switches.
+/*! \brief     Leave global critical section - re-enable context switches.
     \note      Must be called once for each previous stk_critical_section_enter().
 */
-void stk_critical_section_exit(void);
+void stk_critical_section_exit();
 
 // ----- Mutex -----------------------------------------------------------------
 

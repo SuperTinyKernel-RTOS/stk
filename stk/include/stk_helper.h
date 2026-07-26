@@ -19,6 +19,39 @@
 
 namespace stk {
 
+/*! \class StackMemoryDef
+    \brief Stack memory type definition.
+    \note  This descriptor provides an encapsulated type only on basis of which you can declare
+           your memory array variable.
+
+    Usage example:
+    \code
+    StackMemoryDef<128>::Type my_memory_array;
+    \endcode
+*/
+template <size_t TStackSize> struct StackMemoryDef
+{
+    enum EConsts : size_t
+    {
+        SIZE = TStackSize
+    };
+
+    /*! \typedef Type
+        \brief   Stack memory type.
+    */
+#if STK_MPU_STACK_GUARD
+    #if STK_ARCH_ARMV8_M
+        // ARMv8-M alignment is 32 bytes.
+        typedef __stk_aligned(32U) Word Type[SIZE];
+    #else
+        // ARMv7-M alignment is a size of the memory region.
+        typedef __stk_aligned(TStackSize * sizeof(Word)) Word Type[SIZE];
+    #endif
+#else
+    typedef __stk_aligned(STK_STACK_MEMORY_ALIGN) Word Type[SIZE];
+#endif
+};
+
 /*! \class Task
     \brief Partial implementation of the user task.
 
@@ -74,7 +107,7 @@ protected:
     STK_VIRT_DTOR ~Task() = default;
 
 private:
-    typename StackMemoryDef<_StackSize>::Type m_stack; //!< Stack memory region, 16-byte aligned.
+    typename StackMemoryDef<_StackSize>::Type m_stack; //!< Stack memory region, STK_STACK_MEMORY_ALIGN-byte aligned.
 };
 
 /*! \class TaskW
@@ -166,14 +199,75 @@ private:
     MemoryType *m_stack; //!< Pointer to the externally-owned stack memory array.
 };
 
-// Helper function for Kernel::UpdateTaskState.
-template <bool TicklessMode> inline Timeout GetInitialSleepTicks();
-template <> inline Timeout GetInitialSleepTicks<true>()  { return STK_TICKLESS_TICKS_MAX; }
-template <> inline Timeout GetInitialSleepTicks<false>() { return 1; }
+/*! \class SyncObjectBase
+    \brief Default, storage-owning implementation of \a ISyncObject.
+
+    Owns the intrusive wait list (\a m_wait_list) and provides the standard
+    add/remove/wake bookkeeping used by all built-in synchronization primitives
+    (\a Mutex, \a Event, \a Semaphore, \a ConditionVariable, ...). \a m_wait_list is
+    \c protected rather than \c private: primitives that privately inherit this class
+    are permitted to touch it directly on the hot path (see e.g. \a Mutex::Unlock)
+    instead of going through the virtual \a GetWaitList() accessor.
+
+    \note  Not every \a ISyncObject need derive from this class — an implementation
+           with a different storage strategy (e.g. a cross-domain TrustZone wrapper)
+           may implement \a ISyncObject directly instead.
+*/
+class SyncObjectBase : public ISyncObject
+{
+    friend class IKernelService;
+
+public:
+    void AddWaitObject(IWaitObject *wobj) override
+    {
+        ISyncObject::AddWaitObject(m_wait_list, wobj);
+    }
+
+    void RemoveWaitObject(IWaitObject *wobj) override
+    {
+        ISyncObject::RemoveWaitObject(m_wait_list, wobj);
+    }
+
+    const IWaitObject::ListHeadType &GetWaitList() const override
+    {
+        return m_wait_list;
+    }
+
+protected:
+    /*! \brief     Constructor.
+        \note      Can not be standalone object, must be inherited by the implementation.
+    */
+    explicit SyncObjectBase() : m_wait_list()
+    {}
+
+    /*! \brief Destructor.
+        \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
+    */
+    ~SyncObjectBase() = default;
+
+    void WakeOne() override
+    {
+        IKernelService::GetInstance()->Wake(this, false);
+    }
+
+    void WakeAll() override
+    {
+        IKernelService::GetInstance()->Wake(this, true);
+    }
+
+    IWaitObject::ListHeadType &GetWaitList() override
+    {
+        return m_wait_list;
+    }
+
+    IWaitObject::ListHeadType m_wait_list; //!< Tasks blocked on this object.
+};
 
 //! Implementation of ISyncObject::Tick, see \a ISyncObject. Placed here as it depends on hw namespace.
 inline bool ISyncObject::Tick(Timeout elapsed_ticks)
 {
+    IWaitObject::ListHeadType &wlist = GetWaitList();
+
     // note: ScopedCriticalSection usage
     //
     // Single-core: no critical section needed - Tick() runs inside the
@@ -184,10 +278,10 @@ inline bool ISyncObject::Tick(Timeout elapsed_ticks)
     // each core may call Tick() concurrently for the same Semaphore instance,
     // and ISyncObject::Tick() is not re-entrant.
 #if (STK_ARCH_CPU_COUNT > 1)
-    hw::CriticalSection::ScopedLock cs_;
+    const hw::CriticalSection::ScopedLock cs_;
 #endif
 
-    IWaitObject *itr = util::DListCast::ListEntryToParent<IWaitObject>(m_wait_list.GetFirst());
+    IWaitObject *itr = util::DListCast::ListEntryToParent<IWaitObject>(wlist.GetFirst());
 
     while (itr != nullptr)
     {
@@ -201,14 +295,14 @@ inline bool ISyncObject::Tick(Timeout elapsed_ticks)
         itr = next;
     }
 
-    return !m_wait_list.IsEmpty();
+    return !wlist.IsEmpty();
 }
 
 //! Implementation of ISyncObject::Tick, see \a ISyncObject. Placed here as it depends on \a GetUserTaskFromTid.
 inline Weight ISyncObject::FindWeightHigherThan(Weight comp) const
 {
     Weight max_weight = NO_WEIGHT;
-    const IWaitObject *itr = util::DListCast::ListEntryToParent<const IWaitObject>(m_wait_list.GetFirst());     
+    const IWaitObject *itr = util::DListCast::ListEntryToParent<const IWaitObject>(GetWaitList().GetFirst());
 
     while (itr != nullptr)
     {

@@ -1301,7 +1301,7 @@ TEST(Kernel, SyncNotEnabledFailsOnWait)
     {
         g_TestContext.ExpectAssert(true);
         IKernelService::GetInstance()->Wait(nullptr, nullptr, 0);
-        CHECK_TEXT(false, "kernel does not support waiting without KERNEL_SYNC");
+        CHECK_TRUE(false); // kernel does not support waiting without KERNEL_SYNC
     }
     catch (TestAssertPassed &pass)
     {
@@ -1321,7 +1321,7 @@ TEST(Kernel, SyncNotEnabledFailsOnWait)
     {
         g_TestContext.ExpectAssert(true);
         platform->EventTaskWait(0, nullptr, nullptr, 0);
-        CHECK_TEXT(false, "kernel does not support waiting without KERNEL_SYNC");
+        CHECK_TRUE(false); // kernel does not support waiting without KERNEL_SYNC;
     }
     catch (TestAssertPassed &pass)
     {
@@ -1336,6 +1336,28 @@ TEST(Kernel, SyncNotEnabledFailsOnWait)
     g_TestContext.RethrowAssertException(true);
     g_TestContext.ExpectAssert(false);
     CHECK_EQUAL(WAIT_RESULT_FAIL, wresult);
+}
+
+TEST(Kernel, SyncNotEnabledFailsOnWake)
+{
+    Kernel<KERNEL_STATIC, 1, SwitchStrategyRR, PlatformTestMock> kernel;
+    TaskMock<ACCESS_USER> task;
+
+    kernel.Initialize();
+    kernel.AddTask(&task);
+    kernel.Start();
+
+    try
+    {
+        g_TestContext.ExpectAssert(true);
+        IKernelService::GetInstance()->Wake(nullptr, false);
+        CHECK_TRUE(false); // kernel does not support waiting without KERNEL_SYNC
+    }
+    catch (TestAssertPassed &pass)
+    {
+        CHECK(true);
+        g_TestContext.ExpectAssert(false);
+    }
 }
 
 TEST(Kernel, SyncNoNullSyncObj)

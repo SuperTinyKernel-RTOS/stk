@@ -134,11 +134,11 @@ static constexpr T *WordToPtr(Word value) noexcept
 */
 bool IsInsideISR();
 
-/*! \brief     Check if caller is Privileged.
+/*! \brief     Check if caller context is Privileged.
     \return    \c true if Privileged; \c false otherwise.
     \note      ISR-safe itself: may be called from any context.
 */
-bool IsContextPrivileged();
+bool IsPrivilegedContext();
 
 // Some architectures (e.g. RISC-V with the 'tp' register) can implement TLS access as a
 // single inline instruction. When the back-end header defines STK_INLINE_TLS,
@@ -346,14 +346,36 @@ static __stk_forceinline void WriteVolatile64(volatile T *addr, T value)
 class CriticalSection
 {
 public:
+    /*! \enum  ESessionFlags
+        \brief Collection of session flags.
+    */
+    enum ESessionFlags : uint8_t
+    {
+        SESSION_FLAG_NONE  = 0,        //!< None.
+        SESSION_FLAG_NPRIV = (1 << 0), //!< Calling context is non-Priviliged.
+    };
+
+    /*! \brief   Opaque session token returned by Enter() and consumed by Exit().
+        \note    Encodes the privileged/unprivileged handling path taken by Enter(), so that
+                 the matching Exit() can restore state correctly without re-detecting context.
+    */
+    typedef uint8_t Session;
+
+    /*! \brief   Default session value passed to Enter()/Exit() when the caller does not need
+                 to force a specific handling path.
+        \note    With this value, Enter() auto-detects whether the calling context is
+                 privileged or unprivileged.
+    */
+    static constexpr Session DEFAULT_SESSION = SESSION_FLAG_NONE;
+
     /*! \class ScopedLock
-        \brief RAII guard that enters the critical section on construction and exits it on destruction.
+        \brief RAII instance that enters the critical section on construction and exits it on destruction.
         \note  Guarantees Exit() is always called even if an early return or exception unwinds the scope.
 
         Usage example:
         \code
         {
-            CriticalSection::ScopedLock lock;
+            CriticalSection::ScopedLock guard;
 
             // shared resource access protected here
         } // CriticalSection::Exit() called automatically
@@ -364,14 +386,19 @@ public:
     public:
         /*! \brief Enter the critical section.
         */
-        explicit ScopedLock() { CriticalSection::Enter(); }
+        explicit ScopedLock() : m_ses(CriticalSection::Enter())
+        {}
 
         /*! \brief Exit the critical section.
         */
-        ~ScopedLock() { CriticalSection::Exit(); }
+        ~ScopedLock()
+        {
+            CriticalSection::Exit(m_ses);
+        }
 
     private:
         STK_NONCOPYABLE_CLASS(ScopedLock);
+        CriticalSection::Session m_ses;
     };
 
     /*! \brief   Enter a critical section.
@@ -381,8 +408,11 @@ public:
         \warning Every Enter() must be paired with exactly one Exit(). A missing Exit() leaves
                  local interrupts masked and the global spinlock held permanently, stalling all
                  other cores and the scheduler. Prefer ScopedLock to avoid mismatched pairs.
+        \param[in] ses: DEFAULT_SESSION to auto-detect the calling context's privilege level,
+                 or an explicit Session to force a specific handling path.
+        \return  True if privileged context, False otherwise.
     */
-    static void Enter();
+    static Session Enter(const Session ses = DEFAULT_SESSION);
 
     /*! \brief   Exit a critical section.
         \note    Decrements the nesting counter. When it reaches zero (outermost Exit()), releases
@@ -391,12 +421,17 @@ public:
         \warning Must only be called after a matching Enter(). Calling Exit() without a prior Enter()
                  produces undefined behavior (nesting counter underflow, caught by assertion in
                  debug builds).
+        \param[in] ses: Session value returned by the matching Enter() call.
     */
-    static void Exit();
+    static void Exit(const Session ses = DEFAULT_SESSION);
 
 private:
-    explicit CriticalSection() {}
     STK_NONCOPYABLE_CLASS(CriticalSection);
+
+    /*! \brief Protected constructor (instantiation is prohibited).
+    */
+    explicit CriticalSection()
+    {}
 };
 
 /*! \class     SpinLock
@@ -426,6 +461,40 @@ public:
     {
         UNLOCKED = 0, //!< Lock is free and available for acquisition.
         LOCKED        //!< Lock is held by a thread or core.
+    };
+
+    /*! \class ScopedLock
+        \brief RAII guard that the spin lock is locked on construction and unlocked it on destruction.
+
+        Usage example:
+        \code
+        {
+            SpinLock::ScopedLock lock;
+
+            // shared resource access protected here
+        } // SpinLock::Unlock() called automatically
+        \endcode
+    */
+    class ScopedLock
+    {
+    public:
+        /*! \brief Lock a spin lock instance.
+        */
+        explicit ScopedLock(SpinLock &sl) : m_sl(sl)
+        {
+            sl.Lock();
+        }
+
+        /*! \brief Unlock a spin lock instance.
+        */
+        ~ScopedLock()
+        {
+            m_sl.Unlock();
+        }
+
+    private:
+        STK_NONCOPYABLE_CLASS(ScopedLock);
+        SpinLock &m_sl;
     };
 
     /*! \brief Construct a SpinLock (unlocked by default).
@@ -479,8 +548,9 @@ protected:
 #endif
 };
 
-/*! \class HiResClock
-    \brief High-resolution clock for high-precision measurements.
+/*! \class   HiResClock
+    \brief   High-resolution clock for high-precision measurements.
+    \warning Not available for non-Privileged or non-Secure contexts.
 */
 struct HiResClock
 {
@@ -537,7 +607,7 @@ static constexpr ITask *GetUserTaskFromTid(TId task_id) noexcept { return hw::Wo
     \note      Can be overridden by defining _STK_CUSTOM_MEMCPY in system configuration.
 */
 #ifndef _STK_CUSTOM_MEMCPY
-static __stk_forceinline void STK_MEMCPY(void *const dest, const void *const src, const size_t size)
+static inline void STK_MEMCPY(void *const dest, const void *const src, const size_t size)
 {
     using namespace stk;
 
@@ -565,6 +635,39 @@ static __stk_forceinline void STK_MEMCPY(void *const dest, const void *const src
             const uint8_t *const p_s = static_cast<const uint8_t *>(src);
 
             STK_UNUSED(std::copy_n(p_s, size, p_d));
+        }
+    }
+}
+#endif
+
+/*! \brief     A wrapper for a built-in memset, redefine to your own if required.
+    \note      Can be overridden by defining _STK_CUSTOM_MEMSET in system configuration.
+*/
+#ifndef _STK_CUSTOM_MEMSET
+static inline void STK_MEMSET(void *const dest, const uint8_t value, const size_t size)
+{
+    using namespace stk;
+
+    if ((dest != nullptr) && (size != 0U))
+    {
+        const Word dest_addr = hw::PtrToWord(dest);
+
+        // fast path: destination and size are 4-byte aligned, fill in 4-byte chunks
+        if (((dest_addr & 0x03U) == 0U) &&
+            ((size      & 0x03U) == 0U))
+        {
+            uint32_t *const p_d32  = static_cast<uint32_t *>(dest);
+            const uint32_t  word   = static_cast<uint32_t>(value) * 0x01010101U;
+            const size_t    words  = (size >> 2U);
+
+            STK_UNUSED(std::fill_n(p_d32, words, word));
+        }
+        // slow path
+        else
+        {
+            uint8_t *const p_d = static_cast<uint8_t *>(dest);
+
+            STK_UNUSED(std::fill_n(p_d, size, value));
         }
     }
 }

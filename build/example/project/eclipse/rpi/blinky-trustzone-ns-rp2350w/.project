@@ -2589,7 +2589,7 @@
 		<link>
 			<name>deps/stk/include/arch/arm/cortex-m/stk_arch_arm-tz.h</name>
 			<type>1</type>
-			<locationURI>PARENT-6-PROJECT_LOC/stk/include/arch/arm/cortex-m/stk_arch_arm-tz.h</locationURI>
+			<locationURI>PARENT-7-PROJECT_LOC/stk-arm-tz/include/arch/arm/cortex-m/stk_arch_arm-tz.h</locationURI>
 		</link>
 		<link>
 			<name>deps/stk/include/arch/x86/win32/stk_arch_x86-win32.h</name>

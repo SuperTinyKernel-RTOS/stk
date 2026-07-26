@@ -18,8 +18,13 @@ using namespace stk::test;
 
 STK_TEST_DECL_ASSERT;
 
-#define _STK_CHAIN_TEST_TASKS_MAX  3
+#define _STK_CHAIN_TEST_TASKS_MAX  3U
 #define _STK_CHAIN_TEST_DELAY_TIME 100
+#ifdef _STK_ARCH_RISC_V
+#define _STK_CHAIN_TEST_DIFF       30 // QEMU RISC-V is very coarse in timing
+#else
+#define _STK_CHAIN_TEST_DIFF       10
+#endif
 
 namespace stk {
 namespace test {
@@ -29,7 +34,7 @@ namespace test {
  */
 namespace chain {
 
-static volatile uint8_t g_TaskSwitch = 0;
+static volatile uint8_t g_TaskSwitch = 0U;
 
 /*! \class TestTask
     \brief Chain test task.
@@ -55,7 +60,7 @@ static Kernel<KERNEL_DYNAMIC, _STK_CHAIN_TEST_TASKS_MAX, SwitchStrategyRoundRobi
 static TestTask<ACCESS_PRIVILEGED> task1(0), task2(1), task3(2);
 
 //! Execution time of the task.
-static int64_t g_Time[_STK_CHAIN_TEST_TASKS_MAX] = {};
+static Time g_Time[_STK_CHAIN_TEST_TASKS_MAX] = {};
 
 template<> void TestTask<ACCESS_PRIVILEGED>::Run()
 {
@@ -68,11 +73,11 @@ template<> void TestTask<ACCESS_PRIVILEGED>::Run()
     Delay(_STK_CHAIN_TEST_DELAY_TIME);
 
     // activate next task and exit
-    g_TaskSwitch = (task_id + 1) % 3;
-    if (g_TaskSwitch == 1)
+    g_TaskSwitch = (task_id + 1) % 3U;
+    if (g_TaskSwitch == 1U)
         kernel.AddTask(&task2);
     else
-    if (g_TaskSwitch == 2)
+    if (g_TaskSwitch == 2U)
         kernel.AddTask(&task3);
 }
 
@@ -101,15 +106,15 @@ int main(int argc, char **argv)
     int32_t result = TestContext::SUCCESS_EXIT_CODE;
     for (int32_t i = 0; i < _STK_CHAIN_TEST_TASKS_MAX; ++i)
     {
-        int32_t diff = g_Time[i] - (i * _STK_CHAIN_TEST_DELAY_TIME);
+        Time diff = g_Time[i] - (i * _STK_CHAIN_TEST_DELAY_TIME);
 
         if (diff < 0)
             diff = -diff;
 
-        // check if time difference for every task is not more than 15 ms
-        if (diff > 25)
+        // check if time difference for every task is not more than _STK_CHAIN_TEST_DIFF ms
+        if (diff > _STK_CHAIN_TEST_DIFF)
         {
-            printf("failed time: id=%d diff=%d (>25)\n", (int)i, (int)diff);
+            printf("failed time: id=%d diff=%d (>%d)\n", (int)i, (int)diff, (int)_STK_CHAIN_TEST_DIFF);
             result = TestContext::DEFAULT_FAILURE_EXIT_CODE;
         }
     }

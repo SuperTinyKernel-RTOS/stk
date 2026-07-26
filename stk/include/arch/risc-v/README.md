@@ -263,7 +263,7 @@ These defines apply across all STK architectures but are frequently relevant for
 
 | Define | Default | Description |
 |--------|---------|-------------|
-| `STK_CRITICAL_SECTION_NESTINGS_MAX` | `16` | Maximum allowable nesting depth for `hw::CriticalSection`. Exceeding this triggers `KERNEL_PANIC_CS_NESTING_OVERFLOW`. |
+| `stk_cs_NESTINGS_MAX` | `16` | Maximum allowable nesting depth for `hw::CriticalSection`. Exceeding this triggers `KERNEL_PANIC_CS_NESTING_OVERFLOW`. |
 | `STK_SEGGER_SYSVIEW` | `0` | Enable SEGGER SystemView trace integration. Automatically enables `STK_NEED_TASK_ID` and `STK_SYNC_DEBUG_NAMES`. |
 | `STK_SYNC_DEBUG_NAMES` | `0` | Attach string names to synchronization primitives for trace tools. |
 

@@ -63,18 +63,33 @@ class ScopedCriticalSection final : public IMutex
 public:
     /*! \brief Enters critical section.
     */
-    explicit ScopedCriticalSection() { Lock(); }
+    explicit ScopedCriticalSection() : m_ses(hw::CriticalSection::DEFAULT_SESSION)
+    {
+        Lock();
+    }
 
     /*! \brief Exits critical section.
         \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
     */
-    STK_VIRT_DTOR ~ScopedCriticalSection() { Unlock(); }
+    STK_VIRT_DTOR ~ScopedCriticalSection()
+    {
+        Unlock();
+    }
 
 private:
     STK_NONCOPYABLE_CLASS(ScopedCriticalSection);
 
-    void Lock() override { hw::CriticalSection::Enter(); }
-    void Unlock() override { hw::CriticalSection::Exit(); }
+    void Lock() override
+    {
+        m_ses = hw::CriticalSection::Enter(m_ses);
+    }
+
+    void Unlock() override
+    {
+        hw::CriticalSection::Exit(m_ses);
+    }
+
+    hw::CriticalSection::Session m_ses; //!< current session of hw::CriticalSection
 };
 
 } // namespace sync

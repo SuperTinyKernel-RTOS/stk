@@ -46,33 +46,34 @@ STK is an open-source project developed at https://github.com/SuperTinyKernel-RT
 
 ## Key Features
 
-|                                           |                                                                                                                                                                                                                              |
-|-------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| **Soft real-time**                        | No strict time slots, mixed cooperative (by tasks) and preemptive (by kernel) scheduling                                                                                                                                     |
-| **Hard real-time (`KERNEL_HRT`)**         | Guaranteed execution window, deadline monitoring by the kernel                                                                                                                                                               |
-| **Static task model (`KERNEL_STATIC`)**   | Tasks created once at startup                                                                                                                                                                                                |
-| **Dynamic task model (`KERNEL_DYNAMIC`)** | Tasks can be created and exit at runtime                                                                                                                                                                                     |
-| **Rich scheduling capabilities**          | All major scheduling strategies are supported: priority-less (Round-Robin), fixed-priority, weighted (SWRR), earliest-deadline-first (EDF), and mixed-criticality adaptive (MCAS/MCAS4)                                      |
-| **Mixed-criticality**                     | MCAS (2-level) and MCAS4 (4-level) adaptive strategies featuring SWRR-based group scheduling, automatic cascade escalation/recovery, and elastic CPU share adaptation driven by per-group EWMA execution-pressure estimation |
-| **Tick or Tickless modes**                | Fixed-interval periodic interrupts (Tick) for simplicity, or dynamic timer-based wakeups (Tickless, `KERNEL_TICKLESS`) to maximize CPU sleep duration and power efficiency                                                   |
-| **Extensible via C++ interfaces**         | Kernel functionality can be extended by implementing available C++ interfaces                                                                                                                                                |
-| **Multi-core support (AMP)**              | One STK instance per physical core for optimal, lock-free performance                                                                                                                                                        |
-| **Memory Protection Unit (MPU) support**  | Privileged `ACCESS_PRIVILEGED` and non-privileged tasks `ACCESS_USER`                                                                                                                                                        |
-| **Low-power aware**                       | MCU enters sleep when no task is runnable (sleeping)                                                                                                                                                                         |
-| **Synchronization API**                   | Rich set of primitives in `stk::sync` namespace                                                                                                                                                                              |
-| **Memory API**                            | Deterministic, fragmentation-free allocator in `stk::memory` namespace                                                                                                                                                       |
-| **Thread-Local Storage (TLS)**            | Per-task TLS via a dedicated CPU register via inline zero-overhead helpers                                                                                                                                                   |
-| **Tiny footprint**                        | Minimal code unrelated to scheduling                                                                                                                                                                                         |
-| **ARM TrustZone support**                 | Secure-only task scheduling, or Non-Secure + Secure task scheduling with kernel residing in a Secure binary                                                                                                                  |
-| **Safety-critical systems ready**         | No dynamic heap memory allocation — a required baseline for IEC 61508 / ISO 26262 / DO-178C certification. See [Professional Services](#-professional-services--commercial-licensing) for certification support.             |
-| **C++ and C API**                         | Can be used easily in C++ and C projects                                                                                                                                                                                     |
-| **CMSIS-RTOS2 compatible**                | Full CMSIS-RTOS2 wrapper (`cmsis_os2_stk.cpp`) maps the standard ARM CMSIS-RTOS2 C API onto STK, enabling drop-in compatibility with STM32CubeMX, MCUXpresso, and other CMSIS-aware middleware                               |
-| **FreeRTOS compatible**                   | Full FreeRTOS wrapper (`freertos_stk.cpp`) maps the standard FreeRTOS C API onto STK, enabling drop-in migration of existing FreeRTOS codebases with minimal or no application changes                                       |
-| **Easy porting**                          | Requires very small to none BSP surface                                                                                                                                                                                      |
-| **Traceable**                             | Scheduling is fully traceable with a SEGGER SystemView                                                                                                                                                                       |
-| **Development mode (x86)**                | Run the same threaded application on Windows                                                                                                                                                                                 |
-| **100% test coverage**                    | Every source-code line of scheduler logic is covered by unit tests                                                                                                                                                           |
-| **QEMU test coverage**                    | All repository commits are automatically covered by unit tests executed on QEMU for Cortex-M and RISC-V                                                                                                                      |
+|                                                      |                                                                                                                                                                                                                              |
+|------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **Soft real-time**                                   | No strict time slots, mixed cooperative (by tasks) and preemptive (by kernel) scheduling                                                                                                                                     |
+| **Hard real-time (`KERNEL_HRT`)**                    | Guaranteed execution window, deadline monitoring by the kernel                                                                                                                                                               |
+| **Static task model (`KERNEL_STATIC`)**              | Tasks created once at startup                                                                                                                                                                                                |
+| **Dynamic task model (`KERNEL_DYNAMIC`)**            | Tasks can be created and exit at runtime                                                                                                                                                                                     |
+| **Rich scheduling capabilities**                     | All major scheduling strategies are supported: priority-less (Round-Robin), fixed-priority, weighted (SWRR), earliest-deadline-first (EDF), and mixed-criticality adaptive (MCAS/MCAS4)                                      |
+| **Mixed-criticality**                                | MCAS (2-level) and MCAS4 (4-level) adaptive strategies featuring SWRR-based group scheduling, automatic cascade escalation/recovery, and elastic CPU share adaptation driven by per-group EWMA execution-pressure estimation |
+| **Tick or Tickless modes**                           | Fixed-interval periodic interrupts (Tick) for simplicity, or dynamic timer-based wakeups (Tickless, `KERNEL_TICKLESS`) to maximize CPU sleep duration and power efficiency                                                   |
+| **Extensible via C++ interfaces**                    | Kernel functionality can be extended by implementing available C++ interfaces                                                                                                                                                |
+| **Multi-core support (AMP)**                         | One STK instance per physical core for optimal, lock-free performance                                                                                                                                                        |
+| **Memory Protection Unit (MPU) support**             | Privileged `ACCESS_PRIVILEGED` and non-privileged tasks `ACCESS_USER`, memory access partition                                                                                                                               |
+| **Low-power aware**                                  | MCU enters sleep when no task is runnable (sleeping)                                                                                                                                                                         |
+| **Synchronization API**                              | Rich set of primitives in `stk::sync` namespace                                                                                                                                                                              |
+| **Memory API**                                       | Deterministic, fragmentation-free allocator in `stk::memory` namespace                                                                                                                                                       |
+| **Thread-Local Storage (TLS)**                       | Per-task TLS via a dedicated CPU register via inline zero-overhead helpers                                                                                                                                                   |
+| **Per-task MPU stack guard (`STK_MPU_STACK_GUARD`)** | Hardware-enforced stack overflow protection, or up to 3 additional application-defined memory regions per task, reprogrammed on every context switch                                                                         |
+| **Tiny footprint**                                   | Minimal code unrelated to scheduling                                                                                                                                                                                         |
+| **ARM TrustZone support**                            | Secure-only task scheduling, or Non-Secure + Secure task scheduling with kernel residing in a Secure binary                                                                                                                  |
+| **Safety-critical systems ready**                    | No dynamic heap memory allocation — a required baseline for IEC 61508 / ISO 26262 / DO-178C certification. See [Professional Services](#-professional-services--commercial-licensing) for certification support.             |
+| **C++ and C API**                                    | Can be used easily in C++ and C projects                                                                                                                                                                                     |
+| **CMSIS-RTOS2 compatible**                           | Full CMSIS-RTOS2 wrapper (`cmsis_os2_stk.cpp`) maps the standard ARM CMSIS-RTOS2 C API onto STK, enabling drop-in compatibility with STM32CubeMX, MCUXpresso, and other CMSIS-aware middleware                               |
+| **FreeRTOS compatible**                              | Full FreeRTOS wrapper (`freertos_stk.cpp`) maps the standard FreeRTOS C API onto STK, enabling drop-in migration of existing FreeRTOS codebases with minimal or no application changes                                       |
+| **Easy porting**                                     | Requires very small to none BSP surface                                                                                                                                                                                      |
+| **Traceable**                                        | Scheduling is fully traceable with a SEGGER SystemView                                                                                                                                                                       |
+| **Development mode (x86)**                           | Run the same threaded application on Windows                                                                                                                                                                                 |
+| **100% test coverage**                               | Every source-code line of scheduler logic is covered by unit tests                                                                                                                                                           |
+| **QEMU test coverage**                               | All repository commits are automatically covered by unit tests executed on QEMU for Cortex-M and RISC-V                                                                                                                      |
 
 ---
 
@@ -159,9 +160,13 @@ STK is one of the few lightweight RTOSes that offers all popular switching strat
 
 ---
 
-### Task Privilege Separation
+### ARM MPU Support
 
-Starting with ARM Cortex-M3 and all newer cores (M3/M4/M7/M33/M55/...) that implement the Armv7-M or Armv8-M architecture with the **Memory Protection Unit (MPU)**, STK supports explicit privilege separation between tasks.
+Starting with ARM Cortex-M3 and all newer cores (M3/M4/M7/M33/M55/...) that implement the Armv7-M or Armv8-M architecture with the **Memory Protection Unit (MPU)**, STK uses the MPU to provide two complementary, hardware-enforced protection features: privilege separation between tasks, and a per-task stack guard.
+
+#### Task Privilege Separation
+
+STK supports explicit privilege separation between tasks.
 
 | Access Mode                                                                      | Privileged (`ACCESS_PRIVILEGED`)                            | Unprivileged (`ACCESS_USER`)                                       |
 |----------------------------------------------------------------------------------|-------------------------------------------------------------|--------------------------------------------------------------------|
@@ -176,7 +181,7 @@ Modern embedded systems increasingly process untrusted or complex data (network/
 - Only explicitly trusted tasks (marked `ACCESS_PRIVILEGED`) are allowed to touch GPIO, UART, SPI, DMA, timers, etc.
 - The kernel itself and all STK services remain fully functional for unprivileged tasks (`Sleep`, `Yield`, `CriticalSection`, TLS, etc.).
 
-#### Example
+##### Example
 
 ```cpp
 // Trusted driver task – needs direct hardware access
@@ -184,6 +189,39 @@ class DriverTask : public stk::Task<256, ACCESS_PRIVILEGED> { ... };
 
 // Application task that parses USB or network data – runs unprivileged
 class ParserTask : public stk::Task<512, ACCESS_USER> { ... };
+```
+
+#### Per-Task MPU Stack Guard (`STK_MPU_STACK_GUARD`)
+
+Enabling `STK_MPU_STACK_GUARD` (on top of `STK_MPU=1`) reserves the last 2/4 MPU regions for a **per-task MPU** that the kernel fully reprograms on every context switch:
+- One region is always driver-owned and set to precisely the bounds of the incoming task's own stack (full access, execute-never). Since no other region covers memory beyond those bounds, any out-of-bounds stack access — a stack overflow or underflow — immediately raises a hardware fault instead of silently corrupting adjacent RAM or another task's stack.
+- The remaining 3 regions are available to the application, letting each task attach up to 3 additional task-specific memory regions (e.g. a private data section, a restricted peripheral window, or shared read-only code/data) by overriding `ITask::GetMpuRegions()`.
+- All region descriptors are written to the MPU in a single burst load/store during the PendSV handler, keeping the extra context-switch overhead minimal.
+
+##### Example
+
+```cpp
+class SensorTask : public stk::Task<512, ACCESS_USER>
+{
+public:
+    const stk::MpuRegionConfig *GetMpuRegions(uint8_t &out_count) override
+    {
+        static const stk::MpuRegionConfig regions[] =
+        {
+            {
+                .region_idx  = 1, // task-relative slot (1..3)
+                .addr        = hw::PtrToWord(__sensor_task_private_data_start),
+                .size        = hw::PtrToWord(__sensor_task_private_data_end) - hw::PtrToWord(__sensor_task_private_data_start),
+                .access_perm = hw::mpu::ACCESS_FULL,
+                .mem_type    = hw::mpu::TYPE_NORMAL_CACHEABLE,
+                .exec        = hw::mpu::EXEC_NEVER
+            }
+        };
+
+        out_count = STK_STATIC_ARRAY_SIZE(regions);
+        return regions;
+    }
+};
 ```
 
 ---

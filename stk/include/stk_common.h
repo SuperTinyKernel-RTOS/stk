@@ -28,12 +28,6 @@ namespace tz { namespace nsec { namespace util {
     class CmseISyncObjectWrapper;
 }}}
 
-// ARM TrustZone
-#ifdef _STK_CORTEX_M_TRUSTZONE_NON_SECURE
-extern "C" void NSC_stk_ISyncObject_WakeOne(ISyncObject *sobj);
-extern "C" void NSC_stk_ISyncObject_WakeAll(ISyncObject *sobj);
-#endif
-
 /*! \enum    EAccessMode
     \brief   Hardware access modes by the task.
     \note    Can be used as a bit-field.
@@ -68,18 +62,19 @@ enum EKernelPanicId : uint32_t
     KERNEL_PANIC_ASSERT              = 3U,  //!< Internal assertion failed (maps from STK_ASSERT).
     KERNEL_PANIC_HRT_HARD_FAULT      = 4U,  //!< Kernel running in KERNEL_HRT mode reported deadline failure of the task.
     KERNEL_PANIC_CPU_EXCEPTION       = 5U,  //!< CPU reported an exception and halted execution.
-    KERNEL_PANIC_CS_NESTING_OVERFLOW = 6U,  //!< Critical section nesting limit exceeded: violation of STK_CRITICAL_SECTION_NESTINGS_MAX.
+    KERNEL_PANIC_CS_NESTING_OVERFLOW = 6U,  //!< Critical section nesting limit exceeded: violation of STK_CS_NESTINGS_MAX.
     KERNEL_PANIC_UNKNOWN_SVC         = 7U,  //!< Unknown service command received by SVC handler.
     KERNEL_PANIC_BAD_STATE           = 8U,  //!< Kernel entered unexpected (bad) state.
     KERNEL_PANIC_BAD_MODE            = 9U,  //!< Kernel is in bad/unsupported mode for the current operation.
-    KERNEL_PANIC_BAD_STACK_TYPE      = 10U  //!< Stack type is unknown.
+    KERNEL_PANIC_BAD_STACK_TYPE      = 10U, //!< Stack type is unknown.
+    KERNEL_PANIC_NS_ACCESS           = 11U  //!< Non-secure access to protected resource.
 };
 
 /*! \enum  EStackType
     \brief Stack type.
     \see   IPlatform::InitStack
 */
-enum EStackType
+enum EStackType : uint8_t
 {
     STACK_USER_TASK = 0, //!< Stack of the user task.
     STACK_SLEEP_TRAP,    //!< Stack of the Sleep trap.
@@ -89,7 +84,7 @@ enum EStackType
 /*! \enum  EConsts
     \brief Constants.
 */
-enum EConsts
+enum EConsts : uint32_t
 {
     PERIODICITY_MAX      = 99000,             //!< Maximum periodicity (microseconds), 99 milliseconds (note: this value is the highest working on a real hardware and QEMU).
     PERIODICITY_DEFAULT  = 1000,              //!< Default periodicity (microseconds), 1 millisecond.
@@ -99,7 +94,7 @@ enum EConsts
 /*! \enum  ESystemTaskId
     \brief System task id.
 */
-enum ESystemTaskId
+enum ESystemTaskId : uint32_t
 {
     SYS_TASK_ID_SLEEP = 0xFFFFFFFF, //!< Sleep trap.
     SYS_TASK_ID_EXIT  = 0xFFFFFFFE  //!< Exit trap.
@@ -109,7 +104,7 @@ enum ESystemTaskId
     \brief Trace event identifiers for tracing task suspension and resume with debugging tools (e.g. SEGGER SystemView).
     \note  Values are offset by 1000 to avoid collisions with the host tool's built-in system event range (0–999).
 */
-enum ETraceEventId
+enum ETraceEventId : uint32_t
 {
     TRACE_EVENT_UNKNOWN = 0,        //!< Unknown / uninitialized trace event.
     TRACE_EVENT_SWITCH  = 1000 + 1, //!< Task context switch event (task became active).
@@ -119,11 +114,20 @@ enum ETraceEventId
 /*! \enum  EWaitResult
     \brief Wait result (see \c IKernelService::Wait).
 */
-enum EWaitResult
+enum EWaitResult : int8_t
 {
     WAIT_RESULT_FAIL    = -1, //!< IKernelService::Wait returned with error without waiting.
     WAIT_RESULT_SIGNAL  = 0,  //!< The wake was caused by a signal.
     WAIT_RESULT_TIMEOUT = 1   //!< The wake was caused by a timeout expiry.
+};
+
+/*! \enum  EHwException
+    \brief Hardware exception id (see \c IPlatform::IEventOverrider::OnException).
+*/
+enum EHwException : int8_t
+{
+    HW_EXCEPT_FATAL     = 0, //!< HardFault on ARM / Unhandled Fatal Trap on RISC-V.
+    HW_EXCEPT_MEMACCESS = 1  //!< MemManage on ARM / Page Fault or PMP violation on RISC-V.
 };
 
 /*! \typedef Word
@@ -190,34 +194,34 @@ typedef int32_t Weight;
            against this constant directly.
     \see   IsIsrTid()
 */
-constexpr TId TID_ISR_N = static_cast<TId>(0xFFFFF000U);
+static constexpr TId TID_ISR_N = static_cast<TId>(0xFFFFF000U);
 
 /*! \var     TID_NONE
     \brief   Reserved task/thread id representing zero/none thread id.
 */
-constexpr TId TID_NONE = static_cast<TId>(0U);
+static constexpr TId TID_NONE = static_cast<TId>(0U);
 
 /*! \var     WAIT_INFINITE
     \brief   Timeout value: block indefinitely until the synchronization object is signaled.
     \note    Pass as the \a timeout argument to IKernelService::Wait().
 */
-constexpr Timeout WAIT_INFINITE = INT32_MAX;
+static constexpr Timeout WAIT_INFINITE = INT32_MAX;
 
 /*! \var     NO_WAIT
     \brief   Timeout value: return immediately if the synchronization object is not yet signaled (non-blocking poll).
     \note    Pass as the \a timeout argument to IKernelService::Wait().
 */
-constexpr Timeout NO_WAIT = 0;
+static constexpr Timeout NO_WAIT = 0;
 
 /*! \var     NO_WEIGHT
     \brief   Weight value: weight is not set.
 */
-constexpr Weight NO_WEIGHT = -1;
+static constexpr Weight NO_WEIGHT = -1;
 
 /*! \var     DEFAULT_WEIGHT
     \brief   Weight value: default weight of value (1) (see \c SwitchStrategySmoothWeightedRoundRobin).
 */
-constexpr Weight DEFAULT_WEIGHT = 1;
+static constexpr Weight DEFAULT_WEIGHT = 1;
 
 /*! \brief     Test whether a task identifier represents an ISR context.
 
@@ -275,33 +279,46 @@ private:
     size_t m_size; //!< Total number of elements in the view.
 };
 
-/*! \class StackMemoryDef
-    \brief Stack memory type definition.
-    \note  This descriptor provides an encapsulated type only on basis of which you can declare
-           your memory array variable.
-
-    Usage example:
-    \code
-    StackMemoryDef<128>::Type my_memory_array;
-    \endcode
+/*! \class   MpuRegion
+    \brief   MPU region descriptor.
+    \warning Referenced by driver, member offsets must not change.
 */
-template <size_t TStackSize> struct StackMemoryDef
+#if STK_MPU
+struct MpuRegion
 {
-    enum { SIZE = TStackSize };
-
-    /*! \typedef Type
-        \brief   Stack memory type.
-    */
-    typedef __stk_aligned(STK_STACK_MEMORY_ALIGN) Word Type[TStackSize];
+    Word addr; //!< Base address (ARMv7-M/ARMv8-M MPU: MPU->RBAR value).
+    Word attr; //!< Address attributes (ARMv7-M: MPU->RASR value; ARMv8-M: MPU->RLAR value).
 };
+#endif
 
-/*! \class Stack
-    \brief Stack descriptor.
+/*! \class   TaskMpu
+    \brief   MPU descriptor of the task.
+    \warning Fields marked with 'Offset' have static position in the structure and can't move (driver dependent).
+*/
+#if STK_MPU && STK_MPU_STACK_GUARD
+struct TaskMpu
+{
+    /*! \var     TASK_MPU_REGIONS
+        \brief   Number of MPU regions per task.
+    */
+    static constexpr uint8_t NUM_REGIONS = 4;
+
+    Word      mpu_start_addr;      //!< Offset 8: Address of (&MPU->RBAR or &MPU_NS->RBAR). See \a STK_ASM_BLOCK_MPU_STACK_GUARD.
+    MpuRegion region[NUM_REGIONS]; //!< Offset 12: Array of MPU regions of size NUM_REGIONS.
+};
+#endif
+
+/*! \class   Stack
+    \brief   Stack descriptor.
+    \warning Fields marked with 'Offset' have static position in the structure and can't move (driver dependent).
 */
 struct Stack
 {
-    Word        SP;          //!< Stack Pointer (SP) register (note: must be the first entry in this struct). Offset is fixed at 0 bytes, required by the driver.
-    uint32_t    access_mode; //!< Bitfield with hardware access mode of the task (see \a EAccessMode). Offset is fixed at 4 bytes, required by the driver.
+    Word        SP;          //!< Offset 0: Stack Pointer (SP) register.
+    uint32_t    access_mode; //!< Offset 4: Bitfield with hardware access mode of the task (see \a EAccessMode).
+#if STK_MPU && STK_MPU_STACK_GUARD
+    TaskMpu     mpu;         //!< Offset 8: MPU regions of the task.
+#endif
 #if STK_TLS && !STK_TLS_PREFER_REGISTER
     Word        tls;         //!< Thread-local storage if not using ARM Cortex-M R9 register for a fast inline access to TLS.
 #endif
@@ -448,11 +465,17 @@ protected:
 };
 
 /*! \class ISyncObject
-    \brief Synchronization object.
+    \brief Synchronization object interface.
+
+    Pure contract that the kernel programs against. Carries no wait-list storage of its
+    own so that alternative backings (e.g. a cross-domain wrapper such as
+    \a tz::nsec::util::CmseISyncObjectWrapper) can implement this interface without
+    inheriting an unused/incompatible wait list. \see SyncObjectBase for the default,
+    storage-owning implementation used by the built-in primitives.
 */
 class ISyncObject : public util::DListEntry<ISyncObject, false>
 {
-    friend class IKernel;
+    friend class IKernelService;
     friend class tz::nsec::util::CmseISyncObjectWrapper;
 
 public:
@@ -480,10 +503,7 @@ public:
         \param[in] wobj: Wait object representing blocked task.
         \note      Must be called inside the critical section (see \a hw::CriticalSection, \a sync::ScopedCrticalSection).
     */
-    virtual void AddWaitObject(IWaitObject *wobj)
-    {
-        AddWaitObject(m_wait_list, wobj);
-    }
+    virtual void AddWaitObject(IWaitObject *wobj) = 0;
 
     /*! \brief     Called by kernel when a waiting task is being removed (timeout expired, wait aborted, task terminated etc.).
         \param[in] wobj: Wait object to remove from the wait list.
@@ -499,10 +519,7 @@ public:
         \param[in] wobj: Wait object to remove from the wait list.
         \note      Must be called inside the critical section (see \a hw::CriticalSection, \a sync::ScopedCrticalSection).
     */
-    virtual void RemoveWaitObject(IWaitObject *wobj)
-    {
-        RemoveWaitObject(m_wait_list, wobj);
-    }
+    virtual void RemoveWaitObject(IWaitObject *wobj) = 0;
 
     /*! \brief     Called by kernel on every system tick to handle timeout logic of waiting tasks.
         \param[in] elapsed_ticks: Number of ticks elapsed between this and previous calls, in case of
@@ -524,7 +541,7 @@ public:
         \note      Must be called inside the critical section (see \a hw::CriticalSection, \a sync::ScopedCrticalSection).
     */
     Weight FindWeightHigherThan(Weight comp) const;
-    
+
     /*! \brief     Wake the first task in the wait list (FIFO order).
         \note      The woken task is notified with timeout=false, indicating a successful signal
                    (not a timeout expiry).
@@ -553,13 +570,12 @@ public:
         }
     }
 
-protected:
-    /*! \brief     Constructor.
-        \note      Can not be standalone object, must be inherited by the implementation.
+    /*! \brief     Get list of tasks blocked on this object.
+        \note      Read-only access for diagnostics / telemetry.
     */
-    explicit ISyncObject() : m_wait_list()
-    {}
+    virtual const IWaitObject::ListHeadType &GetWaitList() const = 0;
 
+protected:
     /*! \brief Destructor.
         \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
     */
@@ -571,14 +587,7 @@ protected:
         \note      Does nothing if no tasks are currently waiting.
         \note      Must be called inside the critical section (see \a hw::CriticalSection, \a sync::ScopedCrticalSection).
     */
-    virtual void WakeOne()
-    {
-    #ifdef _STK_CORTEX_M_TRUSTZONE_NON_SECURE
-        NSC_stk_ISyncObject_WakeOne(this);
-    #else
-        WakeOne(m_wait_list);
-    #endif
-    }
+    virtual void WakeOne() = 0;
 
     /*! \brief     Wake all tasks currently in the wait list.
         \note      Each woken task is notified with timeout=false, indicating a successful signal
@@ -586,21 +595,11 @@ protected:
         \note      Does nothing if no tasks are currently waiting.
         \note      Must be called inside the critical section (see \a hw::CriticalSection, \a sync::ScopedCrticalSection).
     */
-    virtual void WakeAll()
-    {
-    #ifdef _STK_CORTEX_M_TRUSTZONE_NON_SECURE
-        NSC_stk_ISyncObject_WakeAll(this);
-    #else
-        WakeAll(m_wait_list);
-    #endif
-    }
+    virtual void WakeAll() = 0;
 
-    IWaitObject::ListHeadType &GetWaitList()
-    {
-        return m_wait_list;
-    }
-
-    IWaitObject::ListHeadType m_wait_list; //!< tasks blocked on this object
+    /*! \brief     Get list of tasks blocked on this object.
+    */
+    virtual IWaitObject::ListHeadType &GetWaitList() = 0;
 };
 
 /*! \class IMutex
@@ -688,6 +687,60 @@ public:
         \return    Pointer to the Secure stack memory.
     */
     virtual IStackMemory *GetSecureStackMemory() { return nullptr; }
+
+    /*! \brief     Get up to 3 application-defined MPU regions for this task.
+        \details   When \c STK_MPU_STACK_GUARD is enabled, each task owns 4 hardware
+                   MPU region slots. Slot 0 is always the automatic stack guard,
+                   computed by the driver from the task's own stack memory
+                   (see IStackMemory::GetStack/GetStackSize). This hook supplies the
+                   remaining 3 slots, letting an application additionally sandbox a
+                   task to e.g. a private data buffer, a specific peripheral block, or
+                   a shared IPC region -- on top of its stack guard.
+        \param[out] out_count: Number of valid entries returned (0..3). Set to 0 by
+                   the default implementation, meaning no extra regions are configured.
+        \return    Pointer to an array of up to 3 region descriptors, or \c nullptr if
+                   \a out_count is 0. Array element \c i is applied at task-relative
+                   region index \a i \c +1 (i.e. the 3 slots following the stack guard).
+        \note      Optional. Only consulted when \c STK_MPU_STACK_GUARD is enabled; a
+                   no-op on platforms/builds without MPU stack-guard support.
+        \note      Read once, when the task is bound via Kernel::AddTask() (through
+                   IPlatform::InitStack()), not re-evaluated on every context switch.
+                   Return a pointer with static/member storage duration (e.g. a
+                   \c static const array); a stack-local temporary is invalid once this
+                   function returns.
+        \warning   Any \c region_idx set by the application on the returned entries is
+                   ignored, the driver always assigns them to task-relative slots
+                   +1..+3 by array position. Only \c addr / \c size / \c access_perm /
+                   \c mem_type / \c exec are consumed.
+        \warning   \a out_count greater than 3 is clamped by the driver (STK_ASSERT
+                   fires in debug builds); only the first 3 entries are ever applied.
+        \code
+        class MyTask : public stk::Task<256, stk::ACCESS_USER>
+        {
+            static constexpr stk::MpuRegionConfig s_extra_regions[] =
+            {
+                { .addr = MY_BUFFER_ADDR, .size = MY_BUFFER_SIZE,
+                  .access_perm = stk::hw::mpu::ACCESS_FULL,
+                  .mem_type    = stk::hw::mpu::TYPE_NORMAL_CACHEABLE,
+                  .exec        = stk::hw::mpu::EXEC_NEVER },
+            };
+
+            const stk::MpuRegionConfig *GetMpuRegions(uint8_t &out_count) override
+            {
+                out_count = 1U;
+                return s_extra_regions;
+            }
+
+            void Run() override { ... }
+        };
+        \endcode
+        \see       TaskMpu::Configure, IPlatform::InitStack
+    */
+    virtual const struct MpuRegionConfig *GetMpuRegions(uint8_t &out_count)
+    {
+        out_count = 0U;
+        return nullptr;
+    }
 
     /*! \brief     Get hardware access mode of the user task.
     */
@@ -930,13 +983,43 @@ public:
         /*! \brief  Called by the Kernel when it is entering a sleep mode.
             \return True if event is handled otherwise False to let driver handle it.
         */
-        virtual bool OnSleep(Timeout sleep_ticks) { STK_UNUSED(sleep_ticks); return false; }
+        virtual bool OnSleep(Timeout sleep_ticks)
+        {
+            STK_UNUSED(sleep_ticks);
+            return false;
+        }
 
         /*! \brief  Called by Kernel when hard fault happens.
             \note   Normally called by Kernel when one of the scheduled tasks missed its deadline (see stk::KERNEL_HRT, IPlatform::HardFault).
             \return True if event is handled otherwise False to let driver handle it.
         */
-        virtual bool OnHardFault() { return false; }
+        virtual bool OnHardFault()
+        {
+            return false;
+        }
+
+        virtual const struct MpuRegionConfig *OnConfigureMpu(uint8_t &out_count)
+        {
+            out_count = 0U;
+            return nullptr;
+        }
+
+        /*! \brief     Called by platform driver when hardware exception occurred.
+            \param[in] exc_id: Hardware exception id, see \a EHwException.
+            \param[in] tid: \c TId of the currently active task.
+            \param[in] ctx: FaultContext which includes hardware exception frame captured at
+                       fault entry (see \a hw::ExceptionFrame). PC is the true faulting
+                       instruction address; may be nullptr if unavailable.
+            \return    True if event is handled otherwise False to let driver handle it.
+            \see       EHwException
+        */
+        virtual bool OnException(EHwException exc_id, TId tid, const struct FaultContext *const ctx)
+        {
+            STK_UNUSED(exc_id);
+            STK_UNUSED(tid);
+            STK_UNUSED(ctx);
+            return false;
+        }
     };
 
     /*! \brief     Initialize scheduler's context.
@@ -1030,7 +1113,7 @@ public:
     virtual void ProcessTick() = 0;
 
     /*! \brief     Cause a hard fault of the system.
-        \note      Normally called by the Kernel when one of the scheduled tasks missed its deadline (see stk::KERNEL_HRT).
+        \note      Called by the Kernel when task missed its deadline in HRT mode (see stk::KERNEL_HRT).
     */
     virtual void ProcessHardFault() = 0;
 
@@ -1439,16 +1522,29 @@ public:
     */
     virtual void SwitchToNext() = 0;
 
-    /*! \brief     Put calling process into a waiting state until synchronization object is signaled or timeout occurs.
-        \note      This function implements core blocking logic using the Monitor pattern to ensure atomicity between state check and suspension.
-        \note      The kernel automatically unlocks the provided \a mutex before the task is suspended and re-locks it before this function returns.
+    /*! \brief     Put calling process into a waiting state until synchronization object is
+                   signaled or timeout occurs.
+        \note      This function implements core blocking logic using the Monitor pattern to
+                   ensure atomicity between state check and suspension.
+        \note      The kernel automatically unlocks the provided \a mutex before the task is
+                   suspended and re-locks it before this function returns.
         \param[in] sobj: Synchronization object to wait on.
         \param[in] mutex: Mutex protecting the state of the synchronization object.
-        \param[in] timeout: Maximum wait time (ticks). Use \c WAIT_INFINITE to block indefinitely, use \c NO_WAIT to poll without blocking.
+        \param[in] timeout: Maximum wait time (ticks). Use \c WAIT_INFINITE to block indefinitely,
+                   use \c NO_WAIT to poll without blocking.
         \return    Wait result (see \c EWaitResult).
         \warning   ISR-unsafe.
     */
     virtual EWaitResult Wait(ISyncObject *sobj, IMutex *mutex, Timeout timeout) = 0;
+
+    /*! \brief     Wake one or all tasks currently waiting on a synchronization object.
+        \param[in] sobj: Synchronization object whose waiting queue will be notified.
+        \param[in] all: If \c true, unblocks all waiting tasks (broadcast mode); if \c false,
+                   unblocks only the next waiting task (signal mode).
+        \see       Wait
+        \warning   ISR-unsafe.
+    */
+    virtual void Wake(ISyncObject *sobj, bool all) = 0;
 
     /*! \brief     Suspend scheduling.
         \return    Number of ticks available for the suspension period, as determined by the
@@ -1492,6 +1588,13 @@ protected:
     /*! \brief Destructor.
     */
     ~IKernelService() = default;
+
+    /*! \brief IWaitObject::GetWaitList() access helper.
+    */
+    static __stk_forceinline IWaitObject::ListHeadType &GetWaitList(ISyncObject *sobj)
+    {
+        return sobj->GetWaitList();
+    }
 };
 
 } // namespace stk

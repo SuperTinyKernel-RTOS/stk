@@ -376,18 +376,7 @@ protected:
     */
     static __stk_forceinline Priority GetHighestReadyPriority(uint32_t bitmap)
     {
-    #if defined(__GNUC__)
-        return GetTaskPriorityFromWeight(31U - __builtin_clz(bitmap));
-    #else
-        for (int8_t i = 31; i >= 0; --i)
-        {
-            if (bitmap & (1U << i))
-            {
-                return GetTaskPriorityFromWeight(i);
-            }
-        }
-        return 0;
-    #endif
+        return GetTaskPriorityFromWeight(31U - CountLeadingZeros(bitmap));
     }
 
 private:

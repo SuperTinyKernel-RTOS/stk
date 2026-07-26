@@ -19,9 +19,17 @@
 // Use ARM TrustZone feature: Secure-side
 #define _STK_CORTEX_M_TRUSTZONE
 
-#define STK_SECURE_STACK_SIZE (1024)
+// TrustZone interface config
+#define STK_TZ_SECURE_STACK_SIZE    (1024U)
+#define STK_TZ_NON_SECURE_TASKS_MAX (4U)
 
-#define STK_MAX_NS_TASKS      (4U)
+// MPU
+#define STK_MPU               (0)
+#define STK_MPU_STACK_GUARD   (0)
+
+// Let STK process MemManage and HardFault ISRs
+#define STK_USE_MEMMANAGE_HANDLER (1)
+#define STK_USE_HARDFAULT_HANDLER (1)
 
 // Define _STK_CPU_COUNT as 2 to use STK on both CPU cores or on CPU1, if 1 then STK can be hosted on CPU0 only
 #define STK_ARCH_CPU_COUNT    (2U)
@@ -31,5 +39,7 @@
 #define STK_SYSTICK_HANDLER   isr_systick
 #define STK_PENDSV_HANDLER    isr_pendsv
 #define STK_SVC_HANDLER       isr_svcall
+#define STK_MEMMANAGE_HANDLER isr_memmanage  // optional, see STK_USE_MEMMANAGE_HANDLER
+#define STK_HARDFAULT_HANDLER isr_hardfault  // optional, see STK_USE_HARDFAULT_HANDLER
 
 #endif /* STK_CONFIG_H_ */

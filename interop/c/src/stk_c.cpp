@@ -645,16 +645,27 @@ void stk_tls_set(void *ptr)
 #endif
 
 // -----------------------------------------------------------------------------
-// Critical Section - Manual Enter/Exit
+// Critical Section
 // -----------------------------------------------------------------------------
-void stk_critical_section_enter(void)
+
+stk_cs_session_t stk_critical_section_enter_ex(stk_cs_session_t ses)
 {
-    hw::CriticalSection::Enter();
+    return hw::CriticalSection::Enter(ses);
 }
 
-void stk_critical_section_exit(void)
+void stk_critical_section_exit_ex(stk_cs_session_t ses)
 {
-    hw::CriticalSection::Exit();
+    hw::CriticalSection::Exit(ses);
+}
+
+void stk_critical_section_enter()
+{
+    STK_UNUSED(hw::CriticalSection::Enter(hw::CriticalSection::DEFAULT_SESSION));
+}
+
+void stk_critical_section_exit()
+{
+    hw::CriticalSection::Exit(hw::CriticalSection::DEFAULT_SESSION);
 }
 
 // =============================================================================

@@ -99,11 +99,11 @@ This is the lowest-level header. It includes `stk_config.h` first, making all us
 
 - **Compiler portability macros** — `__stk_forceinline`, `__stk_aligned(x)`, `__stk_attr_naked`, `__stk_attr_noreturn`, `__stk_attr_unused`, `__stk_attr_used` for GCC, Clang/LLVM, IAR, and MSVC.
 - **Assertion macros** — `STK_ASSERT(cond)` (debug), `STK_STATIC_ASSERT(cond)`, `STK_STATIC_ASSERT_DESC(cond, msg)`.
-- **Feature-flag defaults** — `STK_TICKLESS_IDLE` (0), `STK_TICKLESS_USE_ARM_DWT` (1), `STK_TICKLESS_TICKS_MAX` (1000), `STK_ARCH_CPU_COUNT` (1), `STK_SEGGER_SYSVIEW` (0), `STK_SYNC_DEBUG_NAMES` (0).
+- **Feature-flag defaults** — `STK_TICKLESS_IDLE` (0), `STK_TICKLESS_USE_ARM_DWT` (1), `STK_TICKLESS_TICKS_MAX` (1000), `STK_ARCH_CPU_COUNT` (1), `STK_SEGGER_SYSVIEW` (0), `STK_SYNC_DEBUG_NAMES` (0), `STK_STRICT_COMPLIANCY` (0), `STK_TLS` (0), `STK_TLS_PREFER_REGISTER` (arch-dependent: 1 on RISC-V, 0 elsewhere), `STK_MPU` (0), `STK_MPU_STACK_GUARD` (0).
 - **Stack constants** — `STK_STACK_SIZE_MIN` (arch-dependent: 32 on Cortex-M, 256–512+ on RISC-V), `STK_SLEEP_TRAP_STACK_SIZE`, `STK_STACK_MEMORY_ALIGN`, `STK_STACK_MEMORY_FILLER`.
-- **Critical section limit** — `STK_CRITICAL_SECTION_NESTINGS_MAX` (16).
-- **Utility macros** — `STK_NONCOPYABLE_CLASS(TYPE)`, `STK_UNUSED(X)`, `STK_ALLOCATE_COUNT(MODE,FLAG,ONTRUE,ONFALSE)`, endian index macros `STK_ENDIAN_IDX_HI`/`STK_ENDIAN_IDX_LO`.
-- **`stk::Min`/`Max`** — constexpr compile-time min/max templates.
+- **Critical section limit** — `STK_CS_NESTINGS_MAX` (16).
+- **Utility macros** — `STK_NONCOPYABLE_CLASS(TYPE)`, `STK_UNUSED(X)`, `STK_ALLOCATE_COUNT(MODE,FLAG,ONTRUE,ONFALSE)`, `STK_LIKELY(x)`/`STK_UNLIKELY(x)`, `STK_STATIC_ARRAY_SIZE(ARRAY)`, endian index macros `STK_ENDIAN_IDX_HI`/`STK_ENDIAN_IDX_LO`.
+- **`stk::Min`/`Max`/`Align`/`AlignPow2`** — constexpr compile-time helpers, plus `stk::CountLeadingZeros()`.
 
 All user configuration belongs in `stk_config.h`, which is picked up automatically by `stk_defs.h`.
 
@@ -131,29 +131,31 @@ Defines every kernel interface, type alias, and enumeration. Key contents:
 | `TId`     | `Word`      | Task/thread identifier                               |
 | `Timeout` | `int32_t`   | Tick-based timeout (`WAIT_INFINITE`, `NO_WAIT`)      |
 | `Ticks`   | `int64_t`   | Elapsed tick counter                                 |
+| `Time`    | `int64_t`   | Wall-clock-style time value (milliseconds)           |
 | `Cycles`  | `uint64_t`  | High-resolution cycle counter                        |
+| `Weight`  | `int32_t`   | Scheduling weight/priority value                     |
 
 **Key constants:** `TID_ISR_N` (upper 20-bit ISR sentinel), `TID_NONE` (0), `WAIT_INFINITE` (`INT32_MAX`), `NO_WAIT` (0).
 
 **Enumerations:**
 
-| Enum             | Values                                                                            |
-|------------------|-----------------------------------------------------------------------------------|
-| `EAccessMode`    | `ACCESS_USER`, `ACCESS_PRIVILEGED`                                                |
-| `EKernelMode`    | `KERNEL_STATIC`, `KERNEL_DYNAMIC`, `KERNEL_HRT`, `KERNEL_SYNC`, `KERNEL_TICKLESS` |
-| `EKernelPanicId` | 10 panic codes (stack corruption, deadlock, assert, hard fault, etc.)             |
-| `EStackType`     | `STACK_USER_TASK`, `STACK_SLEEP_TRAP`, `STACK_EXIT_TRAP`                          |
-| `EConsts`        | `PERIODICITY_MAX` (99 000 µs), `PERIODICITY_DEFAULT` (1 000 µs), `STACK_SIZE_MIN` |
+| Enum             | Values                                                                                                                                                                                                |
+|------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `EAccessMode`    | `ACCESS_USER`, `ACCESS_PRIVILEGED`, `ACCESS_SECURE` (ARM TrustZone Secure binary)                                                                                                                     |
+| `EKernelMode`    | `KERNEL_STATIC`, `KERNEL_DYNAMIC`, `KERNEL_HRT`, `KERNEL_SYNC`, `KERNEL_TICKLESS`                                                                                                                     |
+| `EKernelPanicId` | 12 panic codes (`KERNEL_PANIC_NONE` plus 11 fault reasons: stack corruption, deadlock, assert, hard fault, CS-nesting overflow, unknown SVC, bad state/mode, bad stack type, non-secure access, etc.) |
+| `EStackType`     | `STACK_USER_TASK`, `STACK_SLEEP_TRAP`, `STACK_EXIT_TRAP`                                                                                                                                              |
+| `EConsts`        | `PERIODICITY_MAX` (99 000 µs), `PERIODICITY_DEFAULT` (1 000 µs), `STACK_SIZE_MIN`                                                                                                                     |
 
 **Interfaces defined here:**
 
-- `ITask` — user task contract (`Run`, `GetStack`, `GetStackSize`, `GetWeight`, `GetId`, `OnDeadlineMissed`, `OnExit`, `GetTraceName`).
+- `ITask` — user task contract (`Run`, `GetStack`, `GetStackSize`, `GetAccessMode`, `GetWeight`, `GetId`, `OnDeadlineMissed`, `OnExit`, `GetTraceName`), plus two optional hardware-isolation hooks: `GetSecureStackMemory()` (ARM TrustZone-only, defaults to `nullptr`) and `GetMpuRegions(out_count)` (up to 3 application-defined MPU regions per task, consulted only when `STK_MPU_STACK_GUARD` is enabled).
 - `IStackMemory` — stack buffer abstraction.
 - `IKernelTask` — kernel-side per-task descriptor (extends `ITask` with scheduling metadata).
-- `ITaskSwitchStrategy` — scheduling strategy interface (`AddTask`, `RemoveTask`, `GetNext`, `GetFirst`, `GetSize`, `OnTaskSleep`, `OnTaskWake`, `OnTaskDeadlineMissed`).
+- `ITaskSwitchStrategy` — scheduling strategy interface (`AddTask`, `RemoveTask`, `GetNext`, `GetFirst`, `GetSize`, `OnTaskSleep`, `OnTaskWake`, `OnTaskDeadlineMissed`, `OnTaskWeightChange`).
 - `IPlatform` — platform driver interface (`Initialize`, `Start`, `Stop`, `InitStack`, `SwitchToNext`, `Sleep`, `SleepUntil`, `Wait`, `ProcessTick`, `ProcessHardFault`, `GetTid`, `Suspend`, `Resume`, `GetCallerSP`, etc.).
-- `IKernel` — kernel control interface (`Initialize`, `AddTask`, `RemoveTask`, `SuspendTask`, `ResumeTask`, `EnumerateTasks`, `EnumerateTasksT<N>`, `Start`, `GetState`, `GetPlatform`, `GetSwitchStrategy`).
-- `IKernelService` — runtime service interface available to running tasks (`GetTid`, `GetTicks`, `GetTickResolution`, `Sleep`, `SleepUntil`, `Delay`, `SwitchToNext`, `Wait`, `Suspend`, `Resume`).
+- `IKernel` — kernel control interface (`Initialize`, `AddTask` (two overloads: plain and with HRT periodicity/deadline/start-delay), `RemoveTask`, `ScheduleTaskRemoval`, `SuspendTask`, `ResumeTask`, `EnumerateKernelTasks`, `EnumerateTasks`, `EnumerateTasksT<N>`, `Start`, `GetState`, `GetPlatform`, `GetSwitchStrategy`).
+- `IKernelService` — runtime service interface available to running tasks (`GetTid`, `GetTicks`, `GetTickResolution`, `GetSysTimerCount`, `GetSysTimerFrequency`, `Delay`, `Sleep`, `SleepUntil`, `SleepCancel`, `SwitchToNext`, `Wait`, `Wake`, `Suspend`, `Resume`, `InheritWeight`, `RestoreWeight`).
 - `ISyncObject`, `IWaitObject`, `IMutex`, `ITraceable` — synchronization building blocks.
 - `StackMemoryDef<N>` — stack memory array type helper.
 
@@ -178,6 +180,7 @@ Second, it declares and implements the portable `stk::hw` namespace used through
 | `hw::PtrToWord<T>(ptr)`                        | Cast pointer to `Word` (register-width integer)               |
 | `hw::WordToPtr<T>(word)`                       | Cast `Word` back to typed pointer                             |
 | `hw::IsInsideISR()`                            | Returns `true` when called from interrupt context             |
+| `hw::IsPrivilegedContext()`                    | Returns `true` when called from a Privileged CPU context      |
 | `hw::GetTls()` / `hw::SetTls(word)`            | Read/write raw thread-local storage register                  |
 | `hw::GetTlsPtr<T>()` / `hw::SetTlsPtr<T>(ptr)` | Type-safe TLS wrappers                                        |
 | `hw::CriticalSection::Enter/Exit`              | Nestable interrupt-disable critical section                   |
@@ -217,6 +220,8 @@ class MyTask : public stk::Task<256, Mode>
 
 **`StackMemoryWrapper<StackSize>`** — Adapter that wraps an externally-owned stack array (e.g. placed in a specific linker section) as an `IStackMemory` for passing to the kernel.
 
+**`SyncObjectBase`** — Default, storage-owning base implementation of `ISyncObject` used by all built-in `stk::sync` primitives (`Mutex`, `Event`, `Semaphore`, `ConditionVariable`, ...). Owns the intrusive wait list and provides the standard add/remove/wake bookkeeping; a synchronization object with a different storage strategy (e.g. a cross-domain TrustZone wrapper) may implement `ISyncObject` directly instead.
+
 **Free functions** (all delegate to `IKernelService::GetInstance()`):
 
 | Function                     | ISR-safe  | Description                              |
@@ -233,6 +238,7 @@ class MyTask : public stk::Task<256, Mode>
 | `Sleep(ticks)`               | No        | Suspend calling task for N ticks         |
 | `SleepMs(ms)`                | No        | Suspend calling task for N milliseconds  |
 | `SleepUntil(timestamp)`      | No        | Suspend until absolute tick timestamp    |
+| `SleepCancel(task_id)`       | Yes       | Cancel a task's pending sleep            |
 | `Yield()`                    | No        | Cooperatively yield to the next task     |
 | `Delay(ticks)`               | No        | Busy-wait for N ticks (spins, no sleep)  |
 | `DelayMs(ms)`                | No        | Busy-wait for N milliseconds             |
@@ -674,26 +680,31 @@ int main()
 
 All macros below can be defined in `stk_config.h`. Macros marked **required** must be set; all others have the shown defaults.
 
-| Macro                               | Default              | Description                                                 |
-|-------------------------------------|:--------------------:|-------------------------------------------------------------|
-| `_STK_ARCH_ARM_CORTEX_M`            | —                    | **Required (one arch)** — select ARM Cortex-M port          |
-| `_STK_ARCH_RISC_V`                  | —                    | **Required (one arch)** — select RISC-V port                |
-| `_STK_ARCH_X86_WIN32`               | —                    | **Required (one arch)** — select x86 Win32 simulation port  |
-| `STK_TICKLESS_IDLE`                 | `0`                  | `1` = enable tickless low-power idle                        |
-| `STK_TICKLESS_USE_ARM_DWT`          | `1`                  | `1` = use DWT for tickless drift correction (Cortex-M3+)    |
-| `STK_TICKLESS_TICKS_MAX`            | `1000`               | Maximum ticks the timer may be suppressed per idle interval |
-| `STK_ARCH_CPU_COUNT`                | `1`                  | Number of CPU cores (SMP)                                   |
-| `STK_ARCH_GET_CPU_ID()`             | `0`                  | Expression returning the calling core's index               |
-| `STK_STACK_SIZE_MIN`                | arch-dependent       | Minimum stack size in `Word` elements                       |
-| `STK_SLEEP_TRAP_STACK_SIZE`         | `STK_STACK_SIZE_MIN` | Sleep trap stack size                                       |
-| `STK_STACK_MEMORY_ALIGN`            | arch-dependent       | Required stack buffer alignment (bytes)                     |
-| `STK_CRITICAL_SECTION_NESTINGS_MAX` | `16`                 | Maximum critical section nesting depth                      |
-| `STK_SEGGER_SYSVIEW`                | `0`                  | `1` = enable SEGGER SystemView tracing                      |
-| `STK_SYNC_DEBUG_NAMES`              | `0`                  | `1` = enable debug names for sync objects                   |
-| `STK_SYSTICK_HANDLER`               | `SysTick_Handler`    | ARM: SysTick ISR symbol name                                |
-| `STK_PENDSV_HANDLER`                | `PendSV_Handler`     | ARM: PendSV ISR symbol name                                 |
-| `STK_SVC_HANDLER`                   | `SVC_Handler`        | ARM/RISC-V: SVC/exception handler symbol name               |
-| `STK_TIMER_THREADS_COUNT`           | `1`                  | TimerHost: number of callback handler tasks                 |
-| `STK_TIMER_HANDLER_STACK_SIZE`      | `256`                | TimerHost: handler task stack size (words)                  |
-| `STK_TIMER_COUNT_MAX`               | `32`                 | TimerHost: max concurrently active timers                   |
-| `STK_PANIC_HANDLER(id)`             | spin loop            | Override with a platform-specific fault handler             |
+| Macro                          | Default              | Description                                                                                    |
+|--------------------------------|:--------------------:|------------------------------------------------------------------------------------------------|
+| `_STK_ARCH_ARM_CORTEX_M`       | —                    | **Required (one arch)** — select ARM Cortex-M port                                             |
+| `_STK_ARCH_RISC_V`             | —                    | **Required (one arch)** — select RISC-V port                                                   |
+| `_STK_ARCH_X86_WIN32`          | —                    | **Required (one arch)** — select x86 Win32 simulation port                                     |
+| `STK_TICKLESS_IDLE`            | `0`                  | `1` = enable tickless low-power idle                                                           |
+| `STK_TICKLESS_USE_ARM_DWT`     | `1`                  | `1` = use DWT for tickless drift correction (Cortex-M3+)                                       |
+| `STK_TICKLESS_TICKS_MAX`       | `1000`               | Maximum ticks the timer may be suppressed per idle interval                                    |
+| `STK_ARCH_CPU_COUNT`           | `1`                  | Number of CPU cores (SMP)                                                                      |
+| `STK_ARCH_GET_CPU_ID()`        | `0`                  | Expression returning the calling core's index                                                  |
+| `STK_STACK_SIZE_MIN`           | arch-dependent       | Minimum stack size in `Word` elements                                                          |
+| `STK_SLEEP_TRAP_STACK_SIZE`    | `STK_STACK_SIZE_MIN` | Sleep trap stack size                                                                          |
+| `STK_STACK_MEMORY_ALIGN`       | arch-dependent       | Required stack buffer alignment (bytes)                                                        |
+| `STK_CS_NESTINGS_MAX`          | `16`                 | Maximum critical section nesting depth                                                         |
+| `STK_STRICT_COMPLIANCY`        | `0`                  | `1` = disable workarounds that break MISRA/safety-critical rules                               |
+| `STK_TLS`                      | `0`                  | `1` = enable per-task thread-local storage                                                     |
+| `STK_TLS_PREFER_REGISTER`      | `0` (`1` on RISC-V)  | `1` = keep the TLS pointer in a CPU register (`r9`/`tp`) instead of `Stack::tls`               |
+| `STK_MPU`                      | `0`                  | `1` = enable MPU support                                                                       |
+| `STK_MPU_STACK_GUARD`          | `0`                  | `1` = reprogram a per-task MPU region to guard the active task's stack on every context switch |
+| `STK_SEGGER_SYSVIEW`           | `0`                  | `1` = enable SEGGER SystemView tracing                                                         |
+| `STK_SYNC_DEBUG_NAMES`         | `0`                  | `1` = enable debug names for sync objects                                                      |
+| `STK_SYSTICK_HANDLER`          | `SysTick_Handler`    | ARM: SysTick ISR symbol name                                                                   |
+| `STK_PENDSV_HANDLER`           | `PendSV_Handler`     | ARM: PendSV ISR symbol name                                                                    |
+| `STK_SVC_HANDLER`              | `SVC_Handler`        | ARM/RISC-V: SVC/exception handler symbol name                                                  |
+| `STK_TIMER_THREADS_COUNT`      | `1`                  | TimerHost: number of callback handler tasks                                                    |
+| `STK_TIMER_HANDLER_STACK_SIZE` | `256`                | TimerHost: handler task stack size (words)                                                     |
+| `STK_TIMER_COUNT_MAX`          | `32`                 | TimerHost: max concurrently active timers                                                      |
+| `STK_PANIC_HANDLER(id)`        | spin loop            | Override with a platform-specific fault handler                                                |

@@ -345,9 +345,14 @@ primitive is supplied by the caller — no heap allocation occurs.
 Disables context switches on the current core. Supports nesting.
 
 ```c
-stk_critical_section_enter();
+static stk_cs_mem_t cs_mem;
+stk_cs_t *cs = stk_cs_create(&cs_mem, sizeof(cs_mem));
+
+stk_cs_enter(cs);
 /* protected region */
-stk_critical_section_exit();
+stk_cs_exit(cs);
+
+stk_cs_destroy(cs);
 ```
 
 > Critical sections protect against context switches only, not hardware

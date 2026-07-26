@@ -35,11 +35,12 @@ void pico_get_unique_board_id(pico_unique_board_id_t *id_out) {
 
 using namespace bsp;
 
+// Size of the task's stack (number of stk::Word)
 // R2350 requires larger stack due to stack-memory heavy SDK API
 #ifdef _PICO_H
-enum { TASK_STACK_SIZE = 1024 };
+static constexpr size_t TASK_STACK_SIZE = 1024U;
 #else
-enum { TASK_STACK_SIZE = 256 };
+static constexpr size_t TASK_STACK_SIZE = 256U;
 #endif
 
 // One flag bit per LED task; task 0 (RED) goes first
@@ -87,7 +88,7 @@ private:
 
             // change active LED
             {
-                stk::hw::CriticalSection::ScopedLock __guard;
+                const stk::hw::CriticalSection::ScopedLock __guard;
                 NSC_bsp_Led_SwitchOnExclusive(static_cast<LedId>(m_task_id));
             }
 

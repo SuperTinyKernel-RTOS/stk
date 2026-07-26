@@ -18,8 +18,13 @@ using namespace stk::test;
 
 STK_TEST_DECL_ASSERT;
 
-#define _STK_SLEEP_TEST_TASKS_MAX  3
+#define _STK_SLEEP_TEST_TASKS_MAX  3U
 #define _STK_SLEEP_TEST_SLEEP_TIME 100
+#ifdef _STK_ARCH_RISC_V
+#define _STK_SLEEP_TEST_DIFF       30 // QEMU RISC-V is very coarse in timing
+#else
+#define _STK_SLEEP_TEST_DIFF       10
+#endif
 
 namespace stk {
 namespace test {
@@ -29,7 +34,7 @@ namespace test {
  */
 namespace sleep {
 
-static int32_t g_Time[_STK_SLEEP_TEST_TASKS_MAX] = {0};
+static Time g_Time[_STK_SLEEP_TEST_TASKS_MAX] = {0};
 
 /*! \class TestTask
     \brief Sleep test task.
@@ -51,11 +56,11 @@ private:
         // task 1: sleep 200 ms
         // task 2: sleep 300 ms
 
-        int64_t start = GetTimeNowMs();
+        Time start = GetTimeNowMs();
 
-        stk::Sleep(_STK_SLEEP_TEST_SLEEP_TIME * (m_task_id + 1));
+        Sleep(_STK_SLEEP_TEST_SLEEP_TIME * (m_task_id + 1));
 
-        int64_t diff = GetTimeNowMs() - start;
+        Time diff = GetTimeNowMs() - start;
 
         printf("id=%d time=%d\n", m_task_id, (int)diff);
 
@@ -83,8 +88,6 @@ int main(int argc, char **argv)
 
     TestContext::ShowTestSuitePrologue();
 
-    using namespace stk;
-    using namespace stk::test;
     using namespace stk::test::sleep;
 
     kernel.Initialize();
@@ -98,15 +101,15 @@ int main(int argc, char **argv)
     int32_t result = TestContext::SUCCESS_EXIT_CODE;
     for (int32_t i = 0; i < _STK_SLEEP_TEST_TASKS_MAX; ++i)
     {
-        int32_t diff = g_Time[i] - ((i + 1) * _STK_SLEEP_TEST_SLEEP_TIME);
+        Time diff = g_Time[i] - ((i + 1) * _STK_SLEEP_TEST_SLEEP_TIME);
 
         if (diff < 0)
             diff = -diff;
 
         // check if time difference for every task is not more than 15 ms
-        if (diff > 20)
+        if (diff > _STK_SLEEP_TEST_DIFF)
         {
-            printf("failed time: id=%d diff=%d (>20)\n", (int)i, (int)diff);
+            printf("failed time: id=%d diff=%d (>%d)\n", (int)i, (int)diff, (int)_STK_SLEEP_TEST_DIFF);
             result = TestContext::DEFAULT_FAILURE_EXIT_CODE;
         }
     }

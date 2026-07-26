@@ -300,7 +300,7 @@ static struct Context final : public PlatformContext
         }
 
         // increase nesting count within a limit
-        if (++m_csu_nesting > STK_CRITICAL_SECTION_NESTINGS_MAX)
+        if (++m_csu_nesting > STK_CS_NESTINGS_MAX)
         {
             // invariant violated: exceeded max allowed number of recursions
             STK_KERNEL_PANIC(KERNEL_PANIC_CS_NESTING_OVERFLOW);
@@ -761,13 +761,16 @@ IKernelService *IKernelService::GetInstance()
     return GetContext().m_service;
 }
 
-void stk::hw::CriticalSection::Enter()
+stk::hw::CriticalSection::Session stk::hw::CriticalSection::Enter(CriticalSection::Session is_npriv)
 {
+    STK_UNUSED(is_npriv);
     GetContext().EnterCriticalSection();
+    return DEFAULT_SESSION;
 }
 
-void stk::hw::CriticalSection::Exit()
+void stk::hw::CriticalSection::Exit(CriticalSection::Session is_npriv)
 {
+    STK_UNUSED(is_npriv);
     GetContext().ExitCriticalSection();
 }
 
@@ -791,7 +794,7 @@ bool stk::hw::IsInsideISR()
     return false;
 }
 
-bool stk::hw::IsContextPrivileged()
+bool stk::hw::IsPrivilegedContext()
 {
     return true;
 }
