@@ -34,6 +34,11 @@
 
 namespace stk {
 
+// Helper function for Kernel::UpdateTaskState.
+template <bool TicklessMode> __stk_forceinline Timeout GetInitialSleepTicks();
+template <> __stk_forceinline Timeout GetInitialSleepTicks<true>()  { return STK_TICKLESS_TICKS_MAX; }
+template <> __stk_forceinline Timeout GetInitialSleepTicks<false>() { return 1; }
+
 /*! \class Kernel
     \brief Concrete implementation of IKernel.
 

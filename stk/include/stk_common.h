@@ -465,7 +465,13 @@ protected:
 };
 
 /*! \class ISyncObject
-    \brief Synchronization object.
+    \brief Synchronization object interface.
+
+    Pure contract that the kernel programs against. Carries no wait-list storage of its
+    own so that alternative backings (e.g. a cross-domain wrapper such as
+    \a tz::nsec::util::CmseISyncObjectWrapper) can implement this interface without
+    inheriting an unused/incompatible wait list. \see SyncObjectBase for the default,
+    storage-owning implementation used by the built-in primitives.
 */
 class ISyncObject : public util::DListEntry<ISyncObject, false>
 {
@@ -497,10 +503,7 @@ public:
         \param[in] wobj: Wait object representing blocked task.
         \note      Must be called inside the critical section (see \a hw::CriticalSection, \a sync::ScopedCrticalSection).
     */
-    virtual void AddWaitObject(IWaitObject *wobj)
-    {
-        AddWaitObject(m_wait_list, wobj);
-    }
+    virtual void AddWaitObject(IWaitObject *wobj) = 0;
 
     /*! \brief     Called by kernel when a waiting task is being removed (timeout expired, wait aborted, task terminated etc.).
         \param[in] wobj: Wait object to remove from the wait list.
@@ -516,10 +519,7 @@ public:
         \param[in] wobj: Wait object to remove from the wait list.
         \note      Must be called inside the critical section (see \a hw::CriticalSection, \a sync::ScopedCrticalSection).
     */
-    virtual void RemoveWaitObject(IWaitObject *wobj)
-    {
-        RemoveWaitObject(m_wait_list, wobj);
-    }
+    virtual void RemoveWaitObject(IWaitObject *wobj) = 0;
 
     /*! \brief     Called by kernel on every system tick to handle timeout logic of waiting tasks.
         \param[in] elapsed_ticks: Number of ticks elapsed between this and previous calls, in case of
@@ -541,7 +541,7 @@ public:
         \note      Must be called inside the critical section (see \a hw::CriticalSection, \a sync::ScopedCrticalSection).
     */
     Weight FindWeightHigherThan(Weight comp) const;
-    
+
     /*! \brief     Wake the first task in the wait list (FIFO order).
         \note      The woken task is notified with timeout=false, indicating a successful signal
                    (not a timeout expiry).
@@ -573,18 +573,9 @@ public:
     /*! \brief     Get list of tasks blocked on this object.
         \note      Read-only access for diagnostics / telemetry.
     */
-    virtual const IWaitObject::ListHeadType &GetWaitList() const
-    {
-        return m_wait_list;
-    }
+    virtual const IWaitObject::ListHeadType &GetWaitList() const = 0;
 
 protected:
-    /*! \brief     Constructor.
-        \note      Can not be standalone object, must be inherited by the implementation.
-    */
-    explicit ISyncObject() : m_wait_list()
-    {}
-
     /*! \brief Destructor.
         \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
     */
@@ -596,7 +587,7 @@ protected:
         \note      Does nothing if no tasks are currently waiting.
         \note      Must be called inside the critical section (see \a hw::CriticalSection, \a sync::ScopedCrticalSection).
     */
-    virtual void WakeOne();
+    virtual void WakeOne() = 0;
 
     /*! \brief     Wake all tasks currently in the wait list.
         \note      Each woken task is notified with timeout=false, indicating a successful signal
@@ -604,16 +595,11 @@ protected:
         \note      Does nothing if no tasks are currently waiting.
         \note      Must be called inside the critical section (see \a hw::CriticalSection, \a sync::ScopedCrticalSection).
     */
-    virtual void WakeAll();
+    virtual void WakeAll() = 0;
 
     /*! \brief     Get list of tasks blocked on this object.
     */
-    virtual IWaitObject::ListHeadType &GetWaitList()
-    {
-        return m_wait_list;
-    }
-
-    IWaitObject::ListHeadType m_wait_list; //!< Tasks blocked on this object.
+    virtual IWaitObject::ListHeadType &GetWaitList() = 0;
 };
 
 /*! \class IMutex
@@ -999,8 +985,8 @@ public:
         */
         virtual bool OnSleep(Timeout sleep_ticks)
         {
-        	STK_UNUSED(sleep_ticks);
-        	return false;
+            STK_UNUSED(sleep_ticks);
+            return false;
         }
 
         /*! \brief  Called by Kernel when hard fault happens.
@@ -1009,7 +995,7 @@ public:
         */
         virtual bool OnHardFault()
         {
-        	return false;
+            return false;
         }
 
         virtual const struct MpuRegionConfig *OnConfigureMpu(uint8_t &out_count)
@@ -1030,9 +1016,9 @@ public:
         virtual bool OnException(EHwException exc_id, TId tid, const struct FaultContext *const ctx)
         {
             STK_UNUSED(exc_id);
-        	STK_UNUSED(tid);
-        	STK_UNUSED(ctx);
-        	return false;
+            STK_UNUSED(tid);
+            STK_UNUSED(ctx);
+            return false;
         }
     };
 
@@ -1463,7 +1449,7 @@ class IKernelService
 public:
     /*! \brief     Get CPU-local instance of the kernel service.
     */
-	static IKernelService *GetInstance();
+    static IKernelService *GetInstance();
 
     /*! \brief     Get thread Id of the currently running task.
         \return    Thread Id.
@@ -1610,16 +1596,6 @@ protected:
         return sobj->GetWaitList();
     }
 };
-
-inline void ISyncObject::WakeOne()
-{
-    IKernelService::GetInstance()->Wake(this, false);
-}
-
-inline void ISyncObject::WakeAll()
-{
-    IKernelService::GetInstance()->Wake(this, true);
-}
 
 } // namespace stk
 

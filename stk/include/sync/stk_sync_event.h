@@ -58,7 +58,7 @@ namespace sync {
     \see  ISyncObject, IWaitObject, IKernelService::Wait
     \note Only available when kernel is compiled with \a KERNEL_SYNC mode enabled.
 */
-class Event final : private ISyncObject, public ITraceable
+class Event final : private SyncObjectBase, public ITraceable
 {
 public:
     /*! \brief     Constructor.
@@ -284,7 +284,7 @@ inline bool Event::TryWait()
 
 inline void Event::RemoveWaitObject(IWaitObject *wobj)
 {
-    ISyncObject::RemoveWaitObject(wobj);
+    SyncObjectBase::RemoveWaitObject(wobj);
 
     // kernel invariant: auto-reset is applied here, not at the Set()/Pulse() call site,
     // when a task wakes due to a signal (not a timeout), the event transitions back to

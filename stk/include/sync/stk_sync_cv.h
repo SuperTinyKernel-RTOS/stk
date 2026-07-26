@@ -64,7 +64,7 @@ namespace sync {
     \see  Mutex, ISyncObject, IWaitObject, IKernelService::Wait
     \note Only available when kernel is compiled with \a KERNEL_SYNC mode enabled.
 */
-class ConditionVariable final : private ISyncObject, public ITraceable
+class ConditionVariable final : private SyncObjectBase, public ITraceable
 {
 public:
     explicit ConditionVariable()
