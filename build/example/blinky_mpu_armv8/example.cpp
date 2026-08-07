@@ -18,6 +18,42 @@
 
 using namespace bsp;
 
+// ---------------------------------------------------------------------------
+// MPU (Memory Protection Unit) setup for RP2350 (Cortex-M33, ARMv8-M MPU, 8 regions)
+// ---------------------------------------------------------------------------
+// This example is built with STK_MPU_TASK_REGIONS=2 (in addition to STK_MPU=1
+// and STK_MPU_STACK_GUARD=1): each task gets only 2 hardware MPU region slots -
+// slot 0 (automatic stack guard) and slot 1 (one application-defined region).
+//
+// On this 8-region MPU that raises STK_CORTEX_M_MPU_TASK_REGION_IDX to 6 (=
+// STK_CORTEX_M_MPU_REGIONS_MAX - STK_MPU_TASK_REGIONS), so the static/global
+// region budget in PlatformEventHandler::OnConfigureMpu() grows from 4 to 6
+// regions - the driver only writes RBAR/RLAR plus one alias register (A1) per
+// context switch in this configuration, which stays within its 4-region-aligned
+// hardware block at index 6 (no manual override needed).
+//
+// The Pico SDK's RAM-resident division routines (__aeabi_ldivmod etc.) are
+// needed identically by every task, so - like 'shared code'/'shared data' -
+// they are now configured once as a global region instead of being repeated
+// per task; the single remaining per-task slot is reserved for what genuinely
+// differs per task instance: its own object memory (the 'self' region).
+//
+// Static/global regions configured in PlatformEventHandler::OnConfigureMpu():
+//   Region 0: Lower flash  - read-only, executable   (code before the shared-code window)
+//   Region 1: Upper flash  - read-only, executable   (code after the shared-code window)
+//   Region 2: Shared code  - read/execute, common code shared by every task
+//   Region 3: RAM data/BSS - read/write, execute-never, globals shared by every task
+//   Region 4: RAM text     - read-only, executable, Pico SDK RAM-resident divide routines
+//   Region 5: reserved, intentionally left unconfigured for now (see note in
+//             OnConfigureMpu() - the BOOTROM_BASE_ADDR/BOOTROM_SIZE constants below
+//             are set aside for mapping this window in a future revision, but are
+//             not wired into the region table yet)
+//
+// Per-task regions (application-defined, see NonSecureLedTask::GetMpuRegions()):
+//   Slot 0 (Region 6): automatic stack guard, configured internally by the kernel
+//   Slot 1 (Region 7): task's own instance data window (the 'self' region)
+// ---------------------------------------------------------------------------
+
 // R2350 requires larger stack due to stack-memory heavy SDK API
 #ifdef _PICO_H
 static constexpr size_t TASK_STACK_SIZE = 1024U;
@@ -50,12 +86,20 @@ static stk::Word s_LedTaskStackMem[4][TASK_STACK_MEMORY_SIZE] __stk_aligned(32U)
 static constexpr size_t TASK_MEMORY_SIZE = stk::Align<size_t>(10U, 32U);
 static stk::Word s_LedTaskMem[4][TASK_MEMORY_SIZE] __stk_aligned(32U);
 
-// Init mpu_shared_data: Pico SDK does not support custom data and bss regions, so
-// we have to do this step before static constructors are called by the init routine.
-// 101 is the highest priority available to user code, this forces it to run at the absolute
-// start of the __init_array loop, or we can use Pico SDK API to place function pointer
-// to the preinit_array section via PICO_RUNTIME_INIT_FUNC which is executed before
-// init_array initialization.
+// Init mpu_shared_data: the Pico SDK's default linker script/runtime does not know
+// about STK's custom .stk_mpu_shared_data/.stk_mpu_shared_bss sections, so their
+// FLASH->RAM copy and zero-fill has to be done manually, and it must happen before
+// any C++ static constructor runs (globals living in those sections - like
+// g_TaskFlags and g_Timeline below - would otherwise be constructed on top of
+// uninitialized/stale memory).
+//
+// Two ways to guarantee that ordering are shown here; this example uses the second:
+//   1. __attribute__((constructor(101))) - 101 is the highest priority available to
+//      user code, forcing the function to the very start of the __init_array loop
+//      (kept below, commented out, for reference).
+//   2. PICO_RUNTIME_INIT_FUNC(..., "00100") - registers the function in the Pico
+//      SDK's preinit_array section, which the SDK's runtime guarantees to run
+//      before init_array (and therefore before any static constructor).
 //__attribute__((constructor(101)))
 static void InitMpuSharedData()
 {
@@ -105,25 +149,19 @@ class NonSecureLedTask : public stk::ITask
     stk::Word         *m_stack;      //!< pointer to stack buffer
     size_t             m_stack_size; //!< stack size in words
     stk::EAccessMode   m_mode;       //!< kernel access mode
-    int32_t            m_weight;     //!< scheduling weight
 
 public:
-    NonSecureLedTask(uint8_t task_id, stk::Word *stack, size_t stack_size, stk::EAccessMode mode)
+    explicit NonSecureLedTask(uint8_t task_id, stk::Word *stack, size_t stack_size, stk::EAccessMode mode)
         : m_task_id(task_id),
           m_my_flag(FLAGS_ALL[task_id]),
           m_next_flag(FLAGS_ALL[(task_id + 1) % LED_MAX]),
           m_stack(stack),
           m_stack_size(stack_size),
-          m_mode(mode),
-          m_weight(stk::DEFAULT_WEIGHT)
+          m_mode(mode)
     {}
 
     // ITask
     stk::EAccessMode GetAccessMode() const override { return m_mode; }
-    void OnDeadlineMissed(uint32_t)        override {}
-    void OnExit()                          override {}
-    int32_t GetWeight()              const override { return m_weight; }
-    const char *GetTraceName()       const override { return nullptr; }
 
     // IStackMemory
     const stk::Word *GetStack()      const override { return m_stack; }
@@ -146,11 +184,10 @@ private:
                 continue;
 
             // change active LED
-            const HwCommand cmd = {
+            s_HwCmdQueue.Write({
                 .id      = HwCommand::CMD_LED_ON,
-                .param_0 = m_task_id
-            };
-            s_HwCmdQueue.Write(cmd);
+                .param_0 = m_task_id}
+            );
 
             // sleep 1s drift-free and then delegate work to the next task
             // we could use simple stk::Sleep() but due to other work around Sleep call we
@@ -173,48 +210,37 @@ private:
     {
         using namespace stk;
 
-        // Pico SDK places __aeabi_ldivmod, __aeabi_uldivmod, __aeabi_idiv0 into RAM for a
-        // faster execution. We must allow this memory region for access by non-priviliged tasks
-        // to support basic math operations.
-        extern char __stk_mpu_ram_text_start[];
-        extern char __stk_mpu_ram_text_end[];
-
-        const uint32_t ram_text_start = hw::PtrToWord(__stk_mpu_ram_text_start);
-        const uint32_t ram_text_end   = hw::PtrToWord(__stk_mpu_ram_text_end);
-        const uint32_t ram_text_size  = stk::Align<uint32_t>(ram_text_end - ram_text_start, 32U);
-
-        static MpuRegionConfig s_mpu_shared_regions[] =
+        // With STK_MPU_TASK_REGIONS=2 each task only has one application-defined
+        // slot available (task-relative slot 1, following the automatic stack
+        // guard in slot 0). The Pico SDK RAM-resident division routines are
+        // identical for every task instance, so they are now configured once as
+        // a global region in PlatformEventHandler::OnConfigureMpu() instead of
+        // being repeated here; this single slot is reserved for what is
+        // genuinely per-instance: access to the task's own object memory.
+        static MpuRegionConfig s_self_region[] =
         {
-            // REGION 4 is reserved by kernel for a stack memory
+            // REGION 6 is reserved by the kernel for the automatic stack guard
 
-            { // REGION 5: TASK INSTANCE DATA WINDOW - R/W for this task and privileged code
-              .region_idx  = 1U, // STK_CORTEX_M_MPU_TASK_REGION_IDX + region_idx (1) = REGION 5
+            { // REGION 7: TASK INSTANCE DATA WINDOW - R/W for this task and privileged code
               .addr        = 0U,
               .size        = TASK_MEMORY_SIZE * sizeof(stk::Word), // cover whole allocated region of the task instance
               .access_perm = hw::mpu::ACCESS_FULL,
               .mem_type    = hw::mpu::TYPE_NORMAL_CACHEABLE,
               .share       = hw::mpu::SHARE_NON,
               .exec        = hw::mpu::EXEC_NEVER
-            },
-            { // REGION 6: TASK INSTANCE DATA WINDOW - RO for all
-                .region_idx  = 2U, // STK_CORTEX_M_MPU_TASK_REGION_IDX + region_idx (2) = REGION 6
-                .addr        = hw::PtrToWord(__stk_mpu_ram_text_start),
-                .size        = ram_text_size,
-                .access_perm = hw::mpu::ACCESS_PRIV_RO_USER_RO,
-                .mem_type    = hw::mpu::TYPE_NORMAL_CACHEABLE,
-                .share       = hw::mpu::SHARE_NON,
-                .exec        = hw::mpu::EXEC_ALLOWED
             }
-
-            // We still have 2 more regions for anything else for MPU with 8 regions.
         };
 
-        // Dynamic entry, we have 4 taks instances and need to allow every instance an access to self
-        // where 'this' is pointing to the start of the task's memory region of TASK_MEMORY_SIZE size.
-        s_mpu_shared_regions[0].addr = hw::PtrToWord(this);
+        // Unlike the static tables in OnConfigureMpu() (identical for every task/call),
+        // this table is recomputed on every call: there are 4 NonSecureLedTask instances
+        // sharing this same GetMpuRegions() code, and each one must only be granted access
+        // to its own object memory - 'this' points at the start of that instance's
+        // TASK_MEMORY_SIZE-word block (see s_LedTaskMem[]), so the base address is patched
+        // in here right before the table is handed back to the kernel for this task.
+        s_self_region[0].addr = hw::PtrToWord(this);
 
-        out_count = STK_STATIC_ARRAY_SIZE(s_mpu_shared_regions);
-        return s_mpu_shared_regions;
+        out_count = STK_STATIC_ARRAY_SIZE(s_self_region);
+        return s_self_region;
     }
 #endif
 };
@@ -255,16 +281,22 @@ class PlatformEventHandler final : public stk::IPlatform::IEventOverrider
     {
         using namespace stk;
 
+        // RP2350 memory map constants. Adjust FLASH_SIZE_BYTES / SRAM_SIZE_BYTES to
+        // match your exact board/flash chip if it differs from the Pico 2 default.
+        // MPU region sizes must be a power of two, so pick the next power-of-two
+        // that covers your actual flash/RAM size when changing these.
         enum EMemPartition : uint32_t
         {
+            // Reserved for a future revision that maps the BOOTROM window as a global
+            // region (see Region 5 note above) - not yet referenced by mpu_table below.
             BOOTROM_BASE_ADDR = 0x00000000UL,
-            BOOTROM_SIZE      = 32 * 1024,
+            BOOTROM_SIZE      = 32 * 1024,    // 32 KB internal boot ROM
 
-            FLASH_BASE_ADDR   = 0x10000000UL,
-            FLASH_SIZE_BYTES  = 4 * 1024 * 1024, // 4 MB
+            FLASH_BASE_ADDR   = 0x10000000UL, // start of external QSPI flash (XIP window)
+            FLASH_SIZE_BYTES  = 4 * 1024 * 1024, // 4 MB -> matches Pico 2 / RP2350 default flash
 
             SRAM_BASE_ADDR    = 0x20000000UL,
-            SRAM_SIZE_BYTES   = 512 * 1024,
+            SRAM_SIZE_BYTES   = 512 * 1024,   // 512 KB on-chip SRAM (banks 0-9 + scratch X/Y)
         };
 
         extern char __stk_mpu_shared_code_start[];
@@ -274,16 +306,26 @@ class PlatformEventHandler final : public stk::IPlatform::IEventOverrider
         extern char __stk_mpu_shared_bss_start[];
         extern char __stk_mpu_shared_bss_end[];
 
+        // Pico SDK places __aeabi_ldivmod, __aeabi_uldivmod, __aeabi_idiv0 into RAM for a
+        // faster execution. We must allow this memory region for access by non-priviliged
+        // tasks to support basic math operations.
+        extern char __stk_mpu_ram_text_start[];
+        extern char __stk_mpu_ram_text_end[];
+
         // Convert pointers once to avoid long calculations in the table
-        const uint32_t shared_code_start = hw::PtrToWord(__stk_mpu_shared_code_start);
-        const uint32_t shared_code_end   = hw::PtrToWord(__stk_mpu_shared_code_end);
-        const uint32_t flash_end         = FLASH_BASE_ADDR + FLASH_SIZE_BYTES;
+        const Word shared_code_start = hw::PtrToWord(__stk_mpu_shared_code_start);
+        const Word shared_code_end   = hw::PtrToWord(__stk_mpu_shared_code_end);
+        const Word flash_end         = FLASH_BASE_ADDR + FLASH_SIZE_BYTES;
+
+        const Word ram_text_start  = hw::PtrToWord(__stk_mpu_ram_text_start);
+        const Word ram_text_end    = hw::PtrToWord(__stk_mpu_ram_text_end);
+        const size_t ram_text_size = stk::Align<size_t>(static_cast<size_t>(ram_text_end - ram_text_start), 32U);
 
         // Static region table mapped to RP2350 hardware layout without overlapping windows.
+        // Table position == hardware region index (entry 0 -> region 0, etc).
         static const stk::MpuRegionConfig mpu_table[] =
         {
             {   // REGION 0: LOWER FLASH - Everything from start up to the shared code window
-                .region_idx  = 0U,
                 .addr        = FLASH_BASE_ADDR,
                 .size        = shared_code_start - FLASH_BASE_ADDR,
                 .access_perm = hw::mpu::ACCESS_PRIV_RO_USER_RO,
@@ -292,7 +334,6 @@ class PlatformEventHandler final : public stk::IPlatform::IEventOverrider
                 .exec        = hw::mpu::EXEC_ALLOWED
             },
             {   // REGION 1: UPPER FLASH - Everything after the shared code window to the end of Flash
-                .region_idx  = 1U,
                 .addr        = shared_code_end,
                 .size        = flash_end - shared_code_end,
                 .access_perm = hw::mpu::ACCESS_PRIV_RO_USER_RO,
@@ -301,7 +342,6 @@ class PlatformEventHandler final : public stk::IPlatform::IEventOverrider
                 .exec        = hw::mpu::EXEC_ALLOWED
             },
             {   // REGION 2: SHARED CODE WINDOW - Explicitly mapped with user execution permissions
-                .region_idx  = 2U,
                 .addr        = shared_code_start,
                 .size        = shared_code_end - shared_code_start,
                 .access_perm = hw::mpu::ACCESS_PRIV_RO_USER_RO,
@@ -310,14 +350,25 @@ class PlatformEventHandler final : public stk::IPlatform::IEventOverrider
                 .exec        = hw::mpu::EXEC_ALLOWED
             },
             {   // REGION 3: RAM DATA / BSS WINDOW
-                .region_idx  = 3U,
                 .addr        = hw::PtrToWord(__stk_mpu_shared_data_start),
                 .size        = hw::PtrToWord(__stk_mpu_shared_bss_end) - hw::PtrToWord(__stk_mpu_shared_data_start),
                 .access_perm = hw::mpu::ACCESS_FULL,
                 .mem_type    = hw::mpu::TYPE_NORMAL_CACHEABLE,
                 .share       = hw::mpu::SHARE_NON,
                 .exec        = hw::mpu::EXEC_NEVER
+            },
+            {   // REGION 4: RAM TEXT WINDOW - Pico SDK division routines, RO+exec for every task
+                .addr        = ram_text_start,
+                .size        = ram_text_size,
+                .access_perm = hw::mpu::ACCESS_PRIV_RO_USER_RO,
+                .mem_type    = hw::mpu::TYPE_NORMAL_CACHEABLE,
+                .share       = hw::mpu::SHARE_NON,
+                .exec        = hw::mpu::EXEC_ALLOWED
             }
+
+            // Region 5 is left unconfigured here on purpose: ConfigureTable() disables
+            // any static-region slot beyond out_count automatically, so it's already
+            // free for future use without a placeholder entry.
         };
 
         STK_UNUSED(__stk_mpu_shared_data_end);
@@ -328,6 +379,10 @@ class PlatformEventHandler final : public stk::IPlatform::IEventOverrider
     }
 #endif
 
+    // Kernel-invoked fault handler: fires on MemManage faults (e.g. the Non-Secure LED
+    // tasks touching g_SecureCounter, or a stack-guard violation) and on generic hard
+    // faults. Dumps CPU/MPU state for diagnostics and halts via a debug breakpoint -
+    // this is intentionally non-recoverable diagnostic code, not a fault-recovery example.
     bool OnException(stk::EHwException exc_id, stk::TId tid, const struct stk::FaultContext *const ctx) override
     {
         if (exc_id == stk::HW_EXCEPT_MEMACCESS)

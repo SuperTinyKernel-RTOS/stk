@@ -128,6 +128,13 @@ Override when your SDK or RTOS uses non-standard names:
 
 > **Important:** If any of these handlers are already defined elsewhere (e.g. by STM32 HAL's `stm32xx_it.c` template), either remove the duplicate or rename it — two definitions of the same weak symbol will cause a linker error or silent override.
 
+**Using your own SysTick handler:** if your application already owns `SysTick_Handler` (or an equivalent) and should call into STK manually instead of letting STK provide the ISR, disable STK's built-in handler and drive the tick yourself:
+```cpp
+// In stk_config.h:
+#define STK_SYSTICK_HANDLER _STK_SYSTICK_HANDLER_DISABLE
+```
+Then call `IKernelService::ProcessTick()` from your own tick ISR on every tick. `PendSV_Handler`/`STK_PENDSV_HANDLER` and `SVC_Handler`/`STK_SVC_HANDLER` do not have an equivalent disable mechanism — STK always provides those two.
+
 ---
 
 ### Clock Configuration
@@ -250,8 +257,9 @@ STK includes optional MPU support for both the legacy ARMv7-M/PMSAv7 layout (Cor
 |--------|---------|-------------|
 | `STK_MPU` | `0` | Set to `1` to enable MPU support. Requires an MPU to actually be present (`__MPU_PRESENT == 1` from CMSIS) — enabling it on a core without an MPU is a build-time `#error`. |
 | `STK_MPU_STACK_GUARD` | `0` | Set to `1` to additionally enable a per-task stack-guard MPU region, reconfigured on every context switch from each task's `TaskMpu` state. Requires `STK_MPU=1` (a build-time `#error` otherwise). |
+| `STK_MPU_TASK_REGIONS` | `2` | Number of hardware MPU region slots reserved per task (`stk::TaskMpu::NUM_REGIONS`), only consumed when `STK_MPU_STACK_GUARD=1`. Slot 0 is always the automatic stack guard; the remaining `STK_MPU_TASK_REGIONS - 1` slots are available to the application via `ITask::GetMpuRegions()`. **Supported values: `2` or `4` only** — anything else is a build-time `#error`. A smaller value frees up more MPU regions for static/global use (see `STK_CORTEX_M_MPU_TASK_REGION_IDX` below) at the cost of fewer application-defined per-task regions. |
 | `STK_CORTEX_M_MPU_REGIONS_MAX` | `8` | Number of MPU regions supported by the MPU peripheral. Override if your device has more or fewer than 8 regions. |
-| `STK_CORTEX_M_MPU_TASK_REGION_IDX` | `STK_CORTEX_M_MPU_REGIONS_MAX - 4` | First MPU region index reserved for per-task regions (the stack guard and any per-task `GetMpuRegions()` entries occupy the last 4 regions). Must not collide with your statically-configured regions. |
+| `STK_CORTEX_M_MPU_TASK_REGION_IDX` | `STK_CORTEX_M_MPU_REGIONS_MAX - STK_MPU_TASK_REGIONS` | First MPU region index reserved for per-task regions (the stack guard and any per-task `GetMpuRegions()` entries occupy the last `STK_MPU_TASK_REGIONS` regions). Must not collide with your statically-configured regions. |
 
 The MPU API lives in `stk::hw::mpu` and is only compiled when `STK_MPU=1`:
 
@@ -309,7 +317,7 @@ STK allocates per-core kernel context instances indexed by core ID. On Cortex-M 
 |--------|---------|-------------|
 | `STK_STACK_SIZE_MIN` | `32` (Cortex-M) | Minimum stack size in `Word` elements. Enforced at stack allocation. The default of 32 covers the full hardware exception frame (8 words) plus callee-saved registers and optional LR/FPU slots. |
 | `STK_STACK_MEMORY_ALIGN` | `4` (Cortex-M) | Required stack alignment in bytes. AAPCS requires 8-byte alignment on function calls; the stack base itself is aligned to 4 bytes by STK. |
-| `STK_STACK_MEMORY_FILLER` | `0xDEADBEEF` | Sentinel value written to the entire stack at init for overflow detection and peak usage watermarking. |
+| `STK_STACK_MEMORY_FILLER` | `0xDEADBEEF` (32-bit targets), `0xDEADBEEFDEADBEEF` (64-bit targets) | Sentinel value written to the entire stack at init for overflow detection and peak usage watermarking. |
 | `STK_SLEEP_TRAP_STACK_SIZE` | `STK_STACK_SIZE_MIN` | Stack size for the idle/sleep trap task. Increase if `IEventOverrider::OnSleep()` uses significant stack depth. |
 
 ---
@@ -318,9 +326,10 @@ STK allocates per-core kernel context instances indexed by core ID. On Cortex-M 
 
 | Define | Default | Description |
 |--------|---------|-------------|
-| `stk_cs_NESTINGS_MAX` | `16` | Maximum allowable nesting depth for `hw::CriticalSection`. Exceeding this triggers `KERNEL_PANIC_CS_NESTING_OVERFLOW`. |
-| `STK_SEGGER_SYSVIEW` | `0` | Enable SEGGER SystemView trace integration. Automatically enables `STK_NEED_TASK_ID` and `STK_SYNC_DEBUG_NAMES`. When enabled, `Initialize()` calls `SEGGER_SYSVIEW_Init()` and the SysTick/PendSV handlers emit trace records. |
-| `STK_SYNC_DEBUG_NAMES` | `0` | Attach string names to synchronization primitives for trace tools. |
+| `STK_CS_NESTINGS_MAX` | `16` | Maximum allowable nesting depth for `hw::CriticalSection`. Exceeding this triggers `KERNEL_PANIC_CS_NESTING_OVERFLOW`. Can be overridden in `stk_config.h` based on Worst-Case Stack Usage (WCSU) analysis. |
+| `STK_SEGGER_SYSVIEW` | `0` | Enable SEGGER SystemView trace integration. Automatically enables `STK_STACK_NEEDS_TASK_ID` and `STK_SYNC_DEBUG_NAMES`. When enabled, `Initialize()` calls `SEGGER_SYSVIEW_Init()` and the SysTick/PendSV handlers emit trace records. |
+| `STK_SYNC_DEBUG_NAMES` | `0` | Attach string names to synchronization primitives for trace tools. Automatically forced to `1` when `STK_SEGGER_SYSVIEW=1`. |
+| `STK_STACK_NEEDS_TASK_ID` | `0`* | Adds a `tid` field to the `Stack` descriptor so trace/fault tooling can identify which task a context switch or fault belongs to. *Automatically forced to `1` whenever `STK_SEGGER_SYSVIEW=1` or `STK_MPU_STACK_GUARD=1` — don't define this manually, enable one of those instead. |
 
 ---
 
@@ -335,7 +344,7 @@ STK can optionally trap the `MemManage` and `HardFault` exceptions itself and ha
 | `STK_USE_HARDFAULT_HANDLER` | `0` | Set to `1` to have STK provide `STK_HARDFAULT_HANDLER`. Not processed by STK by default. |
 | `STK_HARDFAULT_HANDLER` | `HardFault_Handler` | Symbol name STK defines when `STK_USE_HARDFAULT_HANDLER=1`. Override if your vector table expects a different name. |
 
-When either handler fires and an `IEventOverrider` is registered (via `SetEventOverrider()`), STK builds a `FaultContext` and calls `IEventOverrider::OnException()` with the exception kind, the active task's ID (when `STK_NEED_TASK_ID` is enabled), and a pointer to the context. `FaultContext` captures:
+When either handler fires and an `IEventOverrider` is registered (via `SetEventOverrider()`), STK builds a `FaultContext` and calls `IEventOverrider::OnException()` with the exception kind, the active task's ID (when `STK_STACK_NEEDS_TASK_ID` is enabled — this is set automatically when `STK_MPU_STACK_GUARD=1`), and a pointer to the context. `FaultContext` captures:
 
 - The 8-word hardware exception frame (`R0`–`R3`, `R12`, `LR`, `PC`, `xPSR`)
 - `EXC_RETURN` and the current `CONTROL` register
