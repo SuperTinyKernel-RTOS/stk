@@ -265,7 +265,7 @@ public:
     T &operator[](size_t index) const
     {
         STK_ASSERT(index < m_size);
-        //MISRA 5-0-15 deviation: bounds are checked via STK_ASSERT
+        // MISRA 5-0-15 deviation: bounds are checked via STK_ASSERT
         return m_ptr[index];
     }
     
@@ -298,13 +298,16 @@ struct MpuRegion
 #if STK_MPU && STK_MPU_STACK_GUARD
 struct TaskMpu
 {
-    /*! \var     TASK_MPU_REGIONS
-        \brief   Number of MPU regions per task.
+    /*! \var   NUM_REGIONS
+        \brief Number of MPU regions per task.
+        \note  Configurable via \a STK_MPU_TASK_REGIONS (2 or 4). Slot 0 is always the
+               automatic stack guard; the remaining NUM_REGIONS-1 slots are available to
+               the application via \a ITask::GetMpuRegions().
+        \see   Stack, STK_MPU_TASK_REGIONS
     */
-    static constexpr uint8_t NUM_REGIONS = 4;
+    static constexpr uint8_t NUM_REGIONS = STK_MPU_TASK_REGIONS;
 
-    Word      mpu_start_addr;      //!< Offset 8: Address of (&MPU->RBAR or &MPU_NS->RBAR). See \a STK_ASM_BLOCK_MPU_STACK_GUARD.
-    MpuRegion region[NUM_REGIONS]; //!< Offset 12: Array of MPU regions of size NUM_REGIONS.
+    MpuRegion region[NUM_REGIONS]; //!< Array of MPU regions of size NUM_REGIONS.
 };
 #endif
 
@@ -314,16 +317,16 @@ struct TaskMpu
 */
 struct Stack
 {
-    Word        SP;          //!< Offset 0: Stack Pointer (SP) register.
-    uint32_t    access_mode; //!< Offset 4: Bitfield with hardware access mode of the task (see \a EAccessMode).
+    Word     SP;          //!< Offset 0: Stack Pointer (SP) register.
+    uint32_t access_mode; //!< Offset 4: Bitfield with hardware access mode of the task (see \a EAccessMode).
 #if STK_MPU && STK_MPU_STACK_GUARD
-    TaskMpu     mpu;         //!< Offset 8: MPU regions of the task.
+    TaskMpu  mpu;         //!< Offset 8: MPU regions of the task.
 #endif
 #if STK_TLS && !STK_TLS_PREFER_REGISTER
-    Word        tls;         //!< Thread-local storage if not using ARM Cortex-M R9 register for a fast inline access to TLS.
+    Word     tls;         //!< Thread-local storage if not using ARM Cortex-M R9 register for a fast inline access to TLS.
 #endif
 #if STK_STACK_NEEDS_TASK_ID
-    TId         tid;         //!< Task id (see \a STK_SEGGER_SYSVIEW).
+    TId      tid;         //!< Task id (see \a STK_SEGGER_SYSVIEW).
 #endif
 };
 
@@ -688,19 +691,19 @@ public:
     */
     virtual IStackMemory *GetSecureStackMemory() { return nullptr; }
 
-    /*! \brief     Get up to 3 application-defined MPU regions for this task.
-        \details   When \c STK_MPU_STACK_GUARD is enabled, each task owns 4 hardware
-                   MPU region slots. Slot 0 is always the automatic stack guard,
-                   computed by the driver from the task's own stack memory
-                   (see IStackMemory::GetStack/GetStackSize). This hook supplies the
-                   remaining 3 slots, letting an application additionally sandbox a
-                   task to e.g. a private data buffer, a specific peripheral block, or
+    /*! \brief     Get up to (STK_MPU_TASK_REGIONS - 1) application-defined MPU regions for this task.
+        \details   When \c STK_MPU_STACK_GUARD is enabled, each task owns \c STK_MPU_TASK_REGIONS
+                   (2 or 4, see \ref STK_MPU_TASK_REGIONS) hardware MPU region slots. Slot 0 is
+                   always the automatic stack guard, computed by the driver from the task's own
+                   stack memory (see IStackMemory::GetStack/GetStackSize). This hook supplies the
+                   remaining \c STK_MPU_TASK_REGIONS-1 slots, letting an application additionally
+                   sandbox a task to e.g. a private data buffer, a specific peripheral block, or
                    a shared IPC region -- on top of its stack guard.
-        \param[out] out_count: Number of valid entries returned (0..3). Set to 0 by
-                   the default implementation, meaning no extra regions are configured.
-        \return    Pointer to an array of up to 3 region descriptors, or \c nullptr if
-                   \a out_count is 0. Array element \c i is applied at task-relative
-                   region index \a i \c +1 (i.e. the 3 slots following the stack guard).
+        \param[out] out_count: Number of valid entries returned (0..STK_MPU_TASK_REGIONS-1). Set
+                   to 0 by the default implementation, meaning no extra regions are configured.
+        \return    Pointer to an array of up to (STK_MPU_TASK_REGIONS - 1) region descriptors, or
+                   \c nullptr if \a out_count is 0. Array element \c i is applied at task-relative
+                   region index \a i \c +1 (i.e. the slots following the stack guard).
         \note      Optional. Only consulted when \c STK_MPU_STACK_GUARD is enabled; a
                    no-op on platforms/builds without MPU stack-guard support.
         \note      Read once, when the task is bound via Kernel::AddTask() (through
@@ -708,12 +711,9 @@ public:
                    Return a pointer with static/member storage duration (e.g. a
                    \c static const array); a stack-local temporary is invalid once this
                    function returns.
-        \warning   Any \c region_idx set by the application on the returned entries is
-                   ignored, the driver always assigns them to task-relative slots
-                   +1..+3 by array position. Only \c addr / \c size / \c access_perm /
-                   \c mem_type / \c exec are consumed.
-        \warning   \a out_count greater than 3 is clamped by the driver (STK_ASSERT
-                   fires in debug builds); only the first 3 entries are ever applied.
+        \warning   \a out_count greater than (STK_MPU_TASK_REGIONS - 1) is clamped by the driver
+                   (STK_ASSERT fires in debug builds); only the first STK_MPU_TASK_REGIONS-1
+                   entries are ever applied.
         \code
         class MyTask : public stk::Task<256, stk::ACCESS_USER>
         {

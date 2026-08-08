@@ -194,8 +194,8 @@ class ParserTask : public stk::Task<512, ACCESS_USER> { ... };
 #### Per-Task MPU Stack Guard (`STK_MPU_STACK_GUARD`)
 
 Enabling `STK_MPU_STACK_GUARD` (on top of `STK_MPU=1`) reserves the last 2/4 MPU regions for a **per-task MPU** that the kernel fully reprograms on every context switch:
-- One region is always driver-owned and set to precisely the bounds of the incoming task's own stack (full access, execute-never). Since no other region covers memory beyond those bounds, any out-of-bounds stack access — a stack overflow or underflow — immediately raises a hardware fault instead of silently corrupting adjacent RAM or another task's stack.
-- The remaining 3 regions are available to the application, letting each task attach up to 3 additional task-specific memory regions (e.g. a private data section, a restricted peripheral window, or shared read-only code/data) by overriding `ITask::GetMpuRegions()`.
+- One region is always driver-owned and set to precisely the bounds of the incoming task's own stack (full access, execute-never). Since no other region covers memory beyond those bounds, any out-of-bounds stack access — a stack overflow or underflow, immediately raises a hardware fault instead of silently corrupting adjacent RAM or another task's stack.
+- The remaining regions are available to the `applica`tion, letting each task attach additional task-specific memory regions (e.g. a private data section, a restricted peripheral window, or shared read-only code/data) by overriding `ITask::GetMpuRegions()`.
 - All region descriptors are written to the MPU in a single burst load/store during the PendSV handler, keeping the extra context-switch overhead minimal.
 
 ##### Example
@@ -209,7 +209,6 @@ public:
         static const stk::MpuRegionConfig regions[] =
         {
             {
-                .region_idx  = 1, // task-relative slot (1..3)
                 .addr        = hw::PtrToWord(__sensor_task_private_data_start),
                 .size        = hw::PtrToWord(__sensor_task_private_data_end) - hw::PtrToWord(__sensor_task_private_data_start),
                 .access_perm = hw::mpu::ACCESS_FULL,

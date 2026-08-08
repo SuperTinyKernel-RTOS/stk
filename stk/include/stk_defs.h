@@ -146,6 +146,26 @@
     #define STK_MPU_STACK_GUARD (0)
 #endif
 
+/*! \def   STK_MPU_TASK_REGIONS
+    \brief Number of hardware MPU region slots reserved per task (\c stk::TaskMpu::NUM_REGIONS).
+    \details Slot 0 is always the automatic per-task stack guard; the remaining slots
+           (\c STK_MPU_TASK_REGIONS - 1) are available to the application via
+           \c ITask::GetMpuRegions(). Only consumed when \c STK_MPU_STACK_GUARD is enabled.
+    \note  Supported values: 2 or 4. A smaller value frees up MPU regions for
+           static/global use (see \c STK_CORTEX_M_MPU_TASK_REGION_IDX) and shrinks the
+           per-task \c TaskMpu footprint and context-switch burst-copy, at the cost of
+           fewer application-defined per-task regions.
+    \note  Default: 2.
+    \see   STK_MPU_STACK_GUARD, stk::TaskMpu, ITask::GetMpuRegions
+*/
+#ifndef STK_MPU_TASK_REGIONS
+    #define STK_MPU_TASK_REGIONS (2)
+#endif
+
+#if STK_MPU_STACK_GUARD && (STK_MPU_TASK_REGIONS != 2) && (STK_MPU_TASK_REGIONS != 4)
+    #error "STK_MPU_TASK_REGIONS must be defined as 2 or 4"
+#endif
+
 /*! \def   STK_STACK_NEEDS_TASK_ID
     \brief When defined as 1, the Stack descriptor (stk::Stack) carries a \c tid field
            used by the SEGGER SystemView trace back-end to identify tasks during context switches.
@@ -532,20 +552,20 @@
 #ifndef STK_STACK_SIZE_MIN
     #ifdef __riscv
         #if defined(__riscv_32e) && (__riscv_32e == 1)
-            // RISC-V RV32E (Embedded): Small 16-register file
+            // RISC-V RV32E (Embedded): Small 16-register file.
             #if !defined(__riscv_flen) || (__riscv_flen == 0)
                 #define STK_STACK_SIZE_MIN (32U)
             #else
-                // FPU present: Requires additional space for 32 FP registers
+                // FPU present: Requires additional space for 32 FP registers.
                 #define STK_STACK_SIZE_MIN (32U + (__riscv_flen * 2))
             #endif
         #else
-            // Standard RISC-V (RV32I/RV64I): Large 32-register file
-            // Higher minimum to prevent memory corruption on platforms like RP2350
+            // Standard RISC-V (RV32I/RV64I): Large 32-register file.
+            // Higher minimum to prevent memory corruption on platforms like RP2350.
             #if !defined(__riscv_flen) || (__riscv_flen == 0)
                 #define STK_STACK_SIZE_MIN (256U)
             #else
-                // Standard RISC-V with FPU: Maximum frame allocation
+                // Standard RISC-V with FPU: Maximum frame allocation.
                 #define STK_STACK_SIZE_MIN (512U + (__riscv_flen * 2))
             #endif
         #endif
@@ -582,10 +602,10 @@ template <size_t MODE, size_t FLAG, size_t ONTRUE, size_t ONFALSE>
 struct STK_ALLOCATE_COUNT
 {
 #if defined(_MSC_VER) || defined(__ICCARM__)
-    /* MSVC and IAR builds may over-allocate when the flag is not set to avoid compile errors. */
+    // MSVC and IAR builds may over-allocate when the flag is not set to avoid compile errors.
     static constexpr size_t Value = ((ONTRUE > ONFALSE) ? ONTRUE : ONFALSE);
 #else
-    /* GCC and Clang support zero-sized array extensions natively. */
+    // GCC and Clang support zero-sized array extensions natively.
     static constexpr size_t Value = (((MODE & FLAG) != 0U) ? ONTRUE : ONFALSE);
 #endif
 };
@@ -706,7 +726,7 @@ static __stk_forceinline uint32_t CountLeadingZeros(const uint32_t value) noexce
 #else
     uint32_t count = 0U;
 
-    // note: Binary search requires temp_val > 0 to resolve to a max of 31 leading zeros safely.
+    // note: binary search requires temp_val > 0 to resolve to a max of 31 leading zeros safely
     if (temp_val <= 0x0000FFFFU) { count += 16U; temp_val = temp_val << 16U; } else { }
     if (temp_val <= 0x00FFFFFFU) { count += 8U;  temp_val = temp_val << 8U;  } else { }
     if (temp_val <= 0x0FFFFFFFU) { count += 4U;  temp_val = temp_val << 4U;  } else { }

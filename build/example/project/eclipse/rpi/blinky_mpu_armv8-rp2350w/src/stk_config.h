@@ -17,8 +17,9 @@
 #define _STK_ARCH_ARM_CORTEX_M
 
 // Enable MPU support
-#define STK_MPU             (1)
-#define STK_MPU_STACK_GUARD (1)
+#define STK_MPU              (1)
+#define STK_MPU_STACK_GUARD  (1)
+#define STK_MPU_TASK_REGIONS (2)
 
 // Let STK process MemManage and HardFault ISRs
 #define STK_USE_MEMMANAGE_HANDLER (1)

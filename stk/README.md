@@ -97,12 +97,12 @@ The six headers directly inside `include/` form the kernel's foundation layer. T
 
 This is the lowest-level header. It includes `stk_config.h` first, making all user-supplied configuration visible before any STK definition is processed. It then defines:
 
-- **Compiler portability macros** — `__stk_forceinline`, `__stk_aligned(x)`, `__stk_attr_naked`, `__stk_attr_noreturn`, `__stk_attr_unused`, `__stk_attr_used` for GCC, Clang/LLVM, IAR, and MSVC.
+- **Compiler portability macros** — `__stk_forceinline`, `__stk_aligned(x)`, `__stk_attr_naked`, `__stk_attr_noreturn`, `__stk_attr_unused`, `__stk_attr_used`, `__stk_attr_noinline`, `__stk_attr_deprecated`, `__stk_weak`, `__stk_constexpr_cpp17` for GCC, Clang/LLVM, IAR, and MSVC.
 - **Assertion macros** — `STK_ASSERT(cond)` (debug), `STK_STATIC_ASSERT(cond)`, `STK_STATIC_ASSERT_DESC(cond, msg)`.
-- **Feature-flag defaults** — `STK_TICKLESS_IDLE` (0), `STK_TICKLESS_USE_ARM_DWT` (1), `STK_TICKLESS_TICKS_MAX` (1000), `STK_ARCH_CPU_COUNT` (1), `STK_SEGGER_SYSVIEW` (0), `STK_SYNC_DEBUG_NAMES` (0), `STK_STRICT_COMPLIANCY` (0), `STK_TLS` (0), `STK_TLS_PREFER_REGISTER` (arch-dependent: 1 on RISC-V, 0 elsewhere), `STK_MPU` (0), `STK_MPU_STACK_GUARD` (0).
+- **Feature-flag defaults** — `STK_TICKLESS_IDLE` (0), `STK_TICKLESS_USE_ARM_DWT` (1), `STK_TICKLESS_TICKS_MAX` (1000), `STK_ARCH_CPU_COUNT` (1), `STK_SEGGER_SYSVIEW` (0), `STK_SYNC_DEBUG_NAMES` (0), `STK_STRICT_COMPLIANCY` (0), `STK_TLS` (0), `STK_TLS_PREFER_REGISTER` (arch-dependent: 1 on RISC-V, 0 elsewhere), `STK_MPU` (0), `STK_MPU_STACK_GUARD` (0), `STK_MPU_TASK_REGIONS` (2, must be 2 or 4).
 - **Stack constants** — `STK_STACK_SIZE_MIN` (arch-dependent: 32 on Cortex-M, 256–512+ on RISC-V), `STK_SLEEP_TRAP_STACK_SIZE`, `STK_STACK_MEMORY_ALIGN`, `STK_STACK_MEMORY_FILLER`.
 - **Critical section limit** — `STK_CS_NESTINGS_MAX` (16).
-- **Utility macros** — `STK_NONCOPYABLE_CLASS(TYPE)`, `STK_UNUSED(X)`, `STK_ALLOCATE_COUNT(MODE,FLAG,ONTRUE,ONFALSE)`, `STK_LIKELY(x)`/`STK_UNLIKELY(x)`, `STK_STATIC_ARRAY_SIZE(ARRAY)`, endian index macros `STK_ENDIAN_IDX_HI`/`STK_ENDIAN_IDX_LO`.
+- **Utility macros** — `STK_NONCOPYABLE_CLASS(TYPE)`, `STK_UNUSED(X)`, `STK_ALLOCATE_COUNT(MODE,FLAG,ONTRUE,ONFALSE)`, `STK_LIKELY(x)`/`STK_UNLIKELY(x)`, `STK_STATIC_ARRAY_SIZE(ARRAY)`, `STK_VIRT_DTOR` (virtual destructor keyword, compiled out when `STK_STRICT_COMPLIANCY=0`), endian index macros `STK_ENDIAN_IDX_HI`/`STK_ENDIAN_IDX_LO`.
 - **`stk::Min`/`Max`/`Align`/`AlignPow2`** — constexpr compile-time helpers, plus `stk::CountLeadingZeros()`.
 
 All user configuration belongs in `stk_config.h`, which is picked up automatically by `stk_defs.h`.
