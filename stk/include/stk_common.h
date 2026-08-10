@@ -998,6 +998,18 @@ public:
             return false;
         }
 
+        /*! \brief     Called by the platform driver during initialization to obtain global, application-defined MPU regions.
+            \details   Allows user-space code to configure custom MPU regions (e.g., shared data/code sections or peripheral blocks)
+                       at system startup. Unlike per-task MPU regions set via \c ITask::GetMpuRegions(), regions returned by this
+                       callback apply globally across the platform driver.
+            \param[out] out_count: Reference to an integer that receives the number of valid region descriptors in the returned array.
+                       Must be set to 0 if no custom global MPU regions are supplied.
+            \return    Pointer to an array of \c MpuRegionConfig descriptors containing the desired global MPU settings,
+                       or \c nullptr if \a out_count is 0.
+            \note      Optional. The default implementation sets \a out_count to 0 and returns \c nullptr.
+            \note      The returned pointer must remain valid for the duration of platform initialization (e.g., point to a \c static array).
+            \see       MpuRegionConfig, ITask::GetMpuRegions
+        */
         virtual const struct MpuRegionConfig *OnConfigureMpu(uint8_t &out_count)
         {
             out_count = 0U;

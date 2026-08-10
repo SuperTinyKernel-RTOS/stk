@@ -321,6 +321,9 @@ static void CreateKernel()
 
 void RunExample()
 {
+    // For semihosting.
+    stdio_init_all();
+
     // Init BSP.
     Led::InitAll(false);
 

@@ -360,12 +360,12 @@
         #ifdef __riscv_zihintpause
             static __stk_forceinline void __stk_relax_cpu() { __builtin_riscv_pause(); }
         #else
-            static __stk_forceinline void __stk_relax_cpu() { __stk_full_memfence(); }
+            static __stk_forceinline void __stk_relax_cpu() { __asm volatile("nop" ::: "memory"); }
         #endif
     #elif defined(__ARM_ARCH) || defined(_STK_ARCH_ARM_CORTEX_M)
-            static __stk_forceinline void __stk_relax_cpu() { __asm volatile("yield"); }
+            static __stk_forceinline void __stk_relax_cpu() { __asm volatile("yield" ::: "memory"); }
     #else
-            static __stk_forceinline void __stk_relax_cpu() { __stk_full_memfence(); }
+            static __stk_forceinline void __stk_relax_cpu() { __asm volatile("" ::: "memory"); }
     #endif
 #elif defined(__ICCARM__)
     static __stk_forceinline void __stk_relax_cpu() { __asm volatile("YIELD"); }

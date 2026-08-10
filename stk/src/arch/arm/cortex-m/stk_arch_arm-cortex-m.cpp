@@ -178,6 +178,20 @@ using namespace stk;
     #define STK_ASM_ALIGN_2        ".align 2                    \n"
 #endif
 
+// Spin lock timeout.
+#ifndef STK_SPINLOCK_TIMEOUT_US
+    #define STK_SPINLOCK_TIMEOUT_US (5U * 1000U * 1000U) // 5 sec
+#endif
+
+// Conservative lower bound on cycles consumed per iteration of the HW_SpinLockLock retry
+// loop (load + test-and-set attempt + compare + branch + relax hint). Deliberately an
+// underestimate, so the derived iteration budget always waits at least
+// STK_SPINLOCK_TIMEOUT_US before giving up rather than timing out early. If
+// __stk_relax_cpu() ever becomes a multi-cycle instruction on some core, raise this.
+#ifndef STK_SPINLOCK_MIN_CYCLES_PER_ITER
+    #define STK_SPINLOCK_MIN_CYCLES_PER_ITER (4U)
+#endif
+
 //! Enables SVC_FORCE_SWITCH (reserved, do not use).
 //#define STK_CORTEX_M_FORCE_SWITCH
 
@@ -351,6 +365,16 @@ static void OnTaskExit();
 static void OnSchedulerSleep();
 static void OnSchedulerSleepOverride();
 static void OnSchedulerExit();
+
+/*! \brief   Cached spin-lock timeout, in retry-loop iterations.
+    \details Derived from STK_SPINLOCK_TIMEOUT_US and the real core clock frequency by
+             HW_InitSpinlockTimeout(), which must be called once per core during
+             Context::Initialize() before any spinlock is used in anger. The initial
+             value here is a conservative fallback (matches the old fixed-iteration-count
+             behavior) so that any spinlock attempt occurring before Initialize() has run
+             still has a bounded, non-zero timeout instead of panicking immediately.
+*/
+static uint32_t s_StkSpinlockTimeoutIters = 0xFFFFFFFU;
 
 /*! \brief     Start scheduler.
     \note      Triggered via SVC. This will transition CPU to SVC Handler.
@@ -561,7 +585,7 @@ static __stk_forceinline void HW_SpinLockUnlock(volatile bool &lock)
 
     __atomic_clear(&lock, __ATOMIC_RELEASE);
 }
-#elif defined(RP2040_H)
+#elif defined(RP2040_H) || defined(RP2350_H)
 // Raspberry RP2040 dual-core M0+ implementation, using Hardware Spinlock 0 (SIO base 0xd0000000 + offset)
 #define STK_SIO_SPINLOCK SIO->SPINLOCK31
 
@@ -672,21 +696,25 @@ static __stk_forceinline void HW_SpinLockUnlock(volatile bool &lock)
 /*! \brief     Acquire a spin-lock, blocking until it becomes available.
     \details   Calls HW_SpinLockTryLock() in a tight retry loop. On each failed attempt
                \c __stk_relax_cpu() (typically a \c NOP or \c YIELD hint) is executed to
-               reduce bus contention before the next try. A countdown of 0xFFFFFF
-               iterations is enforced: if the lock has not been acquired by the time the
-               counter expires, the kernel invariant has been violated (the lock owner
-               exited without releasing) and STK_KERNEL_PANIC() is called with
+               reduce bus contention before the next try. The retry budget is
+               \c s_StkSpinlockTimeoutIters iterations, derived from
+               \c STK_SPINLOCK_TIMEOUT_US and the real core clock by
+               HW_InitSpinlockTimeout() (see there): if the lock has not been acquired by
+               the time the counter expires, the kernel invariant has been violated (the
+               lock owner exited without releasing) and STK_KERNEL_PANIC() is called with
                \c KERNEL_PANIC_SPINLOCK_DEADLOCK.
     \param[in] lock: Spin-lock state variable. Must be \c false (released) initially.
-    \note      ISR-safe. The timeout is a fixed iteration count, not a wall-clock duration,
-               effective timeout window varies with CPU frequency and bus load.
+    \note      ISR-safe. The timeout represents a roughly constant wall-clock duration
+               (STK_SPINLOCK_TIMEOUT_US) rather than a fixed iteration count, so it no
+               longer needs re-tuning when optimization level, LTO, or core clock speed
+               change.
     \warning   Must not be called while already holding the same \a lock - the M0 fallback
                implementation uses a critical section internally and will deadlock.
-    \see       HW_SpinLockTryLock, HW_SpinLockUnlock
+    \see       HW_SpinLockTryLock, HW_SpinLockUnlock, HW_InitSpinlockTimeout
 */
 static __stk_forceinline void HW_SpinLockLock(volatile bool &lock)
 {
-    uint32_t timeout = 0xFFFFFFU;
+    uint32_t timeout = s_StkSpinlockTimeoutIters;
     while (!HW_SpinLockTryLock(lock))
     {
         if (--timeout == 0U)
@@ -1116,6 +1144,29 @@ static __stk_forceinline uint32_t HW_DWTGetCounter()
 #endif
 }
 
+/*! \brief     Recompute the spin-lock timeout from the current core clock.
+    \details   Converts the STK_SPINLOCK_TIMEOUT_US real-time budget into a retry-loop
+               iteration count using the conservative (underestimated)
+               STK_SPINLOCK_MIN_CYCLES_PER_ITER cost-per-iteration, so the resulting
+               timeout means the same real-world duration regardless of optimization
+               level, LTO, or core clock configuration. Called once per core from
+               Context::Initialize(); safe to call redundantly from multiple cores since
+               it is idempotent for a given clock frequency.
+    \note      Clamped against a zero/unconfigured clock and against overflow, so a
+               misconfigured clock tree cannot produce an immediate false-positive
+               KERNEL_PANIC_SPINLOCK_DEADLOCK on the very first lock attempt.
+*/
+static void HW_InitSpinlockTimeout()
+{
+    const Cycles cycles_budget = ConvertTimeUsToClockCycles(HW_CoreClockFrequency(), STK_SPINLOCK_TIMEOUT_US);
+    const Cycles iters = cycles_budget / STK_SPINLOCK_MIN_CYCLES_PER_ITER;
+
+    // floor guards against a zero/not-yet-configured clock; ceiling guards against overflow
+    // when narrowing to uint32_t
+    s_StkSpinlockTimeoutIters = static_cast<uint32_t>(
+        stk::Min(stk::Max(iters, static_cast<Cycles>(0x1000U)), static_cast<Cycles>(0xFFFFFFFFU)));
+}
+
 #if STK_MPU
 /*! \class ScopedPrivilegeBoost
     \brief RAII utility to temporarily elevate thread mode execution to privileged status.
@@ -1485,6 +1536,13 @@ static struct Context final : public PlatformContext
         m_sleep_ticks    = 0;
         m_sleep_error    = 0U;
     #endif
+
+        // Re-derive the s_StkCortexmCsuLock spin-lock timeout from the now-configured
+        // core clock. Redundant across cores (each core's Context::Initialize() calls
+        // this), but idempotent and cheap - and must run before any critical section is
+        // entered for real, since s_StkSpinlockTimeoutIters otherwise still holds its
+        // conservative pre-init fallback value.
+        HW_InitSpinlockTimeout();
 
     #if (__CORTEX_M > 1) && STK_TICKLESS_USE_ARM_DWT
         HW_DWTEnableCounter();

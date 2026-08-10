@@ -434,6 +434,7 @@ void RunExample()
 {
     using namespace stk;
 
+    // For semihosting.
     stdio_init_all();
 
     Led::InitAll(false);

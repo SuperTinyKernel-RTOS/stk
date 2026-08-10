@@ -84,6 +84,21 @@ using namespace stk;
     #define STK_TIMER_CLOCK_FREQUENCY 1000000U
 #endif
 
+// Spin lock timeout.
+#ifndef STK_SPINLOCK_TIMEOUT_US
+    #define STK_SPINLOCK_TIMEOUT_US (5U * 1000U * 1000U) // 5 sec
+#endif
+
+// Conservative lower bound on cycles consumed per iteration of the HW_SpinLockLock retry
+// loop (atomic test-and-set attempt + compare + branch + relax hint). Deliberately an
+// underestimate, so the derived iteration budget always waits at least
+// STK_SPINLOCK_TIMEOUT_US before giving up rather than timing out early. If
+// __stk_relax_cpu() ever becomes a multi-cycle instruction (or the pause/fence it lowers
+// to on a given target is costlier) on some core, raise this.
+#ifndef STK_SPINLOCK_MIN_CYCLES_PER_ITER
+    #define STK_SPINLOCK_MIN_CYCLES_PER_ITER (4U)
+#endif
+
 /*! \brief  Optional section attribute for placing ISR handlers into a dedicated linker section.
     \note   Define before including this file to override (e.g. __attribute__((section(".isr")))).
             Defaults to empty, handlers are placed in the default text section.
@@ -578,25 +593,39 @@ static __stk_forceinline bool HW_SpinLockTryLock(volatile bool &lock)
     return !__atomic_test_and_set(&lock, __ATOMIC_ACQUIRE);
 }
 
+/*! \brief    Cached spin-lock timeout, in retry-loop iterations.
+    \details  Derived from STK_SPINLOCK_TIMEOUT_US and the real core clock frequency by
+              HW_InitSpinlockTimeout(), which must be called once per hart during
+              Context::Initialize() before any spinlock is used in anger. The initial
+              value here is a conservative fallback (matches the old fixed-iteration-count
+              behavior) so that any spinlock attempt occurring before Initialize() has run
+              still has a bounded, non-zero timeout instead of panicking immediately.
+*/
+static uint32_t s_StkSpinlockTimeoutIters = 0xFFFFFFFU;
+
 /*! \brief     Acquire a spin-lock, blocking until it becomes available (RISC-V).
     \details   Calls HW_SpinLockTryLock() in a tight retry loop. On each failed attempt
                \c __stk_relax_cpu() is executed to reduce bus contention before the next
                try: on targets with the Zihintpause extension this emits a \c pause hint
                instruction; on others it falls back to a full memory fence.
-               A countdown of 0xFFFFFF iterations is enforced: if the lock has not been
-               acquired by the time the counter expires, the kernel invariant has been
-               violated (the lock owner exited without releasing) and STK_KERNEL_PANIC()
-               is called with \c KERNEL_PANIC_SPINLOCK_DEADLOCK.
+               The retry budget is \c s_StkSpinlockTimeoutIters iterations, derived from
+               \c STK_SPINLOCK_TIMEOUT_US and the real core clock by
+               HW_InitSpinlockTimeout() (see there): if the lock has not been acquired by
+               the time the counter expires, the kernel invariant has been violated (the
+               lock owner exited without releasing) and STK_KERNEL_PANIC() is called with
+               \c KERNEL_PANIC_SPINLOCK_DEADLOCK.
     \param[in] lock: Spin-lock state variable. Must be \c false (released) initially.
-    \note      ISR-safe. The timeout is a fixed iteration count, not a wall-clock duration,
-               effective timeout window varies with CPU frequency and bus load.
+    \note      ISR-safe. The timeout represents a roughly constant wall-clock duration
+               (STK_SPINLOCK_TIMEOUT_US) rather than a fixed iteration count, so it no
+               longer needs re-tuning when optimization level, LTO, or core clock speed
+               change.
     \warning   Must not be called while already holding the same \a lock - doing so will
                spin until the timeout expires and then trigger STK_KERNEL_PANIC().
-    \see       HW_SpinLockTryLock, HW_SpinLockUnlock
+    \see       HW_SpinLockTryLock, HW_SpinLockUnlock, HW_InitSpinlockTimeout
 */
 static __stk_forceinline void HW_SpinLockLock(volatile bool &lock)
 {
-    uint32_t timeout = 0xFFFFFFU;
+    uint32_t timeout = s_StkSpinlockTimeoutIters;
     while (!HW_SpinLockTryLock(lock))
     {
         if (--timeout == 0U)
@@ -636,6 +665,29 @@ static __stk_forceinline void HW_SpinLockUnlock(volatile bool &lock)
     __asm volatile("fence rw, w" ::: "memory");
 
     __atomic_clear(&lock, __ATOMIC_RELEASE);
+}
+
+/*! \brief     Recompute the spin-lock timeout from the current core clock.
+    \details   Converts the STK_SPINLOCK_TIMEOUT_US real-time budget into a retry-loop
+               iteration count using the conservative (underestimated)
+               STK_SPINLOCK_MIN_CYCLES_PER_ITER cost-per-iteration, so the resulting
+               timeout means the same real-world duration regardless of optimization
+               level, LTO, or core clock configuration. Called once per hart from
+               Context::Initialize(); safe to call redundantly from multiple harts since
+               it is idempotent for a given clock frequency.
+    \note      Clamped against a zero/unconfigured clock and against overflow, so a
+               misconfigured clock tree cannot produce an immediate false-positive
+               KERNEL_PANIC_SPINLOCK_DEADLOCK on the very first lock attempt.
+*/
+static void HW_InitSpinlockTimeout()
+{
+    const Cycles cycles_budget = ConvertTimeUsToClockCycles(HW_CoreClockFrequency(), STK_SPINLOCK_TIMEOUT_US);
+    const Cycles iters = cycles_budget / STK_SPINLOCK_MIN_CYCLES_PER_ITER;
+
+    // floor guards against a zero/not-yet-configured clock; ceiling guards against overflow
+    // when narrowing to uint32_t
+    s_StkSpinlockTimeoutIters = static_cast<uint32_t>(
+        stk::Min(stk::Max(iters, static_cast<Cycles>(0x1000U)), static_cast<Cycles>(0xFFFFFFFFU)));
 }
 
 /*! \brief Switch context by scheduling PendSV interrupt.
@@ -926,6 +978,13 @@ static struct Context final : public PlatformContext
         m_starting    = false;
         m_started     = false;
         m_exiting     = false;
+
+        // Re-derive the s_StkRiscvCsuLock spin-lock timeout from the now-configured core
+        // clock. Redundant across harts (each hart's Context::Initialize() calls this),
+        // but idempotent and cheap - and must run before any critical section is entered
+        // for real, since s_StkSpinlockTimeoutIters otherwise still holds its conservative
+        // pre-init fallback value.
+        HW_InitSpinlockTimeout();
 
         // mcycle counter must be enabled per-core
     #if STK_SUBMICORSECOND_PRECISION_TIMER
