@@ -177,7 +177,21 @@ SECTIONS
         *(.ARM.exidx* .gnu.linkonce.armexidx.*)
     } > FLASH
     __exidx_end = .;
-
+    
+    /* ======================================================================== */
+    /* PART 1: INTEGRATED SHARED MPU CODE SECTION (RX Only)                     */
+    /* Aligned to 32-bytes (Cortex-M33 requirement).                            */
+    /* ======================================================================== */
+    .stk_mpu_shared_code : ALIGN(32)
+    {
+        __stk_mpu_shared_code_start = .;
+        *(.stk_mpu_shared_code .stk_mpu_shared_code.*)
+        . = ALIGN(32);
+        
+        __stk_mpu_shared_code_end = .;
+    } > FLASH
+    /* ======================================================================== */
+    
     /* Machine inspectable binary information */
     . = ALIGN(4);
     __binary_info_start = .;
@@ -205,7 +219,19 @@ SECTIONS
         *(.time_critical*)
 
         /* remaining .text and .rodata; i.e. stuff we exclude above because we want it in RAM_S */
-        *(.text*)
+        
+        /* ========================================================= */
+        /* ISOLATED RAM CODE BLOCK FOR MPU                           */
+        /* ========================================================= */
+        . = ALIGN(32);                  /* MPU alignment requirement */
+        __stk_mpu_ram_text_start = .;   /* Marker 1: START           */
+
+        *(.text*)                        /* Excluded text/libgcc code */
+
+        . = ALIGN(32);                  /* MPU alignment requirement */
+        __stk_mpu_ram_text_end = .;     /* Marker 2: END             */
+        /* ========================================================= */
+
         . = ALIGN(4);
         *(.rodata*)
         . = ALIGN(4);
@@ -273,6 +299,35 @@ SECTIONS
     __secure_data_load_start = LOADADDR(.secure_data);
     
     /* TrustZone end */
+    
+    /* ======================================================================== */
+    /* PART 2: INTEGRATED SHARED MPU DATA SECTION (RW + XN)                     */
+    /* This section is defined in RAM but loaded from FLASH.                    */
+    /* Aligned to 32-bytes (Cortex-M33 requirement).                            */
+    /* ======================================================================== */
+    /* 1. Initialized Data Section - Consumes space in FLASH */
+    .stk_mpu_shared_data : ALIGN(32)
+    {
+        __stk_mpu_shared_data_start = .;
+        *(.stk_mpu_shared_data .stk_mpu_shared_data.*)
+        . = ALIGN(4); 
+        __stk_mpu_shared_data_end = .;
+    } > RAM_S AT> FLASH
+    
+    __stk_mpu_shared_data_source__ = LOADADDR(.stk_mpu_shared_data);
+
+    /* 2. Zero-Initialized BSS Section - Allocates 0 bytes in FLASH */
+    /* By omitting "AT> FLASH", this section consumes ZERO flash footprint */
+    .stk_mpu_shared_bss : ALIGN(4)
+    {
+        __stk_mpu_shared_bss_start = .;
+        *(.stk_mpu_shared_bss .stk_mpu_shared_bss.*)
+        
+        /* Align the very end of the total combined block to 32 bytes */
+        . = ALIGN(32); 
+        __stk_mpu_shared_bss_end = .;
+    } > RAM_S
+    /* ======================================================================== */
 
     .heap (NOLOAD):
     {

@@ -22,8 +22,8 @@
 #define STK_ARCH_GET_CPU_ID() (*(uint32_t *)(SIO_BASE + SIO_CPUID_OFFSET)) // see get_core_num() in pico/platform.h
 
 // RP2350 implements access to RISC-V CLINT via SIO_BASE which is per calling CPU core
-#define STK_RISCV_CLINT_MTIME_ADDR    ((volatile uint64_t *)(SIO_BASE + SIO_MTIME_OFFSET)) // MTIME + MTIMEH (see SIO_Type in RP2350.h)
-#define STK_RISCV_CLINT_MTIMECMP_ADDR ((volatile uint64_t *)(SIO_BASE + SIO_MTIMECMP_OFFSET)) // MTIMECMP + MTIMECMPH (see SIO_Type in RP2350.h)
+#define STK_RISCV_CLINT_MTIME_ADDR    (SIO_BASE + SIO_MTIME_OFFSET) // MTIME + MTIMEH (see SIO_Type in RP2350.h)
+#define STK_RISCV_CLINT_MTIMECMP_ADDR (SIO_BASE + SIO_MTIMECMP_OFFSET) // MTIMECMP + MTIMECMPH (see SIO_Type in RP2350.h)
 
 // SIO_BASE of RP2350  is per calling CPU core, thus there is no classic access via CLINT + hart
 #define STK_RISCV_CLINT_MTIMECMP_PER_HART (0)
