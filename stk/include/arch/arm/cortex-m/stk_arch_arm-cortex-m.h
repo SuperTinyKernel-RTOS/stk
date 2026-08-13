@@ -165,7 +165,7 @@ public:
     EWaitResult Wait(ISyncObject *sync_obj, IMutex *mutex, Timeout timeout) override;
     void ProcessTick() override;
     void ProcessHardFault() override;
-    void SetEventOverrider(IEventOverrider *overrider) override;
+    void SetEventOverrider(IEventOverrider *overrider, bool non_secure) override;
     Word GetCallerSP() const override;
     TId GetTid() const override;
     Timeout Suspend() override;
@@ -364,6 +364,18 @@ enum EMpuShare : uint32_t
 
 #endif // STK_ARCH_ARMV8_M
 
+/*! \class EMpuConfigFlags
+    \brief MPU control flags for high-level STK configuration.
+*/
+enum EMpuConfigFlags : uint32_t
+{
+    MPU_CFG_NONE              = 0U,        //!< No configuration flags set (corresponds to MpuConfig::MODE_OFF).
+    MPU_CFG_PRIVILEGED_BG_MEM = (1U << 0), //!< Enable default background memory map for privileged access (Cortex-M CTRL.PRIVDEFENA).
+    MPU_CFG_IN_FAULTS         = (1U << 1), //!< Keep MPU active during HardFault and NMI handlers (Cortex-M CTRL.HFNMIENA).
+    MPU_CFG_CLEAR_ON_INIT     = (1U << 2), //!< Wipe/reset all existing region registers upon initialization, before applying the static table below.
+    MPU_CFG_NONSECURE_MPU     = (1U << 3)  //!< Target Non-Secure MPU instance (ARMv8-M TrustZone context). Absent means Secure MPU instance (default). Ignored outside a TrustZone build. Must match the overrider (Secure/Non-Secure) the config was returned from, verified via STK_ASSERT.
+};
+
 } // namespace mpu
 } // namespace hw
 
@@ -383,7 +395,7 @@ struct MpuRegionConfig
 /*! Recommended MPU configuration for per-task MPU regions of non-Privileged tasks:
 
     \code
-    const stk::MpuRegionConfig *MyNonSecureTask::GetMpuRegions(uint8_t &out_count) override
+    stk::MpuRegionConfigResult MyNonSecureTask::GetMpuRegions() override
     {
         using namespace stk;
 
@@ -410,8 +422,7 @@ struct MpuRegionConfig
             },
         };
 
-        out_count = STK_STATIC_ARRAY_SIZE(s_mpu_shared_regions);
-        return s_mpu_shared_regions;
+        return stk::MpuRegionConfigResult(s_mpu_shared_regions, STK_STATIC_ARRAY_SIZE(s_mpu_shared_regions));
     }
     \endcode
 */
@@ -463,32 +474,59 @@ struct MpuRegionConfig
 #endif // STK_MPU
 // =============================================================================
 
-/*! \struct FaultContext
-    \brief  ARMv7-M/ARMv8-M fault context.
+/*! \struct  FaultContext
+    \brief   ARMv7-M/ARMv8-M system fault exception context state capture.
+    \details Preserves exception stack frames, core system control fault status registers (CFSR, HFSR, MMFAR, BFAR, AFSR),
+             execution context status (CONTROL, EXC_RETURN), and hardware Memory Protection Unit (MPU) state snapshots
+             at the time of fault occurrence for post-mortem diagnostics.
+    \see     hw::ExceptionFrame, Fill
 */
 struct FaultContext
 {
+    /*! \struct Mpu
+        \brief  Hardware Memory Protection Unit (MPU) status register snapshot.
+    */
     struct Mpu
     {
+        /*! \struct Region
+            \brief  Register snapshot for an individual hardware MPU region slot.
+        */
         struct Region
         {
-            Word RNR, RBAR, ATTR;
+            Word RNR;  //!< Region Number Register (RNR).
+            Word RBAR; //!< Region Base Address Register (RBAR).
+            Word ATTR; //!< Region Attribute and Size Register (RASR / RLAR / MPU_RLAR).
         };
 
-        Word   CTRL;
+        Word   CTRL;  //!< MPU Control Register (MPU_CTRL).
     #if STK_ARCH_ARMV8_M
-        Word   MAIR0, MAIR1;
+        Word   MAIR0; //!< Memory Attribute Indirection Register 0 (MAIR0, ARMv8-M).
+        Word   MAIR1; //!< Memory Attribute Indirection Register 1 (MAIR1, ARMv8-M).
     #endif
-        Region regions[STK_CORTEX_M_MPU_REGIONS_MAX];
+        Region regions[STK_CORTEX_M_MPU_REGIONS_MAX]; //!< Active hardware MPU region register state table.
     };
 
-    hw::ExceptionFrame frame;
-    Word               CFSR, HFSR, MMFAR, BFAR, AFSR;
-    Word               CONTROL;
-    Word               EXC_RETURN;
-    Mpu                mpu;
-    bool               mmfar_valid, bfar_valid;
+    hw::ExceptionFrame frame;       //!< Saved hardware exception stack frame.
+    Word               CFSR;        //!< Configurable Fault Status Register (CFSR: MemManage, BusFault, UsageFault).
+    Word               HFSR;        //!< HardFault Status Register (HFSR).
+    Word               MMFAR;       //!< Memory Management Fault Address Register (MMFAR).
+    Word               BFAR;        //!< BusFault Address Register (BFAR).
+    Word               AFSR;        //!< Auxiliary Fault Status Register (AFSR).
+    Word               CONTROL;     //!< Core CONTROL register state snapshot.
+    Word               EXC_RETURN;  //!< Exception return magic value (EXC_RETURN).
+#if STK_MPU
+    Mpu                mpu;         //!< Active or Secure MPU hardware configuration snapshot.
+    #if STK_ARCH_ARMV8_M
+    Mpu                mpu_ns;      //!< Non-Secure MPU hardware configuration snapshot (ARMv8-M TrustZone).
+    #endif
+#endif
+    bool               mmfar_valid; //!< Flag indicating validity of MMFAR address value (derived from CFSR.MMARVALID).
+    bool               bfar_valid;  //!< Flag indicating validity of BFAR address value (derived from CFSR.BFARVALID).
 
+    /*! \brief     Populate fault context registers and hardware MPU state from an exception stack frame.
+        \param[in] stacked_regs: Pointer to the hardware-stacked exception register frame.
+        \param[in] exc_return: EXC_RETURN execution state value captured at fault entry.
+    */
     void Fill(const Word *stacked_regs, Word exc_return);
 };
 

@@ -2160,8 +2160,10 @@ void PlatformRiscV::ProcessHardFault()
     }
 }
 
-void PlatformRiscV::SetEventOverrider(IEventOverrider *overrider)
+void PlatformRiscV::SetEventOverrider(IEventOverrider *overrider, bool non_secure)
 {
+    STK_UNUSED(non_secure);
+
     STK_ASSERT(!GetContext().m_started);
     GetContext().m_overrider = overrider;
 }

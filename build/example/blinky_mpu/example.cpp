@@ -129,12 +129,19 @@ private:
             g_TaskFlags.Set(m_next_flag);
 
             // uncommenting this will cause MemManage exception due to access of Secure
-            // memory region by Non-Secure task
+            // memory region by Non-Secure task, under debugger you will see such call stack:
+            //
+            //   * PlatformEventHandler::OnException() at example.cpp:383
+            //   * StkExceptionHandlerMain() at stk_arch_arm-cortex-m.cpp:2 683
+            //   * <signal handler called>() at 0xfffffffd
+            //   * NonSecureLedTask<(stk::EAccessMode)0>::Run at example.cpp:140 <--- points to offending ++g_SecureCounter
+            //   * OnTaskRun() at stk_arch_arm-cortex-m.cpp:2 751
+            //
             //++g_SecureCounter;
         }
     }
 
-    const stk::MpuRegionConfig *GetMpuRegions(uint8_t &out_count) override
+    const stk::MpuRegionList *GetMpuRegions() const override
     {
         using namespace stk;
 
@@ -170,8 +177,10 @@ private:
         // kernel for this task.
         s_self_region[0].addr = hw::PtrToWord(this);
 
-        out_count = STK_STATIC_ARRAY_SIZE(s_self_region);
-        return s_self_region;
+        static const stk::MpuRegionList mpu_regions(
+            s_self_region, STK_STATIC_ARRAY_SIZE(s_self_region));
+
+        return &mpu_regions;
     }
 };
 
@@ -206,7 +215,7 @@ private:
 
 class PlatformEventHandler final : public stk::IPlatform::IEventOverrider
 {
-    const stk::MpuRegionConfig *OnConfigureMpu(uint8_t &out_count) override
+    const stk::MpuConfig *OnConfigureMpu() const override
     {
         using namespace stk;
         using namespace stk::hw::mpu;
@@ -322,8 +331,15 @@ class PlatformEventHandler final : public stk::IPlatform::IEventOverrider
             }
         };
 
-        out_count = STK_STATIC_ARRAY_SIZE(mpu_table);
-        return mpu_table;
+        // set MPU regions and notify driver that we want to enable MPU
+        static const stk::MpuConfig mpu_config
+        (
+            stk::MpuRegionList(mpu_table, STK_STATIC_ARRAY_SIZE(mpu_table)),
+            (hw::mpu::MPU_CFG_PRIVILEGED_BG_MEM |
+             hw::mpu::MPU_CFG_CLEAR_ON_INIT)
+        );
+
+        return &mpu_config;
     }
 
     // Kernel-invoked fault handler: fires on MemManage faults (e.g. the Non-Secure LED
@@ -335,6 +351,9 @@ class PlatformEventHandler final : public stk::IPlatform::IEventOverrider
         if (exc_id == stk::HW_EXCEPT_MEMACCESS)
         {
             printf("\r\n================ MEMMANAGE FAULT DETECTED ================\r\n");
+            printf("(Sandbox Violation: a task's Run() reached outside the MPU\r\n");
+            printf(" regions granted to it - see region dump below for what\r\n");
+            printf(" WAS active for this task at fault time)\r\n");
         }
         else
         {

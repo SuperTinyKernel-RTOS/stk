@@ -273,6 +273,7 @@ class PlatformEventHandler final : public stk::IPlatform::IEventOverrider
         printf("BFAR:  0x%08X (%s)\r\n\r\n", (unsigned int)ctx->BFAR, ctx->bfar_valid ? "VALID" : "INVALID");
         printf("CONTROL: 0x%08X (nPRIV=%u)\r\n", (unsigned int)ctx->CONTROL, (unsigned int)(ctx->CONTROL & 1U));
 
+    #if STK_MPU
         printf("--- MPU Status & Config ---\r\n");
         printf("CTRL:  0x%08X\r\n", (unsigned int)ctx->mpu.CTRL);
     #if STK_ARCH_ARMV8_M
@@ -288,6 +289,7 @@ class PlatformEventHandler final : public stk::IPlatform::IEventOverrider
                    (unsigned int)ctx->mpu.regions[i].ATTR);
         }
         printf("=====================================================\r\n");
+    #endif
 
         __stk_debug_break();
         return false;

@@ -33,6 +33,86 @@
  * OS_INCLUDE_STARTUP_INIT_MULTIPLE_RAM_SECTIONS for the _startup.c file.
  */
 
+/* ============================================================================
+   __stk_mpu_* REGIONS - SuperTinyKernel (STK) RTOS MPU-ISOLATED MEMORY LAYOUT
+   ============================================================================
+
+   These two output sections gather SuperTinyKernel (STK) RTOS code/data that
+   is shared across every MPU-sandboxed task into contiguous blocks, each
+   covered by a single hardware MPU region. This is an ARMv7-M (Cortex-M4,
+   PMSAv7) target: unlike ARMv8-M's byte-granular MPU, the classic Cortex-M
+   MPU requires each region's size to be a power of two *and* its base
+   address to be naturally aligned to that same size. That is why
+   .stk_mpu_shared_code below is opened with `ALIGN(8192)` (a strict 8KB
+   region) and .stk_mpu_shared_data with `ALIGN(16384)` (a strict 16KB
+   region) - these are hard MPU size limits, not just alignment padding:
+   anything placed in either section must fit within its region's fixed
+   power-of-two budget, and both the start and the padded end are re-aligned
+   to that same boundary so the region covers exactly, and only, its
+   intended block.
+
+   Application code never places anything into these sections directly.
+   Instead, STK (see stk_arch_arm-cortex-m.h) provides attribute macros that
+   route ordinary C/C++ declarations here:
+
+       STK_MPU_SHARED_CODE_SECTION  -> .stk_mpu_shared_code   (functions)
+       STK_MPU_SHARED_DATA_SECTION  -> .stk_mpu_shared_data   (initialized globals/statics)
+       STK_MPU_SHARED_BSS_SECTION   -> .stk_mpu_shared_bss    (zero-initialized globals/statics)
+
+   The exported boundary symbols (__stk_mpu_*_start/_end, with a leading-
+   underscore alias for consumers that prefer it) are picked up at runtime -
+   typically via `extern char sym[];` plus `hw::PtrToWord(sym)` - to build
+   the .addr/.size fields of a stk::MpuRegionConfig entry, either in a
+   task's GetMpuRegions() override (per-task regions) or in the platform's
+   static/global MPU table shared by every task (see
+   PlatformEventHandler::OnConfigureMpu() in example.cpp, REGION 4/5).
+
+   Region breakdown:
+
+   1. .stk_mpu_shared_code (PART 1, in FLASH, executed in place, 8KB region)
+      Exported symbols: __stk_mpu_shared_code_start / _end.
+      Populated by STK_MPU_SHARED_CODE_SECTION and executed directly from
+      flash (XIP). Mapped by STK to ACCESS_PRIV_RO_USER_RO + EXEC_ALLOWED:
+      read-only, executable, reachable by both privileged and unprivileged
+      (sandboxed) tasks alike - shared "trusted entry point" code common
+      to every task, described once instead of being duplicated per task.
+
+   2. .stk_mpu_shared_data (PART 2, RAM AT> FLASH, 16KB region)
+      Exported symbols: __stk_mpu_shared_data_start / _end. Populated by
+      STK_MPU_SHARED_DATA_SECTION: initialized read/write globals/statics
+      shared by every task (e.g. event flags, queues). Lives in RAM at
+      runtime, but its initial contents are stored in FLASH and copied to
+      RAM during startup; LOADADDR(.stk_mpu_shared_data) is registered in
+      the __data_regions_array table above (see .inits) alongside .data
+      and .data_CCMRAM, so the standard multi-region startup copy loop
+      initializes it exactly like any other data section.
+
+      Nested inside this same 16KB block - rather than a standalone
+      output section - is .stk_mpu_shared_bss, populated by
+      STK_MPU_SHARED_BSS_SECTION for zero-initialized shared
+      globals/statics (__stk_mpu_shared_bss_start / _end). It is placed
+      immediately after the initialized data and is registered in the
+      __bss_regions_array table above instead of __data_regions_array, so
+      startup zero-fills it rather than copying it from flash. Nesting it
+      inside .stk_mpu_shared_data (instead of giving it its own 8/16KB-
+      aligned region, as the RP2040/Cortex-M33 variant of this script
+      does) avoids spending a second scarce power-of-two MPU region on
+      what is, from the MPU's point of view, the same RW+XN block.
+
+   Together, the initialized and zero-initialized halves of
+   .stk_mpu_shared_data form one contiguous RW+XN (ACCESS_FULL, EXEC_NEVER)
+   MPU region: full read/write access for privileged and unprivileged
+   tasks alike, with code execution from it explicitly forbidden to
+   prevent code injection.
+
+   In short: these markers let STK's static MPU table and each task's
+   GetMpuRegions() precisely locate and size the shared "toolkit" code and
+   data blocks (in both FLASH and RAM) so they can be enclosed in their
+   own dedicated, power-of-two-sized MPU regions, isolated from
+   task-private memory and from each other by access permission
+   (RX vs RW+XN).
+   ============================================================================ */
+
 /*
  * The '__stack' definition is required by crt0, do not remove it.
  */
