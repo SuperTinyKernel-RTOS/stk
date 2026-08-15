@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <pico/runtime.h>
 #include <pico/stdio.h>
+#include <pico/unique_id.h>
 
 #include <stk.h>
 #include <arch/arm/cortex-m/stk_arch_arm-tz.h>
@@ -68,7 +69,13 @@ __stk_tz_nsc_entry void NSC_OnExitNs(void)
     longjmp(s_NsExitEnv, 1);
 }
 
-// A demo function for exposing some sensible data to Non-Secure state.
+// A demo function for exposing SDK functions to Non-Secure side of the binary.
+__stk_tz_nsc_entry void NSC_GetBoardUID(pico_unique_board_id_t *id_out)
+{
+    pico_get_unique_board_id(id_out);
+}
+
+// A demo function for exposing some sensible data to Non-Secure side of the binary.
 __stk_tz_nsc_entry uint32_t NSC_GetKey(uint8_t key[], uint32_t size)
 {
     uint32_t result = 0;

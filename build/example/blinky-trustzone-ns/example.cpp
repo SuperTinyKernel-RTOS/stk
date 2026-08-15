@@ -21,19 +21,25 @@
 
 #include "pico/unique_id.h"
 
+using namespace bsp;
+
 void NSC_OnExitNs(void);
 uint32_t NSC_GetKey(uint8_t key[], uint32_t size);
+void NSC_GetBoardUID(pico_unique_board_id_t *id_out);
 void NSC_bsp_Led_SwitchOnExclusive(bsp::Led::Id led);
 
-extern "C" void runtime_init_clocks(void) {
-
+extern "C" void runtime_init_clocks(void)
+{
+    // clocks are initialized on Secure side of the binary
 }
 
-void pico_get_unique_board_id(pico_unique_board_id_t *id_out) {
-    *id_out = pico_unique_board_id_t{};
-}
+void pico_get_unique_board_id(pico_unique_board_id_t *id_out)
+{
+    // you can get Id via NSC call, if needed for a Non-Secure side of the binary
+    //*id_out = pico_unique_board_id_t{};
 
-using namespace bsp;
+    NSC_GetBoardUID(id_out);
+}
 
 // Size of the task's stack (number of stk::Word)
 // R2350 requires larger stack due to stack-memory heavy SDK API

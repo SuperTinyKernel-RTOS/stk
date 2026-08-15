@@ -516,7 +516,7 @@ struct FaultContext
     Word               EXC_RETURN;  //!< Exception return magic value (EXC_RETURN).
 #if STK_MPU
     Mpu                mpu;         //!< Active or Secure MPU hardware configuration snapshot.
-    #if STK_ARCH_ARMV8_M
+    #if STK_ARCH_ARMV8_M && STK_TZ_SECURE
     Mpu                mpu_ns;      //!< Non-Secure MPU hardware configuration snapshot (ARMv8-M TrustZone).
     #endif
 #endif

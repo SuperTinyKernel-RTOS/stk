@@ -333,7 +333,6 @@ struct TaskMpu
     */
     static constexpr uint8_t NUM_REGIONS = STK_MPU_TASK_REGIONS;
 
-    Word      mpu_start_addr;      //!< Address of (&MPU->RBAR or &MPU_NS->RBAR). See \a STK_ASM_BLOCK_MPU_STACK_GUARD.
     MpuRegion region[NUM_REGIONS]; //!< Array of MPU regions of size NUM_REGIONS.
 };
 #endif
@@ -379,10 +378,13 @@ struct MpuConfig
 */
 struct Stack
 {
-    Word     SP;          //!< Offset 0: Stack Pointer (SP) register.
-    uint32_t access_mode; //!< Offset 4: Bitfield with hardware access mode of the task (see \a EAccessMode).
+    Word     SP;          //!< Offset 0: Stack Pointer (SP) register (note: must always be at offset 0).
+    uint32_t access_mode; //!< Bitfield with hardware access mode of the task (see \a EAccessMode).
 #if STK_MPU && STK_MPU_STACK_GUARD
-    TaskMpu  mpu;         //!< Offset 8: MPU regions of the task.
+    TaskMpu  mpu;         //!< MPU regions of the task (if TrustZone: always Secure side for any task).
+    #ifdef _STK_CORTEX_M_TRUSTZONE
+    TaskMpu  mpu_ns;      //!< MPU regions of Non-Secure side task (only for TrustZone).
+    #endif
 #endif
 #if STK_TLS && !STK_TLS_PREFER_REGISTER
     Word     tls;         //!< Thread-local storage if not using ARM Cortex-M R9 register for a fast inline access to TLS.

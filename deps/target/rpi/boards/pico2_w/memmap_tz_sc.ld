@@ -23,7 +23,7 @@
 
 /* ============================================================================
    SuperTinyKernel (STK) RTOS
-   __stk_mpu_* REGIONS -- SuperTinyKernel (STK) RTOS MPU-ISOLATED MEMORY LAYOUT
+   __stk_mpu_* REGIONS - SuperTinyKernel (STK) RTOS MPU-ISOLATED MEMORY LAYOUT
    ============================================================================
 
    This script carves out several extra output sections, all prefixed
@@ -45,8 +45,8 @@
        STK_MPU_SHARED_BSS_SECTION   -> .stk_mpu_shared_bss    (zero-initialized globals/statics)
 
    The linker-exported boundary symbols below (__stk_mpu_*_start/_end) are
-   then picked up at runtime -- typically via `extern char sym[];` plus
-   `hw::PtrToWord(sym)` -- to compute the .addr/.size fields of a
+   then picked up at runtime - typically via `extern char sym[];` plus
+   `hw::PtrToWord(sym)` - to compute the .addr/.size fields of a
    stk::MpuRegionConfig entry, either in a task's GetMpuRegions() override
    (per-task regions) or in the platform's static/global MPU table (regions
    shared by every task, e.g. PlatformEventHandler::OnConfigureMpu() in
@@ -60,7 +60,7 @@
       Populated by STK_MPU_SHARED_CODE_SECTION. Executes directly from
       flash (XIP). At runtime this maps to an MPU region with
       ACCESS_PRIV_RO_USER_RO + EXEC_ALLOWED: read-only, executable, and
-      reachable by both privileged and unprivileged (sandboxed) tasks --
+      reachable by both privileged and unprivileged (sandboxed) tasks -
       i.e. common "trusted entry point" code shared by every task, so it
       only needs to be described once instead of being duplicated in each
       task's own per-task region list.
@@ -88,7 +88,7 @@
       Exported symbols: __stk_mpu_shared_bss_start / _end.
       Populated by STK_MPU_SHARED_BSS_SECTION: zero-initialized
       globals/statics that share the same MPU region/permissions as
-      .stk_mpu_shared_data, but -- having no "AT> FLASH" load region --
+      .stk_mpu_shared_data, but - having no "AT> FLASH" load region -
       consume zero space in the flash image. Startup code zero-fills this
       range (like .bss) instead of copying it, so it should be preferred
       over .stk_mpu_shared_data for large or scratch shared buffers.
@@ -116,7 +116,7 @@
    Attribution Unit (SAU) is what separates the Secure world as a whole
    from the Non-Secure world. The Non-Secure counterpart of this script
    (memmap_tz_ns.ld) has its own, entirely separate stk_mpu_* sections in
-   RAM_NS/FLASH_NS for sandboxing Non-Secure tasks -- the two sets of
+   RAM_NS/FLASH_NS for sandboxing Non-Secure tasks - the two sets of
    sections never overlap and are not related to each other. See the
    "TRUSTZONE SECTIONS" comment block further below for the symbols that
    actually describe and configure the Secure/Non-Secure boundary.
@@ -206,7 +206,7 @@ SECTIONS
 
     /* ============================================================================
        SuperTinyKernel (STK) RTOS
-       TRUSTZONE SECTIONS -- SAU BOUNDARY DESCRIPTORS + NSC GATEWAY VENEERS
+       TRUSTZONE SECTIONS - SAU BOUNDARY DESCRIPTORS + NSC GATEWAY VENEERS
        ============================================================================
 
        This block is unrelated to the MPU/stk_mpu_* discussion above: it exists
@@ -221,9 +221,9 @@ SECTIONS
        .gnu.sgstubs (FLASH_NSC)
            Exported symbols: __sgstubs_start / __sgstubs_end.
            This section is populated automatically by the linker, not by
-           application code: when compiling with `--mcmse`, every Secure
+           application code: when compiling with `-mcmse`, every Secure
            function marked `__stk_tz_nsc_entry` (i.e.
-           `__attribute__((cmse_nonsecure_entry))` -- see NSC_OnExitNs(),
+           `__attribute__((cmse_nonsecure_entry))` - see NSC_OnExitNs(),
            NSC_GetKey(), NSC_bsp_Led_SwitchOnExclusive() in example.cpp) gets a
            small auto-generated assembly "veneer" placed here. These veneers
            are the *only* addresses the Non-Secure world is allowed to branch
@@ -305,7 +305,7 @@ SECTIONS
        there is still a size limit of 256 bytes, to ensure the boot2 can be
        stored in boot RAM_S.
 
-       Really this is a "XIP setup function" -- the name boot2 is historic and
+       Really this is a "XIP setup function" - the name boot2 is historic and
        refers to its dual-purpose on RP2040, where it also handled vectoring
        from the bootrom into the user image.
     */
@@ -341,7 +341,7 @@ SECTIONS
     
     /* ======================================================================== */
     /* SuperTinyKernel (STK) RTOS                                               */
-    /* -------------------------------------------------------------------------*/
+    /* -------------------------------------*/
     /* PART 1: INTEGRATED SHARED MPU CODE SECTION (RX Only)                     */
     /* Aligned to 32-bytes (Cortex-M33 requirement).                            */
     /* ======================================================================== */
@@ -385,7 +385,7 @@ SECTIONS
         
         /* ========================================================= */
         /* SuperTinyKernel (STK) RTOS                                */
-        /* ----------------------------------------------------------*/
+        /* -----------------------------*/
         /* PART 2: ISOLATED RAM CODE BLOCK FOR MPU                   */
         /* ========================================================= */
         . = ALIGN(32);                  /* MPU alignment requirement */
@@ -452,22 +452,22 @@ SECTIONS
     
     /* ============================================================================
        SuperTinyKernel (STK) RTOS
-       TRUSTZONE SECTIONS -- SECURE-ONLY DATA
+       TRUSTZONE SECTIONS - SECURE-ONLY DATA
        ============================================================================
        .secure_data groups globals/statics that must remain Secure-only, i.e.
        physically outside the __ns_ram_start/__ns_ram_end range exported above
        and therefore unreachable from the Non-Secure world regardless of MPU
-       configuration -- the SAU denies Non-Secure bus access to this range
+       configuration - the SAU denies Non-Secure bus access to this range
        entirely. This is a stronger, orthogonal guarantee to the stk_mpu_*
        "shared" sections earlier in this file: those merely control which
-       *Secure* tasks may read/write/execute a range (MPU, Secure-internal),
-       while .secure_data controls whether the *Non-Secure world* can reach it
+       Secure tasks may read/write/execute a range (MPU, Secure-internal),
+       while .secure_data controls whether the Non-Secure world can reach it
        at all (SAU, Secure-vs-Non-Secure). g_SecureCounter-style state that
-       must never be visible to a Non-Secure task -- even indirectly through a
-       stray pointer -- belongs here rather than in .stk_mpu_shared_data.
+       must never be visible to a Non-Secure task - even indirectly through a
+       stray pointer - belongs here rather than in .stk_mpu_shared_data.
        Both initialized (.secure_data*) and zero-initialized (.secure_bss*)
        input sections are merged into one 32-byte-aligned RAM_S block, loaded
-       from FLASH; __secure_data_load_start is exported for startup code to
+       from FLASH; __secure_data_source__ is exported for startup code to
        copy the initialized portion from flash to RAM_S.
        ============================================================================ */
     
@@ -480,7 +480,7 @@ SECTIONS
         __secure_data_end = .;
     } > RAM_S AT> FLASH
     
-    __secure_data_load_start = LOADADDR(.secure_data);
+    __secure_data_source__ = LOADADDR(.secure_data);
     
     /* ======================================================================== */
     /* TrustZone end                                                            */
@@ -488,7 +488,7 @@ SECTIONS
     
     /* ======================================================================== */
     /* SuperTinyKernel (STK) RTOS                                               */
-    /* -------------------------------------------------------------------------*/
+    /* -------------------------------------*/
     /* PART 3: INTEGRATED SHARED MPU DATA SECTION (RW + XN)                     */
     /* This section is defined in RAM but loaded from FLASH.                    */
     /* Aligned to 32-bytes (Cortex-M33 requirement).                            */
