@@ -999,29 +999,62 @@ static __stk_forceinline void HW_ClearFpuState()
              access to FPU registers and FPSCR.
     \see     STK_CORTEX_M_FPU, _STK_CORTEX_M_TRUSTZONE
 */
-static __stk_forceinline void HW_EnableFullFpuAccess()
+static __stk_forceinline void HW_EnableFullFpuAccess(void)
 {
-#if STK_CORTEX_M_FPU
-    // Enable FPU CP10/CP11 Secure register access.
-    SCB->CPACR |= (static_cast<uint32_t>(0b11) << 20U) | (static_cast<uint32_t>(0b11) << 22U);
+#if defined(STK_CORTEX_M_FPU) && (STK_CORTEX_M_FPU != 0)
 
-    #if defined(_STK_CORTEX_M_TRUSTZONE)
-    // grant Non-Secure state access to the FPU CP10/CP11
-    SCB->NSACR |= (static_cast<uint32_t>(0b11) << 10U);
+    // Compile-time constant bitmasks
+    constexpr uint32_t SCB_CPACR_CP10_FULL_ACCESS = (3UL << 20U); // enable CP10
+    constexpr uint32_t SCB_CPACR_CP11_FULL_ACCESS = (3UL << 22U); // enable CP11
 
-    // enable FPU CP10/CP11 Non-Secure register access
-    SCB_NS->CPACR |= (static_cast<uint32_t>(0b11) << 20U) | (static_cast<uint32_t>(0b11) << 22U);
+    /* -------------------------------------------------------------------------- */
+    /* 1. ARMv7-M & ARMv8-M Base: Grant Privileged & Unprivileged Access          */
+    /* -------------------------------------------------------------------------- */
+    uint32_t cpacr_val = SCB->CPACR;
+    cpacr_val |= (SCB_CPACR_CP10_FULL_ACCESS | SCB_CPACR_CP11_FULL_ACCESS);
+    SCB->CPACR = cpacr_val;
 
-    // lazy stacking for Secure and Non-Secure states
-    FPU->FPCCR |= FPU_FPCCR_TS_Msk | FPU_FPCCR_LSPEN_Msk | FPU_FPCCR_LSPENS_Msk;
-    #endif
+#if defined(_STK_CORTEX_M_TRUSTZONE)
+    constexpr uint32_t SCB_NSACR_CP10_ACCESS = (1UL << 10U); // allow Non-Secure access to CP10
+    constexpr uint32_t SCB_NSACR_CP11_ACCESS = (1UL << 11U); // allow Non-Secure access to CP11
 
-    // allow Unprivileged (User mode) access to the FPU registers/FPSCR
-    FPU->FPCCR |= (1UL << FPU_FPCCR_USER_Pos);
+    /* -------------------------------------------------------------------------- */
+    /* 2. ARMv8-M TrustZone (Secure State Configuration)                          */
+    /* -------------------------------------------------------------------------- */
 
+    // grant Non-Secure access to CP10 and CP11
+    uint32_t nsacr_val = SCB->NSACR;
+    nsacr_val |= (SCB_NSACR_CP10_ACCESS | SCB_NSACR_CP11_ACCESS);
+    SCB->NSACR = nsacr_val;
+
+    // grant Full Access in Non-Secure State
+    uint32_t ns_cpacr_val = SCB_NS->CPACR;
+    ns_cpacr_val |= (SCB_CPACR_CP10_FULL_ACCESS | SCB_CPACR_CP11_FULL_ACCESS);
+    SCB_NS->CPACR = ns_cpacr_val;
+
+    // configure Lazy Stacking for Secure & Non-Secure states
+    uint32_t fpccr_val = FPU->FPCCR;
+    fpccr_val |= (static_cast<uint32_t>(FPU_FPCCR_ASPEN_Msk) | static_cast<uint32_t>(FPU_FPCCR_LSPEN_Msk));
+    FPU->FPCCR = fpccr_val;
+
+    uint32_t ns_fpccr_val = FPU_NS->FPCCR;
+    ns_fpccr_val |= (static_cast<uint32_t>(FPU_FPCCR_ASPEN_Msk) | static_cast<uint32_t>(FPU_FPCCR_LSPEN_Msk));
+    FPU_NS->FPCCR = ns_fpccr_val;
+
+#else
+    /* -------------------------------------------------------------------------- */
+    /* 3. Non-TrustZone / ARMv7-M FPU Control                                     */
+    /* -------------------------------------------------------------------------- */
+    uint32_t fpccr_val = FPU->FPCCR;
+    fpccr_val |= (static_cast<uint32_t>(FPU_FPCCR_ASPEN_Msk) | static_cast<uint32_t>(FPU_FPCCR_LSPEN_Msk));
+    FPU->FPCCR = fpccr_val;
+#endif
+
+    // ensure barriers complete FPU configuration before execution proceeds
     __DSB();
     __ISB();
-#endif
+
+#endif /* defined(STK_CORTEX_M_FPU) && (STK_CORTEX_M_FPU != 0) */
 }
 
 /*! \brief  Get core clock frequency.
