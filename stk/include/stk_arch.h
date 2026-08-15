@@ -593,7 +593,11 @@ struct HiResClock
     \return TId derived from the bound ITask pointer address (unique per task instance).
     \see    GetUserTaskFromTid
 */
+#ifndef _STK_CORTEX_M_TRUSTZONE_NON_SECURE
 static constexpr TId GetTidFromUserTask(const ITask *task) noexcept { return hw::PtrToWord(task); }
+#else
+TId GetTidFromUserTask(const ITask *task);
+#endif
 
 /*! \brief  Get task instance from its identifier.
     \return ITask instance.

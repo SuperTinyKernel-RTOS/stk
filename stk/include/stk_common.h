@@ -833,12 +833,6 @@ public:
     */
     virtual Weight GetWeight() const { return DEFAULT_WEIGHT; }
 
-    /*! \brief     Get task Id set by application.
-        \return    Application-defined task identifier. Return 0 if unused.
-        \note      Used for debugging and tracing only. The kernel does not interpret this value.
-    */
-    TId GetId() const;
-
     /*! \brief     Get task trace name set by application.
         \return    Null-terminated name string, or \c NULL if unused.
         \note      Used for debugging and tracing only (e.g. SEGGER SystemView). Kernel does not

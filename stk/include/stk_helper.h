@@ -318,12 +318,6 @@ inline Weight ISyncObject::FindWeightHigherThan(Weight comp) const
     return ((max_weight > comp) ? max_weight : NO_WEIGHT);
 }
 
-//! Implementation of ITask::GetId, see \a ITask. Placed here as it depends on \a GetTidFromUserTask.
-inline TId ITask::GetId() const
-{
-    return GetTidFromUserTask(this);
-}
-
 /*! \brief     Get task/thread Id of the calling task.
     \return    Id of the calling task/thread.
     \warning   ISR-unsafe. Calling from an ISR context is not permitted and will trigger an assertion.

@@ -136,9 +136,6 @@ TEST(UserTask, GetIdAndName)
     TaskMock<ACCESS_USER> task;
     TaskMockW<1, ACCESS_USER> taskw;
 
-    CHECK_EQUAL((TId)&task, task.GetId());
-    CHECK_EQUAL((TId)&taskw, taskw.GetId());
-
     CHECK_EQUAL((TId)&task, stk::GetTidFromUserTask(&task));
     CHECK_EQUAL((TId)&taskw, stk::GetTidFromUserTask(&taskw));
 
@@ -162,13 +159,8 @@ TEST(UserTask, MPU_GetMpuRegions)
 {
     TaskMock<ACCESS_USER> task;
 
-    uint8_t regions = -1;
-
     // by default Mpu configuration is not provided by the task
-    CHECK_TRUE(nullptr == task.GetMpuRegions(regions));
-
-    // must clear regions count
-    CHECK_EQUAL(0U, regions);
+    CHECK_TRUE(nullptr == task.GetMpuRegions());
 }
 
 // ============================================================================ //

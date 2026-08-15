@@ -666,7 +666,7 @@ static struct SleepCancelRelaxCpuContext
 
         if (counter == 0)
         {
-            SleepCancel(task1->GetId());
+            SleepCancel(GetTidFromUserTask(task1));
         }
 
         ++counter;

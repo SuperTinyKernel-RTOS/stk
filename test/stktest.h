@@ -201,8 +201,10 @@ public:
         m_ticks_count += ticks;
     }
 
-    void SetEventOverrider(IEventOverrider *overrider) override
+    void SetEventOverrider(IEventOverrider *overrider, bool non_secure) override
     {
+        STK_UNUSED(non_secure);
+
         m_overrider = overrider;
     }
 
