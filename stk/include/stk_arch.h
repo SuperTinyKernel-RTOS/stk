@@ -593,7 +593,11 @@ struct HiResClock
     \return TId derived from the bound ITask pointer address (unique per task instance).
     \see    GetUserTaskFromTid
 */
+#ifndef _STK_CORTEX_M_TRUSTZONE_NON_SECURE
 static constexpr TId GetTidFromUserTask(const ITask *task) noexcept { return hw::PtrToWord(task); }
+#else
+TId GetTidFromUserTask(const ITask *task);
+#endif
 
 /*! \brief  Get task instance from its identifier.
     \return ITask instance.
@@ -603,9 +607,7 @@ static constexpr ITask *GetUserTaskFromTid(TId task_id) noexcept { return hw::Wo
 
 } // namespace stk
 
-/*! \brief     A wrapper for a built-in memcpy, redefine to your own if required.
-    \note      Can be overridden by defining _STK_CUSTOM_MEMCPY in system configuration.
-*/
+//! Implementation of STK_MEMCPY.
 #ifndef _STK_CUSTOM_MEMCPY
 static inline void STK_MEMCPY(void *const dest, const void *const src, const size_t size)
 {
@@ -618,8 +620,8 @@ static inline void STK_MEMCPY(void *const dest, const void *const src, const siz
 
         // fast path: check if destination, source, and size are all 4-byte aligned
         // then copy data in 4-byte chunks
-        if (((dest_addr & 0x03U) == 0U) && 
-            ((src_addr  & 0x03U) == 0U) && 
+        if (((dest_addr & 0x03U) == 0U) &&
+            ((src_addr  & 0x03U) == 0U) &&
             ((size      & 0x03U) == 0U))
         {
             uint32_t *const       p_d32 = static_cast<uint32_t *>(dest);
@@ -640,9 +642,7 @@ static inline void STK_MEMCPY(void *const dest, const void *const src, const siz
 }
 #endif
 
-/*! \brief     A wrapper for a built-in memset, redefine to your own if required.
-    \note      Can be overridden by defining _STK_CUSTOM_MEMSET in system configuration.
-*/
+//! Implementation of STK_MEMSET.
 #ifndef _STK_CUSTOM_MEMSET
 static inline void STK_MEMSET(void *const dest, const uint8_t value, const size_t size)
 {

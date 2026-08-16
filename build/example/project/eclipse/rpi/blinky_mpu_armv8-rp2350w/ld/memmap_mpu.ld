@@ -21,6 +21,91 @@
     __stack (== StackTop)
 */
 
+/* ============================================================================
+   __stk_mpu_* REGIONS -- SuperTinyKernel (STK) RTOS MPU-ISOLATED MEMORY LAYOUT
+   ============================================================================
+
+   This script carves out several extra output sections, all prefixed
+   "stk_mpu_", so that SuperTinyKernel (STK) RTOS code/data shared across
+   every MPU-sandboxed task can be gathered into contiguous, predictably
+   aligned blocks and then covered by a *single* hardware MPU region each.
+   ARMv8-M (Cortex-M33) requires MPU region base addresses to be aligned;
+   this script uses 32-byte alignment for that reason, so every stk_mpu_*
+   section is opened with `ALIGN(32)` and its end is re-aligned to 32 bytes
+   as well, guaranteeing no unrelated symbol is accidentally pulled into
+   (or excluded from) the region.
+
+   Application code never places anything into these sections directly.
+   Instead, STK (see stk_arch_arm-cortex-m.h) provides three attribute
+   macros that route ordinary C/C++ declarations into them:
+
+       STK_MPU_SHARED_CODE_SECTION  -> .stk_mpu_shared_code   (functions)
+       STK_MPU_SHARED_DATA_SECTION  -> .stk_mpu_shared_data   (initialized globals/statics)
+       STK_MPU_SHARED_BSS_SECTION   -> .stk_mpu_shared_bss    (zero-initialized globals/statics)
+
+   The linker-exported boundary symbols below (__stk_mpu_*_start/_end) are
+   then picked up at runtime -- typically via `extern char sym[];` plus
+   `hw::PtrToWord(sym)` -- to compute the .addr/.size fields of a
+   stk::MpuRegionConfig entry, either in a task's GetMpuRegions() override
+   (per-task regions) or in the platform's static/global MPU table (regions
+   shared by every task, e.g. PlatformEventHandler::OnConfigureMpu() in
+   example.cpp). This is why the sections must be contiguous and
+   size-computable purely from their start/end symbols.
+
+   Region breakdown:
+
+   1. .stk_mpu_shared_code (PART 1, in FLASH, executed in place)
+      Exported symbols: __stk_mpu_shared_code_start / _end
+      Populated by STK_MPU_SHARED_CODE_SECTION. Executes directly from
+      flash (XIP). At runtime this maps to an MPU region with
+      ACCESS_PRIV_RO_USER_RO + EXEC_ALLOWED: read-only, executable, and
+      reachable by both privileged and unprivileged (sandboxed) tasks --
+      i.e. common "trusted entry point" code shared by every task, so it
+      only needs to be described once instead of being duplicated in each
+      task's own per-task region list.
+
+   2. __stk_mpu_ram_text_start / _end (PART 2, inside .data, in RAM)
+      A sub-region carved out of the normal .data output section. It
+      captures the "leftover" *(.text*) input sections that were
+      deliberately excluded from the main FLASH .text section earlier in
+      this script (see the EXCLUDE_FILE filters around libgcc/libc/libm)
+      and therefore get copied into RAM at startup instead of executing
+      from flash. The 32-byte-aligned start/end markers let this
+      relocated, executable RAM code be described as its own MPU region,
+      distinct from the surrounding (non-executable) RAM data around it.
+
+   3. .stk_mpu_shared_data (PART 3.1, RAM AT> FLASH)
+      Exported symbols: __stk_mpu_shared_data_start / _end, plus
+      __stk_mpu_shared_data_source__ (its LOADADDR in FLASH).
+      Populated by STK_MPU_SHARED_DATA_SECTION: initialized read/write
+      globals/statics shared by every task (e.g. event flags, queues).
+      Lives in RAM at runtime, but its initial contents are stored in
+      FLASH and copied to RAM during startup (like .data), hence the
+      exported source/load address.
+
+   4. .stk_mpu_shared_bss (PART 3.2, RAM only, NOLOAD)
+      Exported symbols: __stk_mpu_shared_bss_start / _end.
+      Populated by STK_MPU_SHARED_BSS_SECTION: zero-initialized
+      globals/statics that share the same MPU region/permissions as
+      .stk_mpu_shared_data, but -- having no "AT> FLASH" load region --
+      consume zero space in the flash image. Startup code zero-fills this
+      range (like .bss) instead of copying it, so it should be preferred
+      over .stk_mpu_shared_data for large or scratch shared buffers.
+
+   .stk_mpu_shared_data and .stk_mpu_shared_bss are placed back-to-back
+   (data first, then bss) and 32-byte aligned only at the very end of the
+   combined block, so together they form one contiguous RW+XN
+   (ACCESS_FULL, EXEC_NEVER) MPU region in RAM: full read/write access for
+   privileged and unprivileged tasks alike, with code execution from it
+   explicitly forbidden to prevent code injection.
+
+   In short: these markers let STK's static MPU table and each task's
+   GetMpuRegions() precisely locate and size the shared "toolkit" code and
+   data blocks (in both FLASH and RAM) so they can be enclosed in their
+   own dedicated MPU regions, isolated from task-private memory and from
+   each other by access permission (RX vs RW+XN).
+   ============================================================================ */
+
 MEMORY
 {
     INCLUDE "pico_flash_region.ld"
@@ -184,7 +269,7 @@ SECTIONS
         /* remaining .text and .rodata; i.e. stuff we exclude above because we want it in RAM */
                 
         /* ========================================================= */
-        /* ISOLATED RAM CODE BLOCK FOR MPU                           */
+        /* PART 2: ISOLATED RAM CODE BLOCK FOR MPU                   */
         /* ========================================================= */
         . = ALIGN(32);                  /* MPU alignment requirement */
         __stk_mpu_ram_text_start = .;   /* Marker 1: START           */
@@ -249,7 +334,7 @@ SECTIONS
     } > RAM
     
     /* ======================================================================== */
-    /* PART 2: INTEGRATED SHARED MPU DATA SECTION (RW + XN)                     */
+    /* PART 3: INTEGRATED SHARED MPU DATA SECTION (RW + XN)                     */
     /* This section is defined in RAM but loaded from FLASH.                    */
     /* Aligned to 32-bytes (Cortex-M33 requirement).                            */
     /* ======================================================================== */

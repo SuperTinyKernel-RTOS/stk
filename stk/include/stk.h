@@ -546,7 +546,7 @@ protected:
 
             // set task id for tracking purpose
         #if STK_STACK_NEEDS_TASK_ID
-            m_stack.tid = user_task->GetId();
+            m_stack.tid = GetTid();
         #endif
 
             // init stack of the user task

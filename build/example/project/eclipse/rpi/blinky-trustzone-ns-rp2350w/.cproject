@@ -34,7 +34,7 @@
 							<option id="ilg.gnuarmeclipse.managedbuild.cross.option.debugging.level.1750428605" name="Debug level" superClass="ilg.gnuarmeclipse.managedbuild.cross.option.debugging.level" useByScannerDiscovery="true" value="ilg.gnuarmeclipse.managedbuild.cross.option.debugging.level.max" valueType="enumerated"/>
 							<option id="ilg.gnuarmeclipse.managedbuild.cross.option.debugging.format.833179061" name="Debug format" superClass="ilg.gnuarmeclipse.managedbuild.cross.option.debugging.format" useByScannerDiscovery="true"/>
 							<option id="ilg.gnuarmeclipse.managedbuild.cross.option.arm.target.family.491202200" name="Arm family (-mcpu)" superClass="ilg.gnuarmeclipse.managedbuild.cross.option.arm.target.family" useByScannerDiscovery="false" value="ilg.gnuarmeclipse.managedbuild.cross.option.arm.target.mcpu.cortex-m33" valueType="enumerated"/>
-							<option id="ilg.gnuarmeclipse.managedbuild.cross.option.arm.target.fpu.abi.367752508" name="Float ABI" superClass="ilg.gnuarmeclipse.managedbuild.cross.option.arm.target.fpu.abi" useByScannerDiscovery="true" value="ilg.gnuarmeclipse.managedbuild.cross.option.arm.target.fpu.abi.softfp" valueType="enumerated"/>
+							<option id="ilg.gnuarmeclipse.managedbuild.cross.option.arm.target.fpu.abi.367752508" name="Float ABI" superClass="ilg.gnuarmeclipse.managedbuild.cross.option.arm.target.fpu.abi" useByScannerDiscovery="true" value="ilg.gnuarmeclipse.managedbuild.cross.option.arm.target.fpu.abi.hard" valueType="enumerated"/>
 							<option id="ilg.gnuarmeclipse.managedbuild.cross.option.warnings.allwarn.1360461406" name="Enable all common warnings (-Wall)" superClass="ilg.gnuarmeclipse.managedbuild.cross.option.warnings.allwarn" useByScannerDiscovery="true" value="true" valueType="boolean"/>
 							<option id="ilg.gnuarmeclipse.managedbuild.cross.option.warnings.extrawarn.1917111173" name="Enable extra warnings (-Wextra)" superClass="ilg.gnuarmeclipse.managedbuild.cross.option.warnings.extrawarn" useByScannerDiscovery="true" value="true" valueType="boolean"/>
 							<option id="ilg.gnuarmeclipse.managedbuild.cross.option.optimization.freestanding.681562146" name="Assume freestanding environment (-ffreestanding)" superClass="ilg.gnuarmeclipse.managedbuild.cross.option.optimization.freestanding" useByScannerDiscovery="true" value="true" valueType="boolean"/>
@@ -984,7 +984,7 @@
 							<option id="ilg.gnuarmeclipse.managedbuild.cross.option.debugging.level.1600545137" name="Debug level" superClass="ilg.gnuarmeclipse.managedbuild.cross.option.debugging.level" useByScannerDiscovery="true"/>
 							<option id="ilg.gnuarmeclipse.managedbuild.cross.option.debugging.format.227392213" name="Debug format" superClass="ilg.gnuarmeclipse.managedbuild.cross.option.debugging.format" useByScannerDiscovery="true"/>
 							<option id="ilg.gnuarmeclipse.managedbuild.cross.option.arm.target.family.1480893555" name="Arm family (-mcpu)" superClass="ilg.gnuarmeclipse.managedbuild.cross.option.arm.target.family" useByScannerDiscovery="false" value="ilg.gnuarmeclipse.managedbuild.cross.option.arm.target.mcpu.cortex-m33" valueType="enumerated"/>
-							<option id="ilg.gnuarmeclipse.managedbuild.cross.option.arm.target.fpu.abi.1400496726" name="Float ABI" superClass="ilg.gnuarmeclipse.managedbuild.cross.option.arm.target.fpu.abi" useByScannerDiscovery="true" value="ilg.gnuarmeclipse.managedbuild.cross.option.arm.target.fpu.abi.softfp" valueType="enumerated"/>
+							<option id="ilg.gnuarmeclipse.managedbuild.cross.option.arm.target.fpu.abi.1400496726" name="Float ABI" superClass="ilg.gnuarmeclipse.managedbuild.cross.option.arm.target.fpu.abi" useByScannerDiscovery="true" value="ilg.gnuarmeclipse.managedbuild.cross.option.arm.target.fpu.abi.hard" valueType="enumerated"/>
 							<option id="ilg.gnuarmeclipse.managedbuild.cross.option.warnings.allwarn.1560352164" name="Enable all common warnings (-Wall)" superClass="ilg.gnuarmeclipse.managedbuild.cross.option.warnings.allwarn" useByScannerDiscovery="true" value="true" valueType="boolean"/>
 							<option id="ilg.gnuarmeclipse.managedbuild.cross.option.warnings.extrawarn.161284451" name="Enable extra warnings (-Wextra)" superClass="ilg.gnuarmeclipse.managedbuild.cross.option.warnings.extrawarn" useByScannerDiscovery="true" value="true" valueType="boolean"/>
 							<option id="ilg.gnuarmeclipse.managedbuild.cross.option.optimization.freestanding.179239831" name="Assume freestanding environment (-ffreestanding)" superClass="ilg.gnuarmeclipse.managedbuild.cross.option.optimization.freestanding" useByScannerDiscovery="true" value="true" valueType="boolean"/>
@@ -1036,6 +1036,18 @@
 									<listOptionValue builtIn="false" value="CYW43_LWIP=0"/>
 									<listOptionValue builtIn="false" value="PICO_CYW43_ARCH_THREADSAFE_BACKGROUND=1"/>
 									<listOptionValue builtIn="false" value="PICO_RUNTIME_NO_INIT_BOOTROM_RESET=1"/>
+									<listOptionValue builtIn="false" value="PICO_RUNTIME_SKIP_INIT_BOOTROM_RESET=1"/>
+									<listOptionValue builtIn="false" value="PICO_RUNTIME_NO_INIT_PER_CORE_BOOTROM_RESET=1"/>
+									<listOptionValue builtIn="false" value="PICO_RUNTIME_SKIP_INIT_PER_CORE_BOOTROM_RESET=1"/>
+									<listOptionValue builtIn="false" value="PICO_RUNTIME_NO_INIT_EARLY_RESETS=1"/>
+									<listOptionValue builtIn="false" value="PICO_RUNTIME_SKIP_INIT_EARLY_RESETS=1"/>
+									<listOptionValue builtIn="false" value="PICO_RUNTIME_SKIP_INIT_USB_POWER_DOWN=1"/>
+									<listOptionValue builtIn="false" value="PICO_RUNTIME_SKIP_INIT_PER_CORE_ENABLE_COPROCESSORS=1"/>
+									<listOptionValue builtIn="false" value="PICO_RUNTIME_SKIP_INIT_POST_CLOCK_RESETS=1"/>
+									<listOptionValue builtIn="false" value="PICO_RUNTIME_SKIP_INIT_RP2040_GPIO_IE_DISABLE=1"/>
+									<listOptionValue builtIn="false" value="PICO_RUNTIME_SKIP_INIT_BOOT_LOCKS_RESET=1"/>
+									<listOptionValue builtIn="false" value="PICO_RUNTIME_SKIP_INIT_BOOTROM_LOCKING_ENABLE=1"/>
+									<listOptionValue builtIn="false" value="PICO_RUNTIME_SKIP_INIT_DEFAULT_ALARM_POOL=1"/>
 								</option>
 								<option IS_BUILTIN_EMPTY="false" IS_VALUE_EMPTY="false" id="ilg.gnuarmeclipse.managedbuild.cross.option.assembler.include.systempaths.1560693553" name="Include system paths (-isystem)" superClass="ilg.gnuarmeclipse.managedbuild.cross.option.assembler.include.systempaths" valueType="includePath">
 									<listOptionValue builtIn="false" value="&quot;${ProjDirPath}/../../../../../../deps/target/rpi/rp2_common/cmsis/stub/CMSIS/Core/Include&quot;"/>
@@ -1164,6 +1176,18 @@
 									<listOptionValue builtIn="false" value="CYW43_LWIP=0"/>
 									<listOptionValue builtIn="false" value="PICO_CYW43_ARCH_THREADSAFE_BACKGROUND=1"/>
 									<listOptionValue builtIn="false" value="PICO_RUNTIME_NO_INIT_BOOTROM_RESET=1"/>
+									<listOptionValue builtIn="false" value="PICO_RUNTIME_SKIP_INIT_BOOTROM_RESET=1"/>
+									<listOptionValue builtIn="false" value="PICO_RUNTIME_NO_INIT_PER_CORE_BOOTROM_RESET=1"/>
+									<listOptionValue builtIn="false" value="PICO_RUNTIME_SKIP_INIT_PER_CORE_BOOTROM_RESET=1"/>
+									<listOptionValue builtIn="false" value="PICO_RUNTIME_NO_INIT_EARLY_RESETS=1"/>
+									<listOptionValue builtIn="false" value="PICO_RUNTIME_SKIP_INIT_EARLY_RESETS=1"/>
+									<listOptionValue builtIn="false" value="PICO_RUNTIME_SKIP_INIT_USB_POWER_DOWN=1"/>
+									<listOptionValue builtIn="false" value="PICO_RUNTIME_SKIP_INIT_PER_CORE_ENABLE_COPROCESSORS=1"/>
+									<listOptionValue builtIn="false" value="PICO_RUNTIME_SKIP_INIT_POST_CLOCK_RESETS=1"/>
+									<listOptionValue builtIn="false" value="PICO_RUNTIME_SKIP_INIT_RP2040_GPIO_IE_DISABLE=1"/>
+									<listOptionValue builtIn="false" value="PICO_RUNTIME_SKIP_INIT_BOOT_LOCKS_RESET=1"/>
+									<listOptionValue builtIn="false" value="PICO_RUNTIME_SKIP_INIT_BOOTROM_LOCKING_ENABLE=1"/>
+									<listOptionValue builtIn="false" value="PICO_RUNTIME_SKIP_INIT_DEFAULT_ALARM_POOL=1"/>
 								</option>
 								<option IS_BUILTIN_EMPTY="false" IS_VALUE_EMPTY="false" id="ilg.gnuarmeclipse.managedbuild.cross.option.c.compiler.include.systempaths.1593130634" name="Include system paths (-isystem)" superClass="ilg.gnuarmeclipse.managedbuild.cross.option.c.compiler.include.systempaths" useByScannerDiscovery="true" valueType="includePath">
 									<listOptionValue builtIn="false" value="&quot;${ProjDirPath}/../../../../../../deps/target/rpi/rp2_common/cmsis/stub/CMSIS/Core/Include&quot;"/>
@@ -1296,6 +1320,18 @@
 									<listOptionValue builtIn="false" value="CYW43_LWIP=0"/>
 									<listOptionValue builtIn="false" value="PICO_CYW43_ARCH_THREADSAFE_BACKGROUND=1"/>
 									<listOptionValue builtIn="false" value="PICO_RUNTIME_NO_INIT_BOOTROM_RESET=1"/>
+									<listOptionValue builtIn="false" value="PICO_RUNTIME_SKIP_INIT_BOOTROM_RESET=1"/>
+									<listOptionValue builtIn="false" value="PICO_RUNTIME_NO_INIT_PER_CORE_BOOTROM_RESET=1"/>
+									<listOptionValue builtIn="false" value="PICO_RUNTIME_SKIP_INIT_PER_CORE_BOOTROM_RESET=1"/>
+									<listOptionValue builtIn="false" value="PICO_RUNTIME_NO_INIT_EARLY_RESETS=1"/>
+									<listOptionValue builtIn="false" value="PICO_RUNTIME_SKIP_INIT_EARLY_RESETS=1"/>
+									<listOptionValue builtIn="false" value="PICO_RUNTIME_SKIP_INIT_USB_POWER_DOWN=1"/>
+									<listOptionValue builtIn="false" value="PICO_RUNTIME_SKIP_INIT_PER_CORE_ENABLE_COPROCESSORS=1"/>
+									<listOptionValue builtIn="false" value="PICO_RUNTIME_SKIP_INIT_POST_CLOCK_RESETS=1"/>
+									<listOptionValue builtIn="false" value="PICO_RUNTIME_SKIP_INIT_RP2040_GPIO_IE_DISABLE=1"/>
+									<listOptionValue builtIn="false" value="PICO_RUNTIME_SKIP_INIT_BOOT_LOCKS_RESET=1"/>
+									<listOptionValue builtIn="false" value="PICO_RUNTIME_SKIP_INIT_BOOTROM_LOCKING_ENABLE=1"/>
+									<listOptionValue builtIn="false" value="PICO_RUNTIME_SKIP_INIT_DEFAULT_ALARM_POOL=1"/>
 								</option>
 								<option IS_BUILTIN_EMPTY="false" IS_VALUE_EMPTY="false" id="ilg.gnuarmeclipse.managedbuild.cross.option.cpp.compiler.include.systempaths.1860266343" name="Include system paths (-isystem)" superClass="ilg.gnuarmeclipse.managedbuild.cross.option.cpp.compiler.include.systempaths" useByScannerDiscovery="true" valueType="includePath">
 									<listOptionValue builtIn="false" value="&quot;${ProjDirPath}/../../../../../../deps/target/rpi/rp2_common/cmsis/stub/CMSIS/Core/Include&quot;"/>

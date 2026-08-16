@@ -238,8 +238,8 @@ static __stk_forceinline bool IsIsrTid(TId id) { return ((id & TID_ISR_N) == TID
 
 /*! \class ArrayView
     \brief Lightweight, non-owning view over a contiguous sequence of elements.
-    \note  This descriptor provides a safe encapsulation over raw pointers without 
-           copying the underlying data.
+    \note  Provides a safe encapsulation over raw pointers without copying the underlying data.
+           Includes binary serialization methods for compact state transfer on 32-bit platforms.
 
     Usage example:
     \code
@@ -250,31 +250,57 @@ static __stk_forceinline bool IsIsrTid(TId id) { return ((id & TID_ISR_N) == TID
 template <typename T> class ArrayView
 {
 public:
-/*! \brief   Construct an ArrayView from a raw pointer and size.
-        \param[in] ptr: Pointer to the first element of the contiguous memory block.
-        \param[in] size: Number of elements available in the memory block.
+    typedef T value_type;
+
+    /*! \brief Construct an empty ArrayView with a null pointer and zero size.
+    */
+    ArrayView() : m_ptr(nullptr), m_size(0U)
+    {}
+
+    /*! \brief     Construct an ArrayView from a raw pointer and size.
+        \param[in] ptr Pointer to the first element of the contiguous memory block.
+        \param[in] size Number of elements available in the memory block.
     */
     ArrayView(T *ptr, size_t size) : m_ptr(ptr), m_size(size)
     {}
     
-    /*! \brief   Subscript operator for element access.
-        \param   index Element index to access.
-        \return  Reference to the element at the specified index.
-        \warning Triggers STK_ASSERT if index is out of bounds in a Debug build.
+    /*! \brief     Subscript operator for element access.
+        \param[in] index: Element index to access.
+        \return    Reference to the element at the specified index.
+        \warning   Triggers STK_ASSERT if index is out of bounds in a Debug build.
     */
     T &operator[](size_t index) const
     {
-        STK_ASSERT(index < m_size);
-        // MISRA 5-0-15 deviation: bounds are checked via STK_ASSERT
-        return m_ptr[index];
+        STK_ASSERT(index < m_size); // enforces MISRA Rule 5-0-16
+        return UncheckedAt(index);  // MISRA Rule 5-0-15 deviation centralized
     }
     
-    /*! \brief   Get number of elements in the view.
-        \return  The size of the array view.
+    /*! \brief    Get pointer to the beginning of elements in the view.
+        \return   Pointer to the elements of array.
+    */
+    T *GetPtr() { return m_ptr; }
+
+    /*! \brief    Get constant pointer to the beginning of elements in the view.
+        \return   Constant pointer to the elements of array.
+    */
+    const T *GetPtr() const { return m_ptr; }
+
+    /*! \brief    Get number of elements in the view.
+        \return   The size of the array view.
     */
     size_t GetSize() const { return m_size; }
 
 private:
+    /*! \brief  Deviation MISRA-CPP-2008-5-0-15
+        \reason Array indexing on a base pointer is required for a dynamic-size
+                non-owning view. The pointer and size are externally supplied.
+                Bounds are enforced by the public API (STK_ASSERT / operator[]).
+    */
+    __stk_forceinline T &UncheckedAt(size_t index) const
+    {
+        return m_ptr[index]; // deviation: indexing non-array pointer
+    }
+
     T     *m_ptr;  //!< Pointer to the underlying memory block.
     size_t m_size; //!< Total number of elements in the view.
 };
@@ -311,16 +337,54 @@ struct TaskMpu
 };
 #endif
 
+/*! \typedef MpuRegions
+    \brief   List of MPU regions.
+    \see     ITask::GetMpuRegions, IPlatform::IEventOverrider::OnConfigureMpu
+*/
+typedef ArrayView<const struct MpuRegionConfig> MpuRegionList;
+
+/*! \struct  MpuConfig
+    \brief   Aggregated hardware MPU setup configuration and state descriptor.
+    \details Wraps a static fixed-capacity collection of MPU region descriptors (`MpuRegionList`)
+             along with an overall enable flag controlling hardware MPU initialization and activation.
+    \see     ITask::GetMpuRegions, IPlatform::IEventOverrider::OnConfigureMpu, MpuRegionList
+*/
+struct MpuConfig
+{
+    /*! \var     DEFAULT_MODE
+        \brief   Default mode.
+    */
+    static constexpr uint32_t MPU_OFF = static_cast<TId>(0U);
+
+    /*! \brief Default constructor initializing an empty, disabled MPU configuration.
+    */
+    MpuConfig() : regions(), mode(MPU_OFF)
+    {}
+
+    /*! \brief     Parameterized constructor initializing MPU region settings and enable state.
+        \param[in] regions_: Initial collection of MPU region descriptors.
+        \param[in] enable_:  Activation state flag for the hardware MPU subsystem.
+    */
+    MpuConfig(const MpuRegionList &regions_, uint32_t mode_) : regions(regions_), mode(mode_)
+    {}
+
+    MpuRegionList regions; //!< Fixed-capacity collection of configured MPU region descriptors.
+    uint32_t      mode;    //!< Mode flags (hardware-dependent, see hw::mpu::EMpuConfigFlags).
+};
+
 /*! \class   Stack
     \brief   Stack descriptor.
     \warning Fields marked with 'Offset' have static position in the structure and can't move (driver dependent).
 */
 struct Stack
 {
-    Word     SP;          //!< Offset 0: Stack Pointer (SP) register.
-    uint32_t access_mode; //!< Offset 4: Bitfield with hardware access mode of the task (see \a EAccessMode).
+    Word     SP;          //!< Offset 0: Stack Pointer (SP) register (note: must always be at offset 0).
+    uint32_t access_mode; //!< Bitfield with hardware access mode of the task (see \a EAccessMode).
 #if STK_MPU && STK_MPU_STACK_GUARD
-    TaskMpu  mpu;         //!< Offset 8: MPU regions of the task.
+    TaskMpu  mpu;         //!< MPU regions of the task (if TrustZone: always Secure side for any task).
+    #ifdef _STK_CORTEX_M_TRUSTZONE
+    TaskMpu  mpu_ns;      //!< MPU regions of Non-Secure side task (only for TrustZone).
+    #endif
 #endif
 #if STK_TLS && !STK_TLS_PREFER_REGISTER
     Word     tls;         //!< Thread-local storage if not using ARM Cortex-M R9 register for a fast inline access to TLS.
@@ -698,20 +762,18 @@ public:
                    stack memory (see IStackMemory::GetStack/GetStackSize). This hook supplies the
                    remaining \c STK_MPU_TASK_REGIONS-1 slots, letting an application additionally
                    sandbox a task to e.g. a private data buffer, a specific peripheral block, or
-                   a shared IPC region -- on top of its stack guard.
-        \param[out] out_count: Number of valid entries returned (0..STK_MPU_TASK_REGIONS-1). Set
-                   to 0 by the default implementation, meaning no extra regions are configured.
-        \return    Pointer to an array of up to (STK_MPU_TASK_REGIONS - 1) region descriptors, or
-                   \c nullptr if \a out_count is 0. Array element \c i is applied at task-relative
-                   region index \a i \c +1 (i.e. the slots following the stack guard).
+                   a shared IPC region - on top of its stack guard.
+        \return    Pointer to a constant \c MpuRegionList containing up to (STK_MPU_TASK_REGIONS - 1)
+                   region descriptors, or \c nullptr if no extra task regions are configured.
+                   Array element \c i is applied at task-relative region index \a i \c +1 (i.e. the slots following the stack guard).
         \note      Optional. Only consulted when \c STK_MPU_STACK_GUARD is enabled; a
                    no-op on platforms/builds without MPU stack-guard support.
         \note      Read once, when the task is bound via Kernel::AddTask() (through
                    IPlatform::InitStack()), not re-evaluated on every context switch.
-                   Return a pointer with static/member storage duration (e.g. a
-                   \c static const array); a stack-local temporary is invalid once this
+                   The underlying \c MpuRegionList instance referenced by the returned pointer must remain valid
+                   (e.g. a \c static const instance); a stack-local temporary is invalid once this
                    function returns.
-        \warning   \a out_count greater than (STK_MPU_TASK_REGIONS - 1) is clamped by the driver
+        \warning   An element count greater than (STK_MPU_TASK_REGIONS - 1) is clamped by the driver
                    (STK_ASSERT fires in debug builds); only the first STK_MPU_TASK_REGIONS-1
                    entries are ever applied.
         \code
@@ -725,20 +787,19 @@ public:
                   .exec        = stk::hw::mpu::EXEC_NEVER },
             };
 
-            const stk::MpuRegionConfig *GetMpuRegions(uint8_t &out_count) override
+            const stk::MpuRegionList *GetMpuRegions() const override
             {
-                out_count = 1U;
-                return s_extra_regions;
+                static const stk::MpuRegionList mpu_regions(s_extra_regions, 1U);
+                return &mpu_regions;
             }
 
             void Run() override { ... }
         };
         \endcode
-        \see       TaskMpu::Configure, IPlatform::InitStack
+        \see       TaskMpu::Configure, IPlatform::InitStack, MpuRegionList
     */
-    virtual const struct MpuRegionConfig *GetMpuRegions(uint8_t &out_count)
+    virtual const MpuRegionList *GetMpuRegions() const
     {
-        out_count = 0U;
         return nullptr;
     }
 
@@ -771,12 +832,6 @@ public:
                    IKernelTask::GetWeight, IKernelService::InheritWeight, IKernelService::RestoreWeight
     */
     virtual Weight GetWeight() const { return DEFAULT_WEIGHT; }
-
-    /*! \brief     Get task Id set by application.
-        \return    Application-defined task identifier. Return 0 if unused.
-        \note      Used for debugging and tracing only. The kernel does not interpret this value.
-    */
-    TId GetId() const;
 
     /*! \brief     Get task trace name set by application.
         \return    Null-terminated name string, or \c NULL if unused.
@@ -902,7 +957,7 @@ public:
             \note       This event can be used to change hardware access mode for the first task.
             \param[out] active: Stack of the task which must enter Active state (to which context will switch).
         */
-        virtual void OnStart(Stack *&active) = 0;
+        virtual void OnStart(Stack *&enable) = 0;
 
         /*! \brief  Called by driver to notify that scheduling is stopped.
             \note   Resets internal kernel state so that Start() may be called again
@@ -924,7 +979,7 @@ public:
                         #define STK_SYSTICK_HANDLER _STK_SYSTICK_HANDLER_DISABLE
                         \endcode
         */
-        virtual bool OnTick(Stack *&idle, Stack *&active
+        virtual bool OnTick(Stack *&idle, Stack *&enable
         #if STK_TICKLESS_IDLE
             , Timeout &ticks
         #endif
@@ -998,21 +1053,19 @@ public:
             return false;
         }
 
-        /*! \brief     Called by the platform driver during initialization to obtain global, application-defined MPU regions.
+        /*! \brief     Called by the platform driver during initialization to obtain global, application-defined MPU configurations.
             \details   Allows user-space code to configure custom MPU regions (e.g., shared data/code sections or peripheral blocks)
-                       at system startup. Unlike per-task MPU regions set via \c ITask::GetMpuRegions(), regions returned by this
-                       callback apply globally across the platform driver.
-            \param[out] out_count: Reference to an integer that receives the number of valid region descriptors in the returned array.
-                       Must be set to 0 if no custom global MPU regions are supplied.
-            \return    Pointer to an array of \c MpuRegionConfig descriptors containing the desired global MPU settings,
-                       or \c nullptr if \a out_count is 0.
-            \note      Optional. The default implementation sets \a out_count to 0 and returns \c nullptr.
-            \note      The returned pointer must remain valid for the duration of platform initialization (e.g., point to a \c static array).
-            \see       MpuRegionConfig, ITask::GetMpuRegions
+                       and enable state at system startup. Unlike per-task MPU regions set via \c ITask::GetMpuRegions(),
+                       configurations returned by this callback apply globally across the platform driver.
+            \return    Pointer to a constant \c MpuConfig structure encapsulating global region descriptors and enable state,
+                       or \c nullptr if no custom global MPU configuration is supplied.
+            \note      Optional. The default implementation returns \c nullptr.
+            \note      The underlying \c MpuConfig instance referenced by the returned pointer must remain valid for the duration
+                       of platform initialization (e.g., point to a \c static instance).
+            \see       MpuConfig, ITask::GetMpuRegions
         */
-        virtual const struct MpuRegionConfig *OnConfigureMpu(uint8_t &out_count)
+        virtual const MpuConfig *OnConfigureMpu() const
         {
-            out_count = 0U;
             return nullptr;
         }
 
@@ -1132,8 +1185,9 @@ public:
     /*! \brief     Set platform event overrider.
         \note      Must be set prior call to IKernel::Start.
         \param[in] overrider: Platform event overrider.
+        \param[in] non_secure: True if instance comes from a Non-Secure binary (TrustZone only).
     */
-    virtual void SetEventOverrider(IEventOverrider *overrider) = 0;
+    virtual void SetEventOverrider(IEventOverrider *overrider, bool non_secure = false) = 0;
 
     /*! \brief     Get caller's Stack Pointer (SP).
         \note      Valid for a Thread process only.

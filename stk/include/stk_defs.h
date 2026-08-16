@@ -747,4 +747,18 @@ namespace util {}
 
 } // namespace stk
 
+/*! \brief     A wrapper for a built-in memcpy, redefine to your own if required.
+    \note      Can be overridden by defining _STK_CUSTOM_MEMCPY in system configuration.
+*/
+#ifndef _STK_CUSTOM_MEMCPY
+static void STK_MEMCPY(void *const dest, const void *const src, const size_t size);
+#endif
+
+/*! \brief     A wrapper for a built-in memset, redefine to your own if required.
+    \note      Can be overridden by defining _STK_CUSTOM_MEMSET in system configuration.
+*/
+#ifndef _STK_CUSTOM_MEMSET
+static void STK_MEMSET(void *const dest, const uint8_t value, const size_t size);
+#endif
+
 #endif /* STK_DEFS_H_ */

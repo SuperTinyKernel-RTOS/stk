@@ -1717,13 +1717,15 @@ TEST(Kernel, SyncInheritWeight)
     // original weight
     CHECK_EQUAL(1, ktasks[0]->GetWeight());
 
-    IKernelService::GetInstance()->InheritWeight(task1.GetId(), 2);
+    const TId task1_id = GetTidFromUserTask(&task1);
+
+    IKernelService::GetInstance()->InheritWeight(task1_id, 2);
 
     // boosted weight
     CHECK_EQUAL(2, ktasks[0]->GetCurrentWeight());
     CHECK_EQUAL(2, ktasks[0]->GetWeight()); // using GetCurrentWeight
 
-    IKernelService::GetInstance()->RestoreWeight(task1.GetId());
+    IKernelService::GetInstance()->RestoreWeight(task1_id);
 
     // dynamic is back to NO_WEIGHT
     CHECK_EQUAL(NO_WEIGHT, ktasks[0]->GetCurrentWeight());

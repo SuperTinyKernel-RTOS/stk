@@ -11,11 +11,13 @@
 #include <stdio.h>
 #include <pico/runtime.h>
 #include <pico/stdio.h>
+#include <pico/unique_id.h>
 
 #include <stk.h>
-#include <arch/arm/cortex-m/stk_arch_arm-tz.h>
 #include <time/stk_time.h>
-#include <sync/stk_sync_pipe.h>
+#include <sync/stk_sync.h>
+#include <arch/arm/cortex-m/stk_arch_arm-tz.h> // for Secure/Non-Secure-specific TrustZone API
+
 #include "example.h"
 
 #if (__ARM_FEATURE_CMSE & 1) == 0
@@ -68,7 +70,13 @@ __stk_tz_nsc_entry void NSC_OnExitNs(void)
     longjmp(s_NsExitEnv, 1);
 }
 
-// A demo function for exposing some sensible data to Non-Secure state.
+// A demo function for exposing SDK functions to Non-Secure side of the binary.
+__stk_tz_nsc_entry void NSC_GetBoardUID(pico_unique_board_id_t *id_out)
+{
+    pico_get_unique_board_id(id_out);
+}
+
+// A demo function for exposing some sensible data to Non-Secure side of the binary.
 __stk_tz_nsc_entry uint32_t NSC_GetKey(uint8_t key[], uint32_t size)
 {
     uint32_t result = 0;
@@ -247,11 +255,20 @@ private:
 
 class PlatformEventHandler final : public stk::IPlatform::IEventOverrider
 {
+    // Kernel-invoked fault handler: fires on MemManage faults (e.g. the Non-Secure LED
+    // tasks touching g_SecureCounter, or a stack-guard violation) and on generic hard
+    // faults. Dumps CPU/MPU state for diagnostics and halts via a debug breakpoint -
+    // this is intentionally non-recoverable diagnostic code, not a fault-recovery example.
+#ifdef DEBUG
     bool OnException(stk::EHwException exc_id, stk::TId tid, const struct stk::FaultContext *const ctx) override
     {
+    #ifdef DEBUG
         if (exc_id == stk::HW_EXCEPT_MEMACCESS)
         {
             printf("\r\n================ MEMMANAGE FAULT DETECTED ================\r\n");
+            printf("(Sandbox Violation: a task's Run() reached outside the MPU\r\n");
+            printf(" regions granted to it - see region dump below for what\r\n");
+            printf(" WAS active for this task at fault time)\r\n");
         }
         else
         {
@@ -273,25 +290,23 @@ class PlatformEventHandler final : public stk::IPlatform::IEventOverrider
         printf("BFAR:  0x%08X (%s)\r\n\r\n", (unsigned int)ctx->BFAR, ctx->bfar_valid ? "VALID" : "INVALID");
         printf("CONTROL: 0x%08X (nPRIV=%u)\r\n", (unsigned int)ctx->CONTROL, (unsigned int)(ctx->CONTROL & 1U));
 
-        printf("--- MPU Status & Config ---\r\n");
-        printf("CTRL:  0x%08X\r\n", (unsigned int)ctx->mpu.CTRL);
-    #if STK_ARCH_ARMV8_M
-        printf("MAIR0: 0x%08X    MAIR1: 0x%08X\r\n", (unsigned int)ctx->mpu.MAIR0, (unsigned int)ctx->mpu.MAIR1);
-    #endif
+#if STK_MPU
+        PrintMpuConfig((STK_ARCH_ARMV8_M && STK_TZ_SECURE) ? "Secure" : "Primary", ctx->mpu);
 
-        printf("--- MPU Regions Configuration ---\r\n");
-        for (size_t i = 0U; i < 8U; i++)
-        {
-            printf("  Region %u -> RBAR: 0x%08X    RLAR: 0x%08X\r\n",
-                   (unsigned int)i,
-                   (unsigned int)ctx->mpu.regions[i].RBAR,
-                   (unsigned int)ctx->mpu.regions[i].ATTR);
-        }
+    #if STK_ARCH_ARMV8_M && STK_TZ_SECURE
+        printf("\r\n");
+        PrintMpuConfig("Non-Secure", ctx->mpu_ns);
+    #endif
+#endif
+
         printf("=====================================================\r\n");
 
         __stk_debug_break();
+    #endif // DEBUG
+
         return false;
     }
+#endif
 };
 
 static void CreateKernel()
@@ -321,8 +336,10 @@ static void CreateKernel()
 
 void RunExample()
 {
-    // For semihosting.
+    // For semihosting and logging to console.
+#ifdef DEBUG
     stdio_init_all();
+#endif
 
     // Init BSP.
     Led::InitAll(false);

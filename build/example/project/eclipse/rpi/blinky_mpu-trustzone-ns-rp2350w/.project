@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <projectDescription>
-	<name>blinky-trustzone-sc-rp2350w</name>
+	<name>blinky_mpu-trustzone-ns-rp2350w</name>
 	<comment></comment>
 	<projects>
-		<project>blinky-trustzone-nsc-rp2350w</project>
+		<project>blinky_mpu-trustzone-sc-rp2350w</project>
 	</projects>
 	<buildSpec>
 		<buildCommand>
@@ -37,7 +37,12 @@
 			<locationURI>virtual:/virtual</locationURI>
 		</link>
 		<link>
-			<name>src/blinky-trustzone-sc</name>
+			<name>src/blinky_mpu-trustzone-ns</name>
+			<type>2</type>
+			<locationURI>virtual:/virtual</locationURI>
+		</link>
+		<link>
+			<name>src/driver</name>
 			<type>2</type>
 			<locationURI>virtual:/virtual</locationURI>
 		</link>
@@ -77,19 +82,24 @@
 			<locationURI>virtual:/virtual</locationURI>
 		</link>
 		<link>
-			<name>src/blinky-trustzone-sc/driver</name>
+			<name>src/blinky_mpu-trustzone-ns/example.cpp</name>
+			<type>1</type>
+			<locationURI>PARENT-4-PROJECT_LOC/blinky_mpu-trustzone-ns/example.cpp</locationURI>
+		</link>
+		<link>
+			<name>src/blinky_mpu-trustzone-ns/example.h</name>
+			<type>1</type>
+			<locationURI>PARENT-4-PROJECT_LOC/blinky_mpu-trustzone-ns/example.h</locationURI>
+		</link>
+		<link>
+			<name>src/driver/led.h</name>
+			<type>1</type>
+			<locationURI>PARENT-4-PROJECT_LOC/driver/led.h</locationURI>
+		</link>
+		<link>
+			<name>src/driver/rp2350w</name>
 			<type>2</type>
 			<locationURI>virtual:/virtual</locationURI>
-		</link>
-		<link>
-			<name>src/blinky-trustzone-sc/example.cpp</name>
-			<type>1</type>
-			<locationURI>PARENT-4-PROJECT_LOC/blinky-trustzone-sc/example.cpp</locationURI>
-		</link>
-		<link>
-			<name>src/blinky-trustzone-sc/example.h</name>
-			<type>1</type>
-			<locationURI>PARENT-4-PROJECT_LOC/blinky-trustzone-sc/example.h</locationURI>
 		</link>
 		<link>
 			<name>deps/rpi/boards/include</name>
@@ -547,29 +557,9 @@
 			<locationURI>virtual:/virtual</locationURI>
 		</link>
 		<link>
-			<name>src/blinky-trustzone-sc/driver/c_wrapper.cpp</name>
+			<name>src/driver/rp2350w/led.cpp</name>
 			<type>1</type>
-			<locationURI>PARENT-4-PROJECT_LOC/driver/c_wrapper.cpp</locationURI>
-		</link>
-		<link>
-			<name>src/blinky-trustzone-sc/driver/cpu.h</name>
-			<type>1</type>
-			<locationURI>PARENT-4-PROJECT_LOC/driver/cpu.h</locationURI>
-		</link>
-		<link>
-			<name>src/blinky-trustzone-sc/driver/defs.h</name>
-			<type>1</type>
-			<locationURI>PARENT-4-PROJECT_LOC/driver/defs.h</locationURI>
-		</link>
-		<link>
-			<name>src/blinky-trustzone-sc/driver/led.h</name>
-			<type>1</type>
-			<locationURI>PARENT-4-PROJECT_LOC/driver/led.h</locationURI>
-		</link>
-		<link>
-			<name>src/blinky-trustzone-sc/driver/rp2350w</name>
-			<type>2</type>
-			<locationURI>virtual:/virtual</locationURI>
+			<locationURI>PARENT-4-PROJECT_LOC/driver/rp2350w/led.cpp</locationURI>
 		</link>
 		<link>
 			<name>deps/rpi/boards/include/boards</name>
@@ -582,14 +572,14 @@
 			<locationURI>virtual:/virtual</locationURI>
 		</link>
 		<link>
-			<name>deps/rpi/boards/pico2_w/memmap_tz_sc.ld</name>
+			<name>deps/rpi/boards/pico2_w/memmap_tz_ns.ld</name>
 			<type>1</type>
-			<locationURI>PARENT-6-PROJECT_LOC/deps/target/rpi/boards/pico2_w/memmap_tz_sc.ld</locationURI>
+			<locationURI>PARENT-6-PROJECT_LOC/deps/target/rpi/boards/pico2_w/memmap_tz_ns.ld</locationURI>
 		</link>
 		<link>
-			<name>deps/rpi/boards/pico2_w/pico_flash_region_tz_sc.ld</name>
+			<name>deps/rpi/boards/pico2_w/pico_flash_region_tz_ns.ld</name>
 			<type>1</type>
-			<locationURI>PARENT-6-PROJECT_LOC/deps/target/rpi/boards/pico2_w/pico_flash_region_tz_sc.ld</locationURI>
+			<locationURI>PARENT-6-PROJECT_LOC/deps/target/rpi/boards/pico2_w/pico_flash_region_tz_ns.ld</locationURI>
 		</link>
 		<link>
 			<name>deps/rpi/common/hardware_claim/claim.c</name>
@@ -1642,16 +1632,6 @@
 			<locationURI>virtual:/virtual</locationURI>
 		</link>
 		<link>
-			<name>src/blinky-trustzone-sc/driver/rp2350w/cpu.cpp</name>
-			<type>1</type>
-			<locationURI>PARENT-4-PROJECT_LOC/driver/rp2350w/cpu.cpp</locationURI>
-		</link>
-		<link>
-			<name>src/blinky-trustzone-sc/driver/rp2350w/led.cpp</name>
-			<type>1</type>
-			<locationURI>PARENT-4-PROJECT_LOC/driver/rp2350w/led.cpp</locationURI>
-		</link>
-		<link>
 			<name>deps/rpi/boards/include/boards/pico.h</name>
 			<type>1</type>
 			<locationURI>PARENT-6-PROJECT_LOC/deps/target/rpi/boards/include/boards/pico.h</locationURI>
@@ -2605,6 +2585,11 @@
 			<name>deps/stk/include/arch/arm/cortex-m/stk_arch_arm-cortex-m.h</name>
 			<type>1</type>
 			<locationURI>PARENT-6-PROJECT_LOC/stk/include/arch/arm/cortex-m/stk_arch_arm-cortex-m.h</locationURI>
+		</link>
+		<link>
+			<name>deps/stk/include/arch/arm/cortex-m/stk_arch_arm-tz.h</name>
+			<type>1</type>
+			<locationURI>PARENT-7-PROJECT_LOC/stk-arm-tz/include/arch/arm/cortex-m/stk_arch_arm-tz.h</locationURI>
 		</link>
 		<link>
 			<name>deps/stk/include/arch/x86/win32/stk_arch_x86-win32.h</name>

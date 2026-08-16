@@ -728,8 +728,10 @@ void PlatformX86Win32::ProcessHardFault()
     }
 }
 
-void PlatformX86Win32::SetEventOverrider(IEventOverrider *overrider)
+void PlatformX86Win32::SetEventOverrider(IEventOverrider *overrider, bool non_secure)
 {
+    STK_UNUSED(non_secure);
+
     STK_ASSERT(!GetContext().m_started);
     GetContext().m_overrider = overrider;
 }

@@ -20,8 +20,13 @@
 #include "stk.h"
 #include "stk_arch.h"
 #include "arch/stk_arch_common.h"
-         
+#include "arch/arm/cortex-m/stk_arch_arm-cortex-m-asm.h"
+
 using namespace stk;
+
+// ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+#if !defined(_STK_CORTEX_M_TRUSTZONE_NON_SECURE)
+// ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 //! Do sanity check for a compiler define, __CORTEX_M must be defined.
 #ifndef __CORTEX_M
@@ -59,22 +64,12 @@ using namespace stk;
     #error "Enable MPU support (STK_MPU=1) to use per-task MPU feature (STK_MPU_STACK_GUARD=1)!"
 #endif
 
-/*! \def   STK_CORTEX_M_MPU_TASK_REGION_IDX
-    \brief MPU region index reserved for the per-task stack guard (must not collide
-           with any statically-configured regions, e.g. flash/RAM/peripheral/null-guard).
-    \note  Last \a STK_MPU_TASK_REGIONS regions (2 or 4, see \ref STK_MPU_TASK_REGIONS)
-           are reserved for a per-task MPU. Default value below (STK_CORTEX_M_MPU_REGIONS_MAX
-           - STK_MPU_TASK_REGIONS) is correctly aligned out of the box for both supported
-           widths, so it normally does not need to be overridden.
-    \warning The context-switch burst write programs \a STK_MPU_TASK_REGIONS regions via
-           MPU->RBAR plus the RNR-relative alias registers (RBAR_A1[, A2, A3]); these
-           aliases wrap within their current 4-region-aligned hardware block rather than
-           carrying into the next one. The region index must therefore satisfy
-           \c (STK_CORTEX_M_MPU_TASK_REGION_IDX \c % \c 4) \c <= \c (4 \c - \c STK_MPU_TASK_REGIONS):
-           full 4-region alignment when \a STK_MPU_TASK_REGIONS is 4 (all three aliases used),
-           or any offset except the last slot in a block (i.e. \c % \c 4 \c != \c 3) when
-           \a STK_MPU_TASK_REGIONS is 2 (only alias A1 used).
-    \see   STK_ASM_BLOCK_MPU_STACK_GUARD
+/*! \def     STK_CORTEX_M_MPU_TASK_REGION_IDX
+    \brief   Base MPU region index reserved for per-task stack protection.
+    \note    Defaults to the last \ref STK_MPU_TASK_REGIONS slots (\c STK_CORTEX_M_MPU_REGIONS_MAX - \ref STK_MPU_TASK_REGIONS).
+    \warning Context-switch burst writes use RBAR aliases (RBAR_A1..A3) which wrap within 4-region hardware blocks.
+             Index must satisfy: \c (IDX \c % \c 4) \c <= \c (4 \c - \c STK_MPU_TASK_REGIONS).
+    \see     STK_ASM_BLOCK_MPU_STACK_GUARD, STK_MPU_TASK_REGIONS
 */
 #ifndef STK_CORTEX_M_MPU_TASK_REGION_IDX
     #define STK_CORTEX_M_MPU_TASK_REGION_IDX (STK_CORTEX_M_MPU_REGIONS_MAX - STK_MPU_TASK_REGIONS)
@@ -100,21 +95,29 @@ using namespace stk;
     #define STK_CORTEX_M_REGISTER_COUNT (16U)
 #endif
 
-//! Additional words pushed onto the stack when TrustZone is active.
-//! Layout (low -> high address, pushed last -> first):
-//!   [0] PSPLIM    – Secure Process Stack Pointer Limit
-//!   [1] PSPLIM_NS – Non-Secure Process Stack Pointer Limit
-//!   [2] PSP_NS    – Non-Secure Process Stack Pointer (mid-execution value)
-//!   [3] CONTROL_NS – Non-Secure CONTROL register (nPRIV, SPSEL)
+/*! \def     STK_CORTEX_M_TZ_REGISTER_COUNT
+    \brief   Number of additional hardware stack words pushed per context frame when TrustZone is enabled.
+    \details Layout of saved TrustZone registers (low address to high address, pushed last to first):
+               - [0] PSPLIM    : Secure Process Stack Pointer Limit
+               - [1] PSPLIM_NS : Non-Secure Process Stack Pointer Limit
+               - [2] PSP_NS    : Non-Secure Process Stack Pointer (mid-execution value)
+               - [3] CONTROL_NS: Non-Secure CONTROL register (nPRIV, SPSEL)
+    \see     STK_STACK_FRAME_SIZE
+*/
 #ifdef _STK_CORTEX_M_TRUSTZONE
     #define STK_CORTEX_M_TZ_REGISTER_COUNT (4U)
 #else
     #define STK_CORTEX_M_TZ_REGISTER_COUNT (0U)
 #endif
 
-//! If (1), a per-task CONTROL register snapshot is saved/restored on every context
-//! switch (see PrivilegeFrame). Requires nPRIV support (M3+); on M0/M0+ there is
-//! no privilege distinction to preserve.
+/*! \def     STK_CORTEX_M_PRIVILEGE_FRAME
+    \brief   Flag enabling per-task CONTROL register saving and restoring during context switches.
+    \details Controls inclusion of the CONTROL register snapshot within PrivilegeFrame to preserve
+             task-specific privilege levels (nPRIV). Requires hardware privilege separation
+             (ARMv7-M / ARMv8-M Mainline); automatically disabled on architectures without
+             privilege distinctions (e.g., Cortex-M0/M0+).
+    \see     STK_CORTEX_M_TZ_REGISTER_COUNT
+*/
 #ifdef CONTROL_nPRIV_Msk
     #define STK_CORTEX_M_PRIVILEGE_FRAME (1)
 #else
@@ -166,28 +169,27 @@ using namespace stk;
         #define STK_HARDFAULT_HANDLER HardFault_Handler
     #endif
 #endif
-      
-// Inline ASM helpers:
-#ifdef __ICCARM__
-    #define STK_ASM_SYNTAX_UNIFIED /* IAR: not needed, unified is default */
-    #define STK_ASM_POOL           /* IAR: not needed, handled automatically */
-    #define STK_ASM_ALIGN_2        /* IAR: not needed */
-#else
-    #define STK_ASM_SYNTAX_UNIFIED ".syntax unified             \n"
-    #define STK_ASM_POOL           ".pool                       \n"
-    #define STK_ASM_ALIGN_2        ".align 2                    \n"
-#endif
 
-// Spin lock timeout.
+/*! \def     STK_SPINLOCK_TIMEOUT_US
+    \brief   Maximum timeout duration in microseconds (us) for spinlock acquisition attempts.
+    \details Defines the hardware spinlock wait threshold before an acquisition attempt
+             times out and triggers KERNEL_PANIC_SPINLOCK_DEADLOCK (defaulting to 5,000,000 us / 5 seconds).
+             Used in conjunction with STK_SPINLOCK_MIN_CYCLES_PER_ITER to compute the maximum retry iteration loop limit.
+    \see     HW_SpinLockLock, STK_SPINLOCK_MIN_CYCLES_PER_ITER, KERNEL_PANIC_SPINLOCK_DEADLOCK
+*/
 #ifndef STK_SPINLOCK_TIMEOUT_US
     #define STK_SPINLOCK_TIMEOUT_US (5U * 1000U * 1000U) // 5 sec
 #endif
 
-// Conservative lower bound on cycles consumed per iteration of the HW_SpinLockLock retry
-// loop (load + test-and-set attempt + compare + branch + relax hint). Deliberately an
-// underestimate, so the derived iteration budget always waits at least
-// STK_SPINLOCK_TIMEOUT_US before giving up rather than timing out early. If
-// __stk_relax_cpu() ever becomes a multi-cycle instruction on some core, raise this.
+/*! \def     STK_SPINLOCK_MIN_CYCLES_PER_ITER
+    \brief   Conservative lower bound on clock cycles consumed per iteration of the HW_SpinLockLock retry loop.
+    \details Accounting for load, test-and-set attempt, comparison, branch, and CPU relax hint.
+             Deliberately underestimated so the derived iteration budget guarantees a total wait
+             duration of at least STK_SPINLOCK_TIMEOUT_US before timing out.
+    \note    If __stk_relax_cpu() expands to a multi-cycle sequence on a specific architecture,
+             this value should be increased accordingly.
+    \see     HW_SpinLockLock, STK_SPINLOCK_TIMEOUT_US
+*/
 #ifndef STK_SPINLOCK_MIN_CYCLES_PER_ITER
     #define STK_SPINLOCK_MIN_CYCLES_PER_ITER (4U)
 #endif
@@ -195,22 +197,34 @@ using namespace stk;
 //! Enables SVC_FORCE_SWITCH (reserved, do not use).
 //#define STK_CORTEX_M_FORCE_SWITCH
 
-//! SVC commands.
+/*! \enum    ESvcCommandId
+    \brief   Supervisor Call (SVC) command identifiers for kernel service requests.
+    \details Enumerates system call vectors serviced by the SVC exception handler to execute
+             privileged kernel operations from unprivileged thread mode.
+    \see     STK_MPU, STK_CORTEX_M_FORCE_SWITCH
+*/
 enum ESvcCommandId : uint8_t
 {
-    SVC_START_SCHEDULING = 0U,
-    SVC_ENTER_CRITICAL,
-    SVC_EXIT_CRITICAL
+    SVC_START_SCHEDULING = 0U, //!< Initialize core scheduler and perform initial task dispatch.
+    SVC_ENTER_CRITICAL,        //!< Enter a thread-level critical section.
+    SVC_EXIT_CRITICAL          //!< Exit a thread-level critical section.
 #if STK_MPU
-  , SVC_BOOST_PRIV
+  , SVC_BOOST_PRIV             //!< Elevate current task execution privilege mode temporarily.
 #endif
 #ifdef STK_CORTEX_M_FORCE_SWITCH
-  , SVC_FORCE_SWITCH
+  , SVC_FORCE_SWITCH           //!< Trigger an immediate asynchronous task context switch.
 #endif
 };
 
+// ----------------------------------------------------------------------------
+//! ARM Cortex-M register helpers.
+namespace stk {
+namespace hw {
+namespace reg {
+// ----------------------------------------------------------------------------
+
 //! ARM Cortex-M Program Counter (PC) register helpers.
-namespace stk::hw::reg::PC {
+namespace PC {
 
 //! Mask to isolate the Thumb state bit (Bit 0) / Halfword alignment mask.
 enum ERegMask : Word
@@ -224,10 +238,10 @@ static inline Word ClearThumbBit(Word REG_PC) noexcept
     return (REG_PC & ~static_cast<Word>(ERegMask::MASK_THUMB_BIT));
 }
 
-} // namespace stk::hw::reg::PC
+} // namespace PC
 
 //! ARM Cortex-M Program Status Register (xPSR / EPSR) definitions.
-namespace stk::hw::reg::XPSR {
+namespace XPSR {
 
 //! Default initial value.
 constexpr Word DEFAULT_INIT = 0U;
@@ -244,12 +258,9 @@ static inline Word SetThumbExecution(Word REG_XPSR) noexcept
     return (REG_XPSR | static_cast<Word>(ERegMask::MASK_T_BIT));
 }
 
-} // namespace stk::hw::reg::XPSR
+} // namespace XPSR
 
 //! ARM Cortex-M CONTROL/CONTROL_NS register.
-namespace stk {
-namespace hw {
-namespace reg {
 namespace CONTROL {
 
 //! Default initial value.
@@ -283,13 +294,16 @@ __stk_attr_unused static inline Word SetSPSelectionToPSP(Word REG_CONTROL) noexc
 }
 
 } // namespace CONTROL
+
+// ----------------------------------------------------------------------------
 } // namespace reg
 } // namespace hw
 } // namespace stk
+// ----------------------------------------------------------------------------
 
 #if defined(_STK_CORTEX_M_TRUSTZONE) && (STK_CORTEX_M_TZ_REGISTER_COUNT != 0U)
-/*! \\struct TrustZoneFrame
-    \\brief  Per-task TrustZone register snapshot saved on every context switch.
+/*! \struct TrustZoneFrame
+    \brief  Per-task TrustZone register snapshot saved on every context switch.
 
     All four words are pushed onto the Secure PSP stack BELOW the callee-saved
     register block (r4-r11, LR) by PendSV and restored before popping them.
@@ -304,7 +318,7 @@ __stk_attr_unused static inline Word SetSPSelectionToPSP(Word REG_CONTROL) noexc
 
     Push sequence in PendSV (STMDB decrements then stores, lowest reg at lower addr):
       STMDB r0!, {PSPLIM, PSPLIM_NS}   -> SP+8, SP+12
-      STMDB r0!, {PSP_NS, CONTROL_NS}  -> SP+0, SP+4  ← new stack top
+      STMDB r0!, {PSP_NS, CONTROL_NS}  -> SP+0, SP+4  <- new stack top
 
     Member declaration order matches struct byte offsets so that InitStack can
     use hw::WordToPtr<TrustZoneFrame>(stack->SP)->field directly.
@@ -366,13 +380,13 @@ static void OnSchedulerSleep();
 static void OnSchedulerSleepOverride();
 static void OnSchedulerExit();
 
-/*! \brief   Cached spin-lock timeout, in retry-loop iterations.
-    \details Derived from STK_SPINLOCK_TIMEOUT_US and the real core clock frequency by
+/*! \brief   Cached spin-lock timeout budget expressed in retry-loop iteration count.
+    \details Derived from STK_SPINLOCK_TIMEOUT_US and the active core clock frequency by
              HW_InitSpinlockTimeout(), which must be called once per core during
-             Context::Initialize() before any spinlock is used in anger. The initial
-             value here is a conservative fallback (matches the old fixed-iteration-count
-             behavior) so that any spinlock attempt occurring before Initialize() has run
-             still has a bounded, non-zero timeout instead of panicking immediately.
+             Context::Initialize() before any spinlock is used in anger. Initialized to
+             a conservative fallback value (0xFFFFFFF) so that spinlock acquisition attempts
+             occurring prior to core initialization maintain a bounded, non-zero timeout limit.
+    \see     HW_InitSpinlockTimeout, STK_SPINLOCK_TIMEOUT_US, STK_SPINLOCK_MIN_CYCLES_PER_ITER
 */
 static uint32_t s_StkSpinlockTimeoutIters = 0xFFFFFFFU;
 
@@ -524,7 +538,7 @@ static __stk_forceinline void HW_EnterSleepMode()
     #ifdef __ICCARM__
       STK_STATIC_ASSERT(sizeof(std::__iar_atomic_flag) == sizeof(bool));
     #endif
-      
+
         return std::__iar_atomic_flag_test_and_set(ptr, memorder);
     }
 
@@ -533,7 +547,7 @@ static __stk_forceinline void HW_EnterSleepMode()
     #ifdef __ICCARM__
       STK_STATIC_ASSERT(sizeof(std::__iar_atomic_flag) == sizeof(bool));
     #endif
-      
+
         std::__iar_atomic_flag_clear(ptr, memorder);
     }
 #endif
@@ -552,7 +566,7 @@ static __stk_forceinline void HW_EnterSleepMode()
     \see       HW_SpinLockLock, HW_SpinLockUnlock
 */
 static __stk_forceinline bool HW_SpinLockTryLock(volatile bool &lock)
-{     
+{
     return !__atomic_test_and_set(&lock, __ATOMIC_ACQUIRE);
 }
 
@@ -569,7 +583,7 @@ static __stk_forceinline bool HW_SpinLockTryLock(volatile bool &lock)
     \see       HW_SpinLockTryLock, HW_SpinLockLock
 */
 static __stk_forceinline void HW_SpinLockUnlock(volatile bool &lock)
-{ 
+{
     if (lock == false)
     {
         STK_KERNEL_PANIC(KERNEL_PANIC_SPINLOCK_DEADLOCK); // release attempt of unowned lock
@@ -792,7 +806,7 @@ int32_t SaveJmp(JmpFrame &/*f*/)
 {
     __asm volatile(
     STK_ASM_SYNTAX_UNIFIED
-      
+
 #if (__CORTEX_M >= 3U)
     // Cortex-M3/M4/M7: STMIA stores r4-r11 at r0+0 .. r0+28
     "STMIA r0,  {r4-r11}            \n" // store r4-r11 at offsets 0-28, no writeback
@@ -834,7 +848,7 @@ int32_t SaveJmp(JmpFrame &/*f*/)
 
     "MOVS r0,  #0                   \n"
     "BX   lr                        \n");
-    
+
 #ifdef __ICCARM__
 #pragma diag_suppress=Pe940
     // return value is passed in r0 by the SVC handler per AAPCS;
@@ -866,7 +880,7 @@ void RestoreJmp(JmpFrame &/*f*/, int32_t /*val*/)
 {
     __asm volatile(
     STK_ASM_SYNTAX_UNIFIED
-      
+
 #if (__CORTEX_M >= 3U)
     // Cortex-M3/M4/M7: LDMIA loads r4-r11 from offsets 0-28
     "LDR   sp,  [r0, #32]           \n" // restore SP
@@ -956,7 +970,7 @@ static __stk_forceinline Word HW_GetCallerSP()
 {
     // use SP (R13) directly: __get_PSP() returns 0 in unprivileged thread mode
     Word sp;
-    __asm volatile("MOV %0, sp" : "=r" (sp));
+    __asm volatile("MOV %0, SP" : "=r" (sp));
     return sp;
 }
 
@@ -976,34 +990,69 @@ static __stk_forceinline void HW_ClearFpuState()
 #endif
 }
 
-/*! \brief Enable FPU.
+/*! \brief   Enable full hardware Floating Point Unit (FPU) access across privilege modes and TrustZone domains.
+    \details Configures Coprocessor Access Control Registers (CPACR, NSACR) to grant full Secure and Non-Secure
+             access to CP10 and CP11 coprocessors. Enables lazy stacking (`LSPEN`, `LSPENS`) to reduce
+             context-switch overhead, sets Treat-as-Secure (`TS`), and permits Unprivileged (User mode)
+             access to FPU registers and FPSCR.
+    \see     STK_CORTEX_M_FPU, _STK_CORTEX_M_TRUSTZONE
 */
-static __stk_forceinline void HW_EnableFullFpuAccess()
+static __stk_forceinline void HW_EnableFullFpuAccess(void)
 {
-#if STK_CORTEX_M_FPU
-    // Enable FPU CP10/CP11 Secure register access.
-    SCB->CPACR |= (static_cast<uint32_t>(0b11) << 20U) | (static_cast<uint32_t>(0b11) << 22U);
+#if defined(STK_CORTEX_M_FPU) && (STK_CORTEX_M_FPU != 0)
+
+    // Compile-time constant bitmasks
+    constexpr uint32_t SCB_CPACR_CP10_FULL_ACCESS = (3UL << 20U); // enable CP10
+    constexpr uint32_t SCB_CPACR_CP11_FULL_ACCESS = (3UL << 22U); // enable CP11
+
+    /* -------------------------------------------------------------------------- */
+    /* 1. ARMv7-M & ARMv8-M Base: Grant Privileged & Unprivileged Access          */
+    /* -------------------------------------------------------------------------- */
+    uint32_t cpacr_val = SCB->CPACR;
+    cpacr_val |= (SCB_CPACR_CP10_FULL_ACCESS | SCB_CPACR_CP11_FULL_ACCESS);
+    SCB->CPACR = cpacr_val;
 
 #if defined(_STK_CORTEX_M_TRUSTZONE)
-    // grant Non-Secure state access to the FPU CP10/CP11
-    SCB->NSACR |= (static_cast<uint32_t>(0b11) << 10U);
+    constexpr uint32_t SCB_NSACR_CP10_ACCESS = (1UL << 10U); // allow Non-Secure access to CP10
+    constexpr uint32_t SCB_NSACR_CP11_ACCESS = (1UL << 11U); // allow Non-Secure access to CP11
 
-    // enable FPU CP10/CP11 Non-Secure register access
-    SCB_NS->CPACR |= (static_cast<uint32_t>(0b11) << 20U) | (static_cast<uint32_t>(0b11) << 22U);
-    __DSB();
-    __ISB();
+    /* -------------------------------------------------------------------------- */
+    /* 2. ARMv8-M TrustZone (Secure State Configuration)                          */
+    /* -------------------------------------------------------------------------- */
 
-    // lazy stacking for Secure and Non-Secure states
-    FPU->FPCCR |= FPU_FPCCR_TS_Msk | FPU_FPCCR_LSPEN_Msk | FPU_FPCCR_LSPENS_Msk;
-    __DSB();
-    __ISB();
+    // grant Non-Secure access to CP10 and CP11
+    uint32_t nsacr_val = SCB->NSACR;
+    nsacr_val |= (SCB_NSACR_CP10_ACCESS | SCB_NSACR_CP11_ACCESS);
+    SCB->NSACR = nsacr_val;
+
+    // grant Full Access in Non-Secure State
+    uint32_t ns_cpacr_val = SCB_NS->CPACR;
+    ns_cpacr_val |= (SCB_CPACR_CP10_FULL_ACCESS | SCB_CPACR_CP11_FULL_ACCESS);
+    SCB_NS->CPACR = ns_cpacr_val;
+
+    // configure Lazy Stacking for Secure & Non-Secure states
+    uint32_t fpccr_val = FPU->FPCCR;
+    fpccr_val |= (static_cast<uint32_t>(FPU_FPCCR_ASPEN_Msk) | static_cast<uint32_t>(FPU_FPCCR_LSPEN_Msk));
+    FPU->FPCCR = fpccr_val;
+
+    uint32_t ns_fpccr_val = FPU_NS->FPCCR;
+    ns_fpccr_val |= (static_cast<uint32_t>(FPU_FPCCR_ASPEN_Msk) | static_cast<uint32_t>(FPU_FPCCR_LSPEN_Msk));
+    FPU_NS->FPCCR = ns_fpccr_val;
+
+#else
+    /* -------------------------------------------------------------------------- */
+    /* 3. Non-TrustZone / ARMv7-M FPU Control                                     */
+    /* -------------------------------------------------------------------------- */
+    uint32_t fpccr_val = FPU->FPCCR;
+    fpccr_val |= (static_cast<uint32_t>(FPU_FPCCR_ASPEN_Msk) | static_cast<uint32_t>(FPU_FPCCR_LSPEN_Msk));
+    FPU->FPCCR = fpccr_val;
 #endif
 
-    // allow Unprivileged (User mode) access to the FPU registers/FPSCR
-    FPU->FPCCR |= (1UL << FPU_FPCCR_USER_Pos);
+    // ensure barriers complete FPU configuration before execution proceeds
     __DSB();
     __ISB();
-#endif
+
+#endif /* defined(STK_CORTEX_M_FPU) && (STK_CORTEX_M_FPU != 0) */
 }
 
 /*! \brief  Get core clock frequency.
@@ -1207,6 +1256,7 @@ struct ScopedPrivilegeBoost
         __set_CONTROL(__get_CONTROL() | CONTROL_nPRIV_Msk);
     }
 };
+
 /*! \brief Definition of the privilege boost constructor inside the secure shared code region.
 
     This constructor triggers the synchronous \a SVC exception to acquire privileged status.
@@ -1236,131 +1286,92 @@ ScopedPrivilegeBoost::ScopedPrivilegeBoost()
 #endif // STK_MPU
 
 #if STK_MPU
+// ----------------------------------------------------------------------------
 namespace stk {
 namespace hw {
 namespace mpu {
+// ----------------------------------------------------------------------------
+
 /*! \brief     Compute MPU register values for a region without touching hardware.
-    \details   Translates a portable, byte-address/byte-size \a cfg descriptor into the
-               raw \a reg.addr / \a reg.attr pair the driver later writes verbatim to
-               MPU->RBAR and MPU->RASR (ARMv7-M/PMSAv7) or MPU->RBAR and MPU->RLAR
-               (ARMv8-M/PMSAv8) via ApplyRegion(). Pure computation only, safe to call
-               with the MPU enabled or disabled, from any context.
-    \param[out] reg: Destination region descriptor to populate. Any previous contents
-               are fully overwritten.
+    \details   Translates a portable, byte-address/byte-size cfg descriptor into the raw
+               reg.addr / reg.attr pair written to MPU->RBAR and MPU->RASR (ARMv7-M/PMSAv7)
+               or MPU->RBAR and MPU->RLAR (ARMv8-M/PMSAv8) via ApplyRegion(). Pure computation
+               only, safe to call with MPU enabled/disabled from any context.
+    \param[out] reg: Destination region descriptor to populate (overwritten).
     \param[in] cfg: Region configuration to encode.
-    \param[in] region_idx: Absolute hardware MPU region index this descriptor targets.
-               Callers (ConfigureStatic(), ConfigureDynamic()) compute this from the entry's
-               position in the table they were given, rather than it being a field of
-               \a cfg. Only consumed on ARMv7-M/PMSAv7, where it is baked directly into
-               \a reg.addr (the legacy RBAR REGION field) so that a burst STMIA write of
-               several consecutive descriptors still selects the right hardware slot for
-               each one; on ARMv8-M/PMSAv8, region selection instead happens purely via
-               MPU->RNR in ApplyRegion(), so \a region_idx is unused there.
-    \note      ARMv8-M/PMSAv8: \c cfg.addr and \c cfg.size must both be 32-byte aligned
-               and \c cfg.size must be non-zero; violations trigger STK_ASSERT.
-    \note      ARMv7-M/PMSAv7: \c cfg.size must be a power of two and \c cfg.addr must
-               be aligned to \c cfg.size; violations trigger STK_ASSERT. As a special
-               case, \c cfg.size == 0 produces a descriptor for a *disabled* region
-               (RASR_DISABLED_REGION) rather than asserting, used to leave unused
-               per-task region slots inert.
-    \warning   \a reg must not be reordered or reinterpreted independently of
-               ApplyRegion(); its member layout (addr/attr) is driver-internal and
-               matches the raw register semantics for the active architecture variant.
+    \param[in] region_idx: Target hardware MPU region index. Consumed only on ARMv7-M/PMSAv7
+               where it is baked into reg.addr (legacy RBAR REGION field) to allow burst STMIA
+               writes. On ARMv8-M/PMSAv8, selection happens via MPU->RNR in ApplyRegion(), so
+               region_idx is unused.
+    \note      ARMv8-M/PMSAv8: cfg.addr and cfg.size must be 32-byte aligned; cfg.size must be
+               non-zero. Violations trigger STK_ASSERT.
+    \note      ARMv7-M/PMSAv7: cfg.size must be a power of two; cfg.addr must be aligned to
+               cfg.size. Violations trigger STK_ASSERT. Setting cfg.size == 0 generates a
+               disabled region descriptor (RASR_DISABLED_REGION) for unused task slots.
+    \warning   reg layout (addr/attr) is driver-internal; do not reorder or reinterpret
+               independently of ApplyRegion().
     \see       ApplyRegion, ConfigureStatic
 */
 void ConfigureRegion(MpuRegion &reg, const struct MpuRegionConfig &cfg, uint32_t region_idx);
 
-/*! \brief     Configure and apply a full table of static (non per-task) MPU regions in one call.
-    \details   Disables the MPU, writes \a cfg_list[i] to hardware region index \c i for
-               every \c i in <tt>[0, cfg_count)</tt>, disables every remaining static-region
-               slot in <tt>[cfg_count, STK_CORTEX_M_MPU_TASK_REGION_IDX)</tt> so no stale
-               configuration from a previous (possibly longer) call can linger active, then
-               re-enables the MPU with \a control_flags (e.g. MPU_CTRL_PRIVDEFENA_Msk).
-               Intended for one-shot boot-time setup of global regions (flash/RAM/peripherals/
-               null-guard), as opposed to TaskMpu::Configure(), which populates the per-task
-               stack-guard region shadow table consumed by STK_ASM_BLOCK_MPU_STACK_GUARD on
-               every context switch.
-    \param[in] cfg_list: Array of region configurations. Target MPU region index is each
-               entry's position in the array (\c cfg_list[i] maps to hardware region \c i);
-               callers no longer supply or need placeholder entries for unused trailing
-               regions.
-    \param[in] cfg_count: Number of entries in \a cfg_list. Must be
-               <tt>&lt;= STK_CORTEX_M_MPU_TASK_REGION_IDX</tt>.
-    \param[in] control_flags: Extra MPU_CTRL bits to OR in on enable (e.g. PRIVDEFENA_Msk).
-    \param[in] non_secure: (ARMv8-M TrustZone only) target the Non-Secure MPU alias.
+/*! \brief     Configure and apply a full table of static (non-task) MPU regions.
+    \details   Disables MPU, writes cfg_list[i] to hardware region index i for i in [0, cfg_count),
+               disables remaining static slots in [cfg_count, STK_CORTEX_M_MPU_TASK_REGION_IDX)
+               to clear stale entries, then re-enables MPU with control_flags (e.g.,
+               MPU_CTRL_PRIVDEFENA_Msk). Intended for boot-time setup of global regions.
+    \param[in] cfg_list: Array of region configurations (cfg_list[i] maps to region i).
+    \param[in] cfg_count: Number of entries in cfg_list. Must be <= STK_CORTEX_M_MPU_TASK_REGION_IDX.
+    \param[in] control_flags: MPU_CTRL bits to set on enable (e.g., PRIVDEFENA_Msk).
+    \param[in] non_secure: (ARMv8-M TrustZone) Target Non-Secure MPU alias when true.
     \see       ConfigureRegion, ApplyRegion, Enable
 */
 void ConfigureStatic(const MpuRegionConfig cfg_list[], size_t cfg_count, uint32_t control_flags,
     bool non_secure);
 
-/*! \brief     Configure the per-task MPU region shadow table (TaskMpu::region[]) consumed by
-               STK_ASM_BLOCK_MPU_STACK_GUARD on every context switch.
-    \details   Writes \a cfg_list[i] into \c task_mpu.region[i] (hardware region
-               <tt>STK_CORTEX_M_MPU_TASK_REGION_IDX + i</tt>) for every \c i in
-               <tt>[0, cfg_count)</tt>, then fills every remaining slot in
-               <tt>[cfg_count, TaskMpu::NUM_REGIONS)</tt> with a disabled-region descriptor
-               so callers don't need to supply placeholder entries for unused task slots.
-               Pure shadow-table computation only; does not touch live MPU registers -- the
-               table is applied to hardware later, during the next context switch into this
-               task.
-    \param[in] task_mpu: Reference to \a TaskMpu instance of the task.
-    \param[in] cfg_list: Array of MPU region configurations. Target task-relative slot is
-               each entry's position in the array (\c cfg_list[i] maps to \c region[i]).
-    \param[in] cfg_count: Number of entries in the \a cfg_list array. Must be
-               <tt>&lt;= TaskMpu::NUM_REGIONS</tt>.
-    \param[in] non_secure: (ARMv8-M TrustZone only) True for a non-secure task, False otherwise. Ignored on
-               ARMv7-M/PMSAv7.
+/*! \brief     Configure per-task MPU region shadow table consumed during context switches.
+    \details   Writes cfg_list[i] into task_mpu.region[i] (hardware region
+               STK_CORTEX_M_MPU_TASK_REGION_IDX + i) for i in [0, cfg_count), then fills
+               remaining slots in [cfg_count, TaskMpu::NUM_REGIONS) with disabled-region
+               descriptors. Pure shadow-table computation; live registers are updated
+               during context switches via STK_ASM_BLOCK_MPU_STACK_GUARD.
+    \param[in] task_mpu: Target TaskMpu instance reference.
+    \param[in] cfg_list: Array of region configurations (cfg_list[i] maps to region[i]).
+    \param[in] cfg_count: Number of entries in cfg_list. Must be <= TaskMpu::NUM_REGIONS.
+    \param[in] overrider: Event overrider interface pointer.
 */
 void ConfigureDynamic(TaskMpu &task_mpu, const struct MpuRegionConfig cfg_list[], const size_t cfg_count,
     IPlatform::IEventOverrider *overrider);
 
-/*! \brief     Write a previously computed region descriptor into a live MPU region slot.
-    \details   Selects the region via MPU->RNR = \a index, then writes \a reg.addr to
-               MPU->RBAR and \a reg.attr to MPU->RASR (ARMv7-M/PMSAv7) or MPU->RLAR
-               (ARMv8-M/PMSAv8).
-    \param[in] reg: Region descriptor previously populated by ConfigureRegion().
-    \param[in] index: Target MPU region index (written to MPU->RNR). On ARMv7-M/PMSAv7
-               this must match the \c region_idx that was passed to ConfigureRegion()
-               when \a reg was computed, since that value is baked into \a reg.addr;
-               passing a mismatched index selects the wrong hardware slot while still
-               encoding the original region number in RBAR.
-    \param[in] non_secure: (ARMv8-M TrustZone only) if true, target the Non-Secure MPU
-               alias (MPU_NS) instead of the Secure MPU. Ignored on ARMv7-M/PMSAv7.
-    \warning   Performs no barrier or enable/disable handling of its own, the caller
-               is responsible for ensuring the write is safe (typically by bracketing
-               a batch of ApplyRegion() calls between \c Enable(false, ...) and
-               \c Enable(true, ...), as ConfigureStatic() does).
+/*! \brief     Write a computed region descriptor to a live MPU region slot.
+    \details   Sets MPU->RNR = index, then writes reg.addr to MPU->RBAR and reg.attr to
+               MPU->RASR (ARMv7-M) or MPU->RLAR (ARMv8-M).
+    \param[in] reg: Region descriptor populated by ConfigureRegion().
+    \param[in] index: Target hardware MPU region index (written to MPU->RNR). On ARMv7-M,
+               this must match region_idx passed to ConfigureRegion() due to address encoding.
+    \param[in] non_secure: (ARMv8-M TrustZone) Target MPU_NS alias when true; ignored on ARMv7-M.
+    \warning   Does not manage barriers or enable/disable state. Callers should bracket batch
+               writes with Enable(false, ...) and Enable(true, ...).
     \see       ConfigureRegion, Enable, ConfigureStatic
 */
 void ApplyRegion(const MpuRegion &reg, uint32_t index, bool non_secure);
 
-/*! \brief     Disable a single MPU region without touching any other region.
+/*! \brief     Disable a single MPU region slot.
     \param[in] index: Region index to disable (written to MPU->RNR).
-    \param[in] non_secure: (ARMv8-M TrustZone only) target the Non-Secure MPU alias.
-    \note      Writes RASR_DISABLED_REGION / RLAR_DISABLED_REGION at \a index; the region
-               slot remains selectable again later via ApplyRegion() with the same index.
+    \param[in] non_secure: (ARMv8-M TrustZone) Target Non-Secure MPU alias when true.
+    \note      Writes RASR_DISABLED_REGION / RLAR_DISABLED_REGION at index. Slot remains
+               available for future ApplyRegion() calls.
     \see       ApplyRegion, ConfigureStatic
 */
 void DisableRegion(uint32_t index, bool non_secure);
 
-/*! \brief     Enable or disable the MPU as a whole, together with MemManage fault reporting.
-    \details   On enable: writes \a control_flags | MPU_CTRL_ENABLE_Msk to MPU->CTRL and
-               sets SCB->SHCSR.MEMFAULTENA (so MPU violations raise a MemManage fault
-               instead of silently escalating to HardFault). On disable: clears
-               SHCSR.MEMFAULTENA first, then clears MPU_CTRL_ENABLE_Msk. A DMB precedes
-               the change and a DSB+ISB follow it, so the new MPU state is guaranteed to
-               be in effect before this function returns.
-    \param[in] enable: true to enable the MPU, false to disable it.
-    \param[in] control_flags: Extra bits OR'd into MPU->CTRL when enabling (e.g.
-               MPU_CTRL_PRIVDEFENA_Msk to fall back to the default background map for
-               addresses not covered by any configured region). Ignored when
-               \a enable is false.
-    \param[in] non_secure: (ARMv8-M TrustZone only) if true, target the Non-Secure MPU
-               and SCB aliases (MPU_NS / SCB_NS) instead of the Secure ones. Ignored on
-               ARMv7-M/PMSAv7.
-    \note      Typically called in pairs around a batch of ApplyRegion() calls:
-               \c Enable(false, ...) before reconfiguring, \c Enable(true, ...) after.
-               ConfigureStatic() does this automatically.
+/*! \brief     Enable or disable the MPU and MemManage fault reporting globally.
+    \details   On enable: writes control_flags | MPU_CTRL_ENABLE_Msk to MPU->CTRL and sets
+               SCB->SHCSR.MEMFAULTENA. On disable: clears SHCSR.MEMFAULTENA before clearing
+               MPU_CTRL_ENABLE_Msk. Emits DMB before and DSB+ISB after pipeline sync.
+    \param[in] enable: True to enable MPU, false to disable.
+    \param[in] control_flags: Extra bits OR'd into MPU->CTRL on enable (e.g., MPU_CTRL_PRIVDEFENA_Msk).
+    \param[in] non_secure: (ARMv8-M TrustZone) Target MPU_NS / SCB_NS aliases when true; ignored on ARMv7-M.
+    \note      Typically used to bracket ApplyRegion() batches: Enable(false) before, Enable(true) after.
     \see       ApplyRegion, DisableRegion, ConfigureStatic
 */
 void Enable(bool enable, uint32_t control_flags, bool non_secure);
@@ -1432,9 +1443,12 @@ static constexpr Word RBAR_DISABLED_REGION(uint32_t region_idx) { return (1U << 
 static constexpr Word RASR_DISABLED_REGION = 0U;
 #endif
 
+// ----------------------------------------------------------------------------
 } // namespace mpu
 } // namespace hw
 } // namespace stk
+// ----------------------------------------------------------------------------
+
 #endif // STK_MPU
 
 /*! \brief External symbols defining the boundary addresses of the secure shared code region.
@@ -1452,23 +1466,28 @@ static constexpr Word RASR_DISABLED_REGION = 0U;
           immutable code.
 */
 #if STK_MPU
-extern char __stk_mpu_shared_code_start[];
-extern char __stk_mpu_shared_code_end[];
-#if defined(DEBUG) || defined(_DEBUG)
-extern char __stk_mpu_shared_data_start[];
-extern char __stk_mpu_shared_data_end[];
-#endif
+    extern char __stk_mpu_shared_code_start[];
+    extern char __stk_mpu_shared_code_end[];
+    #if defined(DEBUG) || defined(_DEBUG)
+    extern char __stk_mpu_shared_data_start[];
+    extern char __stk_mpu_shared_data_end[];
+    #endif
 #endif
 
 #if STK_MPU
+/*! \brief   Default inactive/disabled MPU region configuration instance.
+    \details Represents an unmapped region descriptor (address 0, size 0, no access permissions,
+             strongly-ordered memory type) used to clear or reset unused hardware MPU slots.
+    \see     MpuRegionConfig, STK_MPU
+*/
 static constexpr MpuRegionConfig s_StkDisabledMpuRegion =
 {
-    .addr        = 0U,
-    .size        = 0U,
-    .access_perm = hw::mpu::ACCESS_NONE,
-    .mem_type    = hw::mpu::TYPE_STRONGLY_ORDERED,
-    .share       = hw::mpu::SHARE_NON,
-    .exec        = hw::mpu::EXEC_ALLOWED
+    .addr        = 0U,                             //!< Base memory address (0).
+    .size        = 0U,                             //!< Region size in bytes (0).
+    .access_perm = hw::mpu::ACCESS_NONE,           //!< Disallow all read/write accesses.
+    .mem_type    = hw::mpu::TYPE_STRONGLY_ORDERED, //!< Strongly-ordered memory attribute.
+    .share       = hw::mpu::SHARE_NON,             //!< Non-shareable domain attribute.
+    .exec        = hw::mpu::EXEC_ALLOWED           //!< Instruction execution permission attribute.
 };
 #endif
 
@@ -1478,7 +1497,12 @@ static volatile bool s_StkCortexmCsuLock = false;
 //! Internal context.
 static struct Context final : public PlatformContext
 {
+    typedef IPlatform::IEventOverrider eovrd_t;
+
     explicit Context() : PlatformContext(), m_exit_buf(), m_overrider(nullptr),
+    #if STK_CORTEX_M_TRUSTZONE_FRAME
+        m_overrider_ns(nullptr),
+    #endif
     #if STK_TICKLESS_IDLE
         m_sleep_ticks(0), m_sleep_error(0U),
     #endif
@@ -1500,28 +1524,11 @@ static struct Context final : public PlatformContext
         STK_STATIC_ASSERT_DESC_N(mode, offsetof(Stack, access_mode) == 4U,
             "expect Stack::mode member at offset of 4 (second member)");
     #if STK_MPU
-        // The context-switch burst write programs STK_MPU_TASK_REGIONS regions in one
-        // shot via MPU->RBAR plus the RNR-relative alias registers (RBAR_A1, RBAR_A2,
-        // RBAR_A3), which wrap within the current 4-region-aligned hardware block
-        // rather than carrying over into the next one. Region STK_CORTEX_M_MPU_TASK_REGION_IDX
-        // (i.e. offset 0, written via the non-aliased RBAR/RASR) is always safe; offset k
-        // (1 <= k < STK_MPU_TASK_REGIONS, written via alias Ak) is only safe as long as
-        // (region_idx % 4) + k does not cross a 4-region boundary. The tightest such k is
-        // STK_MPU_TASK_REGIONS - 1, so the general requirement is:
-        //   (region_idx % 4) <= (4 - STK_MPU_TASK_REGIONS)
-        // For STK_MPU_TASK_REGIONS == 4 this reduces to the familiar (region_idx % 4) == 0
-        // (full quad alignment, since all three aliases are in play). For
-        // STK_MPU_TASK_REGIONS == 2 (only RBAR + alias A1 are written) it relaxes to
-        // (region_idx % 4) <= 2, i.e. any offset except the last slot in a block - e.g.
-        // region_idx == 6 on an 8-region MPU is valid, letting the freed-up static/global
-        // budget grow from 4 to 6 regions.
         STK_STATIC_ASSERT_DESC_N(mpu, (STK_CORTEX_M_MPU_TASK_REGION_IDX % 4U) <= (4U - STK_MPU_TASK_REGIONS),
             "STK_CORTEX_M_MPU_TASK_REGION_IDX is not aligned correctly for the RNR-relative "
             "alias burst write at the configured STK_MPU_TASK_REGIONS width");
-    #if STK_MPU_STACK_GUARD
         STK_STATIC_ASSERT_DESC_N(mpu_task_regions, (STK_MPU_TASK_REGIONS == 2U) || (STK_MPU_TASK_REGIONS == 4U),
             "STK_MPU_TASK_REGIONS must be defined as 2 or 4");
-    #endif
         // make sure linker declares __stk_mpu_shared_xxx regions correctly, i.e. code and data
         // sections must contain data
         STK_ASSERT(hw::PtrToWord(__stk_mpu_shared_code_end) - hw::PtrToWord(__stk_mpu_shared_code_start) > 0U);
@@ -1537,11 +1544,6 @@ static struct Context final : public PlatformContext
         m_sleep_error    = 0U;
     #endif
 
-        // Re-derive the s_StkCortexmCsuLock spin-lock timeout from the now-configured
-        // core clock. Redundant across cores (each core's Context::Initialize() calls
-        // this), but idempotent and cheap - and must run before any critical section is
-        // entered for real, since s_StkSpinlockTimeoutIters otherwise still holds its
-        // conservative pre-init fallback value.
         HW_InitSpinlockTimeout();
 
     #if (__CORTEX_M > 1) && STK_TICKLESS_USE_ARM_DWT
@@ -1715,15 +1717,78 @@ static struct Context final : public PlatformContext
     }
 
 #if STK_MPU
-    void ConfigureMpu()
+    void ConfigureMpuInstance(eovrd_t *overrider, bool non_secure)
     {
-        uint8_t regions_count;
-        const stk::MpuRegionConfig *regions = m_overrider->OnConfigureMpu(regions_count);
+        // configure Secure binary side if TrustZone enabled, or just standard
+        if (overrider != nullptr)
         {
-            hw::mpu::ConfigureStatic(regions, regions_count, MPU_CTRL_PRIVDEFENA_Msk, true);
+            const MpuConfig *const cfg = overrider->OnConfigureMpu();
+
+            // OnConfigureMpu() may legitimately return nullptr (no custom global config supplied),
+            // treat that the same as MPU_CFG_NONE below.
+            if (cfg != nullptr)
+            {
+            #if STK_CORTEX_M_TRUSTZONE_FRAME
+                // MPU_CFG_NONSECURE_MPU selects which hardware MPU instance a config targets
+                // (absent = Secure, set = Non-Secure). It must agree with the instance this call
+                // is actually configuring (see ConfigureMpu() below), catching a config wired to
+                // the wrong overrider (e.g. Secure flags returned from the Non-Secure overrider).
+                STK_ASSERT(non_secure == ((cfg->mode & hw::mpu::MPU_CFG_NONSECURE_MPU) != 0U));
+            #endif
+
+                if ((cfg->mode & hw::mpu::MPU_CFG_CLEAR_ON_INIT) != 0U)
+                {
+                    // wipe every hardware region slot (static block + per-task block) so no stale
+                    // configuration left behind by a previous run/bootloader survives the static
+                    // table applied by ConfigureStatic() below.
+                    for (uint32_t index = 0U; index < STK_CORTEX_M_MPU_REGIONS_MAX; ++index)
+                    {
+                        hw::mpu::DisableRegion(index, non_secure);
+                    }
+                }
+
+                uint32_t control_flags = 0U;
+
+                if ((cfg->mode & hw::mpu::MPU_CFG_PRIVILEGED_BG_MEM) != 0U)
+                {
+                    control_flags |= MPU_CTRL_PRIVDEFENA_Msk;
+                }
+
+                if ((cfg->mode & hw::mpu::MPU_CFG_IN_FAULTS) != 0U)
+                {
+                    control_flags |= MPU_CTRL_HFNMIENA_Msk;
+                }
+
+                hw::mpu::ConfigureStatic(cfg->regions.GetPtr(), cfg->regions.GetSize(), control_flags, non_secure);
+            }
+            else
+            {
+                hw::mpu::Enable(false, 0, non_secure);
+            }
         }
     }
+    void ConfigureMpu()
+    {
+        // configure Secure binary side if TrustZone enabled, or just standard
+        ConfigureMpuInstance(m_overrider, false);
+
+    #if STK_CORTEX_M_TRUSTZONE_FRAME
+        // configure MPU_NS for Non-Secure binary side
+        ConfigureMpuInstance(m_overrider_ns, true);
+    #endif
+    }
 #endif
+
+    TId GetCurrentTId() const
+    {
+	#if STK_STACK_NEEDS_TASK_ID
+	    const TId tid = (m_stack_active != nullptr ? m_stack_active->tid : TID_NONE);
+	#else
+	    const TId tid = TID_NONE;
+	#endif
+
+        return tid;
+    }
 
     void Start();
     void OnStart();
@@ -1734,10 +1799,11 @@ static struct Context final : public PlatformContext
     void Resume(Timeout elapsed_ticks);
 #endif
 
-    typedef IPlatform::IEventOverrider eovrd_t;
-
     JmpFrame      m_exit_buf;       //!< saved context of the exit point
     eovrd_t      *m_overrider;      //!< platform events overrider
+#if STK_CORTEX_M_TRUSTZONE_FRAME
+    eovrd_t      *m_overrider_ns;   //!< platform events overrider (TrustZone, Non-Secure)
+#endif
 #if STK_TICKLESS_IDLE
     Timeout       m_sleep_ticks;    //!< sleep ticks of the current session
     uint32_t      m_sleep_error;    //!< sleep error which is accounted in the next sleep
@@ -1956,9 +2022,6 @@ extern "C" void STK_SYSTICK_HANDLER()
 #endif
 }
 
-#define STK_ASM_BLOCK_LOAD_ACTIVE_STACK_TO_R1\
-    "MOV        r1, %[st_active]      \n" /* r1 = Stack* (already in register) */
-
 /*! \def     STK_ASM_BLOCK_MPU_STACK_GUARD
     \brief   Set MPU region(s) for a task.
     \note    Must follow the CONTROL register restore (see PrivilegeFrame).
@@ -1969,20 +2032,48 @@ extern "C" void STK_SYSTICK_HANDLER()
              STK_CORTEX_M_MPU_TASK_REGION_IDX.
     \warning Logic depends on MpuInfo layout.
 */
-#if (STK_MPU_TASK_REGIONS == 2)
-#define STK_ASM_BLOCK_MPU_STACK_GUARD \
-    STK_ASM_BLOCK_LOAD_ACTIVE_STACK_TO_R1 \
-    "LDR   r0, =%[mpu_start_of]      \n" /* r0 = (&MPU->RBAR) */ \
-    "ADD   r1, r1, %[mpu_reg_of]     \n" /* point to mpu.region[0].addr */ \
-    "LDMIA r1!, {r4-r7}              \n" /* burst load 4 words into r4-r7 */ \
-    "STMIA r0!, {r4-r7}              \n" /* burst write into MPU registers */
+#if STK_CORTEX_M_TRUSTZONE_FRAME
+    #if (STK_MPU_TASK_REGIONS == 2)
+    #define STK_ASM_BLOCK_MPU_STACK_GUARD \
+        "MOV   r1, %[st_active]          \n" /* r1 = Stack* (already in register) */\
+        "LDR   r0, =%[mpu_start_of]      \n" /* r0 = i.e. &MPU->RBAR */\
+        "ADD   r12, r1, %[mpu_reg_of]    \n" /* point to mpu.region[0].addr */\
+        "LDMIA r12, {r4-r7}              \n" /* burst load 4 words into r4-r7 */\
+        "STMIA r0!, {r4-r7}              \n" /* burst write into MPU registers */\
+        /* write PSP_NS unconditionally for Secure task too, fully spec-compliant and safe */\
+        "LDR   r0, =%[mpu_ns_start_of]   \n" /* r0 = &MPU_NS->RBAR */\
+        "ADD   r12, r1, %[mpu_ns_reg_of] \n" /* point to mpu_ns.region[0].addr */\
+        "LDMIA r12, {r4-r7}              \n" /* burst load 4 words into r4-r7 */\
+        "STMIA r0!, {r4-r7}              \n" /* burst write into MPU_NS registers */
+    #else
+    #define STK_ASM_BLOCK_MPU_STACK_GUARD \
+        "MOV   r1, %[st_active]          \n" /* r1 = Stack* (already in register) */\
+        "LDR   r0, =%[mpu_start_of]      \n" /* r0 = &MPU->RBAR */\
+        "ADD   r12, r1, %[mpu_reg_of]    \n" /* point to mpu.region[0].addr */\
+        "LDMIA r12, {r4-r11}             \n" /* burst load 8 words into r4-r11 */\
+        "STMIA r0!, {r4-r11}             \n" /* burst write into MPU registers */\
+        /* write PSP_NS unconditionally for Secure task too, fully spec-compliant and safe */\
+        "LDR   r0, =%[mpu_ns_start_of]   \n" /* r0 = &MPU_NS->RBAR */\
+        "ADD   r12, r1, %[mpu_ns_reg_of] \n" /* point to mpu_ns.region[0].addr */\
+        "LDMIA r12, {r4-r11}             \n" /* burst load 8 words into r4-r11 */\
+        "STMIA r0!, {r4-r11}             \n" /* burst write into MPU_NS registers */
+    #endif
 #else
-#define STK_ASM_BLOCK_MPU_STACK_GUARD \
-    STK_ASM_BLOCK_LOAD_ACTIVE_STACK_TO_R1 \
-    "LDR   r0, =%[mpu_start_of]      \n" /* r0 = (&MPU->RBAR) */ \
-    "ADD   r1, r1, %[mpu_reg_of]     \n" /* point to mpu.region[0].addr */ \
-    "LDMIA r1!, {r4-r11}             \n" /* burst load 8 words into r4-r11 */ \
-    "STMIA r0!, {r4-r11}             \n" /* burst write into MPU registers */
+    #if (STK_MPU_TASK_REGIONS == 2)
+    #define STK_ASM_BLOCK_MPU_STACK_GUARD \
+        "MOV   r1, %[st_active]          \n" /* r1 = Stack* (already in register) */\
+        "LDR   r0, =%[mpu_start_of]      \n" /* r0 = i.e. &MPU->RBAR or &MPU_NS->RBAR */\
+        "ADD   r12, r1, %[mpu_reg_of]    \n" /* point to mpu.region[0].addr */\
+        "LDMIA r12, {r4-r7}              \n" /* burst load 4 words into r4-r7 */\
+        "STMIA r0!, {r4-r7}              \n" /* burst write into MPU registers */
+    #else
+    #define STK_ASM_BLOCK_MPU_STACK_GUARD \
+        "MOV   r1, %[st_active]          \n" /* r1 = Stack* (already in register) */\
+        "LDR   r0, =%[mpu_start_of]      \n" /* r0 = &MPU->RBAR or &MPU_NS->RBAR */\
+        "ADD   r12, r1, %[mpu_reg_of]    \n" /* point to mpu.region[0].addr */\
+        "LDMIA r12, {r4-r11}             \n" /* burst load 8 words into r4-r11 */\
+        "STMIA r0!, {r4-r11}             \n" /* burst write into MPU registers */
+    #endif
 #endif
 
 extern "C" __stk_attr_naked void STK_PENDSV_HANDLER()
@@ -1992,15 +2083,15 @@ extern "C" __stk_attr_naked void STK_PENDSV_HANDLER()
     // registers before they are saved. Use r12 IPC scratch register for that
     // and calculate offset for p_ctx only once; instruct assembler to use
     // r3, r2 for holding pointers to Idle and Active stacks
-#ifdef __ICCARM__
+    #ifdef __ICCARM__
     register Context *p_ctx       = &GetContext();
     register Stack   *p_st_idle   = p_ctx->m_stack_idle;
     register Stack   *p_st_active = p_ctx->m_stack_active;
-#else
+    #else
     register Context *p_ctx       __asm("r12") = &GetContext();
     register Stack   *p_st_idle   __asm("r3")  = p_ctx->m_stack_idle;
     register Stack   *p_st_active __asm("r2")  = p_ctx->m_stack_active;
-#endif
+    #endif
 #endif
 
     __asm volatile(
@@ -2090,7 +2181,7 @@ extern "C" __stk_attr_naked void STK_PENDSV_HANDLER()
     // InitStack for a brand-new task); this is the lowest-addressed word of the
     // saved frame (pushed last), so it is popped first, before TrustZoneFrame
 #if STK_CORTEX_M_PRIVILEGE_FRAME
-    "LDR        r12, [r0], %[acess_mode_of] \n"
+    "LDR        r12, [r0], %[access_mode_of] \n"
     "MSR        CONTROL, r12     \n" /* note: on EXC_RETURN platform flushes instruction cache, therefore we omit explicit ISB */
 #endif
 
@@ -2144,22 +2235,26 @@ extern "C" __stk_attr_naked void STK_PENDSV_HANDLER()
     STK_ASM_EXIT_FROM_HANDLER "  \n"
 
     : /* output: none */
-    : [acess_mode_of] "i" (offsetof(Stack, access_mode))
+    : [access_mode_of]  "i" (offsetof(Stack, access_mode))
 #if (STK_ARCH_CPU_COUNT > 1U)
-#ifdef __ICCARM__
-    , [st_idle]      "r3" (p_st_idle)
-    , [st_active]    "r2" (p_st_active)
+    #ifdef __ICCARM__
+    , [st_idle]         "r3" (p_st_idle)
+    , [st_active]       "r2" (p_st_active)
+    #else
+    , [st_idle]         "r" (p_st_idle)
+    , [st_active]       "r" (p_st_active)
+    #endif
 #else
-    , [st_idle]      "r" (p_st_idle)
-    , [st_active]    "r" (p_st_active)
-#endif
-#else
-    , [st_idle]      "r" (GetContext().m_stack_idle)
-    , [st_active]    "r" (GetContext().m_stack_active)
+    , [st_idle]         "r" (GetContext().m_stack_idle)
+    , [st_active]       "r" (GetContext().m_stack_active)
 #endif
 #if STK_MPU_STACK_GUARD
-    , [mpu_start_of] "i" (&MPU->RBAR)
-    , [mpu_reg_of]   "i" (offsetof(Stack, mpu.region[0].addr))
+    , [mpu_start_of]    "i" (&MPU->RBAR)
+    , [mpu_reg_of]      "i" (offsetof(Stack, mpu.region[0].addr))
+    #if STK_CORTEX_M_TRUSTZONE_FRAME
+    , [mpu_ns_start_of] "i" (&MPU_NS->RBAR)
+    , [mpu_ns_reg_of]   "i" (offsetof(Stack, mpu_ns.region[0].addr))
+    #endif
 #endif
     : "r0" /* used as a scratchpad throughout */
 #if STK_MPU_STACK_GUARD
@@ -2194,7 +2289,7 @@ __stk_attr_naked void OnTaskStart()
     // restore this task's CONTROL register as initialized by InitStack (see
     // PrivilegeFrame); lowest-addressed word of the saved frame, popped first
 #if STK_CORTEX_M_PRIVILEGE_FRAME
-    "LDR        r12, [r0], %[acess_mode_of] \n"
+    "LDR        r12, [r0], %[access_mode_of] \n"
     "MSR        CONTROL, r12     \n" /* note: on EXC_RETURN platform flushes instruction cache, therefore we omit explicit ISB */
 #endif
 
@@ -2248,14 +2343,18 @@ __stk_attr_naked void OnTaskStart()
     STK_ASM_EXIT_FROM_HANDLER "  \n"
 
     : /* output: none */
-    : [acess_mode_of] "i" (offsetof(Stack, access_mode))
-    , [st_active]     "r" (GetContext().m_stack_active)
+    : [access_mode_of]  "i" (offsetof(Stack, access_mode))
+    , [st_active]       "r" (GetContext().m_stack_active)
 #if !STK_CORTEX_M_MANAGE_LR
-    , [exc_ret]       "i" (STK_CORTEX_M_EXC_RETURN_THREAD_PSP)
+    , [exc_ret]         "i" (STK_CORTEX_M_EXC_RETURN_THREAD_PSP)
 #endif
 #if STK_MPU_STACK_GUARD
-    , [mpu_start_of]  "i" (&MPU->RBAR)
-    , [mpu_reg_of]    "i" (offsetof(Stack, mpu.region[0].addr))
+    , [mpu_start_of]    "i" (&MPU->RBAR)
+    , [mpu_reg_of]      "i" (offsetof(Stack, mpu.region[0].addr))
+    #if STK_CORTEX_M_TRUSTZONE_FRAME
+    , [mpu_ns_start_of] "i" (&MPU_NS->RBAR)
+    , [mpu_ns_reg_of]   "i" (offsetof(Stack, mpu_ns.region[0].addr))
+    #endif
 #endif
     : "r0" /* used as a scratchpad throughout */
 #if STK_MPU_STACK_GUARD
@@ -2473,90 +2572,12 @@ extern "C" __stk_attr_used void StkSVCHandlerMain(Word *svc_args)
     }
 }
 
-#ifdef _STK_CORTEX_M_TRUSTZONE
-/* ARMv8-M TrustZone (Cortex-M33 / Mainline)
-   EXC_RETURN bit layout (ARMv8-M ARM B1.5.8):
-     bit 6 (0x40): 1 = Secure stack, 0 = Non-Secure stack.  <-- S-bit
-     bit 2 (0x04): 1 = PSP,          0 = MSP.
-   We test bit 6 first to select the correct world's stack pointer,
-   then bit 2 to choose MSP vs PSP within that world. */
-#if (__CORTEX_M >= 33U)
-/* -----------------------------------------------------------------
-   Cortex-M33 and later (ARMv8-M Mainline) -- IT/ITE available.
-   ----------------------------------------------------------------- */
-#define STK_ASM_EXTRACT_STACK_POINTER_TO_R0 \
-    "TST    LR, #4              \n" /* bit 2: 0 = MSP, 1 = PSP */ \
-    "BNE    1f                  \n" \
-    /* --- MSP branch --- */ \
-    "TST    LR, #64             \n" /* bit 6 (S-bit): 1 = Secure, 0 = Non-Secure */ \
-    "ITE    NE                  \n" \
-    "MRSNE  r0, MSP             \n" /* r0 = Secure MSP */ \
-    "MRSEQ  r0, MSP_NS          \n" /* r0 = Non-Secure MSP */ \
-    "B      2f                  \n" \
-    "1:                         \n" \
-    "TST    LR, #64             \n" /* bit 6 (S-bit): 1 = Secure, 0 = Non-Secure */ \
-    "ITE    NE                  \n" \
-    "MRSNE  r0, PSP             \n" /* r0 = Secure PSP */ \
-    "MRSEQ  r0, PSP_NS          \n" /* r0 = Non-Secure PSP */ \
-    "2:                         \n"
-#else
-/* -----------------------------------------------------------------
-   Cortex-M23 (ARMv8-M Baseline) -- no IT instructions, limited ISA.
-   Shift bits into the sign position and use BMI (Branch if Minus).
-     bit 2 -> sign: LSLS r1, #29  (32 - 3 = 29)
-     bit 6 -> sign: LSLS r1, #25  (32 - 7 = 25)
-   ----------------------------------------------------------------- */
-#define STK_ASM_EXTRACT_STACK_POINTER_TO_R0 \
-    "MOV    r1, LR              \n" \
-    "LSLS   r1, r1, #29         \n" /* shift bit 2 into sign */ \
-    "BMI    3f                  \n" /* bit 2 set  -> PSP branch */ \
-    /* --- MSP branch --- */ \
-    "MOV    r1, LR              \n" \
-    "LSLS   r1, r1, #25         \n" /* shift bit 6 (S-bit) into sign */ \
-    "BMI    4f                  \n" /* S=1 -> Secure MSP */ \
-    "MRS    r0, MSP_NS          \n" /* S=0 -> Non-Secure MSP */ \
-    "B      2f                  \n" \
-    "4:                         \n" \
-    "MRS    r0, MSP             \n" /* r0 = Secure MSP */ \
-    "B      2f                  \n" \
-    "3:                         \n" \
-    "MOV    r1, LR              \n" \
-    "LSLS   r1, r1, #25         \n" /* shift bit 6 (S-bit) into sign */ \
-    "BMI    5f                  \n" /* S=1 -> Secure PSP */ \
-    "MRS    r0, PSP_NS          \n" /* S=0 -> Non-Secure PSP */ \
-    "B      2f                  \n" \
-    "5:                         \n" \
-    "MRS    r0, PSP             \n" /* r0 = Secure PSP */ \
-    "2:                         \n"
-#endif
-#elif (__CORTEX_M >= 3U)
-/* Cortex-M3/M4/M7 */
-#define STK_ASM_EXTRACT_STACK_POINTER_TO_R0 \
-    "TST    LR, #4              \n" /* check EXC_RETURN bit 2 */ \
-    "ITE    EQ                  \n" \
-    "MRSEQ  r0, MSP             \n" /* r0 = MSP */ \
-    "MRSNE  r0, PSP             \n" /* else r0 = PSP */
-#else
-/* Cortex-M0/M0+ (limited ISA) */
-#define STK_ASM_EXTRACT_STACK_POINTER_TO_R0 \
-    "MOV    r0, LR              \n" /* r0 = LR */ \
-    "LSLS   r0, r0, #29         \n" /* if (r0 & 4) */ \
-    "BMI    6f                  \n" /* else */ \
-    "MRS    r0, MSP             \n" /* r0 = MSP */ \
-    "B      7f                  \n" \
-    "6:                         \n" \
-    "MRS    r0, PSP             \n" /* else r0 = PSP */ \
-    "7:                         \n"
-#endif
-
 // details: "How to Write an SVC Function", https://developer.arm.com/documentation/ka004005/latest
 extern "C" __stk_attr_naked void STK_SVC_HANDLER()
 {
     __asm volatile(
     STK_ASM_SYNTAX_UNIFIED
-#ifndef __ICCARM__
-    ".global StkSVCHandlerMain     \n"
-#endif
+    STK_ASM_GLOBAL_SYMBOL(StkSVCHandlerMain)
     STK_ASM_ALIGN_2 // ensure the entry point is aligned
 
     STK_ASM_EXTRACT_STACK_POINTER_TO_R0
@@ -2571,96 +2592,35 @@ extern "C" __stk_attr_naked void STK_SVC_HANDLER()
     );
 }
 
-void FaultContext::Fill(const Word *stacked_regs, Word exc_return)
-{
-    this->frame.R0    = stacked_regs[0];
-    this->frame.R1    = stacked_regs[1];
-    this->frame.R2    = stacked_regs[2];
-    this->frame.R3    = stacked_regs[3];
-    this->frame.R12   = stacked_regs[4];
-    this->frame.LR    = stacked_regs[5];
-    this->frame.PC    = stacked_regs[6];
-    this->frame.xPSR  = stacked_regs[7];
-
-    this->EXC_RETURN  = exc_return;
-    this->CONTROL     = __get_CONTROL();
-
-#if STK_ARCH_ARMV6_M
-    // ARMv6-M (Cortex-M0/M0+) does not have CFSR, HFSR, AFSR, MMFAR, or BFAR.
-    this->CFSR        = 0U;
-    this->HFSR        = 0U;
-    this->AFSR        = 0U;
-    this->mmfar_valid = false;
-    this->bfar_valid  = false;
-    this->MMFAR       = 0U;
-    this->BFAR        = 0U;
-#else
-    // ARMv7-M / ARMv8-M
-    this->CFSR        = SCB->CFSR;
-    this->HFSR        = SCB->HFSR;
-    this->AFSR        = SCB->AFSR;
-    this->mmfar_valid = ((this->CFSR & SCB_CFSR_MMARVALID_Msk) != 0U);
-    this->bfar_valid  = ((this->CFSR & SCB_CFSR_BFARVALID_Msk) != 0U);
-    this->MMFAR       = (this->mmfar_valid ? SCB->MMFAR : 0U);
-    this->BFAR        = (this->bfar_valid ? SCB->BFAR : 0U);
-#endif
-
-#if STK_MPU
-    this->mpu.CTRL    = MPU->CTRL;
-#if STK_ARCH_ARMV8_M
-    this->mpu.MAIR0   = MPU->MAIR0;
-    this->mpu.MAIR1   = MPU->MAIR1;
-#endif
-
-    const Word saved_rnr = MPU->RNR;
-    for (size_t i = 0U; i < STK_STATIC_ARRAY_SIZE(this->mpu.regions); ++i)
-    {
-        MPU->RNR = static_cast<Word>(i);
-        __DSB();
-        __ISB();
-        this->mpu.regions[i].RNR  = static_cast<Word>(i);
-        this->mpu.regions[i].RBAR = MPU->RBAR;
-    #if STK_ARCH_ARMV8_M
-        this->mpu.regions[i].ATTR = MPU->RLAR;
-    #else
-        this->mpu.regions[i].ATTR = MPU->RASR;
-    #endif
-    }
-    MPU->RNR = saved_rnr;
-#endif
-}
-
 #if (STK_USE_MEMMANAGE_HANDLER && defined(STK_MEMMANAGE_HANDLER)) ||\
     (STK_USE_HARDFAULT_HANDLER && defined(STK_HARDFAULT_HANDLER))
 extern "C" __stk_attr_used
 void StkExceptionHandlerMain(const Word *stacked_regs, Word exc_id)
 {
     Word exc_return;
-    __asm volatile ("mov %0, lr" : "=r" (exc_return)); // EXC_RETURN, if not already clobbered
+    __asm volatile ("MOV %0, LR" : "=r" (exc_return) :: "memory"); // EXC_RETURN, if not already clobbered
 
+    bool handled = false;
     Context &ctx = GetContext();
 
     if (ctx.m_overrider != nullptr)
     {
-    #if STK_STACK_NEEDS_TASK_ID
-        const TId tid = (ctx.m_stack_active != nullptr ? ctx.m_stack_active->tid : TID_NONE);
-    #else
-        const TId tid = TID_NONE;
-    #endif
-
         static FaultContext fault_ctx;
         fault_ctx.Fill(stacked_regs, exc_return);
 
-        if (!ctx.m_overrider->OnException(static_cast<EHwException>(exc_id), tid, &fault_ctx))
-        {
-            // Default handler of memory management exception:
+        handled = ctx.m_overrider->OnException(static_cast<EHwException>(exc_id), ctx.GetCurrentTId(),
+            &fault_ctx);
+    }
 
-            // 1. Break in Debugger.
-            __stk_debug_break();
+    if (!handled)
+    {
+        // default handler of memory management exception:
 
-            // 2. Restart device.
-            NVIC_SystemReset();
-        }
+        // 1. break in Debugger
+        __stk_debug_break();
+
+        // 2. restart device
+        NVIC_SystemReset();
     }
 }
 #endif
@@ -2670,9 +2630,7 @@ extern "C" __stk_attr_naked void STK_MEMMANAGE_HANDLER()
 {
     __asm volatile(
     STK_ASM_SYNTAX_UNIFIED
-#ifndef __ICCARM__
-    ".global StkExceptionHandlerMain     \n"
-#endif
+    STK_ASM_GLOBAL_SYMBOL(StkExceptionHandlerMain)
     STK_ASM_ALIGN_2
 
     STK_ASM_EXTRACT_STACK_POINTER_TO_R0
@@ -2688,16 +2646,14 @@ extern "C" __stk_attr_naked void STK_MEMMANAGE_HANDLER()
     :  /* no clobber */
     );
 }
-#endif // STK_MPU_STACK_GUARD
+#endif // STK_MEMMANAGE_HANDLER
 
 #if STK_USE_HARDFAULT_HANDLER && defined(STK_HARDFAULT_HANDLER)
 extern "C" __stk_attr_naked void STK_HARDFAULT_HANDLER()
 {
     __asm volatile(
     STK_ASM_SYNTAX_UNIFIED
-#ifndef __ICCARM__
-    ".global StkExceptionHandlerMain     \n"
-#endif
+    STK_ASM_GLOBAL_SYMBOL(StkExceptionHandlerMain)
     STK_ASM_ALIGN_2
 
     STK_ASM_EXTRACT_STACK_POINTER_TO_R0
@@ -2713,7 +2669,7 @@ extern "C" __stk_attr_naked void STK_HARDFAULT_HANDLER()
     :  /* no clobber */
     );
 }
-#endif
+#endif // STK_USE_HARDFAULT_HANDLER
 
 STK_MPU_SHARED_CODE_SECTION
 void OnTaskRun(ITask *runnable)
@@ -2819,48 +2775,57 @@ static void ConfigureTaskMpu(IPlatform::IEventOverrider *overrider, Stack *stack
     MpuRegionConfig task_mpu_cfg[TaskMpu::NUM_REGIONS];
     uint8_t cfg_count = 0U;
 
-    const bool is_user_task = (user_task != nullptr) && (user_task->GetAccessMode() == ACCESS_USER);
-
-    // slot 0: automatic stack guard, computed from the task's own stack memory for tasks
-    if (is_user_task)
-    {
-        MpuRegionConfig &slot_0 = task_mpu_cfg[cfg_count++];
-
-        slot_0.addr        = hw::PtrToWord(stack_memory->GetStack());
-        slot_0.size        = stack_memory->GetStackSize() * sizeof(Word);
-        slot_0.access_perm = hw::mpu::EMpuAccess::ACCESS_FULL;
-        slot_0.mem_type    = hw::mpu::EMpuType::TYPE_NORMAL_CACHEABLE;
-        slot_0.share       = hw::mpu::EMpuShare::SHARE_NON;
-        slot_0.exec        = hw::mpu::EMpuExec::EXEC_NEVER;
-    }
-
     // merge in up to (TaskMpu::NUM_REGIONS - 1) application-defined regions
     // (task-relative slots [+1..+NUM_REGIONS-1)]; user_task is null for the internal
     // sleep/exit trap stacks, which never carry application-defined regions
-    if (is_user_task)
+    if (user_task != nullptr)
     {
-        uint8_t regions_count = 0U;
-        const MpuRegionConfig *const regions = user_task->GetMpuRegions(regions_count);
-
-        STK_ASSERT(regions_count <= (TaskMpu::NUM_REGIONS - 1U));
-        if (regions_count > (TaskMpu::NUM_REGIONS - 1U))
+        // note: if task does not provide MPU regions the stack guard is not applied either
+        //       this approach avoids stack guard for Privileged tasks with MPU=MPU_CFG_PRIVILEGED_BG_MEM
+        const MpuRegionList *const regions = user_task->GetMpuRegions();
+        if (regions != nullptr)
         {
-            regions_count = (TaskMpu::NUM_REGIONS - 1U); // defensively clamp in release builds
-        }
+            // slot 0: automatic stack guard, computed from the task's own stack memory for tasks
+            {
+                MpuRegionConfig &slot_0 = task_mpu_cfg[cfg_count++];
 
-        for (uint8_t i = 0U; i < regions_count; ++i)
-        {
-            task_mpu_cfg[cfg_count++] = regions[i];
+                slot_0.addr        = hw::PtrToWord(stack_memory->GetStack());
+                slot_0.size        = stack_memory->GetStackSize() * sizeof(Word);
+                slot_0.access_perm = hw::mpu::EMpuAccess::ACCESS_FULL;
+                slot_0.mem_type    = hw::mpu::EMpuType::TYPE_NORMAL_CACHEABLE;
+                slot_0.share       = hw::mpu::EMpuShare::SHARE_NON;
+                slot_0.exec        = hw::mpu::EMpuExec::EXEC_NEVER;
+            }
+
+            size_t regions_count = regions->GetSize();
+
+            STK_ASSERT(regions_count <= (TaskMpu::NUM_REGIONS - 1U));
+            if (regions_count > (TaskMpu::NUM_REGIONS - 1U))
+            {
+                regions_count = (TaskMpu::NUM_REGIONS - 1U); // defensively clamp in release builds
+            }
+
+            // slot 1 or 1-3: user-defined regions, including region of *this* instance of ITask instance
+            for (size_t i = 0U; i < regions_count; ++i)
+            {
+                task_mpu_cfg[cfg_count++] = (*regions)[i];
+            }
         }
     }
 
+#ifdef _STK_CORTEX_M_TRUSTZONE
+    TaskMpu &task_mpu = (non_secure ? stack->mpu_ns : stack->mpu);
+#else
+    TaskMpu &task_mpu = stack->mpu;
+#endif
+
     // any slots beyond cfg_count are left disabled by ConfigureDynamic() itself
-    hw::mpu::ConfigureDynamic(stack->mpu, task_mpu_cfg, cfg_count, overrider);
+    hw::mpu::ConfigureDynamic(task_mpu, task_mpu_cfg, cfg_count, overrider);
 }
 #endif
 
 #if STK_CORTEX_M_TRUSTZONE_FRAME
-static void ConfigureTaskTrustZone(Stack *stack, IStackMemory *secure_stack_memory, ITask *user_task, bool non_secure)
+static void ConfigureTaskTrustZone(Stack *stack, IStackMemory *stack_memory, ITask *user_task, bool non_secure)
 {
     // write TrustZoneFrame immediately above stack->SP (below the r4-r11 region);
     // frame layout in memory (low -> high address, matching STMDB push order in PendSV):
@@ -2870,8 +2835,7 @@ static void ConfigureTaskTrustZone(Stack *stack, IStackMemory *secure_stack_memo
     //   [SP+12] PSPLIM_NS
     // TrustZoneFrame sits one word above Stack::SP when PrivilegeFrame is present,
     // since PrivilegeFrame::CONTROL occupies the lowest word of the saved region
-    TrustZoneFrame *const tz_frame = hw::WordToPtr<TrustZoneFrame>(
-        stack->SP + (STK_CORTEX_M_PRIV_REGISTER_COUNT * sizeof(Word)));
+    TrustZoneFrame *const tz_frame = hw::WordToPtr<TrustZoneFrame>(stack->SP + (STK_CORTEX_M_PRIV_REGISTER_COUNT * sizeof(Word)));
     tz_frame->PSP_NS     = 0U;
     tz_frame->CONTROL_NS = hw::reg::CONTROL::DEFAULT_INIT;
     tz_frame->PSPLIM     = 0U; // unlimited for Secure task
@@ -2879,13 +2843,16 @@ static void ConfigureTaskTrustZone(Stack *stack, IStackMemory *secure_stack_memo
 
     if (non_secure)
     {
-        IStackMemory *ns_stack_mem = user_task;
+        // instance points to non-secure stack memory, secure memory is obtained by GetSecureStackMemory
+        IStackMemory *ns_stack_memory = user_task;
 
         // initialize stack memory
-        const Word ns_stack_top = Context::InitStackMemory(ns_stack_mem);
+        const Word ns_stack_top = Context::InitStackMemory(ns_stack_memory);
 
-        // NS thread privileged by default
-        tz_frame->CONTROL_NS = hw::reg::CONTROL::SetPrivileged(tz_frame->CONTROL_NS);
+        // NS thread Privilege status
+        tz_frame->CONTROL_NS = (((stack->access_mode & ACCESS_PRIVILEGED) != 0U) ?
+            hw::reg::CONTROL::SetPrivileged(tz_frame->CONTROL_NS) :
+            hw::reg::CONTROL::SetUnprivileged(tz_frame->CONTROL_NS));
 
         // NS thread is using PSP_NS
         tz_frame->CONTROL_NS = hw::reg::CONTROL::SetSPSelectionToPSP(tz_frame->CONTROL_NS);
@@ -2895,26 +2862,28 @@ static void ConfigureTaskTrustZone(Stack *stack, IStackMemory *secure_stack_memo
         tz_frame->PSP_NS = ns_stack_top;
 
         // bottom of NS stack
-        tz_frame->PSPLIM_NS = hw::PtrToWord(ns_stack_mem->GetStack());
+        tz_frame->PSPLIM_NS = hw::PtrToWord(ns_stack_memory->GetStack());
 
         // bottom of S stack
-        tz_frame->PSPLIM = hw::PtrToWord(secure_stack_memory->GetStack());
+        tz_frame->PSPLIM = hw::PtrToWord(stack_memory->GetStack());
     }
     else
     {
         stack->access_mode |= ACCESS_SECURE;
 
         // bottom of S stack
-        tz_frame->PSPLIM = hw::PtrToWord(secure_stack_memory->GetStack());
+        tz_frame->PSPLIM = hw::PtrToWord(stack_memory->GetStack());
     }
 }
 #endif // STK_CORTEX_M_TRUSTZONE_FRAME
 
 void PlatformArmCortexM::InitStack(EStackType stack_type, Stack *stack, IStackMemory *stack_memory, ITask *user_task)
 {
-    STK_STATIC_ASSERT_DESC_N(hw::ExceptionFrame, (sizeof(hw::ExceptionFrame) == (8 * sizeof(Word))),
+    STK_STATIC_ASSERT_DESC_N(hw::ExceptionFrame, (sizeof(hw::ExceptionFrame) == (8U * sizeof(Word))),
         "ExceptionFrame layout must match the ARMv7-M hardware exception frame exactly");
     STK_ASSERT(stack_memory->GetStackSize() > STK_CORTEX_M_TOTAL_REGISTER_COUNT);
+
+    Context &ctx = GetContext();
 
 #ifdef _STK_CORTEX_M_TRUSTZONE
     bool is_non_secure_task = false;
@@ -2952,7 +2921,7 @@ void PlatformArmCortexM::InitStack(EStackType stack_type, Stack *stack, IStackMe
         break; }
 
     case STACK_SLEEP_TRAP: {
-        task_frame->exc.PC = hw::PtrToWord(GetContext().m_overrider != nullptr ? &OnSchedulerSleepOverride : &OnSchedulerSleep);
+        task_frame->exc.PC = hw::PtrToWord(ctx.m_overrider != nullptr ? &OnSchedulerSleepOverride : &OnSchedulerSleep);
         task_frame->exc.LR = STK_STACK_MEMORY_FILLER; // should not attempt to exit
         task_frame->exc.R0 = 0U;
         break; }
@@ -2999,20 +2968,20 @@ void PlatformArmCortexM::InitStack(EStackType stack_type, Stack *stack, IStackMe
     }
 #endif
 
-#if STK_MPU_STACK_GUARD
-    // configure per-task MPU
-    ConfigureTaskMpu(GetContext().m_overrider, stack, stack_memory, user_task,
-    #if STK_CORTEX_M_TRUSTZONE_FRAME
-        is_non_secure_task
-    #else
-        false
-    #endif
-    );
+    // configure per-task TrustZone hardware frames and boundaries
+#if STK_CORTEX_M_TRUSTZONE_FRAME
+    ConfigureTaskTrustZone(stack, stack_memory, user_task, is_non_secure_task);
 #endif
 
-#if STK_CORTEX_M_TRUSTZONE_FRAME
-    // configure per-task TrustZone hardware frames and boundaries
-    ConfigureTaskTrustZone(stack, stack_memory, user_task, is_non_secure_task);
+    // configure per-task MPU
+#if STK_MPU_STACK_GUARD
+    ConfigureTaskMpu(ctx.m_overrider, stack, stack_memory, user_task, false);
+    #if STK_CORTEX_M_TRUSTZONE_FRAME
+    if (is_non_secure_task)
+    {
+        ConfigureTaskMpu(ctx.m_overrider_ns, stack, user_task, user_task, true);
+    }
+    #endif
 #endif
 }
 
@@ -3100,6 +3069,14 @@ STK_TZ_NSC_GATEWAY
 bool NSC_stk_hw_IsInsideISR()
 {
     return hw::IsInsideISR();
+}
+
+/*! \brief  NSC gateway: for handling inside exception only (debugging).
+*/
+STK_TZ_NSC_GATEWAY
+TId NSC_stk_debug_GetCurrentTId()
+{
+    return GetContext().GetCurrentTId();
 }
 
 #endif // _STK_CORTEX_M_TRUSTZONE
@@ -3205,10 +3182,24 @@ void PlatformArmCortexM::ProcessHardFault()
     }
 }
 
-void PlatformArmCortexM::SetEventOverrider(IEventOverrider *overrider)
+void PlatformArmCortexM::SetEventOverrider(IEventOverrider *overrider, bool non_secure)
 {
-    STK_ASSERT(!GetContext().m_started);
-    GetContext().m_overrider = overrider;
+    Context &ctx = GetContext();
+
+    STK_ASSERT(!ctx.m_started);
+
+#if STK_CORTEX_M_TRUSTZONE_FRAME
+    if (non_secure)
+    {
+        ctx.m_overrider_ns = overrider;
+    }
+    else
+#else
+        STK_UNUSED(non_secure);
+#endif
+    {
+        ctx.m_overrider = overrider;
+    }
 }
 
 Word PlatformArmCortexM::GetCallerSP() const
@@ -3395,18 +3386,24 @@ void KernelServiceSvcProxy::RestoreWeight(stk::TId tid, stk::ISyncObject *sobj)
 }
 #endif // STK_MPU
 
-STK_MPU_SHARED_CODE_SECTION
 IKernelService *IKernelService::GetInstance()
 {
+    IKernelService *service;
+
 #if STK_MPU
     if (HW_IsPrivilegedContext() || HW_IsHandlerMode())
     {
-#endif
-        return GetContext().m_service;
-#if STK_MPU
+        service = GetContext().m_service;
     }
-    return &s_StkKernelServiceUnprivProxy;
+    else
+    {
+        service = &s_StkKernelServiceUnprivProxy;
+    }
+#else
+    service = GetContext().m_service;
 #endif
+
+    return service;
 }
 
 STK_MPU_SHARED_CODE_SECTION
@@ -3498,9 +3495,11 @@ void stk::hw::SetTls(Word tp)
 #endif // STK_TLS && !STK_INLINE_TLS
 
 #if STK_MPU
+// ----------------------------------------------------------------------------
 namespace stk {
 namespace hw {
 namespace mpu {
+// ----------------------------------------------------------------------------
 
 // Helpers to extract effective physical bounds [start, end_inclusive]
 struct RegionBounds
@@ -3585,9 +3584,11 @@ static void ValidateNoOverlaps(const MpuRegionConfig dynamic_cfg_list[], size_t 
     }
 }
 
+// ----------------------------------------------------------------------------
 } // namespace mpu
 } // namespace hw
 } // namespace stk
+// ----------------------------------------------------------------------------
 
 void hw::mpu::ConfigureRegion(MpuRegion &reg, const struct MpuRegionConfig &cfg, uint32_t region_idx)
 {
@@ -3769,12 +3770,8 @@ void hw::mpu::ConfigureStatic(const MpuRegionConfig cfg_list[], size_t cfg_count
 
     #if STK_ARCH_ARMV8_M
         // configure memory attributes
-        MPU->MAIR0 = MAIR0_PMSAV8_INIT;
-        MPU->MAIR1 = MAIR1_PMSAV8_INIT;
-        #if STK_TZ_SECURE
-            MPU_NS->MAIR0 = MAIR0_PMSAV8_INIT;
-            MPU_NS->MAIR1 = MAIR1_PMSAV8_INIT;
-        #endif
+        MPU_ptr->MAIR0 = MAIR0_PMSAV8_INIT;
+        MPU_ptr->MAIR1 = MAIR1_PMSAV8_INIT;
     #endif
 
         // point to the start of the per-task config area
@@ -3789,18 +3786,22 @@ void hw::mpu::ConfigureDynamic(TaskMpu &task_mpu, const struct MpuRegionConfig c
 {
     STK_ASSERT((cfg_list != nullptr) || (cfg_count == 0U));
     STK_ASSERT(cfg_count <= TaskMpu::NUM_REGIONS);
+
     const size_t clamped_count = ((cfg_count <= TaskMpu::NUM_REGIONS) ? cfg_count : TaskMpu::NUM_REGIONS);
 
     // retrieve static regions directly via overrider getter
-    uint8_t static_regions_count = 0U;
-    const stk::MpuRegionConfig *static_regions = nullptr;
+    MpuRegionList static_regions(nullptr, 0);
     if (overrider != nullptr)
     {
-        static_regions = overrider->OnConfigureMpu(static_regions_count);
+        const MpuConfig *const cfg = overrider->OnConfigureMpu();
+        if (cfg != nullptr)
+        {
+            static_regions = cfg->regions;
+        }
     }
 
     // validate task region list internal consistency
-    ValidateNoOverlaps(static_regions, static_regions_count, cfg_list, clamped_count);
+    ValidateNoOverlaps(static_regions.GetPtr(), static_regions.GetSize(), cfg_list, clamped_count);
 
     // cfg_list[i] always targets task-relative slot i (hardware region
     // STK_CORTEX_M_MPU_TASK_REGION_IDX + i): the index is derived from array position
@@ -3823,5 +3824,78 @@ void hw::mpu::ConfigureDynamic(TaskMpu &task_mpu, const struct MpuRegionConfig c
     }
 }
 #endif // STK_MPU
+
+// ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+#endif // !defined(_STK_CORTEX_M_TRUSTZONE_NON_SECURE)
+// ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+#if STK_MPU
+static void FaultContext_FillMpu(FaultContext::Mpu &mpu_ctx, MPU_Type *mpu_inst)
+{
+    mpu_ctx.CTRL = mpu_inst->CTRL;
+#if STK_ARCH_ARMV8_M
+    mpu_ctx.MAIR0 = mpu_inst->MAIR0;
+    mpu_ctx.MAIR1 = mpu_inst->MAIR1;
+#endif
+
+    const Word saved_rnr = mpu_inst->RNR;
+    for (size_t i = 0U; i < STK_STATIC_ARRAY_SIZE(mpu_ctx.regions); ++i)
+    {
+        mpu_inst->RNR = static_cast<Word>(i);
+        __DSB();
+        __ISB();
+        mpu_ctx.regions[i].RNR  = static_cast<Word>(i);
+        mpu_ctx.regions[i].RBAR = mpu_inst->RBAR;
+    #if STK_ARCH_ARMV8_M
+        mpu_ctx.regions[i].ATTR = mpu_inst->RLAR;
+    #else
+        mpu_ctx.regions[i].ATTR = mpu_inst->RASR;
+    #endif
+    }
+    mpu_inst->RNR = saved_rnr;
+}
+#endif // STK_MPU
+
+void FaultContext::Fill(const Word *stacked_regs, Word exc_return)
+{
+    this->frame.R0    = stacked_regs[0];
+    this->frame.R1    = stacked_regs[1];
+    this->frame.R2    = stacked_regs[2];
+    this->frame.R3    = stacked_regs[3];
+    this->frame.R12   = stacked_regs[4];
+    this->frame.LR    = stacked_regs[5];
+    this->frame.PC    = stacked_regs[6];
+    this->frame.xPSR  = stacked_regs[7];
+
+    this->EXC_RETURN  = exc_return;
+    this->CONTROL     = __get_CONTROL();
+
+#if STK_ARCH_ARMV6_M
+    // ARMv6-M (Cortex-M0/M0+) does not have CFSR, HFSR, AFSR, MMFAR, or BFAR.
+    this->CFSR        = 0U;
+    this->HFSR        = 0U;
+    this->AFSR        = 0U;
+    this->mmfar_valid = false;
+    this->bfar_valid  = false;
+    this->MMFAR       = 0U;
+    this->BFAR        = 0U;
+#else
+    // ARMv7-M / ARMv8-M
+    this->CFSR        = SCB->CFSR;
+    this->HFSR        = SCB->HFSR;
+    this->AFSR        = SCB->AFSR;
+    this->mmfar_valid = ((this->CFSR & SCB_CFSR_MMARVALID_Msk) != 0U);
+    this->bfar_valid  = ((this->CFSR & SCB_CFSR_BFARVALID_Msk) != 0U);
+    this->MMFAR       = (this->mmfar_valid ? SCB->MMFAR : 0U);
+    this->BFAR        = (this->bfar_valid ? SCB->BFAR : 0U);
+#endif
+
+#if STK_MPU
+    FaultContext_FillMpu(this->mpu, MPU);
+    #if STK_ARCH_ARMV8_M && STK_TZ_SECURE
+    FaultContext_FillMpu(this->mpu_ns, MPU_NS);
+    #endif
+#endif
+}
 
 #endif // _STK_ARCH_ARM_CORTEX_M

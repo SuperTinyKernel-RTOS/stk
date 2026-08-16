@@ -1,9 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <projectDescription>
-	<name>blinky-trustzone-sc-rp2350w</name>
+	<name>blinky_mpu-trustzone-sc-rp2350w</name>
 	<comment></comment>
 	<projects>
-		<project>blinky-trustzone-nsc-rp2350w</project>
 	</projects>
 	<buildSpec>
 		<buildCommand>
@@ -37,7 +36,7 @@
 			<locationURI>virtual:/virtual</locationURI>
 		</link>
 		<link>
-			<name>src/blinky-trustzone-sc</name>
+			<name>src/blinky_mpu-trustzone-sc</name>
 			<type>2</type>
 			<locationURI>virtual:/virtual</locationURI>
 		</link>
@@ -77,19 +76,19 @@
 			<locationURI>virtual:/virtual</locationURI>
 		</link>
 		<link>
-			<name>src/blinky-trustzone-sc/driver</name>
+			<name>src/blinky_mpu-trustzone-sc/driver</name>
 			<type>2</type>
 			<locationURI>virtual:/virtual</locationURI>
 		</link>
 		<link>
-			<name>src/blinky-trustzone-sc/example.cpp</name>
+			<name>src/blinky_mpu-trustzone-sc/example.cpp</name>
 			<type>1</type>
-			<locationURI>PARENT-4-PROJECT_LOC/blinky-trustzone-sc/example.cpp</locationURI>
+			<locationURI>PARENT-4-PROJECT_LOC/blinky_mpu-trustzone-sc/example.cpp</locationURI>
 		</link>
 		<link>
-			<name>src/blinky-trustzone-sc/example.h</name>
+			<name>src/blinky_mpu-trustzone-sc/example.h</name>
 			<type>1</type>
-			<locationURI>PARENT-4-PROJECT_LOC/blinky-trustzone-sc/example.h</locationURI>
+			<locationURI>PARENT-4-PROJECT_LOC/blinky_mpu-trustzone-sc/example.h</locationURI>
 		</link>
 		<link>
 			<name>deps/rpi/boards/include</name>
@@ -547,27 +546,27 @@
 			<locationURI>virtual:/virtual</locationURI>
 		</link>
 		<link>
-			<name>src/blinky-trustzone-sc/driver/c_wrapper.cpp</name>
+			<name>src/blinky_mpu-trustzone-sc/driver/c_wrapper.cpp</name>
 			<type>1</type>
 			<locationURI>PARENT-4-PROJECT_LOC/driver/c_wrapper.cpp</locationURI>
 		</link>
 		<link>
-			<name>src/blinky-trustzone-sc/driver/cpu.h</name>
+			<name>src/blinky_mpu-trustzone-sc/driver/cpu.h</name>
 			<type>1</type>
 			<locationURI>PARENT-4-PROJECT_LOC/driver/cpu.h</locationURI>
 		</link>
 		<link>
-			<name>src/blinky-trustzone-sc/driver/defs.h</name>
+			<name>src/blinky_mpu-trustzone-sc/driver/defs.h</name>
 			<type>1</type>
 			<locationURI>PARENT-4-PROJECT_LOC/driver/defs.h</locationURI>
 		</link>
 		<link>
-			<name>src/blinky-trustzone-sc/driver/led.h</name>
+			<name>src/blinky_mpu-trustzone-sc/driver/led.h</name>
 			<type>1</type>
 			<locationURI>PARENT-4-PROJECT_LOC/driver/led.h</locationURI>
 		</link>
 		<link>
-			<name>src/blinky-trustzone-sc/driver/rp2350w</name>
+			<name>src/blinky_mpu-trustzone-sc/driver/rp2350w</name>
 			<type>2</type>
 			<locationURI>virtual:/virtual</locationURI>
 		</link>
@@ -1642,12 +1641,12 @@
 			<locationURI>virtual:/virtual</locationURI>
 		</link>
 		<link>
-			<name>src/blinky-trustzone-sc/driver/rp2350w/cpu.cpp</name>
+			<name>src/blinky_mpu-trustzone-sc/driver/rp2350w/cpu.cpp</name>
 			<type>1</type>
 			<locationURI>PARENT-4-PROJECT_LOC/driver/rp2350w/cpu.cpp</locationURI>
 		</link>
 		<link>
-			<name>src/blinky-trustzone-sc/driver/rp2350w/led.cpp</name>
+			<name>src/blinky_mpu-trustzone-sc/driver/rp2350w/led.cpp</name>
 			<type>1</type>
 			<locationURI>PARENT-4-PROJECT_LOC/driver/rp2350w/led.cpp</locationURI>
 		</link>

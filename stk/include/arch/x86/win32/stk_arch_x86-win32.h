@@ -44,7 +44,7 @@ public:
     EWaitResult Wait(ISyncObject *sync_obj, IMutex *mutex, Timeout timeout) override;
     void ProcessTick() override;
     void ProcessHardFault() override;
-    void SetEventOverrider(IEventOverrider *overrider) override;
+    void SetEventOverrider(IEventOverrider *overrider, bool non_secure) override;
     Word GetCallerSP() const override;
     TId GetTid() const override;
     Timeout Suspend() override;

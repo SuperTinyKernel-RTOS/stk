@@ -5,55 +5,58 @@
  *
  * Copyright (c) 2022-2026 Neutron Code Limited <stk@neutroncode.com>. All Rights Reserved.
  * License: MIT License, see LICENSE for a full text.
+ *
+ * -----------------------------------------------------------------------------------------------
+ * TrustZone + per-task MPU sandboxing example (Secure side).
+ *
+ * Builds on the plain TrustZone example: on top of the SAU split (Secure/Non-Secure/NSC), this
+ * adds a second, independent layer of defense using the Secure world's own MPU:
+ *
+ *   1. IPlatform::IEventOverrider::OnConfigureMpu() installs system-wide "background" regions
+ *      (Flash: RO+exec, general RAM: RW+no-exec, and a Privileged-only "secrets" partition) that
+ *      apply underneath every task's own regions -- so even a task with no GetMpuRegions() of its
+ *      own gets sane W^X defaults, and nothing (Secure or Non-Secure, any privilege) can reach the
+ *      secrets partition except Secure Privileged code.
+ *
+ *   2. SecureHwCommandQueueTask sandboxes *itself* to just its own HW command queue via
+ *      ITask::GetMpuRegions() -- defense-in-depth: even though this Secure task is Privileged and
+ *      could otherwise touch all of Secure RAM, a bug in its own Run() can't stray outside the
+ *      queue it actually needs.
+ *
+ *   3. The existing PlatformEventHandler::OnException() (unchanged) is what reports any MemManage
+ *      fault raised by either of the above -- e.g. from the Non-Secure side's deliberately-disabled
+ *      TryBreakoutDemo() in example_ns_mpu.cpp -- including the MPU region table active at fault
+ *      time, which now tells you exactly which region did (or didn't) permit the access.
+ *
+ * Required stk_config.h settings for this example:
+ *   #define STK_MPU             1
+ *   #define STK_MPU_STACK_GUARD 1
+ *   #define STK_MPU_TASK_REGIONS 2
+ * -----------------------------------------------------------------------------------------------
  */
 
+#include <setjmp.h>
 #include <stdio.h>
-#include <new>
 #include <pico/runtime.h>
 #include <pico/stdio.h>
 
 #include <stk.h>
+#include <arch/arm/cortex-m/stk_arch_arm-tz.h>
+#include <time/stk_time.h>
 #include <sync/stk_sync.h>
 #include "example.h"
 
-using namespace bsp;
+#if (__ARM_FEATURE_CMSE & 1) == 0
+#error "Need ARMv8-M security extensions"
+#elif (__ARM_FEATURE_CMSE & 2) == 0
+#error "Compile with --mcmse"
+#endif
 
-// ---------------------------------------------------------------------------
-// MPU (Memory Protection Unit) setup for RP2350 (Cortex-M33, ARMv8-M MPU, 8 regions)
-// ---------------------------------------------------------------------------
-// This example is built with STK_MPU_TASK_REGIONS=2 (in addition to STK_MPU=1
-// and STK_MPU_STACK_GUARD=1): each task gets only 2 hardware MPU region slots -
-// slot 0 (automatic stack guard) and slot 1 (one application-defined region).
-//
-// On this 8-region MPU that raises STK_CORTEX_M_MPU_TASK_REGION_IDX to 6 (=
-// STK_CORTEX_M_MPU_REGIONS_MAX - STK_MPU_TASK_REGIONS), so the static/global
-// region budget in PlatformEventHandler::OnConfigureMpu() grows from 4 to 6
-// regions - the driver only writes RBAR/RLAR plus one alias register (A1) per
-// context switch in this configuration, which stays within its 4-region-aligned
-// hardware block at index 6 (no manual override needed).
-//
-// The Pico SDK's RAM-resident division routines (__aeabi_ldivmod etc.) are
-// needed identically by every task, so - like 'shared code'/'shared data' -
-// they are now configured once as a global region instead of being repeated
-// per task; the single remaining per-task slot is reserved for what genuinely
-// differs per task instance: its own object memory (the 'self' region).
-//
-// Static/global regions configured in PlatformEventHandler::OnConfigureMpu():
-//   Region 0: Lower flash  - read-only, executable   (code before the shared-code window)
-//   Region 1: Upper flash  - read-only, executable   (code after the shared-code window)
-//   Region 2: Shared code  - read/execute, common code shared by every task
-//   Region 3: RAM data/BSS - read/write, execute-never, globals shared by every task
-//   Region 4: RAM text     - read-only, executable, Pico SDK RAM-resident divide routines
-//   Region 5: reserved, intentionally left unconfigured for now (see note in
-//             OnConfigureMpu() - the BOOTROM_BASE_ADDR/BOOTROM_SIZE constants below
-//             are set aside for mapping this window in a future revision, but are
-//             not wired into the region table yet)
-//
-// Per-task regions (application-defined, see NonSecureLedTask::GetMpuRegions()):
-//   Slot 0 (Region 6): automatic stack guard, configured internally by the kernel
-//   Slot 1 (Region 7): task's own instance data window (the 'self' region)
-// ---------------------------------------------------------------------------
+#if !STK_MPU || !STK_MPU_STACK_GUARD
+#error "This example requires STK_MPU=1 and STK_MPU_STACK_GUARD=1 in stk_config.h"
+#endif
 
+// Size of the task's stack (number of stk::Word)
 // R2350 requires larger stack due to stack-memory heavy SDK API
 #ifdef _PICO_H
 static constexpr size_t TASK_STACK_SIZE = 1024U;
@@ -61,30 +64,93 @@ static constexpr size_t TASK_STACK_SIZE = 1024U;
 static constexpr size_t TASK_STACK_SIZE = 256U;
 #endif
 
-// One flag bit per LED task; task 0 (RED) goes first
-static constexpr uint32_t FLAGS_ALL[] = {
-    (1U << LED_RED),
-    (1U << LED_ORANGE),
-    (1U << LED_GREEN),
-    (1U << LED_BLUE)
+// Tasks count.
+#define TASK_NS_COUNT (4U)
+#define TASK_S_COUNT  (1U)
+#define TASK_COUNT    (TASK_NS_COUNT + TASK_S_COUNT)
+
+// Kernel type.
+#define KERNEL_TYPE   KERNEL_STATIC
+
+using namespace bsp;
+using namespace stk;
+
+// Allocate a global jump buffer in Secure memory.
+static jmp_buf s_NsExitEnv;
+
+// Counter located in a secure_data section.
+__attribute__((section(".secure_data"))) uint32_t s_Counter = 0U;
+
+// Hw commands.
+struct HwCommand
+{
+    enum EId
+    {
+        CMD_NONE   = 0,
+        CMD_LED_ON = 1
+    };
+
+    EId  id;
+    Word param_0;
+};
+static sync::PipeT<HwCommand, 4> s_HwCmdQueue;
+
+static const MpuRegionConfig s_HwCmdQueueMpuLimit =
+{
+    .addr        = hw::PtrToWord(&s_HwCmdQueue),
+    .size        = sizeof(s_HwCmdQueue),
+    .access_perm = hw::mpu::ACCESS_FULL,
+    .mem_type    = hw::mpu::TYPE_NORMAL_CACHEABLE,
+    .share       = hw::mpu::SHARE_NON,
+    .exec        = hw::mpu::EXEC_NEVER
 };
 
-// Start with the RED task's flag set so it runs first
-STK_MPU_SHARED_DATA_SECTION static stk::sync::EventFlags g_TaskFlags(FLAGS_ALL[LED_RED]);
+// This is your NSC exit function.
+__stk_tz_nsc_entry void NSC_OnExitNs(void)
+{
+    // Jump back to the point right before BLXNS happened,
+    // passing '1' as the return value for setjmp.
+    longjmp(s_NsExitEnv, 1);
+}
 
-// Timeline for a precise LED switching
-STK_MPU_SHARED_DATA_SECTION static stk::Ticks g_Timeline = 0;
+// A demo function for exposing some sensible data to Non-Secure state.
+__stk_tz_nsc_entry uint32_t NSC_GetKey(uint8_t key[], uint32_t size)
+{
+    uint32_t result = 0;
 
-// Variable residing in Secure memory region accessible by only Secure tasks.
-static uint32_t g_SecureCounter = 0;
+    // Verify the entire buffer lies in Non-Secure memory and is writable
+    if (cmse_check_address_range(key, size, CMSE_NONSECURE | CMSE_MPU_READWRITE) != nullptr)
+    {
+        if (size == 4)
+        {
+            key[0] = 1;
+            key[1] = 2;
+            key[2] = 3;
+            key[3] = 4;
 
-// Non-Secure task's stack memory (on ARMv8-M must be aligned to 32 bytes at least).
-static constexpr size_t TASK_STACK_MEMORY_SIZE = stk::Align<size_t>(TASK_STACK_SIZE, 32U);
-static stk::Word s_LedTaskStackMem[4][TASK_STACK_MEMORY_SIZE] __stk_aligned(32U);
+            result = 4;
+        }
+    }
 
-// Non-Secure task memory (on ARMv8-M must be aligned to 32 bytes at least).
-static constexpr size_t TASK_MEMORY_SIZE = stk::Align<size_t>(10U, 32U);
-static stk::Word s_LedTaskMem[4][TASK_MEMORY_SIZE] __stk_aligned(32U);
+    return result;
+}
+
+// A demo function for exposing some sensible data to Non-Secure state.
+__stk_tz_nsc_entry void NSC_bsp_Led_SwitchOnExclusive(bsp::Led::Id led)
+{
+    // You can call hardware directly now, because execution is happening in a
+    // Secure world and Non-Secure task is Privileged.
+    if (hw::IsPrivilegedContext())
+    {
+        Led::SwitchOnExclusive(led);
+    }
+    else
+    {
+        // If Non-Secure task is not Privileged - direct hw calls are not possible, let Secure
+        // Privileged task handle all hw calls for such calling contexts.
+        s_HwCmdQueue.Write({ .id = HwCommand::CMD_LED_ON, led });
+    }
+}
 
 // Init mpu_shared_data: the Pico SDK's default linker script/runtime does not know
 // about STK's custom .stk_mpu_shared_data/.stk_mpu_shared_bss sections, so their
@@ -125,134 +191,117 @@ static void InitMpuSharedData()
 }
 PICO_RUNTIME_INIT_FUNC(InitMpuSharedData, "00100");
 
-// Hw commands.
-struct HwCommand
+static void Configure_SAU(void)
 {
-    enum EId
+    extern char __nsc_start[];        // = ORIGIN(FLASH_NSC)
+    extern char __nsc_end[];          // = ORIGIN(FLASH_NSC) + LENGTH(FLASH_NSC)
+    extern char __ns_ram_start[];     // = ORIGIN(RAM_NS)
+    //extern char __ns_ram_end[];       // = ORIGIN(RAM_NS) + LENGTH(RAM_NS)
+    extern char __ns_flash_start[];   // = __nsc_end
+    extern char __ns_flash_end[];     // = ORIGIN(FLASH_NS) + LENGTH(FLASH_NS)
+    extern char __ns_scratch_start[]; // = ORIGIN = 0x2007E000
+    extern char __ns_scratch_end[];   // = ORIGIN = 0x2007F000
+
+    // Disable SAU while programming regions.
+    SAU->CTRL = 0U;
+
+    // Region 0: NSC Gateway.
+    SAU->RNR  = 0U;
+    SAU->RBAR = (uintptr_t)__nsc_start;
+    SAU->RLAR = (((uintptr_t)__nsc_end - 1U) & ~0x1FU) | 2U | 1U; // NSC + ENABLE
+
+    // Region 1: Non-Secure Flash (code + vector table).
+    SAU->RNR  = 1U;
+    SAU->RBAR = (uintptr_t)__ns_flash_start;
+    SAU->RLAR = (((uintptr_t)__ns_flash_end - 1U) & ~0x1FU) | 0U | 1U; // NS + ENABLE
+
+    // Region 2: Non-Secure RAM (TASK STACKS ONLY).
+    SAU->RNR  = 2U;
+    SAU->RBAR = (uintptr_t)__ns_ram_start;   // 0x20040000
+    SAU->RLAR = (((uintptr_t)__ns_scratch_start - 1U) & ~0x1FU) | 0U | 1U; // NS + ENABLE
+
+    // Region 3: SCRATCH RAM (core stacks / special buffers).
+    SAU->RNR  = 3U;
+    SAU->RBAR = (uintptr_t)__ns_scratch_start;
+    SAU->RLAR = (((uintptr_t)__ns_scratch_end - 1U) & ~0x1FU) | 0U | 1U; // NS + ENABLE
+
+    // Clear remaining SAU regions.
+    for (uint32_t i = 4U; i < 8U; ++i)
     {
-        CMD_NONE   = 0,
-        CMD_LED_ON = 1
-    };
-
-    EId       id;
-    stk::Word param_0;
-};
-STK_MPU_SHARED_DATA_SECTION static stk::sync::PipeT<HwCommand, 4> s_HwCmdQueue;
-
-// Task's core (thread)
-class NonSecureLedTask : public stk::ITask
-{
-    uint8_t            m_task_id;
-    uint32_t           m_my_flag;
-    uint32_t           m_next_flag;
-
-    stk::Word         *m_stack;      //!< pointer to stack buffer
-    size_t             m_stack_size; //!< stack size in words
-    stk::EAccessMode   m_mode;       //!< kernel access mode
-
-public:
-    explicit NonSecureLedTask(uint8_t task_id, stk::Word *stack, size_t stack_size, stk::EAccessMode mode)
-        : m_task_id(task_id),
-          m_my_flag(FLAGS_ALL[task_id]),
-          m_next_flag(FLAGS_ALL[(task_id + 1) % LED_MAX]),
-          m_stack(stack),
-          m_stack_size(stack_size),
-          m_mode(mode)
-    {}
-
-    // ITask
-    stk::EAccessMode GetAccessMode() const override { return m_mode; }
-
-    // IStackMemory
-    const stk::Word *GetStack()      const override { return m_stack; }
-    size_t GetStackSize()            const override { return m_stack_size; }
-
-private:
-    void Run() override
-    {
-        // we switch LEDs with 250ms period
-        const stk::Ticks period = stk::GetTicksFromMs(250);
-
-        // get a start of the timeline
-        g_Timeline = stk::GetTicks();
-
-        while (true)
-        {
-            // block until this task's flag is set; auto-cleared on return
-            uint32_t result = g_TaskFlags.Wait(m_my_flag, stk::sync::EventFlags::OPT_WAIT_ANY);
-            if (stk::sync::EventFlags::IsError(result))
-                continue;
-
-            // change active LED
-            s_HwCmdQueue.Write({
-                .id      = HwCommand::CMD_LED_ON,
-                .param_0 = m_task_id}
-            );
-
-            // sleep 1s drift-free and then delegate work to the next task
-            // we could use simple stk::Sleep() but due to other work around Sleep call we
-            // will get a time drift, STK allows to sleep until exact timestamp making it
-            // possible precise sleeping with 1 tick precision, you could also use
-            // time::TimerHost for timer-related tasks (see related 'timer' example)
-            stk::SleepUntil(g_Timeline += period);
-
-            // hand off to the next task
-            g_TaskFlags.Set(m_next_flag);
-
-            // uncommenting this will cause MemManage exception due to access of Secure
-            // memory region by Non-Secure task, under debugger you will see such call stack:
-            //
-            //   * PlatformEventHandler::OnException() at example.cpp:459
-            //   * StkExceptionHandlerMain() at stk_arch_arm-cortex-m.cpp:2 683
-            //   * <signal handler called>() at 0xfffffffd
-            //   * NonSecureLedTask<(stk::EAccessMode)0>::Run at example.cpp:211 <--- points to offending ++g_SecureCounter
-            //   * OnTaskRun() at stk_arch_arm-cortex-m.cpp:2 751
-            //
-            //++g_SecureCounter;
-        }
+        SAU->RNR  = i;
+        SAU->RBAR = 0U;
+        SAU->RLAR = 0U;
     }
 
-#if STK_MPU
-    const stk::MpuRegionList *GetMpuRegions() const override
+    // Enable SAU (default = Secure).
+    SAU->CTRL = 1U;
+
+    __DSB();
+    __ISB();
+}
+
+static void ConfigureSecureState()
+{
+    // Enable secure fault reporting.
+    SCB->SHCSR |= SCB_SHCSR_SECUREFAULTENA_Msk |
+                  SCB_SHCSR_BUSFAULTENA_Msk |
+                  SCB_SHCSR_USGFAULTENA_Msk |
+                  SCB_SHCSR_MEMFAULTENA_Msk;
+
+    // 1. Configure SAU boundaries before any peripheral writes.
+    Configure_SAU();
+
+    // 2. Do other initializations...
+}
+
+static void InvokeNonSecureState()
+{
+    typedef __stk_tz_ns_call void (* NSFuncT)(void);
+
+    extern char __ns_flash_start[];   // = __nsc_end
+
+    // 1. Init PSP to 0.
+    __TZ_set_PSP_NS(0);
+    __set_PSP(0);
+
+    // 2. Read the initial Stack Pointer dynamically from Word 0 of the NS vector table
+    // (Instead of hardcoding to the start of RAM, this ensures it uses the stack top your NS app expects)
+    uint32_t *ns_vector_table = reinterpret_cast<uint32_t *>(__ns_flash_start);
+    uint32_t initial_msp_ns = ns_vector_table[0];
+    __TZ_set_MSP_NS(initial_msp_ns);
+
+    // 3. Point the NON-SECURE VTOR to the Non-Secure vector table
+    SCB_NS->VTOR = reinterpret_cast<uintptr_t>(__ns_flash_start);
+    __DSB();
+    __ISB();
+
+    // 4. Extract the Reset Handler address (Word 1 of the NS vector table)
+    uint32_t reset_handler_address = ns_vector_table[1];
+
+    // 5. Clear Bit 0 (LSB): required by BLXNS — signals Secure-to-NonSecure transition.
+    //    The vector table stores Thumb addresses (LSB=1), but BLXNS needs LSB=0.
+    NSFuncT ResetHandler_ns = reinterpret_cast<NSFuncT>(reset_handler_address & ~1UL);
+
+    // Save the current Secure CPU state.
+    // The first time setjmp executes, it returns 0.
+    if (setjmp(s_NsExitEnv) == 0)
     {
-        using namespace stk;
-
-        // With STK_MPU_TASK_REGIONS=2 each task only has one application-defined
-        // slot available (task-relative slot 1, following the automatic stack
-        // guard in slot 0). The Pico SDK RAM-resident division routines are
-        // identical for every task instance, so they are now configured once as
-        // a global region in PlatformEventHandler::OnConfigureMpu() instead of
-        // being repeated here; this single slot is reserved for what is
-        // genuinely per-instance: access to the task's own object memory.
-        static MpuRegionConfig s_self_region[] =
-        {
-            // REGION 6 is reserved by the kernel for the automatic stack guard
-
-            { // REGION 7: TASK INSTANCE DATA WINDOW - R/W for this task and privileged code
-              .addr        = 0U,
-              .size        = TASK_MEMORY_SIZE * sizeof(stk::Word), // cover whole allocated region of the task instance
-              .access_perm = hw::mpu::ACCESS_FULL,
-              .mem_type    = hw::mpu::TYPE_NORMAL_CACHEABLE,
-              .share       = hw::mpu::SHARE_NON,
-              .exec        = hw::mpu::EXEC_NEVER
-            }
-        };
-
-        // Unlike the static tables in OnConfigureMpu() (identical for every task/call),
-        // this table is recomputed on every call: there are 4 NonSecureLedTask instances
-        // sharing this same GetMpuRegions() code, and each one must only be granted access
-        // to its own object memory - 'this' points at the start of that instance's
-        // TASK_MEMORY_SIZE-word block (see s_LedTaskMem[]), so the base address is patched
-        // in here right before the table is handed back to the kernel for this task.
-        s_self_region[0].addr = hw::PtrToWord(this);
-
-        static const stk::MpuRegionList mpu_regions(
-            s_self_region, STK_STATIC_ARRAY_SIZE(s_self_region));
-
-        return &mpu_regions;
+        // 6. Jump into the Non-Secure World.
+        ResetHandler_ns();
     }
-#endif
-};
+    else
+    {
+        // --- WE ARE BACK IN SECURE MODE PERMANENTLY ---
+
+        // The Non-Secure binary called NSC_Secure_HandleNSExit(), which triggered longjmp(),
+        // bypassing the standard C function return mechanism.
+
+        // Continue your Secure-only main loop or application logic here.
+
+        // Reset PSP_NS.
+        __TZ_set_PSP_NS(0);
+    }
+}
 
 // Secure task's core.
 template <stk::EAccessMode _AccessMode>
@@ -270,13 +319,11 @@ private:
                 {
                 case HwCommand::CMD_LED_ON: {
                     Led::SwitchOnExclusive(static_cast<bsp::Led::Id>(cmd.param_0));
-
-                    // counter is accessed by a Safe task, no MemManage exception in this case
-                    ++g_SecureCounter;
+                    //++s_Counter;
                     break; }
-                default: {
+                default:
                     STK_ASSERT(false);
-                    break; }
+                    break;
                 }
             }
         }
@@ -285,7 +332,6 @@ private:
 
 class PlatformEventHandler final : public stk::IPlatform::IEventOverrider
 {
-#if STK_MPU
     const stk::MpuConfig *OnConfigureMpu() const override
     {
         using namespace stk;
@@ -393,7 +439,6 @@ class PlatformEventHandler final : public stk::IPlatform::IEventOverrider
 
         return &mpu_config;
     }
-#endif
 
 #if STK_MPU
     static void PrintMpuConfig(const char *label, const stk::FaultContext::Mpu &mpu)
@@ -420,7 +465,6 @@ class PlatformEventHandler final : public stk::IPlatform::IEventOverrider
     // tasks touching g_SecureCounter, or a stack-guard violation) and on generic hard
     // faults. Dumps CPU/MPU state for diagnostics and halts via a debug breakpoint -
     // this is intentionally non-recoverable diagnostic code, not a fault-recovery example.
-#ifdef DEBUG
     bool OnException(stk::EHwException exc_id, stk::TId tid, const struct stk::FaultContext *const ctx) override
     {
         if (exc_id == stk::HW_EXCEPT_MEMACCESS)
@@ -451,9 +495,9 @@ class PlatformEventHandler final : public stk::IPlatform::IEventOverrider
         printf("CONTROL: 0x%08X (nPRIV=%u)\r\n", (unsigned int)ctx->CONTROL, (unsigned int)(ctx->CONTROL & 1U));
 
 #if STK_MPU
-        PrintMpuConfig((STK_ARCH_ARMV8_M && STK_TZ_SECURE) ? "Secure" : "Primary", ctx->mpu);
+        PrintMpuConfig(STK_ARCH_ARMV8_M ? "Secure" : "Primary", ctx->mpu);
 
-    #if STK_ARCH_ARMV8_M && STK_TZ_SECURE
+    #if STK_ARCH_ARMV8_M
         printf("\r\n");
         PrintMpuConfig("Non-Secure", ctx->mpu_ns);
     #endif
@@ -462,59 +506,61 @@ class PlatformEventHandler final : public stk::IPlatform::IEventOverrider
         printf("=====================================================\r\n");
 
         __stk_debug_break();
-        return false; // allow default handling by the platform driver
+        return false;
     }
-#endif // DEBUG
 };
 
-void RunExample()
+static void CreateKernel()
 {
-    using namespace stk;
-
-    // For semihosting and logging to console.
-#ifdef DEBUG
-    stdio_init_all();
-#endif
-
     Led::InitAll(false);
 
-    // operating in Static + Sync mode (EventFlags requires KERNEL_SYNC) and optionally tickless
-    const uint8_t KernelMode = KERNEL_STATIC | KERNEL_SYNC | (STK_TICKLESS_IDLE ? KERNEL_TICKLESS : 0);
+    // Operating in Static + Sync mode (EventFlags requires KERNEL_SYNC) and optionally tickless.
+    const uint8_t KernelMode = KERNEL_TYPE | KERNEL_SYNC | (STK_TICKLESS_IDLE ? KERNEL_TICKLESS : 0);
 
-    // allocate scheduling kernel for 3 threads (tasks) with Round-Robin scheduling strategy
-    static Kernel<KernelMode, 5, SwitchStrategyRR, PlatformDefault> kernel;
+    // Allocate scheduling kernel for 3 threads (tasks) with Round-Robin scheduling strategy.
+    static Kernel<KernelMode, TASK_COUNT, SwitchStrategyRR, PlatformDefault> kernel;
 
-    // for MPU configuration and MemFault/HardFault exceptions processing
+    // for MPU configuration and MemFault/HardFault exceptions processing (also supplies the
+    // system-wide background MPU regions via OnConfigureMpu(), see above).
     static PlatformEventHandler event_overrider;
     kernel.GetPlatform()->SetEventOverrider(&event_overrider);
 
-    // make sure memory is enough
-    STK_STATIC_ASSERT(sizeof(NonSecureLedTask) / sizeof(stk::Word) <= TASK_MEMORY_SIZE);
-
-    // Non-Secure tasks
-    NonSecureLedTask *led_task1 = new (s_LedTaskMem[0]) NonSecureLedTask(LED_RED, s_LedTaskStackMem[0], STK_STATIC_ARRAY_SIZE(s_LedTaskStackMem[0]), ACCESS_USER);
-    NonSecureLedTask *led_task2 = new (s_LedTaskMem[1]) NonSecureLedTask(LED_ORANGE, s_LedTaskStackMem[1], STK_STATIC_ARRAY_SIZE(s_LedTaskStackMem[1]), ACCESS_USER);
-    NonSecureLedTask *led_task3 = new (s_LedTaskMem[2]) NonSecureLedTask(LED_GREEN, s_LedTaskStackMem[2], STK_STATIC_ARRAY_SIZE(s_LedTaskStackMem[2]), ACCESS_USER);
-    NonSecureLedTask *led_task4 = new (s_LedTaskMem[3]) NonSecureLedTask(LED_BLUE, s_LedTaskStackMem[3], STK_STATIC_ARRAY_SIZE(s_LedTaskStackMem[3]), ACCESS_USER);
-
-    // Secure tasks
-    static SecureHwCommandQueueTask<ACCESS_PRIVILEGED> hw_cmd_proc;
-
-    // init scheduling kernel
+    // Init scheduling kernel.
     kernel.Initialize();
 
-    // register non-secure tasks (LED state ordering tasks)
-    kernel.AddTask(led_task1);
-    kernel.AddTask(led_task2);
-    kernel.AddTask(led_task3);
-    kernel.AddTask(led_task4);
+    // Register kernel instance with TrustZone interface.
+    tz::sec::SetKernel(0, &kernel);
 
-    // register secure task which will interact with hardware
-    kernel.AddTask(&hw_cmd_proc);
+    // Add Secure tasks:
+    static SecureHwCommandQueueTask<ACCESS_PRIVILEGED> hw_cmd_task;
+    kernel.AddTask(&hw_cmd_task);
+}
 
-    // start scheduler (it will start threads added by AddTask), execution in main() will be blocked on this line
-    kernel.Start();
+void RunExample()
+{
+    // For semihosting.
+    stdio_init_all();
 
-    // shall not reach here after Start() was called
-    STK_ASSERT(false);
+    // Init BSP.
+    Led::InitAll(false);
+
+    // Configure Secure state by partitioning FLASH and RAM via SAU. STK does not wrap this functionality
+    // to give more freedom and be less noisy in its API.
+    ConfigureSecureState();
+
+    // Create scheduler and add Secure tasks.
+    CreateKernel();
+
+    // Invoke Non-Secure state which will drive logic further.
+    InvokeNonSecureState();
+
+    // CPU is now executing your Non-Secure application, execution will never return here.
+    while (true)
+    {
+        // KERNEL_STATIC does not support exit from scheduling, while it is possible with KERNEL_DYNAMIC
+        // when all tasks exit on both sides Non-secure and Secure.
+    #if (KERNEL_TYPE == KERNEL_STATIC)
+        STK_ASSERT(false);
+    #endif
+    }
 }

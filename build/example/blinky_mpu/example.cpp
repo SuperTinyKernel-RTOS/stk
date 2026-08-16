@@ -108,7 +108,7 @@ private:
         while (true)
         {
             // block until this task's flag is set; auto-cleared on return
-            uint32_t result = g_TaskFlags.Wait(m_my_flag, stk::sync::EventFlags::OPT_WAIT_ANY);
+            const uint32_t result = g_TaskFlags.Wait(m_my_flag, stk::sync::EventFlags::OPT_WAIT_ANY);
             if (stk::sync::EventFlags::IsError(result))
                 continue;
 
@@ -129,12 +129,19 @@ private:
             g_TaskFlags.Set(m_next_flag);
 
             // uncommenting this will cause MemManage exception due to access of Secure
-            // memory region by Non-Secure task
+            // memory region by Non-Secure task, under debugger you will see such call stack:
+            //
+            //   * PlatformEventHandler::OnException() at example.cpp:383
+            //   * StkExceptionHandlerMain() at stk_arch_arm-cortex-m.cpp:2 683
+            //   * <signal handler called>() at 0xfffffffd
+            //   * NonSecureLedTask<(stk::EAccessMode)0>::Run at example.cpp:140 <--- points to offending ++g_SecureCounter
+            //   * OnTaskRun() at stk_arch_arm-cortex-m.cpp:2 751
+            //
             //++g_SecureCounter;
         }
     }
 
-    const stk::MpuRegionConfig *GetMpuRegions(uint8_t &out_count) override
+    const stk::MpuRegionList *GetMpuRegions() const override
     {
         using namespace stk;
 
@@ -170,8 +177,10 @@ private:
         // kernel for this task.
         s_self_region[0].addr = hw::PtrToWord(this);
 
-        out_count = STK_STATIC_ARRAY_SIZE(s_self_region);
-        return s_self_region;
+        static const stk::MpuRegionList mpu_regions(
+            s_self_region, STK_STATIC_ARRAY_SIZE(s_self_region));
+
+        return &mpu_regions;
     }
 };
 
@@ -206,7 +215,7 @@ private:
 
 class PlatformEventHandler final : public stk::IPlatform::IEventOverrider
 {
-    const stk::MpuRegionConfig *OnConfigureMpu(uint8_t &out_count) override
+    const stk::MpuConfig *OnConfigureMpu() const override
     {
         using namespace stk;
         using namespace stk::hw::mpu;
@@ -322,19 +331,51 @@ class PlatformEventHandler final : public stk::IPlatform::IEventOverrider
             }
         };
 
-        out_count = STK_STATIC_ARRAY_SIZE(mpu_table);
-        return mpu_table;
+        // set MPU regions and notify driver that we want to enable MPU
+        static const stk::MpuConfig mpu_config
+        (
+            stk::MpuRegionList(mpu_table, STK_STATIC_ARRAY_SIZE(mpu_table)),
+            (hw::mpu::MPU_CFG_PRIVILEGED_BG_MEM |
+             hw::mpu::MPU_CFG_CLEAR_ON_INIT)
+        );
+
+        return &mpu_config;
     }
+
+#if STK_MPU
+    static void PrintMpuConfig(const char *label, const stk::FaultContext::Mpu &mpu)
+    {
+        printf("--- %s MPU Status & Config ---\r\n", label);
+        printf("CTRL:  0x%08X\r\n", (unsigned int)mpu.CTRL);
+    #if STK_ARCH_ARMV8_M
+        printf("MAIR0: 0x%08X    MAIR1: 0x%08X\r\n", (unsigned int)mpu.MAIR0, (unsigned int)mpu.MAIR1);
+    #endif
+
+        printf("--- %s MPU Regions Configuration ---\r\n", label);
+        for (size_t i = 0U; i < STK_STATIC_ARRAY_SIZE(mpu.regions); i++)
+        {
+            printf("  Region %u -> RBAR: 0x%08X    R%s: 0x%08X\r\n",
+                   (unsigned int)i,
+                   (unsigned int)mpu.regions[i].RBAR,
+                   STK_ARCH_ARMV8_M ? "LAR" : "ASR",
+                   (unsigned int)mpu.regions[i].ATTR);
+        }
+    }
+#endif
 
     // Kernel-invoked fault handler: fires on MemManage faults (e.g. the Non-Secure LED
     // tasks touching g_SecureCounter, or a stack-guard violation) and on generic hard
     // faults. Dumps CPU/MPU state for diagnostics and halts via a debug breakpoint -
     // this is intentionally non-recoverable diagnostic code, not a fault-recovery example.
+#ifdef DEBUG
     bool OnException(stk::EHwException exc_id, stk::TId tid, const struct stk::FaultContext *const ctx) override
     {
         if (exc_id == stk::HW_EXCEPT_MEMACCESS)
         {
             printf("\r\n================ MEMMANAGE FAULT DETECTED ================\r\n");
+            printf("(Sandbox Violation: a task's Run() reached outside the MPU\r\n");
+            printf(" regions granted to it - see region dump below for what\r\n");
+            printf(" WAS active for this task at fault time)\r\n");
         }
         else
         {
@@ -356,25 +397,21 @@ class PlatformEventHandler final : public stk::IPlatform::IEventOverrider
         printf("BFAR:  0x%08X (%s)\r\n\r\n", (unsigned int)ctx->BFAR, ctx->bfar_valid ? "VALID" : "INVALID");
         printf("CONTROL: 0x%08X (nPRIV=%u)\r\n", (unsigned int)ctx->CONTROL, (unsigned int)(ctx->CONTROL & 1U));
 
-        printf("--- MPU Status & Config ---\r\n");
-        printf("CTRL:  0x%08X\r\n", (unsigned int)ctx->mpu.CTRL);
-    #if STK_ARCH_ARMV8_M
-        printf("MAIR0: 0x%08X    MAIR1: 0x%08X\r\n", (unsigned int)ctx->mpu.MAIR0, (unsigned int)ctx->mpu.MAIR1);
-    #endif
+#if STK_MPU
+        PrintMpuConfig((STK_ARCH_ARMV8_M && STK_TZ_SECURE) ? "Secure" : "Primary", ctx->mpu);
 
-        printf("--- MPU Regions Configuration ---\r\n");
-        for (size_t i = 0U; i < 8U; i++)
-        {
-            printf("  Region %u -> RBAR: 0x%08X    RLAR: 0x%08X\r\n",
-                   (unsigned int)i,
-                   (unsigned int)ctx->mpu.regions[i].RBAR,
-                   (unsigned int)ctx->mpu.regions[i].ATTR);
-        }
+    #if STK_ARCH_ARMV8_M && STK_TZ_SECURE
+        printf("\r\n");
+        PrintMpuConfig("Non-Secure", ctx->mpu_ns);
+    #endif
+#endif
+
         printf("=====================================================\r\n");
 
         __stk_debug_break();
-        return false;
+        return false; // allow default handling by the platform driver
     }
+#endif // DEBUG
 };
 
 void RunExample()

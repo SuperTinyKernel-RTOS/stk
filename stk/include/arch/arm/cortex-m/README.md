@@ -261,18 +261,14 @@ STK includes optional MPU support for both the legacy ARMv7-M/PMSAv7 layout (Cor
 | `STK_CORTEX_M_MPU_REGIONS_MAX` | `8` | Number of MPU regions supported by the MPU peripheral. Override if your device has more or fewer than 8 regions. |
 | `STK_CORTEX_M_MPU_TASK_REGION_IDX` | `STK_CORTEX_M_MPU_REGIONS_MAX - STK_MPU_TASK_REGIONS` | First MPU region index reserved for per-task regions (the stack guard and any per-task `GetMpuRegions()` entries occupy the last `STK_MPU_TASK_REGIONS` regions). Must not collide with your statically-configured regions. |
 
-The MPU API lives in `stk::hw::mpu` and is only compiled when `STK_MPU=1`:
+The low-level region-programming functions (`ConfigureRegion`, `ConfigureStatic`, `ConfigureDynamic`, `ApplyRegion`, `DisableRegion`, `Enable`) live in `stk::hw::mpu` but are declared and defined entirely inside `stk_arch_arm-cortex-m.cpp` — **they are driver-internal and not exposed by any public header**, so application code cannot call them directly. Applications configure the MPU exclusively through the two hooks below; the driver translates both into these internal calls automatically:
 
-| Function | Purpose |
-|----------|---------|
-| `ConfigureRegion(reg, cfg)` | Pure computation: translates a byte-address/byte-size `MpuRegionConfig` into the raw `MpuRegion` register pair, without touching hardware. |
-| `ConfigureTable(cfg_list, cfg_count, control_flags, non_secure=false)` | One-shot boot-time setup: disables the MPU, writes every entry of `cfg_list` to its target region, then re-enables the MPU with `control_flags` (e.g. `MPU_CTRL_PRIVDEFENA_Msk`). |
-| `ConfigureTask(task_mpu, cfg_list, cfg_count, non_secure=false)` | Populates a task's `TaskMpu` per-task region shadow table, applied automatically on every context switch when `STK_MPU_STACK_GUARD=1`. |
-| `ApplyRegion(reg, index, non_secure=false)` | Writes a single precomputed region descriptor into a live MPU region slot. No barrier handling of its own — bracket batches with `Enable(false, ...)` / `Enable(true, ...)`. |
-| `DisableRegion(index, non_secure=false)` | Disables a single MPU region without touching any other region. |
-| `Enable(enable, control_flags, non_secure=false)` | Enables/disables the MPU as a whole, together with `SCB->SHCSR.MEMFAULTENA` so MPU violations raise a MemManage fault instead of escalating to HardFault. |
+| Hook | Scope | When applied |
+|------|-------|--------------|
+| `ITask::GetMpuRegions()` | Per-task, dynamic | Every context switch (`STK_MPU_STACK_GUARD=1` only) |
+| `IPlatform::IEventOverrider::OnConfigureMpu()` | Global/static, per security state | Once, during platform `Initialize()` |
 
-A task opts into a per-task region set by overriding `GetMpuRegions()` and returning an array of `MpuRegionConfig` entries (region index, address, size, access permission, memory type, shareability, execute-never). See the class docs in `stk_arch_arm-cortex-m.h` for a worked example, including the recommended shared-region layout below.
+A task opts into a per-task region set by overriding `GetMpuRegions()` and returning a `const MpuRegionList *` — a view over an array of `MpuRegionConfig` entries (address, size, access permission, memory type, shareability, execute-never; array position implicitly maps to task-relative region index `i + 1`, i.e. the slots following the automatic stack guard in region 0). See the class docs in `stk_arch_arm-cortex-m.h` for a worked example, including the recommended shared-region layout below.
 
 Three attribute macros place code/data in regions shared between privileged and unprivileged tasks:
 
@@ -282,9 +278,9 @@ Three attribute macros place code/data in regions shared between privileged and 
 | `STK_MPU_SHARED_CODE_SECTION` | `.stk_mpu_shared_code` | Read-only + executable for privileged and unprivileged tasks (used for system entry points such as privilege-escalation trampolines). |
 | `STK_MPU_SHARED_BSS_SECTION` | `.stk_mpu_shared_bss` | Same permissions as `STK_MPU_SHARED_DATA_SECTION`, but zero-initialized at boot instead of copied from flash — use for large scratch buffers that don't need a non-zero initializer, to avoid wasting flash on a stored image of zeros. |
 
-> On ARMv8-M TrustZone builds, every MPU function takes a `non_secure` parameter to target the Non-Secure MPU/SCB register aliases (`MPU_NS`/`SCB_NS`) instead of the Secure ones; it is ignored on ARMv7-M/PMSAv7.
+> On ARMv8-M TrustZone builds, the Secure and Non-Secure MPU instances (`MPU`/`MPU_NS`) are configured independently. Register a second `IEventOverrider` for the Non-Secure side via `IPlatform::SetEventOverrider(overrider, /*non_secure=*/true)`; its `OnConfigureMpu()` must set `hw::mpu::MPU_CFG_NONSECURE_MPU` in `MpuConfig::mode` (an `STK_ASSERT` fires if it's registered against the wrong side). Internally, every low-level region-programming function above also takes a `non_secure` parameter to target the correct register alias (`MPU_NS`/`SCB_NS`); this is not exposed to application code.
 
-> MPU configuration functions are not accessible from non-privileged, non-Secure contexts.
+> MPU configuration is not accessible from non-privileged, non-Secure contexts.
 
 ---
 
