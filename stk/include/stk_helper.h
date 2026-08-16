@@ -12,6 +12,9 @@
 
 #include "stk_common.h"
 #include "stk_arch.h"
+#ifdef _STK_CORTEX_M_TRUSTZONE_NON_SECURE
+    #include "arch/arm/cortex-m/stk_arch_arm-tz.h"
+#endif
 
 /*! \file  stk_helper.h
     \brief Contains helper implementations which simplify user-side code.
@@ -56,9 +59,9 @@ template <size_t TStackSize> struct StackMemoryDef
     \brief Partial implementation of the user task.
 
     Provides stack storage and default implementations of all optional ITask methods.
-    Inherit from this class and implement GetFunc() and GetFuncUserData() to make a
-    schedulable task. Use ACCESS_USER for unprivileged tasks and ACCESS_PRIVILEGED
-    for tasks requiring full hardware access.
+    Inherit from this class and implement Run() to make a schedulable task. Use
+    ACCESS_USER for unprivileged tasks and ACCESS_PRIVILEGED for tasks requiring
+    full hardware access.
 
     Usage example:
     \code
@@ -77,9 +80,21 @@ template <size_t TStackSize> struct StackMemoryDef
 
     MyTask<ACCESS_PRIVILEGED> my_task;
     \endcode
+
+    \note  On ARM TrustZone Non-Secure builds (\c _STK_CORTEX_M_TRUSTZONE_NON_SECURE), derives from
+           \a tz::nsec::NsTask instead of \a ITask directly. Unlike \a ISyncObject, \a ITask does
+           have an explicit deregistration call (\a IKernel::RemoveTask), but \a NsTask's destructor
+           still acts as a safety net: if a dynamically-allocated task is destroyed without that call
+           first, the Secure-side proxy pool slot is freed anyway, preventing permanent pool exhaustion.
+    \see   tz::nsec::NsTask, IKernel::RemoveTask
 */
 template <size_t _StackSize, EAccessMode _AccessMode>
-class Task : public ITask
+class Task
+#ifdef _STK_CORTEX_M_TRUSTZONE_NON_SECURE
+    : public tz::nsec::NsTask
+#else
+    : public ITask
+#endif
 {
 public:
     enum { STACK_SIZE = _StackSize }; //!< Stack size in elements of Word, mirrors the _StackSize template parameter.
@@ -122,10 +137,16 @@ private:
     \note  Hard Real-Time mode (KERNEL_HRT) is not supported for weighted tasks.
            OnDeadlineMissed() will trigger an assertion if HRT scheduling is attempted.
 
-    See Task for full usage example and implementation guidance.
+    See Task for full usage example, implementation guidance, and TrustZone Non-Secure
+    inheritance notes.
 */
 template <Weight _Weight, size_t _StackSize, EAccessMode _AccessMode>
-class TaskW : public ITask
+class TaskW
+#ifdef _STK_CORTEX_M_TRUSTZONE_NON_SECURE
+    : public tz::nsec::NsTask
+#else
+    : public ITask
+#endif
 {
 public:
     enum { STACK_SIZE = _StackSize }; //!< Stack size in elements of Word, mirrors the _StackSize template parameter.
@@ -209,11 +230,22 @@ private:
     are permitted to touch it directly on the hot path (see e.g. \a Mutex::Unlock)
     instead of going through the virtual \a GetWaitList() accessor.
 
-    \note  Not every \a ISyncObject need derive from this class — an implementation
+    \note  Not every \a ISyncObject need derive from this class - an implementation
            with a different storage strategy (e.g. a cross-domain TrustZone wrapper)
            may implement \a ISyncObject directly instead.
+    \note  On ARM TrustZone Non-Secure builds (\c _STK_CORTEX_M_TRUSTZONE_NON_SECURE), derives from
+           \a tz::nsec::NsSyncObject instead of \a ISyncObject directly. Unlike \a ITask, \a ISyncObject
+           has no explicit deregistration call, so \a NsSyncObject's destructor is the only mechanism
+           that frees the Secure-side proxy pool slot for a dynamically-allocated sync object - without
+           it, destroying sync objects at runtime would permanently exhaust the pool.
+    \see   tz::nsec::NsSyncObject
 */
-class SyncObjectBase : public ISyncObject
+class SyncObjectBase
+#ifdef _STK_CORTEX_M_TRUSTZONE_NON_SECURE
+    : public tz::nsec::NsSyncObject
+#else
+    : public ISyncObject
+#endif
 {
     friend class IKernelService;
 
@@ -320,7 +352,9 @@ inline Weight ISyncObject::FindWeightHigherThan(Weight comp) const
 
 /*! \brief     Get task/thread Id of the calling task.
     \return    Id of the calling task/thread.
-    \warning   ISR-unsafe. Calling from an ISR context is not permitted and will trigger an assertion.
+    \note      ISR-safe. When called from an ISR context, returns \c TID_ISR_N | exception_number
+               (see \a TID_ISR_N) rather than asserting; use \a IsIsrTid() to test for this.
+    \see       TID_ISR_N, TID_NONE, IsIsrTid
 */
 static __stk_forceinline TId GetTid()
 {

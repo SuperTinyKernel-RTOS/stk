@@ -24,9 +24,9 @@
 
 // Architecture back-end selection.
 // Exactly one of the following macros must be defined by the build system (e.g. via -D compiler flag):
-//   _STK_ARCH_ARM_CORTEX_M  — ARM Cortex-M (M0/M0+/M3/M4/M7/M33/M55).
-//   _STK_ARCH_RISC_V        — RISC-V (RV32I/RV32E/RV64, with optional FPU).
-//   _STK_ARCH_X86_WIN32     — x86/x64 on Windows (simulation/test use only).
+//   _STK_ARCH_ARM_CORTEX_M  - ARM Cortex-M (M0/M0+/M3/M4/M7/M33/M55).
+//   _STK_ARCH_RISC_V        - RISC-V (RV32I/RV32E/RV64, with optional FPU).
+//   _STK_ARCH_X86_WIN32     - x86/x64 on Windows (simulation/test use only).
 //
 // Defining more than one is not supported and will result in multiple conflicting definitions.
 // _STK_ARCH_DEFINED is set by whichever back-end is included; it can be tested by downstream
@@ -46,7 +46,7 @@
 
 #ifndef STK_PANIC_HANDLER
     /*! \brief Default panic handler: disable interrupts, record the id,
-               and spin in a tight loop — a defined, detectable safe state.
+               and spin in a tight loop - a defined, detectable safe state.
         \note  On a system with a watchdog enabled this will trigger a watchdog
                reset after the watchdog period, which is the desired behaviour.
         \note  Replace with a platform-specific handler (e.g. one that writes a
@@ -61,7 +61,7 @@ namespace stk {
 
 /*! \brief Called when the kernel detects an unrecoverable internal fault.
     \note  Unlike STK_ASSERT (which checks preconditions) this macro is reached only
-           when a runtime invariant has been irreversibly violated — the kernel
+           when a runtime invariant has been irreversibly violated - the kernel
            cannot continue operating correctly from this point.
     \note  Default behaviour:
              - In debug builds:   triggers a hardware breakpoint so a debugger can
@@ -324,7 +324,8 @@ static __stk_forceinline void WriteVolatile64(volatile T *addr, T value)
     \note  \b Mechanism (two-layer protocol):
            -# Local interrupts are masked on the calling core (via PRIMASK / CPSID on Cortex-M,
               or equivalent on other architectures) to prevent re-entrant ISR access on this core.
-           -# A global spinlock (\c g_CsuLock) is then acquired to block any other core from
+           -# A global spinlock (\c s_StkCortexmCsuLock on the ARM Cortex-M back-end) is then
+              acquired to block any other core from
               entering the same critical section concurrently.
            On Enter() the spinlock is only acquired at nesting depth 0 so that nested Enter()
            calls from the same core do not deadlock. On Exit(), the spinlock is released and
@@ -352,7 +353,7 @@ public:
     enum ESessionFlags : uint8_t
     {
         SESSION_FLAG_NONE  = 0,        //!< None.
-        SESSION_FLAG_NPRIV = (1 << 0), //!< Calling context is non-Priviliged.
+        SESSION_FLAG_NPRIV = (1 << 0), //!< Calling context is non-Privileged.
     };
 
     /*! \brief   Opaque session token returned by Enter() and consumed by Exit().
@@ -410,7 +411,9 @@ public:
                  other cores and the scheduler. Prefer ScopedLock to avoid mismatched pairs.
         \param[in] ses: DEFAULT_SESSION to auto-detect the calling context's privilege level,
                  or an explicit Session to force a specific handling path.
-        \return  True if privileged context, False otherwise.
+        \return  Opaque Session token to pass to the matching Exit() call. Encodes which handling
+                 path was taken (see SESSION_FLAG_NPRIV) - not to be interpreted as a plain
+                 privileged/unprivileged boolean.
     */
     static Session Enter(const Session ses = DEFAULT_SESSION);
 
@@ -439,7 +442,8 @@ private:
                inside CriticalSection.
     \note      Implemented using an atomic test-and-set (or hardware spinlock peripheral on RP2040)
                so that it is safe across multiple CPU cores. CriticalSection::Enter() acquires
-               this lock (via \c g_CsuLock) after masking local interrupts, giving the combined
+               this lock (via \c s_StkCortexmCsuLock on the ARM Cortex-M back-end) after masking
+               local interrupts, giving the combined
                interrupt-mask + cross-core guarantee described in CriticalSection.
     \note      SpinLock is exposed as a public API for use cases that need a bare cross-core lock
                without interrupt masking, for example protecting data shared only between two
@@ -447,8 +451,11 @@ private:
     \note      Use only for very short, low-latency critical sections. Spinning wastes CPU cycles
                and can increase interrupt latency and power consumption.
     \note      Non-recursive: calling Lock() twice from the same thread/core without an intervening
-               Unlock() will deadlock. The ARM implementation includes a debug-break timeout
-               (0xFFFFFF iterations) to catch lock-not-released bugs in debug builds.
+               Unlock() will deadlock. The ARM implementation guards against this: Lock() times out
+               after approximately \c STK_SPINLOCK_TIMEOUT_US (default 5 seconds) of wall-clock spin
+               time, computed at runtime from the core clock speed, and raises
+               \c STK_KERNEL_PANIC(KERNEL_PANIC_SPINLOCK_DEADLOCK) - in all build configurations,
+               not just debug builds.
     \see       CriticalSection
 */
 class SpinLock
@@ -550,7 +557,11 @@ protected:
 
 /*! \class   HiResClock
     \brief   High-resolution clock for high-precision measurements.
-    \warning Not available for non-Privileged or non-Secure contexts.
+    \warning Calling hw::HiResClock directly requires a Privileged/Secure context. On TrustZone
+             targets, Non-Secure/unprivileged callers must go through the NSC (Non-Secure
+             Callable) gateway functions (\c NSC_stk_hw_HiResClock_GetFrequency,
+             \c NSC_stk_hw_HiResClock_GetCycles) provided by the ARM Cortex-M back-end instead
+             of calling this class directly.
 */
 struct HiResClock
 {

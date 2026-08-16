@@ -326,7 +326,7 @@ class PlatformEventHandler final : public stk::IPlatform::IEventOverrider
 };
 
 // Task's core (thread)
-class MyTask : public stk::ITask
+class MyTask : public stk::tz::nsec::NsTask
 {
     // Private per-task scratch memory. Each task instance gets its own, and (thanks to the MPU
     // region installed in MyTask's constructor) no other ACCESS_USER task can read or write it,

@@ -1459,7 +1459,7 @@
 								<option IS_BUILTIN_EMPTY="false" IS_VALUE_EMPTY="false" id="ilg.gnuarmeclipse.managedbuild.cross.option.cpp.linker.paths.123560084" name="Library search path (-L)" superClass="ilg.gnuarmeclipse.managedbuild.cross.option.cpp.linker.paths" useByScannerDiscovery="false" valueType="libPaths">
 									<listOptionValue builtIn="false" value="&quot;${ProjDirPath}/../../../../../../deps/target/rpi/rp2_common/pico_crt0/rp2350&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;${ProjDirPath}/../../../../../../deps/target/rpi/boards/pico2_w&quot;"/>
-									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/blinky_mpu-trustzone-sc-rp2350w/Debug}&quot;"/>
+									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/blinky_mpu-trustzone-sc-rp2350w/Release}&quot;"/>
 								</option>
 								<option IS_BUILTIN_EMPTY="false" IS_VALUE_EMPTY="false" id="ilg.gnuarmeclipse.managedbuild.cross.option.cpp.linker.scriptfile.1801527071" name="Script files (-T)" superClass="ilg.gnuarmeclipse.managedbuild.cross.option.cpp.linker.scriptfile" useByScannerDiscovery="false" valueType="stringList">
 									<listOptionValue builtIn="false" value="memmap_tz_ns.ld"/>

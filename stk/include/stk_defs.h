@@ -113,7 +113,8 @@
     \note  When set to 1 the stk::Stack gains no \c tls member, reducing
            per-task RAM by one \c Word. On targets with many tasks this saving can
            be significant.
-    \note  Default: 0 (disabled). Leave at 0 if \c -ffixed-r9 cannot be applied
+    \note  Default: 0 (disabled) on all architectures except RISC-V, where it defaults to 1
+           (see the RISC-V note above). Leave at 0 if \c -ffixed-r9 cannot be applied
            to all task translation units (e.g. pre-built third-party libraries);
            the memory-based fallback incurs only one extra load/store per TLS access.
     \warning Cortex-M only: \c -ffixed-r9 must be applied to \e every translation
@@ -169,10 +170,11 @@
 /*! \def   STK_STACK_NEEDS_TASK_ID
     \brief When defined as 1, the Stack descriptor (stk::Stack) carries a \c tid field
            used by the SEGGER SystemView trace back-end to identify tasks during context switches.
-    \note  Set unconditionally (no \c #ifndef guard) whenever STK_SEGGER_SYSVIEW is enabled.
-           Any prior manual definition will be silently overwritten. Do not define this macro
-           manually; enable STK_SEGGER_SYSVIEW instead.
-    \see   STK_SEGGER_SYSVIEW, stk::Stack
+    \note  Automatically defined to 1 (guarded by \c #ifndef, so a prior manual definition is
+           respected) whenever STK_SEGGER_SYSVIEW \e or STK_MPU_STACK_GUARD is enabled. Do not
+           rely on defining this macro manually; enable STK_SEGGER_SYSVIEW or STK_MPU_STACK_GUARD
+           instead.
+    \see   STK_SEGGER_SYSVIEW, STK_MPU_STACK_GUARD, stk::Stack
 */
 #if STK_SEGGER_SYSVIEW || STK_MPU_STACK_GUARD
 	#ifndef STK_STACK_NEEDS_TASK_ID
@@ -345,10 +347,13 @@
            that the current thread is in a spin-wait. Platform-specific expansions:
            - x86/x64 (GCC/Clang/MSVC): the \c PAUSE instruction via \c __builtin_ia32_pause() or \c _mm_pause().
            - RISC-V with Zihintpause (GCC/Clang): the \c PAUSE hint via \c __builtin_riscv_pause().
-           - RISC-V without Zihintpause (GCC/Clang): falls back to \c __stk_full_memfence().
+           - RISC-V without Zihintpause (GCC/Clang): falls back to a \c nop compiler barrier
+             (compiler-reordering fence only, no CPU-level memory fence).
            - ARM Cortex-M (GCC/Clang/IAR): the \c YIELD instruction via inline asm; valid Thumb on all M0-M33 variants.
            - ARM Cortex-M (MSVC): the \c YIELD instruction via \c __yield().
-           - Other/unknown targets: falls back to \c __stk_full_memfence().
+           - Other/unknown GCC/Clang targets: falls back to an empty inline-asm compiler barrier
+             (compiler-reordering fence only, no CPU-level memory fence).
+           - Other/unknown MSVC targets: falls back to \c __stk_full_memfence() (a true CPU memory fence).
     \note  Can be redefined externally (e.g. in test harnesses) to intercept control inside kernel
            waiting loops without modifying kernel source.
 */
@@ -658,8 +663,8 @@ struct STK_ALLOCATE_COUNT
     \param     x The expression to evaluate.
 */
 #if __cplusplus >= 202002L
-    #define STK_LIKELY(x)   ([]() { if constexpr (!!(x)) [[likely]] return true; else return false; }())
-    #define STK_UNLIKELY(x) ([]() { if constexpr (!!(x)) return true; else [[unlikely]] return false; }())
+    #define STK_LIKELY(x)   ([&]() { if (!!(x)) [[likely]] { return true; } else { return false; } }())
+    #define STK_UNLIKELY(x) ([&]() { if (!!(x)) { return true; } else [[unlikely]] { return false; } }())
 #elif defined(__GNUC__) || defined(__clang__)
     #define STK_LIKELY(x)   __builtin_expect(!!(x), 1)
     #define STK_UNLIKELY(x) __builtin_expect(!!(x), 0)
