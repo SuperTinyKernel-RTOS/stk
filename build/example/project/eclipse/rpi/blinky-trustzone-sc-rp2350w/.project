@@ -3,6 +3,7 @@
 	<name>blinky-trustzone-sc-rp2350w</name>
 	<comment></comment>
 	<projects>
+		<project>blinky-trustzone-nsc-rp2350w</project>
 	</projects>
 	<buildSpec>
 		<buildCommand>

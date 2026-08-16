@@ -25,9 +25,7 @@
 using namespace stk;
 
 // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-#if defined(_STK_CORTEX_M_TRUSTZONE) ||\
-    (!defined(_STK_CORTEX_M_TRUSTZONE) && (!STK_TZ_NON_SECURE && STK_TZ_SECURE)) ||\
-    (!defined(_STK_CORTEX_M_TRUSTZONE) && (!STK_TZ_NON_SECURE && !STK_TZ_SECURE))
+#if !defined(_STK_CORTEX_M_TRUSTZONE_NON_SECURE)
 // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 //! Do sanity check for a compiler define, __CORTEX_M must be defined.
@@ -3828,7 +3826,7 @@ void hw::mpu::ConfigureDynamic(TaskMpu &task_mpu, const struct MpuRegionConfig c
 #endif // STK_MPU
 
 // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-#endif // _STK_CORTEX_M_TRUSTZONE
+#endif // !defined(_STK_CORTEX_M_TRUSTZONE_NON_SECURE)
 // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 #if STK_MPU

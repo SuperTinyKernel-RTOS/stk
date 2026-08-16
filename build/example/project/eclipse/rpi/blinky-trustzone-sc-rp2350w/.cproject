@@ -938,7 +938,7 @@
 									<listOptionValue builtIn="false" value="&quot;${ProjDirPath}/../../../../../../../stk-arm-tz/include&quot;"/>
 								</option>
 								<option IS_BUILTIN_EMPTY="false" IS_VALUE_EMPTY="false" id="ilg.gnuarmeclipse.managedbuild.cross.option.assembler.defs.307326933" name="Defined symbols (-D)" superClass="ilg.gnuarmeclipse.managedbuild.cross.option.assembler.defs" useByScannerDiscovery="true" valueType="definedSymbols">
-									<listOptionValue builtIn="false" value="DEBUG"/>
+									<listOptionValue builtIn="false" value="NDEBUG"/>
 									<listOptionValue builtIn="false" value="PICO_BOARD_PICO2_W"/>
 									<listOptionValue builtIn="false" value="PICO_ON_DEVICE=1"/>
 									<listOptionValue builtIn="false" value="PICO_RP2350=1"/>
@@ -955,7 +955,7 @@
 									<listOptionValue builtIn="false" value="LIB_PICO_FLOAT_PICO_VFP=1"/>
 									<listOptionValue builtIn="false" value="CYW43_LWIP=0"/>
 									<listOptionValue builtIn="false" value="PICO_CYW43_ARCH_THREADSAFE_BACKGROUND=1"/>
-									<listOptionValue builtIn="false" value="LIB_PICO_STDIO_SEMIHOSTING=1"/>
+									<listOptionValue builtIn="false" value="LIB_PICO_STDIO_SEMIHOSTING=0"/>
 								</option>
 								<option IS_BUILTIN_EMPTY="false" IS_VALUE_EMPTY="false" id="ilg.gnuarmeclipse.managedbuild.cross.option.assembler.include.systempaths.1560693553" name="Include system paths (-isystem)" superClass="ilg.gnuarmeclipse.managedbuild.cross.option.assembler.include.systempaths" valueType="includePath">
 									<listOptionValue builtIn="false" value="&quot;${ProjDirPath}/../../../../../../deps/target/rpi/rp2_common/cmsis/stub/CMSIS/Core/Include&quot;"/>
@@ -1067,7 +1067,7 @@
 									<listOptionValue builtIn="false" value="&quot;${ProjDirPath}/../../../../../../../stk-arm-tz/include&quot;"/>
 								</option>
 								<option IS_BUILTIN_EMPTY="false" IS_VALUE_EMPTY="false" id="ilg.gnuarmeclipse.managedbuild.cross.option.c.compiler.defs.674991523" name="Defined symbols (-D)" superClass="ilg.gnuarmeclipse.managedbuild.cross.option.c.compiler.defs" useByScannerDiscovery="true" valueType="definedSymbols">
-									<listOptionValue builtIn="false" value="DEBUG"/>
+									<listOptionValue builtIn="false" value="NDEBUG"/>
 									<listOptionValue builtIn="false" value="PICO_BOARD_PICO2_W"/>
 									<listOptionValue builtIn="false" value="PICO_ON_DEVICE=1"/>
 									<listOptionValue builtIn="false" value="PICO_RP2350=1"/>
@@ -1084,7 +1084,7 @@
 									<listOptionValue builtIn="false" value="LIB_PICO_FLOAT_PICO_VFP=1"/>
 									<listOptionValue builtIn="false" value="CYW43_LWIP=0"/>
 									<listOptionValue builtIn="false" value="PICO_CYW43_ARCH_THREADSAFE_BACKGROUND=1"/>
-									<listOptionValue builtIn="false" value="LIB_PICO_STDIO_SEMIHOSTING=1"/>
+									<listOptionValue builtIn="false" value="LIB_PICO_STDIO_SEMIHOSTING=0"/>
 								</option>
 								<option IS_BUILTIN_EMPTY="false" IS_VALUE_EMPTY="false" id="ilg.gnuarmeclipse.managedbuild.cross.option.c.compiler.include.systempaths.1593130634" name="Include system paths (-isystem)" superClass="ilg.gnuarmeclipse.managedbuild.cross.option.c.compiler.include.systempaths" useByScannerDiscovery="true" valueType="includePath">
 									<listOptionValue builtIn="false" value="&quot;${ProjDirPath}/../../../../../../deps/target/rpi/rp2_common/cmsis/stub/CMSIS/Core/Include&quot;"/>
@@ -1200,7 +1200,7 @@
 								<option id="ilg.gnuarmeclipse.managedbuild.cross.option.cpp.compiler.nousecxaatexit.933431943" name="Do not use _cxa_atexit() (-fno-use-cxa-atexit)" superClass="ilg.gnuarmeclipse.managedbuild.cross.option.cpp.compiler.nousecxaatexit" useByScannerDiscovery="true" value="true" valueType="boolean"/>
 								<option id="ilg.gnuarmeclipse.managedbuild.cross.option.cpp.compiler.nothreadsafestatics.1444264868" name="Do not use thread-safe statics (-fno-threadsafe-statics)" superClass="ilg.gnuarmeclipse.managedbuild.cross.option.cpp.compiler.nothreadsafestatics" useByScannerDiscovery="true" value="true" valueType="boolean"/>
 								<option IS_BUILTIN_EMPTY="false" IS_VALUE_EMPTY="false" id="ilg.gnuarmeclipse.managedbuild.cross.option.cpp.compiler.defs.33054591" name="Defined symbols (-D)" superClass="ilg.gnuarmeclipse.managedbuild.cross.option.cpp.compiler.defs" useByScannerDiscovery="true" valueType="definedSymbols">
-									<listOptionValue builtIn="false" value="DEBUG"/>
+									<listOptionValue builtIn="false" value="NDEBUG"/>
 									<listOptionValue builtIn="false" value="PICO_BOARD_PICO2_W"/>
 									<listOptionValue builtIn="false" value="PICO_ON_DEVICE=1"/>
 									<listOptionValue builtIn="false" value="PICO_RP2350=1"/>
@@ -1217,7 +1217,7 @@
 									<listOptionValue builtIn="false" value="LIB_PICO_FLOAT_PICO_VFP=1"/>
 									<listOptionValue builtIn="false" value="CYW43_LWIP=0"/>
 									<listOptionValue builtIn="false" value="PICO_CYW43_ARCH_THREADSAFE_BACKGROUND=1"/>
-									<listOptionValue builtIn="false" value="LIB_PICO_STDIO_SEMIHOSTING=1"/>
+									<listOptionValue builtIn="false" value="LIB_PICO_STDIO_SEMIHOSTING=0"/>
 								</option>
 								<option IS_BUILTIN_EMPTY="false" IS_VALUE_EMPTY="false" id="ilg.gnuarmeclipse.managedbuild.cross.option.cpp.compiler.include.systempaths.1860266343" name="Include system paths (-isystem)" superClass="ilg.gnuarmeclipse.managedbuild.cross.option.cpp.compiler.include.systempaths" useByScannerDiscovery="true" valueType="includePath">
 									<listOptionValue builtIn="false" value="&quot;${ProjDirPath}/../../../../../../deps/target/rpi/rp2_common/cmsis/stub/CMSIS/Core/Include&quot;"/>

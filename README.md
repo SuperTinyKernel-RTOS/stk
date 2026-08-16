@@ -23,20 +23,20 @@ STK combines the control and transparency of bare-metal development with the str
 
 You get:
 
-- **C++ native RTOS** — Built so the C++ compiler can efficiently optimize your STK-based application for maximum speed and ultra-low overhead.
-- **Safe code from day one** — Thoughtful OOP design enforces strict encapsulation and type safety to deliver secure, robust, and high-performance firmware.
-- **Full-featured RTOS** — A comprehensive suite of thread synchronization, memory, and time management primitives. You only need to bring your own HAL.
-- **Safety-critical ready** — Built for strict compliance with MISRA standards. Looking for a safe C++ RTOS for your certified device? Explore our [Services](#services). 
-- **Deterministic execution** — Zero dynamic memory allocation (`malloc`/`free`) and zero heap fragmentation. Memory usage is fully predictable at compile time.
-- **Clean C++ design** — No STL dependencies, exceptions, RTTI, or heavy runtime abstractions. Readable internals simplify debugging and tracing.
-- **Verbose-free code** — A clean C++ API makes your implementation highly concise, making it significantly easier to maintain, refactor, and debug than standard C-only APIs.
-- **Portable design** — Minimal BSP (Board Support Package) footprint with complete independence from specific board and MCU peripherals.
-- **Reduced hardware requirements** — Compact kernel footprint that allows you to deploy on lower-RAM, lower-cost MCU variants.
-- **Higher CPU availability** — More time for your application logic. Benchmarks show up to **~12% more application CPU time** compared to FreeRTOS under comparable workloads (see [Benchmark](#benchmark)).
-- **Lower power consumption** — Features ultra-low power, tickless scheduling paired with reduced overhead, enabling the use of lower-frequency MCUs to save battery of your portable design.
-- **Native C support** — Includes a fully featured C API wrapper, allowing you to seamlessly use STK in pure C projects.
-- **Simplified migration** — Drop-in compatibility layers for FreeRTOS and CMSIS-RTOS2 to help you migrate legacy codebases with minimal application changes.
-- **B2B professional support** — Engineered for seamless integration into commercial projects. Explore our [Services](#services) for enterprise-grade support and custom engineering.
+- **C++ native RTOS** - Built so the C++ compiler can efficiently optimize your STK-based application for maximum speed and ultra-low overhead.
+- **Safe code from day one** - Thoughtful OOP design enforces strict encapsulation and type safety to deliver secure, robust, and high-performance firmware.
+- **Full-featured RTOS** - A comprehensive suite of thread synchronization, memory, and time management primitives. You only need to bring your own HAL.
+- **Safety-critical ready** - Built for strict compliance with MISRA standards. Looking for a safe C++ RTOS for your certified device? Explore our [Services](#services). 
+- **Deterministic execution** - Zero dynamic memory allocation (`malloc`/`free`) and zero heap fragmentation. Memory usage is fully predictable at compile time.
+- **Clean C++ design** - No STL dependencies, exceptions, RTTI, or heavy runtime abstractions. Readable internals simplify debugging and tracing.
+- **Verbose-free code** - A clean C++ API makes your implementation highly concise, making it significantly easier to maintain, refactor, and debug than standard C-only APIs.
+- **Portable design** - Minimal BSP (Board Support Package) footprint with complete independence from specific board and MCU peripherals.
+- **Reduced hardware requirements** - Compact kernel footprint that allows you to deploy on lower-RAM, lower-cost MCU variants.
+- **Higher CPU availability** - More time for your application logic. Benchmarks show up to **~12% more application CPU time** compared to FreeRTOS under comparable workloads (see [Benchmark](#benchmark)).
+- **Lower power consumption** - Features ultra-low power, tickless scheduling paired with reduced overhead, enabling the use of lower-frequency MCUs to save battery of your portable design.
+- **Native C support** - Includes a fully featured C API wrapper, allowing you to seamlessly use STK in pure C projects.
+- **Simplified migration** - Drop-in compatibility layers for FreeRTOS and CMSIS-RTOS2 to help you migrate legacy codebases with minimal application changes.
+- **B2B professional support** - Engineered for seamless integration into commercial projects. Explore our [Services](#services) for enterprise-grade support and custom engineering.
 
 > STK does not attempt to abstract or manage MCU peripherals, similarly to FreeRTOS or CMSIS-RTOS2.
 
@@ -62,10 +62,11 @@ STK is an open-source project developed at https://github.com/SuperTinyKernel-RT
 | **Synchronization API**                              | Rich set of primitives in `stk::sync` namespace                                                                                                                                                                              |
 | **Memory API**                                       | Deterministic, fragmentation-free allocator in `stk::memory` namespace                                                                                                                                                       |
 | **Thread-Local Storage (TLS)**                       | Per-task TLS via a dedicated CPU register via inline zero-overhead helpers                                                                                                                                                   |
-| **Per-task MPU stack guard (`STK_MPU_STACK_GUARD`)** | Hardware-enforced stack overflow protection                                                                                                                                                                                  |
+| **Per-task MPU stack guard (`STK_MPU_STACK_GUARD`)** | Hardware-enforced stack overflow protection, plus 2 or 4 dynamic per-task regions (auto stack guard + task-instance/user-defined) reprogrammed on every context switch                                                        |
 | **Tiny footprint**                                   | Minimal code unrelated to scheduling                                                                                                                                                                                         |
 | **ARM TrustZone support**                            | Secure-only task scheduling, or Non-Secure + Secure task scheduling with kernel residing in a Secure binary                                                                                                                  |
-| **Safety-critical systems ready**                    | No dynamic heap memory allocation — a required baseline for IEC 61508 / ISO 26262 / DO-178C certification. See [Professional Services](#-professional-services--commercial-licensing) for certification support.             |
+| **Independent per-zone MPU hardening (TrustZone)**   | Separate MPU (Secure) and MPU_NS (Non-Secure) region tables, task privilege separation, and stack guards - each zone configured, enabled, and enforced fully independently of the other                                      |
+| **Safety-critical systems ready**                    | No dynamic heap memory allocation - a required baseline for IEC 61508 / ISO 26262 / DO-178C certification. See [Professional Services](#-professional-services--commercial-licensing) for certification support.             |
 | **C++ and C API**                                    | Can be used easily in C++ and C projects                                                                                                                                                                                     |
 | **CMSIS-RTOS2 compatible**                           | Full CMSIS-RTOS2 wrapper (`cmsis_os2_stk.cpp`) maps the standard ARM CMSIS-RTOS2 C API onto STK, enabling drop-in compatibility with STM32CubeMX, MCUXpresso, and other CMSIS-aware middleware                               |
 | **FreeRTOS compatible**                              | Full FreeRTOS wrapper (`freertos_stk.cpp`) maps the standard FreeRTOS C API onto STK, enabling drop-in migration of existing FreeRTOS codebases with minimal or no application changes                                       |
@@ -149,9 +150,9 @@ STK is one of the few lightweight RTOSes that offers all popular switching strat
 | `SwitchStrategyRoundRobin` / `SwitchStrategyRR` | Soft / HRT | Round-Robin scheduling strategy (Default). Each runnable task receives one time slice per tick in turn. Allows 100% CPU utilization.                                                                                                                                                                                                                                       |
 | `SwitchStrategySmoothWeightedRoundRobin` / `SwitchStrategySWRR` | Soft / HRT | Smooth Weighted Round-Robin (SWRR). Distributes CPU time proportionally to per-task weights with burst-free interleaving. On each tick: every task's current weight is incremented by its static weight; the task with the highest current weight runs and then has the total weight sum deducted. Includes a wake-up priority boost to prevent I/O-bound task starvation. |
 | `SwitchStrategyFixedPriority`            | Soft / HRT | Fixed-Priority Round-Robin. Tasks have fixed priorities (up to 32 levels); same-priority tasks are scheduled in Round-Robin order. Kernel supports Priority Inheritance automatically. Behavior is similar to FreeRTOS's scheduler.                                                                                                                                        |
-| `SwitchStrategyRM`                       | HRT        | Rate-Monotonic (RM). Assigns fixed priorities based on task periodicity — shorter period means higher priority. Optimal among all fixed-priority policies for independent periodic tasks. Includes WCRT schedulability analysis.                                                                                                                                           |
-| `SwitchStrategyDM`                       | HRT        | Deadline-Monotonic (DM). Assigns fixed priorities based on task deadlines — shorter deadline means higher priority. Generalizes RM; optimal when deadlines ≤ periods. Includes WCRT schedulability analysis.                                                                                                                                                               |
-| `SwitchStrategyEDF`                      | HRT        | Earliest Deadline First (EDF). Selects the runnable task with the smallest relative deadline (`deadline − elapsed_duration`) via an O(n) linear scan each tick. Provably optimal for single-processor systems — if a feasible schedule exists, EDF will find it.                                                                                                           |
+| `SwitchStrategyRM`                       | HRT        | Rate-Monotonic (RM). Assigns fixed priorities based on task periodicity - shorter period means higher priority. Optimal among all fixed-priority policies for independent periodic tasks. Includes WCRT schedulability analysis.                                                                                                                                           |
+| `SwitchStrategyDM`                       | HRT        | Deadline-Monotonic (DM). Assigns fixed priorities based on task deadlines - shorter deadline means higher priority. Generalizes RM; optimal when deadlines ≤ periods. Includes WCRT schedulability analysis.                                                                                                                                                               |
+| `SwitchStrategyEDF`                      | HRT        | Earliest Deadline First (EDF). Selects the runnable task with the smallest relative deadline (`deadline − elapsed_duration`) via an O(n) linear scan each tick. Provably optimal for single-processor systems - if a feasible schedule exists, EDF will find it.                                                                                                           |
 | `SwitchStrategyMCAS` 🔒                  | HRT        | Mixed-Criticality Adaptive Scheduler (2-level). SWRR within each criticality group (LO / HI) with automatic escalation to a protected HI-only mode on budget overrun. **Commercial License**                                                                                                                                                                               |
 | `SwitchStrategyMCAS4` 🔒                 | HRT        | Mixed-Criticality Adaptive Scheduler (4-level). Extends MCAS with four criticality levels, cascade escalation/recovery, and elastic CPU share adaptation via per-group EWMA pressure estimation. **Commercial License**                                                                                                                                                    |
 | **Custom**                               | Soft / HRT | Custom algorithm implemented via the `ITaskSwitchStrategy` interface. By implementing the `ITaskSwitchStrategy` interface you can provide your own unique scheduling strategy without changing anything inside the kernel.                                                                                                                                                 |
@@ -191,35 +192,45 @@ class DriverTask : public stk::Task<256, ACCESS_PRIVILEGED> { ... };
 class ParserTask : public stk::Task<512, ACCESS_USER> { ... };
 ```
 
-#### Per-Task MPU Stack Guard (`STK_MPU_STACK_GUARD`)
+#### Per-Task MPU Stack Guard & Dynamic Regions (`STK_MPU_STACK_GUARD`)
 
-Enabling `STK_MPU_STACK_GUARD` (on top of `STK_MPU=1`) reserves the last 2/4 MPU regions for a **per-task MPU** that the kernel fully reprograms on every context switch:
-- One region is always driver-owned and set to precisely the bounds of the incoming task's own stack (full access, execute-never). Since no other region covers memory beyond those bounds, any out-of-bounds stack access — a stack overflow or underflow, immediately raises a hardware fault instead of silently corrupting adjacent RAM or another task's stack.
-- The remaining regions are available to the `applica`tion, letting each task attach additional task-specific memory regions (e.g. a private data section, a restricted peripheral window, or shared read-only code/data) by overriding `ITask::GetMpuRegions()`.
-- All region descriptors are written to the MPU in a single burst load/store during the PendSV handler, keeping the extra context-switch overhead minimal.
+Enabling `STK_MPU_STACK_GUARD` (on top of `STK_MPU=1`) gives every task its own **dynamic per-task MPU region set**, sized to either **2 or 4** hardware regions via `STK_MPU_TASK_REGIONS`. Unlike the static/background regions configured once at boot, this per-task region set is **fully reprogrammed by the kernel on every context switch**, so the live MPU always reflects the regions belonging to whichever task is about to run:
+
+- **Region 0 — stack guard (automatic).** Always driver-owned and computed from the incoming task's own stack bounds (full access, execute-never). Since no other region covers memory beyond those bounds, any out-of-bounds stack access — a stack overflow or underflow — immediately raises a hardware fault instead of silently corrupting adjacent RAM or another task's stack. The scheduler allocates and updates this region for every task automatically; the application never has to define it.
+- **Region 1 — task instance (`this`), by convention.** The remaining regions are supplied by the task itself by overriding `ITask::GetMpuRegions()`, which returns an `stk::MpuRegionList`. The pattern used throughout STK's reference examples is to dedicate region 1 to the task's own class instance — `addr = this`, `size = sizeof(*this)` (or just its private-data member) — so a task can freely read/write its own state while staying walled off from every other task's memory, even other instances of the exact same C++ class.
+- **Regions 2 and 3 — free for application use, when `STK_MPU_TASK_REGIONS = 4`.** In 4-region mode, two additional slots are left entirely for the application to define via the same `GetMpuRegions()` list — e.g. a restricted peripheral window, a shared read-only code/data section, or a second private buffer. In 2-region mode, only region 1 is available.
+- All region descriptors for the incoming task are computed once and written to the live MPU registers in a single burst load/store during the PendSV handler, so per-task region reprogramming stays a small, fixed-cost part of every context switch regardless of whether 2 or 4 regions are configured.
 
 ##### Example
 
 ```cpp
 class SensorTask : public stk::Task<512, ACCESS_USER>
 {
-public:
-    const stk::MpuRegionConfig *GetMpuRegions(uint8_t &out_count) override
+    // Private per-task scratch data, protected via region 1 below.
+    struct PrivateData
     {
-        static const stk::MpuRegionConfig regions[] =
-        {
-            {
-                .addr        = hw::PtrToWord(__sensor_task_private_data_start),
-                .size        = hw::PtrToWord(__sensor_task_private_data_end) - hw::PtrToWord(__sensor_task_private_data_start),
-                .access_perm = hw::mpu::ACCESS_FULL,
-                .mem_type    = hw::mpu::TYPE_NORMAL_CACHEABLE,
-                .exec        = hw::mpu::EXEC_NEVER
-            }
-        };
+        uint32_t sample_count;
+    } m_private;
 
-        out_count = STK_STATIC_ARRAY_SIZE(regions);
-        return regions;
-    }
+    // Region 1: this task instance's own memory - readable/writable only by itself, even
+    // though every SensorTask instance shares the same C++ type.
+    const stk::MpuRegionConfig m_mpu_regions[1] =
+    {
+        {
+            .addr        = stk::hw::PtrToWord(this),
+            .size        = sizeof(SensorTask),
+            .access_perm = stk::hw::mpu::ACCESS_FULL,
+            .mem_type    = stk::hw::mpu::TYPE_NORMAL_CACHEABLE,
+            .share       = stk::hw::mpu::SHARE_NON,
+            .exec        = stk::hw::mpu::EXEC_NEVER
+        }
+    };
+    const stk::MpuRegionList m_mpu_regions_list{ m_mpu_regions, STK_STATIC_ARRAY_SIZE(m_mpu_regions) };
+
+public:
+    // Supplies region 1 (the slot right after the automatic stack guard in region 0).
+    // With STK_MPU_TASK_REGIONS=4, add up to 2 more entries here for regions 2 and 3.
+    const stk::MpuRegionList *GetMpuRegions() const override { return &m_mpu_regions_list; }
 };
 ```
 
@@ -234,9 +245,9 @@ The open-source Cortex-M architecture driver (`stk_arch_arm-cortex-m.cpp`) alrea
 * Secure/Non-Secure FPU lazy-stacking setup (CP10/CP11 access for both states).
 * Detecting which security state a task was running in (S-bit) when a context switch occurs.
 
-This is enough to build a **Secure-only** system, where the kernel and all tasks it schedules reside entirely in the Secure binary. A Non-Secure image may still exist and run on the chip (e.g. bootloader-provided or third-party Non-Secure code) — STK simply does not schedule, wrap, or otherwise manage any tasks running there.
+This is enough to build a **Secure-only** system, where the kernel and all tasks it schedules reside entirely in the Secure binary. A Non-Secure image may still exist and run on the chip (e.g. bootloader-provided or third-party Non-Secure code) - STK simply does not schedule, wrap, or otherwise manage any tasks running there.
 
-The **full-featured TrustZone interface** — enabling a proper split system where the kernel lives in the Secure binary and schedules both Secure *and* Non-Secure tasks — is available under the [commercial license](#-professional-services--commercial-licensing). This interface (`stk_arch_arm-tz.h` / `stk_arch_arm-tz.cpp`) provides:
+The **full-featured TrustZone interface** - enabling a proper split system where the kernel lives in the Secure binary and schedules both Secure *and* Non-Secure tasks - is available under the [commercial license](#-professional-services--commercial-licensing). This interface (`stk_arch_arm-tz.h` / `stk_arch_arm-tz.cpp`) provides:
 * CMSE (`ARM_CMSE`)-based Non-Secure callable (NSC) gateway functions exposing kernel services (`AddTask`, `RemoveTask`, `SuspendTask`, `ResumeTask`, `Sleep`, `Delay`, `Wait`, `GetTid`, `GetTicks`, critical sections, spinlocks, etc.) to the Non-Secure world.
 * Lightweight `ITask`/`ISyncObject`/`IMutex` wrapper structures (`CmseITaskWrapper`, `CmseISyncObjectWrapper`, `CmseIMutexWrapper`) that bridge Non-Secure task objects and synchronization primitives across the security boundary, so a Non-Secure task looks and behaves like a regular STK task to the Secure-side scheduler.
 * A drop-in Non-Secure `stk::tz::nsec::Kernel` / `KernelService` facade, so Non-Secure application code uses the same familiar STK API (`AddTask`, `Start`, `Sleep`, `Wait`, ...) without needing to know it is actually calling across the Secure boundary.
@@ -245,8 +256,8 @@ The **full-featured TrustZone interface** — enabling a proper split system whe
 
 | Model                                     | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 |-------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| **Secure-only**                           | The STK kernel and all its tasks reside in the Secure binary. A Non-Secure world may be present and running on the chip, but STK does not schedule or manage any tasks in it — only Secure tasks are ever scheduled. Achievable with the open-source Cortex-M driver alone.                                                                                                                                                                                                                    |
-| **Non-Secure + Secure (full protection)** | The STK kernel and its trusted tasks reside in the **Secure** binary, while application tasks run in a separate **Non-Secure** binary. The kernel schedules both worlds, but Non-Secure code can only reach the kernel through explicit, CMSE-checked NSC gateway functions — it can never call into, inspect, or corrupt Secure-side kernel state or Secure task memory directly. Requires the [commercial](#services) full-featured TrustZone interface, or you can freely develop your own. |
+| **Secure-only**                           | The STK kernel and all its tasks reside in the Secure binary. A Non-Secure world may be present and running on the chip, but STK does not schedule or manage any tasks in it - only Secure tasks are ever scheduled. Achievable with the open-source Cortex-M driver alone.                                                                                                                                                                                                                    |
+| **Non-Secure + Secure (full protection)** | The STK kernel and its trusted tasks reside in the **Secure** binary, while application tasks run in a separate **Non-Secure** binary. The kernel schedules both worlds, but Non-Secure code can only reach the kernel through explicit, CMSE-checked NSC gateway functions - it can never call into, inspect, or corrupt Secure-side kernel state or Secure task memory directly. Requires the [commercial](#services) full-featured TrustZone interface, or you can freely develop your own. |
 
 > 🔒 Commercial STK Interface for ARM TrustZone is available to commercial licensees for faster time-to-market development. See the bottom of `README.md` for [contact details](#services).
 
@@ -254,19 +265,82 @@ The **full-featured TrustZone interface** — enabling a proper split system whe
 
 ![STK TrustZone Secure-only mode](docs/img/stk_trustzone_secure-only.svg)
 
-**Non-Secure + Secure (full protection):** the Secure kernel schedules both worlds, but Non-Secure tasks can only reach it through CMSE-checked NSC gateway functions — direct access to Secure memory or kernel state is blocked by hardware.
+**Non-Secure + Secure (full protection):** the Secure kernel schedules both worlds, but Non-Secure tasks can only reach it through CMSE-checked NSC gateway functions - direct access to Secure memory or kernel state is blocked by hardware.
 
 ![STK TrustZone Non-Secure + Secure mode](docs/img/stk_trustzone_ns-plus-secure.svg)
 
-In the Non-Secure + Secure model, the Non-Secure application is **fully protected from the Secure world's perspective**: hardware (SAU/IDAU + MPU) prevents Non-Secure code from ever accessing Secure memory or peripherals, while the kernel itself lives entirely on the trusted, Secure side — so a compromised or buggy Non-Secure task can, at worst, disrupt only the Non-Secure world, never the Secure kernel or Secure tasks.
+In the Non-Secure + Secure model, the Non-Secure application is **fully protected from the Secure world's perspective**: hardware (SAU/IDAU + MPU) prevents Non-Secure code from ever accessing Secure memory or peripherals, while the kernel itself lives entirely on the trusted, Secure side - so a compromised or buggy Non-Secure task can, at worst, disrupt only the Non-Secure world, never the Secure kernel or Secure tasks.
+
+#### Independent MPU Hardening per Security State
+
+Armv8-M TrustZone cores expose **two separate hardware MPU instances**, Secure `MPU` and its Non-Secure alias `MPU_NS`, on top of the SAU/IDAU memory partitioning. STK's Cortex-M driver treats these as two fully independent protection domains, so you can configure, enable, and harden each side of the Secure/Non-Secure boundary to its own threat model, without either side's configuration being able to leak into or override the other:
+
+* **Per-side static regions.** `IPlatform::IEventOverrider::OnConfigureMpu()` returns an `stk::MpuConfig` describing the region table for *one* MPU instance. Register up to two overriders, one per security state, via `IPlatform::SetEventOverrider(overrider, non_secure)`. The `hw::mpu::MPU_CFG_NONSECURE_MPU` bit in `MpuConfig::mode` marks which physical instance a config targets, and the driver asserts that flag matches the overrider slot it was returned from, so a table meant for `MPU_NS` can never be written into the Secure `MPU`, or vice versa.
+* **Per-side task privilege separation.** `ACCESS_PRIVILEGED` / `ACCESS_USER` is enforced against whichever MPU instance backs the security state a task is currently executing in, so the same task can be Privileged on one side of the boundary and Unprivileged on the other if your NSC gateway design calls for it.
+* **Per-side stack guard.** With `STK_MPU_STACK_GUARD` enabled, the kernel reprograms **both** MPU instances on every context switch for a Non-Secure task: the Secure per-task guard region protects the Secure-side register frame saved for that task, while a completely separate Non-Secure guard region protects the task's actual Non-Secure stack - an overflow on the Non-Secure side raises a fault against `MPU_NS` alone, without the kernel ever needing to touch or trust Secure region state to catch it.
+* **Per-side fault diagnostics.** `stk::FaultContext` carries independent `mpu` (Secure) and `mpu_ns` (Non-Secure) region-table snapshots, so a single Secure-side fault handler can inspect and report the live configuration of *both* MPU instances at once, making it easy to tell a Non-Secure task probing Secure memory (SAU/IDAU violation) apart from a Non-Secure task simply overrunning its own region table (`MPU_NS` violation).
+
+In practice this lets you run, for example, strict W^X plus a Privileged-only "secrets" partition on the Secure side, and a separate, independently-tuned (or entirely absent) region table on the Non-Secure side, each enforced by its own hardware MPU instance.
+
+##### Example
+
+```cpp
+// Secure-side background regions, registered against the Secure MPU instance.
+class SecureMpuOverrider final : public stk::IPlatform::IEventOverrider
+{
+    const stk::MpuConfig *OnConfigureMpu() const override
+    {
+        static const stk::MpuRegionConfig regions[] = 
+        { /* Secure Flash / RAM / "secrets" partition */ };
+        
+        static const stk::MpuConfig cfg(
+            stk::MpuRegionList(regions, STK_STATIC_ARRAY_SIZE(regions)),
+             hw::mpu::MPU_CFG_PRIVILEGED_BG_MEM | hw::mpu::MPU_CFG_CLEAR_ON_INIT);
+             
+        return &cfg;
+    }
+};
+
+// Non-Secure-side background regions, registered against the Non-Secure (MPU_NS) instance.
+class NonSecureMpuOverrider final : public stk::IPlatform::IEventOverrider
+{
+    const stk::MpuConfig *OnConfigureMpu() const override
+    {
+        static const stk::MpuRegionConfig regions[] = 
+        { /* Non-Secure Flash / RAM only */ };
+        
+        static const stk::MpuConfig cfg(
+            stk::MpuRegionList(regions, STK_STATIC_ARRAY_SIZE(regions)),
+            hw::mpu::MPU_CFG_NONSECURE_MPU | hw::mpu::MPU_CFG_CLEAR_ON_INIT);
+        
+        return &cfg;
+    }
+};
+
+static SecureMpuOverrider    s_secure_overrider;
+static NonSecureMpuOverrider s_nsec_overrider;
+
+kernel.GetPlatform()->SetEventOverrider(&s_secure_overrider);     // Secure side (non_secure = false, default)
+kernel.GetPlatform()->SetEventOverrider(&s_nsec_overrider, true); // Non-Secure side (non_secure = true)
+```
+
+> A complete reference implementation of this pattern - a Secure task sandboxed to just the hardware it needs (`GetMpuRegions()`) behind Secure background regions, plus a Non-Secure task whose deliberate out-of-bounds access is caught and reported by the Non-Secure MPU alone is available in the `blinky_mpu-trustzone-sc` / `blinky_mpu-trustzone-ns` example pair.
 
 #### Examples
 
-Ready-to-try TrustZone examples for the Raspberry Pi Pico 2 W (RP2350, Cortex-M33):
-* `build/example/blinky-trustzone-ns` — Non-Secure application example
-* `build/example/blinky-trustzone-sc` — Secure application example
-* `build/example/project/eclipse/rpi/blinky-trustzone-ns-rp2350w` — ready-to-import Eclipse project (Non-Secure side)
-* `build/example/project/eclipse/rpi/blinky-trustzone-sc-rp2350w` — ready-to-import Eclipse project (Secure side)
+Ready-to-try TrustZone examples for the Raspberry Pi Pico 2 W (RP2350, Cortex-M33).
+
+**TrustZone only**:
+* [build/example/blinky-trustzone-ns](https://github.com/SuperTinyKernel-RTOS/stk/tree/port/build/example/blinky-trustzone-ns) - Non-Secure application example.
+* [build/example/blinky-trustzone-sc](https://github.com/SuperTinyKernel-RTOS/stk/tree/port/build/example/blinky-trustzone-sc) - Secure application example.
+* [build/example/project/eclipse/rpi/blinky-trustzone-ns-rp2350w](https://github.com/SuperTinyKernel-RTOS/stk/tree/port/build/example/project/eclipse/rpi/blinky-trustzone-ns-rp2350w) - ready-to-import Eclipse project (Non-Secure side).
+* [build/example/project/eclipse/rpi/blinky-trustzone-sc-rp2350w](https://github.com/SuperTinyKernel-RTOS/stk/tree/port/build/example/project/eclipse/rpi/blinky-trustzone-sc-rp2350w) - ready-to-import Eclipse project (Secure side).
+
+**TrustZone + MPU**:
+* [build/example/blinky_mpu-trustzone-ns](https://github.com/SuperTinyKernel-RTOS/stk/tree/port/build/example/blinky_mpu-trustzone-ns) - Non-Secure application example.
+* [build/example/blinky_mpu-trustzone-sc](https://github.com/SuperTinyKernel-RTOS/stk/tree/port/build/example/blinky_mpu-trustzone-sc) - Secure application example.
+* [build/example/project/eclipse/rpi/blinky_mpu-trustzone-ns-rp2350w](https://github.com/SuperTinyKernel-RTOS/stk/tree/port/build/example/project/eclipse/rpi/blinky_mpu-trustzone-ns-rp2350w) - ready-to-import Eclipse project (Non-Secure side).
+* [build/example/project/eclipse/rpi/blinky_mpu-trustzone-sc-rp2350w](https://github.com/SuperTinyKernel-RTOS/stk/tree/port/build/example/project/eclipse/rpi/blinky_mpu-trustzone-sc-rp2350w) - ready-to-import Eclipse project (Secure side).
 
 ---
 
@@ -353,7 +427,7 @@ bool OnSleep(stk::Timeout sleep_ticks) override
 STK supports **ISR-safe** kernel suspension, allowing an interrupt handler to pause and resume all task scheduling without race conditions. This is useful for entering a low-activity state (e.g. user-triggered standby) where tasks should be fully frozen until an external event occurs.
 
 ```cpp
-// In an ISR (e.g. button press — EXTI0_IRQHandler):
+// In an ISR (e.g. button press - EXTI0_IRQHandler):
 stk::IKernelService *kernel = stk::IKernelService::GetInstance();
 
 // Suspend: returns ticks until the nearest scheduled wake-up.
@@ -384,7 +458,7 @@ A complete ultra-low power demo targeting the [STM32F407G-DISC1](https://www.st.
 
 * ARM Cortex-M (ARMv6-M, ARMv7-M, ARMv7E-M, ARMv8-M, ARMv8.1-M)
 * RISC-V RV32I (RV32IMA_ZICSR)
-* RISC-V RV32E (RV32EMA_ZICSR) — including very small RAM devices
+* RISC-V RV32E (RV32EMA_ZICSR) - including very small RAM devices
 
 ### Floating-point
 
@@ -488,7 +562,7 @@ INCLUDES += -Ilibs/stk/interop/cmsis/rtos2/include
 ```
 
 ```c
-// 3. No application changes required — existing CMSIS-RTOS2 calls work as-is
+// 3. No application changes required - existing CMSIS-RTOS2 calls work as-is
 #include "cmsis_os2.h"
 
 int main(void)
@@ -521,7 +595,7 @@ INCLUDES += -Ilibs/stk/interop/freertos/include
 ```
 
 ```c
-// 3. No application changes required — existing FreeRTOS calls work as-is
+// 3. No application changes required - existing FreeRTOS calls work as-is
 #include "FreeRTOS.h"
 #include "task.h"
 
@@ -684,7 +758,7 @@ The benchmark suite uses CRC32 hash calculations as the task payload. The score 
 
 ## Quick Start (1 minute)
 
-The fastest way to evaluate STK is to build and run one of the bundled examples on your local machine — **no hardware required**.
+The fastest way to evaluate STK is to build and run one of the bundled examples on your local machine - **no hardware required**.
 
 **Prerequisites:** Git, CMake 3.15+, and either Visual Studio (Windows) or GCC via Eclipse CDT (Windows/Linux/macOS).
 
@@ -1006,7 +1080,7 @@ SRCS += libs/stk/src/arch/arm/cortex-m/stk_arch_arm-cortex-m.cpp
 
 #### 6. Build
 
-Build your project normally — STK will now be compiled together with it.
+Build your project normally - STK will now be compiled together with it.
 
 ### Alternative Method 2: Copy only STK kernel to your project using Git Sparse Clone method:
 

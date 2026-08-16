@@ -56,23 +56,23 @@ static uint16_t Led_GetPin(Led::Id led)
 
 void Led::Init(Id led, bool init_state)
 {
-    uint16_t pin = Led_GetPin(led);
-    if (NO_LED == pin)
-        return;
-
-    Led_InitGpio(Led_GetPin(led));
-    Set(led, init_state);
+    const uint16_t pin = Led_GetPin(led);
+    if (pin != NO_LED)
+    {
+        Led_InitGpio(Led_GetPin(led));
+        Set(led, init_state);
+    }
 }
 
 void Led::Set(Id led, bool state)
 {
-    uint16_t pin = Led_GetPin(led);
-    if (NO_LED == pin)
-        return;
-
-#if defined(PICO_DEFAULT_LED_PIN)
-    gpio_put(pin, state);
-#elif defined(CYW43_WL_GPIO_LED_PIN)
-    cyw43_arch_gpio_put(pin, state);
-#endif
+    const uint16_t pin = Led_GetPin(led);
+    if (pin != NO_LED)
+    {
+    #if defined(PICO_DEFAULT_LED_PIN)
+        gpio_put(pin, state);
+    #elif defined(CYW43_WL_GPIO_LED_PIN)
+        cyw43_arch_gpio_put(pin, state);
+    #endif
+    }
 }

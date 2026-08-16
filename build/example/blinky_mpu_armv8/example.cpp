@@ -420,6 +420,7 @@ class PlatformEventHandler final : public stk::IPlatform::IEventOverrider
     // tasks touching g_SecureCounter, or a stack-guard violation) and on generic hard
     // faults. Dumps CPU/MPU state for diagnostics and halts via a debug breakpoint -
     // this is intentionally non-recoverable diagnostic code, not a fault-recovery example.
+#ifdef DEBUG
     bool OnException(stk::EHwException exc_id, stk::TId tid, const struct stk::FaultContext *const ctx) override
     {
         if (exc_id == stk::HW_EXCEPT_MEMACCESS)
@@ -450,9 +451,9 @@ class PlatformEventHandler final : public stk::IPlatform::IEventOverrider
         printf("CONTROL: 0x%08X (nPRIV=%u)\r\n", (unsigned int)ctx->CONTROL, (unsigned int)(ctx->CONTROL & 1U));
 
 #if STK_MPU
-        PrintMpuConfig(STK_ARCH_ARMV8_M ? "Secure" : "Primary", ctx->mpu);
+        PrintMpuConfig((STK_ARCH_ARMV8_M && STK_TZ_SECURE) ? "Secure" : "Primary", ctx->mpu);
 
-    #if STK_ARCH_ARMV8_M
+    #if STK_ARCH_ARMV8_M && STK_TZ_SECURE
         printf("\r\n");
         PrintMpuConfig("Non-Secure", ctx->mpu_ns);
     #endif
@@ -461,16 +462,19 @@ class PlatformEventHandler final : public stk::IPlatform::IEventOverrider
         printf("=====================================================\r\n");
 
         __stk_debug_break();
-        return false;
+        return false; // allow default handling by the platform driver
     }
+#endif // DEBUG
 };
 
 void RunExample()
 {
     using namespace stk;
 
-    // For semihosting.
+    // For semihosting and logging to console.
+#ifdef DEBUG
     stdio_init_all();
+#endif
 
     Led::InitAll(false);
 

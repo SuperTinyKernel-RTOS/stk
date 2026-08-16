@@ -8,9 +8,10 @@
  */
 
 #include <stk.h>
-#include <sync/stk_sync_eventflags.h>
-#include <arch/arm/cortex-m/stk_arch_arm-tz.h>
+#include <sync/stk_sync.h>
 #include <time/stk_time.h>
+#include <arch/arm/cortex-m/stk_arch_arm-tz.h> // for Secure/Non-Secure-specific TrustZone API
+
 #include "example.h"
 
 #if (__ARM_FEATURE_CMSE & 1) == 0
@@ -88,7 +89,7 @@ private:
         while (true)
         {
             // block until this task's flag is set; auto-cleared on return
-            uint32_t result = g_TaskFlags.Wait(m_my_flag, stk::sync::EventFlags::OPT_WAIT_ANY);
+            const uint32_t result = g_TaskFlags.Wait(m_my_flag, stk::sync::EventFlags::OPT_WAIT_ANY);
             if (stk::sync::EventFlags::IsError(result))
                 continue;
 
@@ -121,8 +122,8 @@ void RunExample()
     // Note: using ACCESS_PRIVILEGED as Cortex-M3+ may not allow writing to GPIO from a less secure user thread.
     static MyTask<ACCESS_USER> task1(LED_RED);
     static MyTask<ACCESS_USER> task2(LED_ORANGE);
-    static MyTask<ACCESS_PRIVILEGED> task3(LED_GREEN); // made ACCESS_PRIVILEGED as an example, see NSC_bsp_Led_SwitchOnExclusive on secure side
-    static MyTask<ACCESS_PRIVILEGED> task4(LED_BLUE);
+    static MyTask<ACCESS_USER> task3(LED_GREEN); // you can set to ACCESS_PRIVILEGED too, see NSC_bsp_Led_SwitchOnExclusive on secure side, but for smooth performance on RP2350 let background thread handle GPIO
+    static MyTask<ACCESS_USER> task4(LED_BLUE);
 
     static tz::nsec::Kernel kernel;
 

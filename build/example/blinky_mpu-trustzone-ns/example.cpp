@@ -32,10 +32,10 @@
 #include <pico/runtime.h>
 
 #include <stk.h>
-#include <sync/stk_sync_eventflags.h>
-#include <arch/arm/cortex-m/stk_arch_arm-tz.h>
-#include <arch/arm/cortex-m/stk_arch_arm-cortex-m.h> // stk::MpuRegionConfig, stk::hw::mpu::*
+#include <sync/stk_sync.h>
 #include <time/stk_time.h>
+#include <arch/arm/cortex-m/stk_arch_arm-tz.h> // for Secure/Non-Secure-specific TrustZone API
+
 #include "example.h"
 
 #if (__ARM_FEATURE_CMSE & 1) == 0
@@ -412,7 +412,7 @@ private:
         while (true)
         {
             // block until this task's flag is set; auto-cleared on return
-            uint32_t result = g_TaskFlags.Wait(m_my_flag, stk::sync::EventFlags::OPT_WAIT_ANY);
+            const uint32_t result = g_TaskFlags.Wait(m_my_flag, stk::sync::EventFlags::OPT_WAIT_ANY);
             if (stk::sync::EventFlags::IsError(result))
                 continue;
 
@@ -452,10 +452,14 @@ void RunExample()
     STK_STATIC_ASSERT(sizeof(MyTask) / sizeof(stk::Word) <= TASK_MEMORY_SIZE);
 
     // Non-Secure tasks
-    MyTask *led_task1 = new (s_LedTaskMem[0]) MyTask(LED_RED,    s_LedTaskStackMem[0], STK_STATIC_ARRAY_SIZE(s_LedTaskStackMem[0]), ACCESS_USER);
-    MyTask *led_task2 = new (s_LedTaskMem[1]) MyTask(LED_ORANGE, s_LedTaskStackMem[1], STK_STATIC_ARRAY_SIZE(s_LedTaskStackMem[1]), ACCESS_USER);
-    MyTask *led_task3 = new (s_LedTaskMem[2]) MyTask(LED_GREEN,  s_LedTaskStackMem[2], STK_STATIC_ARRAY_SIZE(s_LedTaskStackMem[2]), ACCESS_USER); // made ACCESS_PRIVILEGED as an example, see NSC_bsp_Led_SwitchOnExclusive on secure side
-    MyTask *led_task4 = new (s_LedTaskMem[3]) MyTask(LED_BLUE,   s_LedTaskStackMem[3], STK_STATIC_ARRAY_SIZE(s_LedTaskStackMem[3]), ACCESS_USER);
+    MyTask *led_task1 = new (s_LedTaskMem[0])
+        MyTask(LED_RED,    s_LedTaskStackMem[0], STK_STATIC_ARRAY_SIZE(s_LedTaskStackMem[0]), ACCESS_USER);
+    MyTask *led_task2 = new (s_LedTaskMem[1])
+        MyTask(LED_ORANGE, s_LedTaskStackMem[1], STK_STATIC_ARRAY_SIZE(s_LedTaskStackMem[1]), ACCESS_USER);
+    MyTask *led_task3 = new (s_LedTaskMem[2])
+        MyTask(LED_GREEN,  s_LedTaskStackMem[2], STK_STATIC_ARRAY_SIZE(s_LedTaskStackMem[2]), ACCESS_USER); // you can set to ACCESS_PRIVILEGED too, see NSC_bsp_Led_SwitchOnExclusive on secure side, but for smooth performance on RP2350 let background thread handle GPIO
+    MyTask *led_task4 = new (s_LedTaskMem[3])
+        MyTask(LED_BLUE,   s_LedTaskStackMem[3], STK_STATIC_ARRAY_SIZE(s_LedTaskStackMem[3]), ACCESS_USER);
 
     SetBreakoutTask(led_task4);
 
