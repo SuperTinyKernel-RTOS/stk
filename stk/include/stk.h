@@ -317,7 +317,9 @@ protected:
 
         /*! \brief  Get remaining HRT deadline (ticks left before the deadline expires).
             \return deadline - duration: ticks remaining before the task must call Yield().
-                    A negative or zero value means the deadline has been missed.
+                    Zero means this is the last tick still within the deadline; a negative value
+                    means the deadline has already been missed (see HrtIsDeadlineMissed(), which
+                    uses a strict duration > deadline comparison).
             \note   KERNEL_HRT mode only. Asserts if called outside HRT mode or while sleeping.
         */
         Timeout GetHrtRelativeDeadline() const override
@@ -971,8 +973,9 @@ public:
     */
     static constexpr size_t TASKS_MAX = TSize;
 
-    /*! \brief Construct the kernel with all storage zero-initialized and the request flag set to ~0
-               (indicating uninitialized state; cleared to REQ_NONE by Initialize()).
+    /*! \brief Construct the kernel with all storage zero-initialized, m_request cleared to REQ_NONE,
+               and m_kstate set to KSTATE_INACTIVE (indicating uninitialized state; advanced to
+               KSTATE_READY by Initialize()).
         \note  In debug builds also verifies that TPlatform derives from IPlatform and TStrategy
                from ITaskSwitchStrategy.
         \note  If TMode includes KERNEL_TICKLESS, a compile-time assertion fires unless
@@ -1009,7 +1012,7 @@ public:
         \note      If running on an STM32 device with HAL driver or on QEMU, do not change the default
                    resolution (PERIODICITY_DEFAULT). STM32's HAL expects 1 millisecond resolution and
                    QEMU does not have enough resolution on Windows to operate correctly at sub-millisecond resolution.
-        \note      Kernel must be in \a STATE_INACTIVE state.
+        \note      Kernel must be in \a KSTATE_INACTIVE state.
     */
     __stk_attr_noinline void Initialize(uint32_t resolution_us = PERIODICITY_DEFAULT) override
     {
@@ -1611,7 +1614,7 @@ protected:
         \note       Delivers initial OnTaskSleep notifications to sleep-aware strategies for any tasks
                     that were added in a sleeping state before Start() was called.
         \note       Selects the first runnable task via GetNewFsmState() and transitions the kernel
-                    to STATE_RUNNING.
+                    to KSTATE_RUNNING.
         \note       If STK_SEGGER_SYSVIEW is enabled, emits a task-start trace event for the first task.
         \warning    At least one task must have been added via AddTask(); asserts if the strategy pool is empty.
     */
@@ -1682,7 +1685,7 @@ protected:
 
     /*! \brief  Called by the platform driver after a scheduler stop (all tasks have exited).
         \note   KERNEL_DYNAMIC mode only: resets FSM to FSM_STATE_NONE and transitions
-                kernel back to STATE_READY so Start() may be called again.
+                kernel back to KSTATE_READY so Start() may be called again.
         \note   Has no effect in KERNEL_STATIC mode (static kernels never stop).
     */
     __stk_attr_noinline void OnStop() override
@@ -2361,8 +2364,8 @@ protected:
     bool IsInitialized() const { return (m_kstate != KSTATE_INACTIVE); }
 
     /*! \brief     Signal the kernel to process a pending AddTask request on the next tick.
-        \note      Sets the REQ_ADD_TASK bit in m_request and emits a full memory fence
-                   so the ISR-side tick handler observes the flag without delay.
+        \note      Sets the REQ_ADD_TASK bit in m_request under a hw::CriticalSection::ScopedLock,
+                   so the ISR-side tick handler observes the flag safely without a data race.
     */
     void ScheduleAddTask()
     {

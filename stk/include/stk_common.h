@@ -390,7 +390,7 @@ struct Stack
     Word     tls;         //!< Thread-local storage if not using ARM Cortex-M R9 register for a fast inline access to TLS.
 #endif
 #if STK_STACK_NEEDS_TASK_ID
-    TId      tid;         //!< Task id (see \a STK_SEGGER_SYSVIEW).
+    TId      tid;         //!< Task id (see \a STK_SEGGER_SYSVIEW, \a STK_MPU_STACK_GUARD).
 #endif
 };
 
@@ -1368,7 +1368,7 @@ public:
                    resolution (PERIODICITY_DEFAULT). STM32's HAL expects 1 millisecond resolution and
                    QEMU does not have enough resolution on Windows to operate correctly at sub-millisecond
                    resolution.
-        \note      Kernel must be in \a STATE_INACTIVE state.
+        \note      Kernel must be in \a KSTATE_INACTIVE state.
     */
     virtual void Initialize(uint32_t resolution_us = PERIODICITY_DEFAULT) = 0;
 
@@ -1403,7 +1403,8 @@ public:
     /*! \brief     Schedule task removal from scheduling (exit).
         \param[in] user_task: User task to remove. Must not be \c nullptr.
         \warning   KERNEL_DYNAMIC mode only. Asserts if called in KERNEL_STATIC or KERNEL_HRT mode,
-                   or if called after Start(). Use RemoveTask to remove task if kernel is not running.
+                   or if called before Start() (i.e. while the kernel is not yet running).
+                   Use RemoveTask instead to remove a task while the kernel is not running.
         \see       RemoveTask
     */
     virtual void ScheduleTaskRemoval(ITask *user_task) = 0;
@@ -1476,13 +1477,13 @@ public:
 
     /*! \brief     Start kernel scheduling.
         \note      This function never returns. Must be called after Initialize() and AddTask().
-        \note      Kernel must be in \a STATE_READY state.
+        \note      Kernel must be in \a KSTATE_READY state.
     */
     virtual void Start() = 0;
 
     /*! \brief     Get a snapshot of the kernel state.
         \return    Kernel state.
-        \see       EState
+        \see       EKernelState
     */
     virtual EKernelState GetState() const = 0;
 
@@ -1619,7 +1620,8 @@ public:
         \note      After suspending the scheduler you can change the CPU frequency and then
                    resume scheduling by calling Resume().
         \note      ISR-safe. Pair with Resume().
-        \see       IKernel::EState::STATE_SUSPENDED
+        \warning   Requires the kernel to be instantiated with \c stk::KERNEL_TICKLESS; asserts otherwise.
+        \see       IKernel::EKernelState::KSTATE_SUSPENDED
     */
     virtual Timeout Suspend() = 0;
 
@@ -1631,7 +1633,8 @@ public:
                    you can change CPU frequency after Suspend() and restart scheduler with a
                    new frequency with Resume().
         \note      ISR-safe.
-        \see       IKernel::EState::STATE_SUSPENDED
+        \warning   Requires the kernel to be instantiated with \c stk::KERNEL_TICKLESS; asserts otherwise.
+        \see       IKernel::EKernelState::KSTATE_SUSPENDED
     */
     virtual void Resume(Timeout elapsed_ticks) = 0;
 
