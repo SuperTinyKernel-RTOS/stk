@@ -1502,11 +1502,6 @@
 			<locationURI>PARENT-6-PROJECT_LOC/stk/include/arch/stk_arch_common.h</locationURI>
 		</link>
 		<link>
-			<name>deps/stk/include/arch/x86</name>
-			<type>2</type>
-			<locationURI>virtual:/virtual</locationURI>
-		</link>
-		<link>
 			<name>deps/stk/include/memory/README.md</name>
 			<type>1</type>
 			<locationURI>PARENT-6-PROJECT_LOC/stk/include/memory/README.md</locationURI>
@@ -2107,11 +2102,6 @@
 			<locationURI>virtual:/virtual</locationURI>
 		</link>
 		<link>
-			<name>deps/stk/include/arch/x86/win32</name>
-			<type>2</type>
-			<locationURI>virtual:/virtual</locationURI>
-		</link>
-		<link>
 			<name>deps/stk/src/arch/arm/cortex-m</name>
 			<type>2</type>
 			<locationURI>virtual:/virtual</locationURI>
@@ -2607,9 +2597,9 @@
 			<locationURI>PARENT-6-PROJECT_LOC/stk/include/arch/arm/cortex-m/stk_arch_arm-cortex-m.h</locationURI>
 		</link>
 		<link>
-			<name>deps/stk/include/arch/x86/win32/stk_arch_x86-win32.h</name>
+			<name>deps/stk/include/arch/arm/cortex-m/stk_arch_arm-tz.h</name>
 			<type>1</type>
-			<locationURI>PARENT-6-PROJECT_LOC/stk/include/arch/x86/win32/stk_arch_x86-win32.h</locationURI>
+			<locationURI>PARENT-7-PROJECT_LOC/stk-arm-tz/include/arch/arm/cortex-m/stk_arch_arm-tz.h</locationURI>
 		</link>
 		<link>
 			<name>deps/stk/src/arch/arm/cortex-m/stk_arch_arm-cortex-m.cpp</name>
