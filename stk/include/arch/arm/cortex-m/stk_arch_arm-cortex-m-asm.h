@@ -28,8 +28,8 @@
     \param[in] name: Symbol identifier to export globally.
 */
 #if defined(__ICCARM__)
-    // IAR Assembler uses PUBLIC instead of .global
-    #define STK_ASM_GLOBAL_SYMBOL(name) "PUBLIC " #name  "\n"
+    // IAR automatically exports symbol labels in inline assembly; directive is omitted
+    #define STK_ASM_GLOBAL_SYMBOL(name)
 #else
     // GCC, Clang, and Keil armclang (ARMCC v6+)
     #define STK_ASM_GLOBAL_SYMBOL(name) ".global " #name "\n"
