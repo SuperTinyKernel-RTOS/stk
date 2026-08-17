@@ -873,7 +873,7 @@ protected:
             }
         }
 
-        void Wake(ISyncObject *sobj, bool all)
+        void Wake(ISyncObject *sobj, bool all) override
         {
             if __stk_constexpr_cpp17 (IsSyncMode())
             {
