@@ -256,6 +256,12 @@ public:
         m_event_handler->OnSuspend(false);
     }
 
+    void SetCpuFrequency(uint8_t core_id, uint32_t frequency) override
+    {
+        STK_ASSERT(core_id < STK_STATIC_ARRAY_SIZE(m_core_freq));
+        m_core_freq[core_id] = frequency;
+    }
+
     IKernelService  *m_service;
     Stack           *m_exit_trap;
     int32_t          m_resolution;
@@ -271,6 +277,7 @@ public:
     uint64_t         m_systimer_count;
     uint32_t         m_systimer_freq;
     uint32_t         m_sleep_ticks;
+    uint32_t         m_core_freq[STK_ARCH_CPU_COUNT] = {};
 
 protected:
     IEventHandler *m_event_handler;

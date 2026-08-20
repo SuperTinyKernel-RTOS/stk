@@ -60,6 +60,7 @@ public:
     TId GetTid() const override;
     Timeout Suspend() override;
     void Resume(Timeout elapsed_ticks) override;
+    void SetCpuFrequency(uint8_t core_id, uint32_t frequency) override;
 
     void SetSpecificEventHandler(ISpecificEventHandler *handler);
 };
@@ -109,13 +110,6 @@ static __stk_forceinline void __stk_dmb() { __asm volatile("fence rw, rw" ::: "m
 */
 #ifndef STK_SUBMICORSECOND_PRECISION_TIMER
     #define STK_SUBMICORSECOND_PRECISION_TIMER 0
-#endif
-
-/*! \def   STK_SYSTEM_CORE_CLOCK_VAR
-    \brief Definition of the system core clock variable holding frequency of the CPU in Hz.
-*/
-#ifndef STK_SYSTEM_CORE_CLOCK_VAR
-    #define STK_SYSTEM_CORE_CLOCK_VAR SystemCoreClock
 #endif
 
 /*! \def   STK_SYSTEM_CORE_CLOCK_FREQUENCY

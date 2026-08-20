@@ -543,19 +543,20 @@ protected:
         */
         void Bind(TPlatform *platform, ITask *user_task)
         {
+            // bind user task (GetTid depends on m_user)
+            m_user = user_task;
+
             // set access mode for this stack
             m_stack.access_mode = user_task->GetAccessMode();
 
             // set task id for tracking purpose
         #if STK_STACK_NEEDS_TASK_ID
             m_stack.tid = GetTid();
+            STK_ASSERT(m_stack.tid != TID_NONE);
         #endif
 
             // init stack of the user task
             platform->InitStack(STACK_USER_TASK, &m_stack, user_task, user_task);
-
-            // bind user task
-            m_user = user_task;
 
             // initialize current weight to NO_WEIGHT for priority inheritance mechanism
             if __stk_constexpr_cpp17 (TStrategy::PRIORITY_INHERITANCE_API)
@@ -2227,12 +2228,14 @@ protected:
             active = next->GetUserStackPtr();
 
             // if stack memory is exceeded these assertions will be hit
+        #if STK_STACK_GUARD
             if (now->IsBusy())
             {
                 // current task could exit, thus we check it with IsBusy to avoid referencing nullptr returned by GetUserTask()
                 STK_ASSERT(now->GetUserTask()->GetStack()[0] == STK_STACK_MEMORY_FILLER);
             }
             STK_ASSERT(next->GetUserTask()->GetStack()[0] == STK_STACK_MEMORY_FILLER);
+        #endif
 
             m_task_now = next;
 
@@ -2274,7 +2277,9 @@ protected:
 
         // if stack memory is exceeded these assertions will be hit
         STK_ASSERT(m_sleep_trap[0].memory[0] == STK_STACK_MEMORY_FILLER);
+    #if STK_STACK_GUARD
         STK_ASSERT(next->GetUserTask()->GetStack()[0] == STK_STACK_MEMORY_FILLER);
+    #endif
 
         m_task_now = next;
 

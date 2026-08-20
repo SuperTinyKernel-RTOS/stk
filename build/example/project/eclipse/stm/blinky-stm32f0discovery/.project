@@ -371,11 +371,6 @@
 			<locationURI>virtual:/virtual</locationURI>
 		</link>
 		<link>
-			<name>deps/stk/src/arch/x86</name>
-			<type>2</type>
-			<locationURI>virtual:/virtual</locationURI>
-		</link>
-		<link>
 			<name>deps/stm32fx/include/arm/semihosting.h</name>
 			<type>1</type>
 			<locationURI>PARENT-6-PROJECT_LOC/deps/target/stm32fx/include/arm/semihosting.h</locationURI>
@@ -1071,11 +1066,6 @@
 			<locationURI>virtual:/virtual</locationURI>
 		</link>
 		<link>
-			<name>deps/stk/src/arch/x86/win32</name>
-			<type>2</type>
-			<locationURI>virtual:/virtual</locationURI>
-		</link>
-		<link>
 			<name>deps/stm32fx/include/stm32f0-hal/Legacy/stm32_hal_legacy.h</name>
 			<type>1</type>
 			<locationURI>PARENT-6-PROJECT_LOC/deps/target/stm32fx/include/stm32f0-hal/Legacy/stm32_hal_legacy.h</locationURI>
@@ -1099,11 +1089,6 @@
 			<name>deps/stk/src/arch/arm/cortex-m/stk_arch_arm-cortex-m.cpp</name>
 			<type>1</type>
 			<locationURI>PARENT-6-PROJECT_LOC/stk/src/arch/arm/cortex-m/stk_arch_arm-cortex-m.cpp</locationURI>
-		</link>
-		<link>
-			<name>deps/stk/src/arch/x86/win32/stk_arch_x86-win32.cpp</name>
-			<type>1</type>
-			<locationURI>PARENT-6-PROJECT_LOC/stk/src/arch/x86/win32/stk_arch_x86-win32.cpp</locationURI>
 		</link>
 	</linkedResources>
 	<variableList>

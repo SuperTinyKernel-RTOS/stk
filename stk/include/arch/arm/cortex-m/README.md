@@ -23,6 +23,7 @@ This document is the configuration and porting reference for the ARM Cortex-M ar
   - [TrustZone (Cortex-M33 / ARMv8-M)](#trustzone-cortex-m33--armv8-m)
   - [Memory Protection (MPU)](#memory-protection-mpu)
   - [Multi-Core (SMP)](#multi-core-smp)
+  - [Spinlock Deadlock Detection](#spinlock-deadlock-detection)
   - [Stack Configuration](#stack-configuration)
   - [Kernel Tuning](#kernel-tuning)
   - [Fault Handling](#fault-handling)
@@ -50,6 +51,7 @@ The Cortex-M port targets both privileged and unprivileged thread modes. Context
 - Optional MPU support (PMSAv7/PMSAv8) with per-task stack-guard regions, auto-detected via `__MPU_PRESENT`
 - Optional register-based thread-local storage (r9) with a memory-based fallback
 - Optional MemManage/HardFault trapping with a captured fault context (registers, MPU state, fault status registers)
+- Optional Pointer Authentication Code (PAC) signing of the saved link register on ARMv8.1-M+ cores with `__ARM_FEATURE_PA_BITS` (e.g. Cortex-M85), auto-detected — no user-facing define
 
 ---
 
@@ -143,7 +145,10 @@ The scheduler tick period is derived from `SystemCoreClock` at the time `Initial
 
 | Variable / Define | Description |
 |--------|-------------|
-| `SystemCoreClock` | **Required.** CPU core clock frequency in Hz. Must be set correctly before `PlatformArmCortexM::Initialize()` is called. Provided by CMSIS and typically updated by `SystemCoreClockUpdate()` or your clock init code. |
+| `SystemCoreClock` | **Required.** CPU core clock frequency in Hz. Must be set correctly before `PlatformArmCortexM::Initialize()` is called. Provided by CMSIS and typically updated by `SystemCoreClockUpdate()` or your clock init code. Used only to seed the driver's internal frequency cache at `Initialize()` time — if `SetCpuFrequency()` (see below) has already been called with a nonzero value beforehand, that value is used instead and `SystemCoreClock` is not re-read. |
+| `STK_CORE_FREQ_UNIFIED` | `1` | Set to `0` on SMP targets where cores run at independent clock frequencies. When `1` (default), a single cached frequency value serves all cores; when `0`, the driver keeps one cached value per core (indexed by `STK_ARCH_GET_CPU_ID()`) and each core's frequency must be reported individually via `SetCpuFrequency()`. |
+
+**Runtime frequency changes:** if your application changes the CPU clock speed after `Initialize()` (e.g. dynamic frequency scaling), call `IPlatform::SetCpuFrequency(core_id, frequency)` immediately afterward so the driver's tick/tickless timing math and spin-lock timeout budget (see [Spinlock Deadlock Detection](#spinlock-deadlock-detection)) stay accurate. Pass `core_id = 0xFF` to update all cores at once (or on a `STK_CORE_FREQ_UNIFIED=1` build, where there is only one cached value regardless of `core_id`). `SetCpuFrequency()` is ISR-safe.
 
 > **Common mistake:** Calling `Initialize()` before the PLL is configured, or before `SystemCoreClockUpdate()` is called. The tick period will be calculated from the wrong frequency and all sleep durations and timeouts will be proportionally wrong.
 
@@ -257,9 +262,9 @@ STK includes optional MPU support for both the legacy ARMv7-M/PMSAv7 layout (Cor
 |--------|---------|-------------|
 | `STK_MPU` | `0` | Set to `1` to enable MPU support. Requires an MPU to actually be present (`__MPU_PRESENT == 1` from CMSIS) — enabling it on a core without an MPU is a build-time `#error`. |
 | `STK_MPU_STACK_GUARD` | `0` | Set to `1` to additionally enable a per-task stack-guard MPU region, reconfigured on every context switch from each task's `TaskMpu` state. Requires `STK_MPU=1` (a build-time `#error` otherwise). |
-| `STK_MPU_TASK_REGIONS` | `2` | Number of hardware MPU region slots reserved per task (`stk::TaskMpu::NUM_REGIONS`), only consumed when `STK_MPU_STACK_GUARD=1`. Slot 0 is always the automatic stack guard; the remaining `STK_MPU_TASK_REGIONS - 1` slots are available to the application via `ITask::GetMpuRegions()`. **Supported values: `2` or `4` only** — anything else is a build-time `#error`. A smaller value frees up more MPU regions for static/global use (see `STK_CORTEX_M_MPU_TASK_REGION_IDX` below) at the cost of fewer application-defined per-task regions. |
+| `STK_MPU_TASK_REGIONS` | `2` | Number of hardware MPU region slots reserved per task (`stk::TaskMpu::NUM_REGIONS`), only consumed when `STK_MPU_STACK_GUARD=1`. Slot 0 is always the automatic stack guard; the remaining `STK_MPU_TASK_REGIONS - 1` slots are available to the application via `ITask::GetMpuRegions()`. **Supported values: `2`, `4`, or `6` only** — anything else is a build-time `#error`. A smaller value frees up more MPU regions for static/global use (see `STK_CORTEX_M_MPU_TASK_REGION_IDX` below) at the cost of fewer application-defined per-task regions. |
 | `STK_CORTEX_M_MPU_REGIONS_MAX` | `8` | Number of MPU regions supported by the MPU peripheral. Override if your device has more or fewer than 8 regions. |
-| `STK_CORTEX_M_MPU_TASK_REGION_IDX` | `STK_CORTEX_M_MPU_REGIONS_MAX - STK_MPU_TASK_REGIONS` | First MPU region index reserved for per-task regions (the stack guard and any per-task `GetMpuRegions()` entries occupy the last `STK_MPU_TASK_REGIONS` regions). Must not collide with your statically-configured regions. |
+| `STK_CORTEX_M_MPU_TASK_REGION_IDX` | `STK_CORTEX_M_MPU_REGIONS_MAX - STK_MPU_TASK_REGIONS` | First MPU region index reserved for per-task regions (the stack guard and any per-task `GetMpuRegions()` entries occupy the last `STK_MPU_TASK_REGIONS` regions). Must not collide with your statically-configured regions. **Alignment constraint:** the context-switch burst write uses RBAR aliases that wrap within 4-region hardware blocks. For `STK_MPU_TASK_REGIONS <= 4`, the index must satisfy `(IDX % 4) <= (4 - STK_MPU_TASK_REGIONS)`. For `STK_MPU_TASK_REGIONS == 6`, the burst splits into a full 4-region block followed by a 2-region block, so the base index must be block-aligned: `(IDX % 4) == 0`. Violating this is a build-time `static_assert` failure. |
 
 The low-level region-programming functions (`ConfigureRegion`, `ConfigureStatic`, `ConfigureDynamic`, `ApplyRegion`, `DisableRegion`, `Enable`) live in `stk::hw::mpu` but are declared and defined entirely inside `stk_arch_arm-cortex-m.cpp` — **they are driver-internal and not exposed by any public header**, so application code cannot call them directly. Applications configure the MPU exclusively through the two hooks below; the driver translates both into these internal calls automatically:
 
@@ -304,6 +309,21 @@ STK allocates per-core kernel context instances indexed by core ID. On Cortex-M 
 > **RP2040 note:** STK reserves SIO hardware spinlock 31 (`SIO->SPINLOCK31`) for its internal critical section. Do not use `SPINLOCK31` anywhere else in your application.
 
 > On RP2350 with the ARM Cortex-M33 cores, the generic atomic spin-lock (GCC builtins) is used — no SIO spinlock is needed because M33 provides LDREX/STREX.
+
+---
+
+### Spinlock Deadlock Detection
+
+`hw::CriticalSection` and `hw::SpinLock` are both backed by the same internal spin-lock primitive (`HW_SpinLockLock`/`HW_SpinLockUnlock`), regardless of which backend from the table above is active. Blocking acquisition (`HW_SpinLockLock`) retries in a tight loop with a `__stk_relax_cpu()` back-off hint between attempts, bounded by a real-time timeout rather than a fixed iteration count — so the timeout does not need re-tuning when optimization level, LTO, or core clock speed change.
+
+| Define | Default | Description |
+|--------|---------|-------------|
+| `STK_SPINLOCK_TIMEOUT_US` | `5000000` (5 s) | Maximum wall-clock time, in microseconds, a blocking spin-lock acquisition will retry before concluding the lock owner exited without releasing it. On expiry, triggers `STK_KERNEL_PANIC(KERNEL_PANIC_SPINLOCK_DEADLOCK)`. |
+| `STK_SPINLOCK_MIN_CYCLES_PER_ITER` | `4` | Conservative lower-bound estimate of CPU cycles consumed per retry-loop iteration (load, test-and-set, compare, branch, relax hint), used to convert `STK_SPINLOCK_TIMEOUT_US` into a retry-iteration budget. Deliberately underestimated so the derived budget guarantees at least `STK_SPINLOCK_TIMEOUT_US` of real wall-clock retrying before timing out. Increase if `__stk_relax_cpu()` expands to a multi-cycle sequence on your toolchain/core. |
+
+The retry budget is computed once per core during `Initialize()` (`HW_InitSpinlockTimeout()`), from `STK_SPINLOCK_TIMEOUT_US` and the core clock frequency reported by `SystemCoreClock` / `SetCpuFrequency()`. Releasing a lock that the caller does not hold is also treated as an unrecoverable error and triggers `KERNEL_PANIC_SPINLOCK_DEADLOCK` immediately, without waiting for a timeout.
+
+> This applies to every spin-lock backend (GCC atomic, RP2040 SIO hardware spinlock, and the Cortex-M0 PRIMASK fallback) since they all share the same blocking wrapper. It is a change from unbounded spinning: a critical section held too long, or a bug that acquires a lock without a matching release, now surfaces as a deterministic kernel panic instead of hanging silently.
 
 ---
 
@@ -538,6 +558,14 @@ On M3+ the DWT `CYCCNT` is a 32-bit register that wraps every 2³² cycles (~28 
 **On RP2040 dual-core: deadlock or crash in critical section**
 
 Something else in your application is also using `SIO->SPINLOCK31`. STK reserves this spinlock for inter-core critical section exclusion. Use a different SIO spinlock (0–30) for application purposes.
+
+**Kernel panics with `KERNEL_PANIC_SPINLOCK_DEADLOCK`**
+
+Either a spin-lock (`hw::SpinLock` or the internal lock behind `hw::CriticalSection`) was held longer than `STK_SPINLOCK_TIMEOUT_US` (default 5 s) without being released — typically a task that panicked, got stuck, or was killed while holding the lock — or `Unlock()`/`Exit()` was called on a lock the caller never acquired. Check for a missing `Unlock()` on an error path, or a `ScopedLock` that was bypassed. If long critical sections are expected by design (e.g. very slow peripheral access under lock), increase `STK_SPINLOCK_TIMEOUT_US` rather than disabling the check — see [Spinlock Deadlock Detection](#spinlock-deadlock-detection).
+
+**Build error: `static_assert` on `STK_CORTEX_M_MPU_TASK_REGION_IDX` alignment**
+
+The MPU per-task region burst-copy uses RBAR aliases that wrap within 4-region hardware blocks, which constrains where the task-region window may start. For `STK_MPU_TASK_REGIONS <= 4`, `STK_CORTEX_M_MPU_TASK_REGION_IDX % 4` must be `<= 4 - STK_MPU_TASK_REGIONS`; for `STK_MPU_TASK_REGIONS == 6` the index must be block-aligned (`% 4 == 0`). Adjust your static/global region allocation so the task-region window lands on a valid boundary, or override `STK_CORTEX_M_MPU_TASK_REGION_IDX` explicitly.
 
 **On Cortex-M0: `HiResClock::GetTimeUs()` is jittery**
 
