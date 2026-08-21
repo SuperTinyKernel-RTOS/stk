@@ -57,6 +57,112 @@
     #define STK_PANIC_HANDLER(id) STK_PANIC_HANDLER_DEFAULT(id)
 #endif
 
+// =============================================================================
+#if STK_MPU
+// =============================================================================
+
+/*! \def   STK_MPU_SHARED_DATA_SECTION
+    \brief Attribute macro to place global or static variables into the shared MPU data memory section.
+
+    Any variables tagged with this macro are placed in the \a .stk_mpu_shared_data region.
+    According to the recommended MPU configuration, this specialized region grants full read and
+    write access (\a ACCESS_FULL) to both privileged and unprivileged user tasks, while explicitly
+    blocking code execution (\a EXEC_NEVER).
+*/
+#define STK_MPU_SHARED_DATA_SECTION __attribute__((section(".stk_mpu_shared_data")))
+
+/*! \def   STK_MPU_SHARED_CODE_SECTION
+    \brief Attribute macro to place functions into the shared MPU executable code section.
+
+    Any functions tagged with this macro are placed in the \a .stk_mpu_shared_code region.
+    According to the recommended MPU configuration, this specialized region allows execution
+    privileges (\a EXEC_ALLOWED) and read-only access for privileged and unprivileged user tasks
+    (\a ACCESS_PRIV_RO_USER_RO) to facilitate secure system entry points.
+*/
+#define STK_MPU_SHARED_CODE_SECTION __attribute__((section(".stk_mpu_shared_code")))
+
+/*! \def   STK_MPU_SHARED_BSS_SECTION
+    \brief Attribute macro to place zero-initialized global or static variables into the shared
+           MPU data memory section without consuming flash storage.
+
+    Any variables tagged with this macro are placed in the \a .stk_mpu_shared_bss region, a
+    zero-initialized subrange nested inside the same \a .stk_mpu_shared_data MPU region. As such,
+    it carries the same access permissions as \ref STK_MPU_SHARED_DATA_SECTION - full read and
+    write access (\a ACCESS_FULL) to both privileged and unprivileged user tasks, with code
+    execution explicitly blocked (\a EXEC_NEVER).
+
+    Unlike \ref STK_MPU_SHARED_DATA_SECTION, variables placed here must not have a non-zero
+    initializer: the linker stores no image for this region, and startup code zero-fills it at
+    boot instead of copying it from flash. Prefer this macro over \ref STK_MPU_SHARED_DATA_SECTION
+    for large or scratch shared buffers to avoid wasting flash space on a stored image of zeros.
+*/
+#define STK_MPU_SHARED_BSS_SECTION __attribute__((section(".stk_mpu_shared_bss")))
+
+/*! \def   STK_MPU_KERNEL_DATA_SECTION
+    \brief Attribute macro to place global or static variables into the privileged-only kernel
+           data memory section.
+    \note  Optional (do not declare in a linker script) if MPU is configured
+           with \ref hw::mpu::MPU_CFG_PRIVILEGED_BG_MEM.
+
+    Any variables tagged with this macro are placed in the \a .stk_mpu_kernel_data region.
+    Unlike \ref STK_MPU_SHARED_DATA_SECTION, this region is intended to be mapped
+    \a ACCESS_PRIV_RW_USER_NO - read/write for privileged code only, no access at all for
+    unprivileged tasks - and \a EXEC_NEVER. Use for scheduler internals (e.g.
+    \c s_StkPlatformContext) or application data that must stay unreachable by unprivileged
+    tasks even when the MPU is enabled without \ref hw::mpu::MPU_CFG_PRIVILEGED_BG_MEM.
+    \see   STK_MPU_KERNEL_BSS_SECTION, STK_MPU_KERNEL_CODE_SECTION
+*/
+#define STK_MPU_KERNEL_DATA_SECTION __attribute__((section(".stk_mpu_kernel_data")))
+
+/*! \def   STK_MPU_KERNEL_CODE_SECTION
+    \brief Attribute macro to place functions into the privileged-only kernel executable code
+           section.
+    \note  Optional (do not declare in a linker script) if MPU is configured
+           with \ref hw::mpu::MPU_CFG_PRIVILEGED_BG_MEM.
+
+    Any functions tagged with this macro are placed in the \a .stk_mpu_kernel_code region.
+    Unlike \ref STK_MPU_SHARED_CODE_SECTION, this region is intended to be mapped
+    \a ACCESS_PRIV_RO_USER_NO - execution and read allowed for privileged code only, no access
+    at all for unprivileged tasks. Use for kernel entry points that must never be reachable
+    from unprivileged thread mode.
+    \see   STK_MPU_KERNEL_DATA_SECTION, STK_MPU_KERNEL_BSS_SECTION
+*/
+#define STK_MPU_KERNEL_CODE_SECTION __attribute__((section(".stk_mpu_kernel_code")))
+
+/*! \def   STK_MPU_KERNEL_BSS_SECTION
+    \brief Attribute macro to place zero-initialized global or static variables into the
+           privileged-only kernel data memory section without consuming flash storage.
+    \note  Optional (do not declare in a linker script) if MPU is configured
+           with \ref hw::mpu::MPU_CFG_PRIVILEGED_BG_MEM.
+
+    Any variables tagged with this macro are placed in the \a .stk_mpu_kernel_bss region, a
+    zero-initialized subrange nested inside the same \a .stk_mpu_kernel_data MPU region. As
+    such, it carries the same access permissions as \ref STK_MPU_KERNEL_DATA_SECTION -
+    privileged-only read/write (\a ACCESS_PRIV_RW_USER_NO), with code execution explicitly
+    blocked (\a EXEC_NEVER).
+
+    Unlike \ref STK_MPU_KERNEL_DATA_SECTION, variables placed here must not have a non-zero
+    initializer: the linker stores no image for this region, and startup code zero-fills it at
+    boot instead of copying it from flash. Prefer this macro over \ref STK_MPU_KERNEL_DATA_SECTION
+    for large or scratch privileged-only buffers to avoid wasting flash space on a stored image
+    of zeros.
+    \see   STK_MPU_KERNEL_DATA_SECTION
+*/
+#define STK_MPU_KERNEL_BSS_SECTION __attribute__((section(".stk_mpu_kernel_bss")))
+
+#else
+
+#define STK_MPU_SHARED_DATA_SECTION
+#define STK_MPU_SHARED_CODE_SECTION
+#define STK_MPU_SHARED_BSS_SECTION
+#define STK_MPU_KERNEL_DATA_SECTION
+#define STK_MPU_KERNEL_CODE_SECTION
+#define STK_MPU_KERNEL_BSS_SECTION
+
+// =============================================================================
+#endif // STK_MPU
+// =============================================================================
+
 namespace stk {
 
 /*! \brief Called when the kernel detects an unrecoverable internal fault.

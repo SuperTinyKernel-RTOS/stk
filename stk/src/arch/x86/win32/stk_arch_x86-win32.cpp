@@ -675,6 +675,11 @@ void PlatformX86Win32::Resume(Timeout elapsed_ticks)
     STK_ASSERT(false); // unsupported
 }
 
+void PlatformX86Win32::SetCpuFrequency(uint8_t core_id, uint32_t frequency)
+{
+    STK_ASSERT(false); // unsupported
+}
+
 void PlatformX86Win32::InitStack(EStackType stack_type, Stack *stack, IStackMemory *stack_memory, ITask *user_task)
 {
     GetContext().InitStack(stack_type, stack, stack_memory, user_task);

@@ -100,7 +100,7 @@ This is the lowest-level header. It includes `stk_config.h` first, making all us
 
 - **Compiler portability macros** — `__stk_forceinline`, `__stk_aligned(x)`, `__stk_attr_naked`, `__stk_attr_noreturn`, `__stk_attr_unused`, `__stk_attr_used`, `__stk_attr_noinline`, `__stk_attr_deprecated`, `__stk_weak`, `__stk_constexpr_cpp17` for GCC, Clang/LLVM, IAR, and MSVC.
 - **Assertion macros** — `STK_ASSERT(cond)` (debug), `STK_STATIC_ASSERT(cond)`, `STK_STATIC_ASSERT_DESC(cond, msg)`.
-- **Feature-flag defaults** — `STK_TICKLESS_IDLE` (0), `STK_TICKLESS_USE_ARM_DWT` (1), `STK_TICKLESS_TICKS_MAX` (1000), `STK_ARCH_CPU_COUNT` (1), `STK_SEGGER_SYSVIEW` (0), `STK_SYNC_DEBUG_NAMES` (0), `STK_STRICT_COMPLIANCY` (0), `STK_TLS` (0), `STK_TLS_PREFER_REGISTER` (arch-dependent: 1 on RISC-V, 0 elsewhere), `STK_MPU` (0), `STK_MPU_STACK_GUARD` (0), `STK_MPU_TASK_REGIONS` (2, must be 2 or 4).
+- **Feature-flag defaults** — `STK_TICKLESS_IDLE` (0), `STK_TICKLESS_USE_ARM_DWT` (1), `STK_TICKLESS_TICKS_MAX` (1000), `STK_ARCH_CPU_COUNT` (1), `STK_CORE_FREQ_UNIFIED` (1), `STK_SEGGER_SYSVIEW` (0), `STK_SYNC_DEBUG_NAMES` (0), `STK_STRICT_COMPLIANCY` (0), `STK_STACK_GUARD` (1), `STK_TLS` (0), `STK_TLS_PREFER_REGISTER` (arch-dependent: 1 on RISC-V, 0 elsewhere), `STK_MPU` (0), `STK_MPU_STACK_GUARD` (0), `STK_MPU_TASK_REGIONS` (2, must be 2, 4, or 6).
 - **Stack constants** — `STK_STACK_SIZE_MIN` (arch-dependent: 32 on Cortex-M, 256–512+ on RISC-V), `STK_SLEEP_TRAP_STACK_SIZE`, `STK_STACK_MEMORY_ALIGN`, `STK_STACK_MEMORY_FILLER`.
 - **Critical section limit** — `STK_CS_NESTINGS_MAX` (16).
 - **Utility macros** — `STK_NONCOPYABLE_CLASS(TYPE)`, `STK_UNUSED(X)`, `STK_ALLOCATE_COUNT(MODE,FLAG,ONTRUE,ONFALSE)`, `STK_LIKELY(x)`/`STK_UNLIKELY(x)`, `STK_STATIC_ARRAY_SIZE(ARRAY)`, `STK_VIRT_DTOR` (virtual destructor keyword, compiled out when `STK_STRICT_COMPLIANCY=0`), endian index macros `STK_ENDIAN_IDX_HI`/`STK_ENDIAN_IDX_LO`.
@@ -136,7 +136,7 @@ Defines every kernel interface, type alias, and enumeration. Key contents:
 | `Cycles`  | `uint64_t`  | High-resolution cycle counter                        |
 | `Weight`  | `int32_t`   | Scheduling weight/priority value                     |
 
-**Key constants:** `TID_ISR_N` (upper 20-bit ISR sentinel), `TID_NONE` (0), `WAIT_INFINITE` (`INT32_MAX`), `NO_WAIT` (0).
+**Key constants:** `TID_ISR_N` (upper 20-bit ISR sentinel), `TID_NONE` (0), `WAIT_INFINITE` (`INT32_MAX`), `NO_WAIT` (0), `NO_WEIGHT` (-1), `DEFAULT_WEIGHT` (1).
 
 **Enumerations:**
 
@@ -144,17 +144,17 @@ Defines every kernel interface, type alias, and enumeration. Key contents:
 |------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `EAccessMode`    | `ACCESS_USER`, `ACCESS_PRIVILEGED`, `ACCESS_SECURE` (ARM TrustZone Secure binary)                                                                                                                     |
 | `EKernelMode`    | `KERNEL_STATIC`, `KERNEL_DYNAMIC`, `KERNEL_HRT`, `KERNEL_SYNC`, `KERNEL_TICKLESS`                                                                                                                     |
-| `EKernelPanicId` | 12 panic codes (`KERNEL_PANIC_NONE` plus 11 fault reasons: stack corruption, deadlock, assert, hard fault, CS-nesting overflow, unknown SVC, bad state/mode, bad stack type, non-secure access, etc.) |
+| `EKernelPanicId` | 13 panic codes (`KERNEL_PANIC_NONE` plus 12 fault reasons: spin-lock deadlock, stack corruption, assert, HRT hard fault, CPU exception, CS-nesting overflow, unknown SVC, bad state, bad mode, bad stack type, non-secure access, bad memory region) |
 | `EStackType`     | `STACK_USER_TASK`, `STACK_SLEEP_TRAP`, `STACK_EXIT_TRAP`                                                                                                                                              |
 | `EConsts`        | `PERIODICITY_MAX` (99 000 µs), `PERIODICITY_DEFAULT` (1 000 µs), `STACK_SIZE_MIN`                                                                                                                     |
 
 **Interfaces defined here:**
 
-- `ITask` — user task contract (`Run`, `GetStack`, `GetStackSize`, `GetAccessMode`, `GetWeight`, `OnDeadlineMissed`, `OnExit`, `GetTraceName`), plus two optional hardware-isolation hooks: `GetSecureStackMemory()` (ARM TrustZone-only, defaults to `nullptr`) and `GetMpuRegions()` (returns a `const MpuRegionList *` of up to `STK_MPU_TASK_REGIONS - 1` application-defined MPU regions per task — i.e. 1 region in 2-region mode, 3 in 4-region mode — consulted only when `STK_MPU_STACK_GUARD` is enabled; see [MPU Configuration API](#mpu-configuration-api)).
+- `ITask` — user task contract (`Run`, `GetStack`, `GetStackSize`, `GetAccessMode`, `GetWeight`, `OnDeadlineMissed`, `OnExit`, `GetTraceName`), plus two optional hardware-isolation hooks: `GetSecureStackMemory()` (ARM TrustZone-only, defaults to `nullptr`) and `GetMpuRegions()` (returns a `const MpuRegionList *` of up to `STK_MPU_TASK_REGIONS - 1` application-defined MPU regions per task — i.e. 1 region in 2-region mode, 3 in 4-region mode, 5 in 6-region mode — consulted only when `STK_MPU_STACK_GUARD` is enabled; see [MPU Configuration API](#mpu-configuration-api)).
 - `IStackMemory` — stack buffer abstraction.
 - `IKernelTask` — kernel-side per-task descriptor (extends `ITask` with scheduling metadata).
 - `ITaskSwitchStrategy` — scheduling strategy interface (`AddTask`, `RemoveTask`, `GetNext`, `GetFirst`, `GetSize`, `OnTaskSleep`, `OnTaskWake`, `OnTaskDeadlineMissed`, `OnTaskWeightChange`).
-- `IPlatform` — platform driver interface (`Initialize`, `Start`, `Stop`, `InitStack`, `SwitchToNext`, `Sleep`, `SleepUntil`, `Wait`, `ProcessTick`, `ProcessHardFault`, `SetEventOverrider`, `GetTid`, `Suspend`, `Resume`, `GetCallerSP`, etc.).
+- `IPlatform` — platform driver interface (`Initialize`, `Start`, `Stop`, `InitStack`, `SwitchToNext`, `Sleep`, `SleepUntil`, `Wait`, `ProcessTick`, `ProcessHardFault`, `SetEventOverrider`, `GetTid`, `Suspend`, `Resume`, `GetCallerSP`, `SetCpuFrequency(core_id, frequency)` (notifies the scheduler of a core's operating frequency for tick/tickless timing accuracy; pass `0xFF` as `core_id` to set the frequency for all cores at once — call it whenever a core's clock speed changes), etc.).
 - `IPlatform::IEventOverrider` — optional hook interface for extending the platform driver from user-space, registered via `IPlatform::SetEventOverrider(overrider, non_secure = false)` (the `non_secure` slot is TrustZone-only, for a separate Non-Secure-side overrider). Covers `OnSleep`, `OnHardFault`, `OnException` (per-exception fault reporting), and `OnConfigureMpu()` — returns a `const MpuConfig *` of global/background MPU regions applied underneath every task's own regions (see [MPU Configuration API](#mpu-configuration-api)).
 - `IKernel` — kernel control interface (`Initialize`, `AddTask` (two overloads: plain and with HRT periodicity/deadline/start-delay), `RemoveTask`, `ScheduleTaskRemoval`, `SuspendTask`, `ResumeTask`, `EnumerateKernelTasks`, `EnumerateTasks`, `EnumerateTasksT<N>`, `Start`, `GetState`, `GetPlatform`, `GetSwitchStrategy`).
 - `IKernelService` — runtime service interface available to running tasks (`GetTid`, `GetTicks`, `GetTickResolution`, `GetSysTimerCount`, `GetSysTimerFrequency`, `Delay`, `Sleep`, `SleepUntil`, `SleepCancel`, `SwitchToNext`, `Wait`, `Wake`, `Suspend`, `Resume`, `InheritWeight`, `RestoreWeight`).
@@ -187,7 +187,7 @@ Second, it declares and implements the portable `stk::hw` namespace used through
 | `hw::GetTlsPtr<T>()` / `hw::SetTlsPtr<T>(ptr)` | Type-safe TLS wrappers                                        |
 | `hw::CriticalSection::Enter/Exit`              | Nestable interrupt-disable critical section                   |
 | `hw::CriticalSection::ScopedLock`              | RAII wrapper for `CriticalSection`                            |
-| `hw::SpinLock::Lock/Unlock/TryLock`            | Hardware atomic spinlock (SMP)                                |
+| `hw::SpinLock::Lock/Unlock/TryLock/IsLocked`   | Hardware atomic spinlock (SMP); `IsLocked()` is a non-synchronizing snapshot, not for use as an acquisition check |
 | `hw::HiResClock::GetCycles()`                  | 64-bit cycle counter                                          |
 | `hw::HiResClock::GetFrequency()`               | Counter frequency in Hz                                       |
 | `hw::HiResClock::GetTimeUs()`                  | Elapsed microseconds                                          |
@@ -336,7 +336,7 @@ Defines `PlatformContext` — the base class inherited by every concrete platfor
 
 Context switching uses **SysTick** (tick source) → **PendSV** (lowest-priority, deferred context switch) → **SVC** (scheduler start, privileged critical section entry/exit). The core variant is auto-detected from the CMSIS `__CORTEX_M` macro.
 
-**Provides:** `PlatformArmCortexM` class, `typedef PlatformArmCortexM PlatformDefault`, TLS via `r9`, `__stk_dmb()` = `dmb sy`.
+**Provides:** `PlatformArmCortexM` class, `typedef PlatformArmCortexM PlatformDefault`, TLS via `r9`, `__stk_dmb()` = `dmb sy`, `SetCpuFrequency(core_id, frequency)` for runtime per-core clock updates (see `STK_CORE_FREQ_UNIFIED`).
 
 **Key configuration macros** (set in `stk_config.h` before including STK):
 
@@ -351,8 +351,9 @@ Context switching uses **SysTick** (tick source) → **PendSV** (lowest-priority
 | `STK_ARCH_GET_CPU_ID()`    | `0`               | Expression returning current core index         |
 | `STK_MPU`                  | `0`               | Enable MPU support (Cortex-M3+ with MPU present)|
 | `STK_MPU_STACK_GUARD`      | `0`               | Enable dynamic per-task MPU regions (requires `STK_MPU=1`) |
-| `STK_MPU_TASK_REGIONS`     | `2`               | Hardware regions per task: `2` or `4` (see [MPU Configuration API](#mpu-configuration-api)) |
+| `STK_MPU_TASK_REGIONS`     | `2`               | Hardware regions per task: `2`, `4`, or `6` (see [MPU Configuration API](#mpu-configuration-api)) |
 | `STK_CORTEX_M_MPU_REGIONS_MAX` | `8`           | Total hardware MPU regions available on the core; override only if your part implements fewer/more than 8 |
+| `STK_CORE_FREQ_UNIFIED`    | `1`               | `1` if all cores share the same clock frequency; set `0` on SMP targets with per-core frequencies and update each core via `SetCpuFrequency(core_id, frequency)` |
 
 `SystemCoreClock` must be set to the correct CPU frequency before `Initialize()` is called.
 
@@ -365,11 +366,12 @@ Declared in `stk_arch_arm-cortex-m.h` (`stk::MpuRegionConfig`, `stk::hw::mpu::*`
 - **`stk::MpuRegionConfig`** — one region descriptor: `addr` (`Word`), `size` (`size_t`), `access_perm` (`hw::mpu::EMpuAccess`), `mem_type` (`hw::mpu::EMpuType`), `share` (`hw::mpu::EMpuShare`), `exec` (`hw::mpu::EMpuExec`). Used both for per-task regions (`ITask::GetMpuRegions()`) and global/static regions (`IPlatform::IEventOverrider::OnConfigureMpu()`).
 - **`stk::hw::mpu` enums** — `EMpuAccess` (`ACCESS_FULL`, `ACCESS_PRIV_RW_USER_NO`, `ACCESS_PRIV_RO_USER_RO`, `ACCESS_PRIV_RO_USER_NO`, plus `ACCESS_NONE` as a disabled-slot sentinel; ARMv7-M additionally has `ACCESS_PRIV_RW_USER_RO`/`ACCESS_HW_NO_ACCESS`, not available on ARMv8-M), `EMpuExec` (`EXEC_ALLOWED`/`EXEC_NEVER`), `EMpuType` (`TYPE_STRONGLY_ORDERED`, `TYPE_DEVICE`, `TYPE_NORMAL_NON_CACHE`, `TYPE_NORMAL_CACHEABLE`), `EMpuShare` (`SHARE_NON`, `SHARE_OUTER`, `SHARE_INNER`). Underlying storage type and exact values differ between the ARMv7-M (PMSAv7) and ARMv8-M (PMSAv8) builds, selected automatically via `STK_ARCH_ARMV8_M`.
 - **`stk::hw::mpu::EMpuConfigFlags`** — mode flags for `MpuConfig::mode`: `MPU_CFG_PRIVILEGED_BG_MEM` (enable Cortex-M's default privileged background map, `CTRL.PRIVDEFENA`), `MPU_CFG_IN_FAULTS` (keep the MPU active during HardFault/NMI, `CTRL.HFNMIENA`), `MPU_CFG_CLEAR_ON_INIT` (wipe all region registers before applying the static table), and `MPU_CFG_NONSECURE_MPU` (TrustZone only — target the Non-Secure `MPU_NS` instance instead of the Secure `MPU`; must match the overrider slot the config came from, or an `STK_ASSERT` fires).
-- **Per-task dynamic regions (`STK_MPU_STACK_GUARD`)** — each task owns `STK_MPU_TASK_REGIONS` (2 or 4) hardware region slots, fully reprogrammed by the kernel on every context switch (`stk::TaskMpu` inside `Stack::mpu`, plus `Stack::mpu_ns` under TrustZone):
+- **Per-task dynamic regions (`STK_MPU_STACK_GUARD`)** — each task owns `STK_MPU_TASK_REGIONS` (2, 4, or 6) hardware region slots, fully reprogrammed by the kernel on every context switch (`stk::TaskMpu` inside `Stack::mpu`, plus `Stack::mpu_ns` under TrustZone):
   - Region 0 is always the automatic stack guard, computed by the driver from the task's own stack bounds — the application never defines it.
   - Regions 1..`STK_MPU_TASK_REGIONS - 1` are supplied by the task via `ITask::GetMpuRegions()`, most commonly used to sandbox the task's own class instance (`this`) or a private data buffer.
 - **Global/static regions (`IPlatform::IEventOverrider::OnConfigureMpu()`)** — background regions (Flash, general RAM, shared code/data windows) applied once at boot, underneath every task's own regions. Independent of and evaluated separately from per-task regions.
-- **`STK_MPU_SHARED_DATA_SECTION` / `STK_MPU_SHARED_CODE_SECTION` / `STK_MPU_SHARED_BSS_SECTION`** — linker-section attribute macros (`stk_arch_arm-cortex-m.h`) for placing globals/functions into the recommended shared MPU windows: `.stk_mpu_shared_data`/`.stk_mpu_shared_bss` (`ACCESS_FULL`, `EXEC_NEVER` — readable/writable by every task) and `.stk_mpu_shared_code` (`ACCESS_PRIV_RO_USER_RO`, `EXEC_ALLOWED` — executable, read-only). No-ops when `STK_MPU=0`.
+- **`STK_MPU_SHARED_DATA_SECTION` / `STK_MPU_SHARED_CODE_SECTION` / `STK_MPU_SHARED_BSS_SECTION`** — linker-section attribute macros (declared in `stk_arch.h`) for placing globals/functions into the recommended shared MPU windows: `.stk_mpu_shared_data`/`.stk_mpu_shared_bss` (`ACCESS_FULL`, `EXEC_NEVER` — readable/writable by every task) and `.stk_mpu_shared_code` (`ACCESS_PRIV_RO_USER_RO`, `EXEC_ALLOWED` — executable, read-only). No-ops when `STK_MPU=0`.
+- **`STK_MPU_KERNEL_DATA_SECTION` / `STK_MPU_KERNEL_CODE_SECTION` / `STK_MPU_KERNEL_BSS_SECTION`** — linker-section attribute macros (declared in `stk_arch.h`) for placing globals/functions into privileged-only kernel windows: `.stk_mpu_kernel_data`/`.stk_mpu_kernel_bss` (`ACCESS_PRIV_RW_USER_NO`, `EXEC_NEVER` — read/write for privileged code only) and `.stk_mpu_kernel_code` (`ACCESS_PRIV_RO_USER_NO`, `EXEC_ALLOWED` — execute/read for privileged code only). Use for scheduler internals or application data/entry points that must stay unreachable from unprivileged tasks even without `MPU_CFG_PRIVILEGED_BG_MEM`. No-ops when `STK_MPU=0`.
 - **TrustZone dual-instance MPU** — on ARMv8-M TrustZone builds, `IPlatform::SetEventOverrider(overrider, non_secure)` registers up to two independent `IEventOverrider` instances — one per security state — each with its own `OnConfigureMpu()` global regions and, for Non-Secure tasks, its own per-task stack guard/region set (`Stack::mpu_ns`), reprogrammed independently of the Secure side on every context switch.
 
 ---
@@ -418,7 +420,7 @@ This port simulates the RTOS on Windows for development and testing. Each task m
 
 > **Full reference:** [`include/strategy/README.md`](include/strategy/README.md)
 
-All strategies are **header-only** classes implementing `ITaskSwitchStrategy`. The `Kernel` is templated on the strategy type — selection happens at compile time with zero runtime overhead. Each strategy maintains two intrusive lists: `m_tasks` (runnable) and `m_sleep` (blocked), and reports two capability flags (`WEIGHT_API`, `SLEEP_EVENT_API`) as compile-time `enum EConfig` values.
+All strategies are **header-only** classes implementing `ITaskSwitchStrategy`. The `Kernel` is templated on the strategy type — selection happens at compile time with zero runtime overhead. Each strategy maintains two intrusive lists: `m_tasks` (runnable) and `m_sleep` (blocked), and reports four capability flags (`WEIGHT_API`, `SLEEP_EVENT_API`, `DEADLINE_MISSED_API`, `PRIORITY_INHERITANCE_API`) as compile-time `enum EConfig` values. `DEADLINE_MISSED_API` gates whether the kernel calls `OnTaskDeadlineMissed()` to let a strategy absorb an HRT budget overrun instead of hard-faulting; `PRIORITY_INHERITANCE_API` gates `OnTaskWeightChange()` notifications used for priority-inheritance support.
 
 **Available strategies at a glance:**
 
@@ -589,7 +591,7 @@ Every implementation file begins with:
 
 The `stk_config.h` note is a reminder: the config file lives in the repository root and must be copied to `include/` and customized for your target before building.
 
-All three files implement the same `IPlatform` interface — `Initialize`, `Start`, `Stop`, `InitStack`, `SwitchToNext`, `Sleep`, `SleepUntil`, `Wait`, `ProcessTick`, `ProcessHardFault`, `GetTid`, `GetCallerSP`, `Suspend`, `Resume` — and the `hw::` namespace definitions (`CriticalSection::Enter/Exit`, `SpinLock::Lock/Unlock/TryLock`, `IsInsideISR`, `HiResClock::GetCycles/GetFrequency`).
+All three files implement the same `IPlatform` interface — `Initialize`, `Start`, `Stop`, `InitStack`, `SwitchToNext`, `Sleep`, `SleepUntil`, `Wait`, `ProcessTick`, `ProcessHardFault`, `GetTid`, `GetCallerSP`, `Suspend`, `Resume`, `SetCpuFrequency` — and the `hw::` namespace definitions (`CriticalSection::Enter/Exit`, `SpinLock::Lock/Unlock/TryLock`, `IsInsideISR`, `HiResClock::GetCycles/GetFrequency`).
 
 ---
 
@@ -710,16 +712,18 @@ All macros below can be defined in `stk_config.h`. Macros marked **required** mu
 | `STK_TICKLESS_TICKS_MAX`       | `1000`               | Maximum ticks the timer may be suppressed per idle interval                                    |
 | `STK_ARCH_CPU_COUNT`           | `1`                  | Number of CPU cores (SMP)                                                                      |
 | `STK_ARCH_GET_CPU_ID()`        | `0`                  | Expression returning the calling core's index                                                  |
+| `STK_CORE_FREQ_UNIFIED`        | `1`                  | `1` = all CPU cores share the same clock frequency. Set `0` on SMP targets with independent per-core clocks and call `IPlatform::SetCpuFrequency(core_id, frequency)` to report each core's frequency at runtime |
 | `STK_STACK_SIZE_MIN`           | arch-dependent       | Minimum stack size in `Word` elements                                                          |
 | `STK_SLEEP_TRAP_STACK_SIZE`    | `STK_STACK_SIZE_MIN` | Sleep trap stack size                                                                          |
 | `STK_STACK_MEMORY_ALIGN`       | arch-dependent       | Required stack buffer alignment (bytes)                                                        |
+| `STK_STACK_GUARD`              | `1`                  | `1` = kernel checks stack health on every context switch                                       |
 | `STK_CS_NESTINGS_MAX`          | `16`                 | Maximum critical section nesting depth                                                         |
 | `STK_STRICT_COMPLIANCY`        | `0`                  | `1` = disable workarounds that break MISRA/safety-critical rules                               |
 | `STK_TLS`                      | `0`                  | `1` = enable per-task thread-local storage                                                     |
 | `STK_TLS_PREFER_REGISTER`      | `0` (`1` on RISC-V)  | `1` = keep the TLS pointer in a CPU register (`r9`/`tp`) instead of `Stack::tls`               |
 | `STK_MPU`                      | `0`                  | `1` = enable MPU support                                                                       |
 | `STK_MPU_STACK_GUARD`          | `0`                  | `1` = give each task `STK_MPU_TASK_REGIONS` dynamic MPU regions (auto stack guard + app-defined), reprogrammed every context switch. Requires `STK_MPU=1` |
-| `STK_MPU_TASK_REGIONS`         | `2`                  | Dynamic MPU regions per task when `STK_MPU_STACK_GUARD=1`: `2` or `4`. Region 0 is always the automatic stack guard; the rest are supplied via `ITask::GetMpuRegions()` |
+| `STK_MPU_TASK_REGIONS`         | `2`                  | Dynamic MPU regions per task when `STK_MPU_STACK_GUARD=1`: `2`, `4`, or `6`. Region 0 is always the automatic stack guard; the rest are supplied via `ITask::GetMpuRegions()` |
 | `STK_SEGGER_SYSVIEW`           | `0`                  | `1` = enable SEGGER SystemView tracing                                                         |
 | `STK_SYNC_DEBUG_NAMES`         | `0`                  | `1` = enable debug names for sync objects                                                      |
 | `STK_SYSTICK_HANDLER`          | `SysTick_Handler`    | ARM: SysTick ISR symbol name                                                                   |

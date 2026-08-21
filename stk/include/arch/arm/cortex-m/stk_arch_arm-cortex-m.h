@@ -170,6 +170,7 @@ public:
     TId GetTid() const override;
     Timeout Suspend() override;
     void Resume(Timeout elapsed_ticks) override;
+    void SetCpuFrequency(uint8_t core_id, uint32_t frequency) override;
 };
 
 /*! \typedef PlatformDefault
@@ -426,49 +427,6 @@ struct MpuRegionConfig
     }
     \endcode
 */
-
-/*! \def   STK_MPU_SHARED_DATA_SECTION
-    \brief Attribute macro to place global or static variables into the shared MPU data memory section.
-
-    Any variables tagged with this macro are placed in the \a .stk_mpu_shared_data region.
-    According to the recommended MPU configuration, this specialized region grants full read and
-    write access (\a ACCESS_FULL) to both privileged and unprivileged user tasks, while explicitly
-    blocking code execution (\a EXEC_NEVER).
-*/
-#define STK_MPU_SHARED_DATA_SECTION __attribute__((section(".stk_mpu_shared_data")))
-
-/*! \def   STK_MPU_SHARED_CODE_SECTION
-    \brief Attribute macro to place functions into the shared MPU executable code section.
-
-    Any functions tagged with this macro are placed in the \a .stk_mpu_shared_code region.
-    According to the recommended MPU configuration, this specialized region allows execution
-    privileges (\a EXEC_ALLOWED) and read-only access for privileged and unprivileged user tasks
-    (\a ACCESS_PRIV_RO_USER_RO) to facilitate secure system entry points.
-*/
-#define STK_MPU_SHARED_CODE_SECTION __attribute__((section(".stk_mpu_shared_code")))
-
-/*! \def   STK_MPU_SHARED_BSS_SECTION
-    \brief Attribute macro to place zero-initialized global or static variables into the shared
-           MPU data memory section without consuming flash storage.
-
-    Any variables tagged with this macro are placed in the \a .stk_mpu_shared_bss region, a
-    zero-initialized subrange nested inside the same \a .stk_mpu_shared_data MPU region. As such,
-    it carries the same access permissions as \ref STK_MPU_SHARED_DATA_SECTION - full read and
-    write access (\a ACCESS_FULL) to both privileged and unprivileged user tasks, with code
-    execution explicitly blocked (\a EXEC_NEVER).
-
-    Unlike \ref STK_MPU_SHARED_DATA_SECTION, variables placed here must not have a non-zero
-    initializer: the linker stores no image for this region, and startup code zero-fills it at
-    boot instead of copying it from flash. Prefer this macro over \ref STK_MPU_SHARED_DATA_SECTION
-    for large or scratch shared buffers to avoid wasting flash space on a stored image of zeros.
-*/
-#define STK_MPU_SHARED_BSS_SECTION __attribute__((section(".stk_mpu_shared_bss")))
-
-#else
-
-#define STK_MPU_SHARED_DATA_SECTION
-#define STK_MPU_SHARED_CODE_SECTION
-#define STK_MPU_SHARED_BSS_SECTION
 
 // =============================================================================
 #endif // STK_MPU

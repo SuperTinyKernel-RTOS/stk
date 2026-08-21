@@ -68,7 +68,10 @@ using namespace stk;
     \brief   Base MPU region index reserved for per-task stack protection.
     \note    Defaults to the last \ref STK_MPU_TASK_REGIONS slots (\c STK_CORTEX_M_MPU_REGIONS_MAX - \ref STK_MPU_TASK_REGIONS).
     \warning Context-switch burst writes use RBAR aliases (RBAR_A1..A3) which wrap within 4-region hardware blocks.
-             Index must satisfy: \c (IDX \c % \c 4) \c <= \c (4 \c - \c STK_MPU_TASK_REGIONS).
+             For \c STK_MPU_TASK_REGIONS \c <= \c 4, index must satisfy:
+             \c (IDX \c % \c 4) \c <= \c (4 \c - \c STK_MPU_TASK_REGIONS). For \c STK_MPU_TASK_REGIONS \c == \c 6,
+             the burst is split into a first, full 4-region block (IDX..IDX+3) followed by a second 2-region
+             block (IDX+4..IDX+5), which requires the base to be block-aligned: \c (IDX \c % \c 4) \c == \c 0.
     \see     STK_ASM_BLOCK_MPU_STACK_GUARD, STK_MPU_TASK_REGIONS
 */
 #ifndef STK_CORTEX_M_MPU_TASK_REGION_IDX
@@ -301,6 +304,117 @@ __stk_attr_unused static inline Word SetSPSelectionToPSP(Word REG_CONTROL) noexc
 } // namespace stk
 // ----------------------------------------------------------------------------
 
+// ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+#if STK_MPU
+// ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+// ----------------------------------------------------------------------------
+namespace stk {
+namespace hw {
+namespace mpu {
+// ----------------------------------------------------------------------------
+
+// Helpers to extract effective physical bounds [start, end_inclusive]
+struct RegionBounds
+{
+    Word start;
+    Word end;
+    bool valid;
+};
+
+static inline RegionBounds GetRegionBounds(const MpuRegionConfig &cfg)
+{
+    RegionBounds result = { 0U, 0U, false };
+
+    if ((cfg.size != 0U) && (cfg.access_perm != EMpuAccess::ACCESS_NONE))
+    {
+    #if STK_ARCH_ARMV8_M
+        // PMSAv8: 32-byte aligned base and size
+        result.start = cfg.addr & ~31U;
+        result.end   = result.start + cfg.size - 1U;
+    #else
+        // PMSAv7: naturally aligned power-of-two size
+        result.start = cfg.addr & ~(cfg.size - 1U);
+        result.end   = result.start + cfg.size - 1U;
+    #endif
+
+        result.valid = (result.start < result.end);
+    }
+
+    return result;
+}
+
+static inline bool IsOverlapping(const RegionBounds &a, const RegionBounds &b)
+{
+#if STK_ARCH_ARMV8_M
+    // standard closed-interval collision test [start, end]
+    return ((!a.valid || !b.valid) ? false : (a.start <= b.end) && (b.start <= a.end));
+#else
+    // ARMv7-M (PMSAv7) supports regions overlapping, so we always allow overlapping
+    STK_UNUSED(a);
+    STK_UNUSED(b);
+    return false;
+#endif
+}
+
+static void ValidateNoOverlaps(const MpuRegionConfig dynamic_cfg_list[], size_t dynamic_cfg_count,
+    const MpuRegionConfig static_cfg_list[], size_t static_cfg_count)
+{
+    // 1. Validate internal overlaps within dynamic list
+    for (size_t i = 0U; i < dynamic_cfg_count; ++i)
+    {
+        const RegionBounds bounds_i = GetRegionBounds(dynamic_cfg_list[i]);
+        if (!bounds_i.valid)
+        {
+            continue;
+        }
+
+        for (size_t j = i + 1U; j < dynamic_cfg_count; ++j)
+        {
+            const RegionBounds bounds_j = GetRegionBounds(dynamic_cfg_list[j]);
+            if (!bounds_j.valid)
+            {
+                continue;
+            }
+
+            // Assert failure means two active dynamic configurations cross boundaries
+            if (IsOverlapping(bounds_i, bounds_j))
+            {
+                STK_KERNEL_PANIC(KERNEL_PANIC_BAD_MEMORY_REGION);
+            }
+        }
+
+        // 2. Validate dynamic region 'i' against static regions from overrider
+        if (static_cfg_list != nullptr)
+        {
+            for (size_t k = 0U; k < static_cfg_count; ++k)
+            {
+                const RegionBounds static_bounds = GetRegionBounds(static_cfg_list[k]);
+                if (!static_bounds.valid)
+                {
+                    continue;
+                }
+
+                // Assert failure means a dynamic region collides with a static region
+                if (IsOverlapping(bounds_i, static_bounds))
+                {
+                    STK_KERNEL_PANIC(KERNEL_PANIC_BAD_MEMORY_REGION);
+                }
+            }
+        }
+    }
+}
+
+// ----------------------------------------------------------------------------
+} // namespace mpu
+} // namespace hw
+} // namespace stk
+// ----------------------------------------------------------------------------
+
+// ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+#endif
+// ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
 #if defined(_STK_CORTEX_M_TRUSTZONE) && (STK_CORTEX_M_TZ_REGISTER_COUNT != 0U)
 /*! \struct TrustZoneFrame
     \brief  Per-task TrustZone register snapshot saved on every context switch.
@@ -380,6 +494,14 @@ static void OnSchedulerSleep();
 static void OnSchedulerSleepOverride();
 static void OnSchedulerExit();
 
+// Local static variables:
+STK_MPU_KERNEL_BSS_SECTION
+#if STK_CORE_FREQ_UNIFIED
+static uint32_t s_StkSystemCoreClock[1U];
+#else
+static uint32_t s_StkSystemCoreClock[STK_ARCH_CPU_COUNT];
+#endif
+
 /*! \brief   Cached spin-lock timeout budget expressed in retry-loop iteration count.
     \details Derived from STK_SPINLOCK_TIMEOUT_US and the active core clock frequency by
              HW_InitSpinlockTimeout(), which must be called once per core during
@@ -388,7 +510,16 @@ static void OnSchedulerExit();
              occurring prior to core initialization maintain a bounded, non-zero timeout limit.
     \see     HW_InitSpinlockTimeout, STK_SPINLOCK_TIMEOUT_US, STK_SPINLOCK_MIN_CYCLES_PER_ITER
 */
+STK_MPU_KERNEL_DATA_SECTION
 static uint32_t s_StkSpinlockTimeoutIters = 0xFFFFFFFU;
+
+//! Global lock to synchronize critical sections of multiple cores.
+STK_MPU_KERNEL_BSS_SECTION
+static volatile bool s_StkCortexmCsuLock = false;
+
+//! Panic id cache for post-mortem inspection.
+STK_MPU_KERNEL_BSS_SECTION
+static volatile EKernelPanicId g_StkLastPanicId = KERNEL_PANIC_NONE;
 
 /*! \brief     Start scheduler.
     \note      Triggered via SVC. This will transition CPU to SVC Handler.
@@ -810,8 +941,8 @@ int32_t SaveJmp(JmpFrame &/*f*/)
 #if (__CORTEX_M >= 3U)
     // Cortex-M3/M4/M7: STMIA stores r4-r11 at r0+0 .. r0+28
     "STMIA r0,  {r4-r11}            \n" // store r4-r11 at offsets 0-28, no writeback
-    "STR   sp,  [r0, #32]           \n" // SP at offset 32
-    "STR   lr,  [r0, #36]           \n" // LR at offset 36
+    "STR   SP,  [r0, #32]           \n" // SP at offset 32
+    "STR   LR,  [r0, #36]           \n" // LR at offset 36
 #else
     // Cortex-M0/M0+/M1: Thumb-1 only
     "STR  r4,  [r0, #0]             \n"
@@ -826,11 +957,11 @@ int32_t SaveJmp(JmpFrame &/*f*/)
     "STR  r1,  [r0, #24]            \n"
     "MOV  r1,  r11                  \n"
     "STR  r1,  [r0, #28]            \n"
-    "MOV  r1,  sp                   \n"
+    "MOV  r1,  SP                   \n"
     "STR  r1,  [r0, #32]            \n"
-    "MOV  r1,  lr                   \n"
+    "MOV  r1,  LR                   \n"
     "STR  r1,  [r0, #36]            \n"
-#endif
+#endif // (__CORTEX_M >= 3U)
 
 #if STK_CORTEX_M_FPU
     "VMRS r1,  FPSCR                \n"
@@ -838,16 +969,16 @@ int32_t SaveJmp(JmpFrame &/*f*/)
 #endif
 
 #if STK_CORTEX_M_PAC
-    "PAC   r12, lr, sp              \n" // sign LR using SP as modifier -> R12
-#if STK_CORTEX_M_FPU
+    "PAC   r12, LR, SP              \n" // sign LR using SP as modifier -> R12
+    #if STK_CORTEX_M_FPU
     "STR  r12, [r0, #44]            \n" // offset 44 if FPU is present
-#else
+    #else
     "STR  r12, [r0, #40]            \n" // offset 40 if FPU is absent
-#endif
+    #endif
 #endif
 
     "MOVS r0,  #0                   \n"
-    "BX   lr                        \n");
+    "BX   LR                        \n");
 
 #ifdef __ICCARM__
 #pragma diag_suppress=Pe940
@@ -891,20 +1022,20 @@ void RestoreJmp(JmpFrame &/*f*/, int32_t /*val*/)
 #endif
 
 #if STK_CORTEX_M_PAC
-#if STK_CORTEX_M_FPU
+    #if STK_CORTEX_M_FPU
     "LDR   r12, [r0, #44]           \n" // load saved PAC signature into R12
-#else
+    #else
     "LDR   r12, [r0, #40]           \n"
-#endif
+    #endif
 #endif
 
     "LDR   r2,  [r0, #36]           \n" // load saved LR into r2
 
-#if STK_CORTEX_M_PAC
-    "MOV   lr,  r2                  \n" // move to LR for authentication
-    "AUT   r12, lr, sp              \n" // authenticate LR using current SP and R12
-    "MOV   r2,  lr                  \n" // move validated address back to r2
-#endif
+    #if STK_CORTEX_M_PAC
+    "MOV   LR,  r2                  \n" // move to LR for authentication
+    "AUT   r12, LR, SP              \n" // authenticate LR using current SP and R12
+    "MOV   r2,  LR                  \n" // move validated address back to r2
+    #endif
 
     "LDMIA r0,  {r4-r11}            \n" // restore r4-r11, no writeback
     "MOV   r0,  r1                  \n" // return val
@@ -912,9 +1043,9 @@ void RestoreJmp(JmpFrame &/*f*/, int32_t /*val*/)
 #else
     // Cortex-M0/M0+/M1: Thumb-1 only
     "LDR  r2,  [r0, #36]            \n"
-    "MOV  lr,  r2                   \n"
+    "MOV  LR,  r2                   \n"
     "LDR  r2,  [r0, #32]            \n"
-    "MOV  sp,  r2                   \n"
+    "MOV  SP,  r2                   \n"
     "LDR  r2,  [r0, #28]            \n"
     "MOV  r11, r2                   \n"
     "LDR  r2,  [r0, #24]            \n"
@@ -928,8 +1059,8 @@ void RestoreJmp(JmpFrame &/*f*/, int32_t /*val*/)
     "LDR  r6,  [r0, #8]             \n"
     "LDR  r7,  [r0, #12]            \n"
     "MOV  r0,  r1                   \n"  // return val
-    "BX   lr                        \n"
-#endif
+    "BX   LR                        \n"
+#endif // (__CORTEX_M >= 3U)
     );
 }
 
@@ -1060,7 +1191,11 @@ static __stk_forceinline void HW_EnableFullFpuAccess(void)
 */
 static __stk_forceinline uint32_t HW_CoreClockFrequency()
 {
-    return SystemCoreClock;
+#if STK_CORE_FREQ_UNIFIED
+    return s_StkSystemCoreClock[0];
+#else
+    return s_StkSystemCoreClock[STK_ARCH_GET_CPU_ID()];
+#endif
 }
 
 /*! \brief Clear pending switch by PendSV exception.
@@ -1216,7 +1351,10 @@ static void HW_InitSpinlockTimeout()
         stk::Min(stk::Max(iters, static_cast<Cycles>(0x1000U)), static_cast<Cycles>(0xFFFFFFFFU)));
 }
 
+// ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 #if STK_MPU
+// ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
 /*! \class ScopedPrivilegeBoost
     \brief RAII utility to temporarily elevate thread mode execution to privileged status.
 
@@ -1283,9 +1421,7 @@ ScopedPrivilegeBoost::ScopedPrivilegeBoost()
         : "memory"
     );
 }
-#endif // STK_MPU
 
-#if STK_MPU
 // ----------------------------------------------------------------------------
 namespace stk {
 namespace hw {
@@ -1449,7 +1585,9 @@ static constexpr Word RASR_DISABLED_REGION = 0U;
 } // namespace stk
 // ----------------------------------------------------------------------------
 
+// ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 #endif // STK_MPU
+// ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 /*! \brief External symbols defining the boundary addresses of the secure shared code region.
 
@@ -1491,10 +1629,8 @@ static constexpr MpuRegionConfig s_StkDisabledMpuRegion =
 };
 #endif
 
-//! Global lock to synchronize critical sections of multiple cores.
-static volatile bool s_StkCortexmCsuLock = false;
-
 //! Internal context.
+STK_MPU_KERNEL_DATA_SECTION
 static struct Context final : public PlatformContext
 {
     typedef IPlatform::IEventOverrider eovrd_t;
@@ -1521,19 +1657,23 @@ static struct Context final : public PlatformContext
 
         STK_STATIC_ASSERT_DESC_N(SP, offsetof(Stack, SP) == 0U,
             "expect Stack::mode member at offset of 0 (first member)");
-        STK_STATIC_ASSERT_DESC_N(mode, offsetof(Stack, access_mode) == 4U,
-            "expect Stack::mode member at offset of 4 (second member)");
     #if STK_MPU
-        STK_STATIC_ASSERT_DESC_N(mpu, (STK_CORTEX_M_MPU_TASK_REGION_IDX % 4U) <= (4U - STK_MPU_TASK_REGIONS),
+        STK_STATIC_ASSERT_DESC_N(mpu,
+            (STK_MPU_TASK_REGIONS == 4U)
+                ? ((STK_CORTEX_M_MPU_TASK_REGION_IDX % 4U) == 0U)
+                : ((STK_CORTEX_M_MPU_TASK_REGION_IDX % 4U) <= 2U),
             "STK_CORTEX_M_MPU_TASK_REGION_IDX is not aligned correctly for the RNR-relative "
             "alias burst write at the configured STK_MPU_TASK_REGIONS width");
-        STK_STATIC_ASSERT_DESC_N(mpu_task_regions, (STK_MPU_TASK_REGIONS == 2U) || (STK_MPU_TASK_REGIONS == 4U),
-            "STK_MPU_TASK_REGIONS must be defined as 2 or 4");
+        STK_STATIC_ASSERT_DESC_N(mpu_task_regions,
+            (STK_MPU_TASK_REGIONS == 2U) || (STK_MPU_TASK_REGIONS == 4U) || (STK_MPU_TASK_REGIONS == 6U),
+            "STK_MPU_TASK_REGIONS must be defined as 2, 4 or 6");
         // make sure linker declares __stk_mpu_shared_xxx regions correctly, i.e. code and data
         // sections must contain data
         STK_ASSERT(hw::PtrToWord(__stk_mpu_shared_code_end) - hw::PtrToWord(__stk_mpu_shared_code_start) > 0U);
         STK_ASSERT(hw::PtrToWord(__stk_mpu_shared_data_end) - hw::PtrToWord(__stk_mpu_shared_data_start) > 0U);
     #endif
+        STK_ASSERT(s_StkCortexmCsuLock == false);
+        STK_ASSERT(g_StkLastPanicId == KERNEL_PANIC_NONE);
 
         m_csu            = 0U;
         m_csu_nesting    = 0U;
@@ -1543,6 +1683,15 @@ static struct Context final : public PlatformContext
         m_sleep_ticks    = 0;
         m_sleep_error    = 0U;
     #endif
+
+        // initialize system clock if user-side code has not yet done it
+        if (s_StkSystemCoreClock[0] == 0U)
+        {
+            for (uint8_t i = 0U; i < STK_STATIC_ARRAY_SIZE(s_StkSystemCoreClock); ++i)
+            {
+                s_StkSystemCoreClock[i] = SystemCoreClock;
+            }
+        }
 
         HW_InitSpinlockTimeout();
 
@@ -1600,7 +1749,7 @@ static struct Context final : public PlatformContext
         }
     #else
         OnTick();
-    #endif
+    #endif // STK_TICKLESS_IDLE
 
         HW_EnableInterrupts();
     }
@@ -1767,6 +1916,9 @@ static struct Context final : public PlatformContext
             }
         }
     }
+#endif // STK_MPU
+
+#if STK_MPU
     void ConfigureMpu()
     {
         // configure Secure binary side if TrustZone enabled, or just standard
@@ -1777,7 +1929,7 @@ static struct Context final : public PlatformContext
         ConfigureMpuInstance(m_overrider_ns, true);
     #endif
     }
-#endif
+#endif // STK_MPU
 
     TId GetCurrentTId() const
     {
@@ -1830,13 +1982,7 @@ public:
         m_acc  = 0U;
     }
 
-    static HiResClockDWT *GetInstance()
-    {
-        // keep declaration function-local to allow compiler stripping it from the binary if
-        // it is unused by the user code
-        static HiResClockDWT clock;
-        return &clock;
-    }
+    static HiResClockDWT *GetInstance();
 
     void Update()
     {
@@ -1861,17 +2007,20 @@ public:
     }
 };
 
+STK_MPU_KERNEL_CODE_SECTION
+HiResClockDWT *HiResClockDWT::GetInstance()
+{
+    // keep declaration function-local to allow compiler stripping it from the binary if
+    // it is unused by the user code
+    STK_MPU_KERNEL_DATA_SECTION static HiResClockDWT clock;
+    return &clock;
+}
+
 //! High resolution clock implementation for Cortex-M0.
 class HiResClockM0
 {
 public:
-    static HiResClockM0 *GetInstance()
-    {
-        // keep declaration function-local to allow compiler stripping it from the binary if
-        // it is unused by the user code
-        static HiResClockM0 clock;
-        return &clock;
-    }
+    static HiResClockM0 *GetInstance();
 
     Cycles GetCycles()
     {
@@ -1892,20 +2041,26 @@ public:
     }
 };
 
+STK_MPU_KERNEL_CODE_SECTION
+HiResClockM0 *HiResClockM0::GetInstance()
+{
+    // keep declaration function-local to allow compiler stripping it from the binary if
+    // it is unused by the user code
+    STK_MPU_KERNEL_DATA_SECTION static HiResClockM0 clock;
+    return &clock;
+}
+
 #if (__CORTEX_M >= 3U)
     typedef HiResClockDWT HiResClockImpl;
 #else
     typedef HiResClockM0 HiResClockImpl;
 #endif
 
-//! Panic id cache for post-mortem inspection.
-static volatile EKernelPanicId g_LastPanicId = KERNEL_PANIC_NONE;
-
 __stk_attr_noinline  // keep out of inlining to preserve stack frame
 __stk_attr_noreturn  // never returns - a trap
 void STK_PANIC_HANDLER_DEFAULT(EKernelPanicId id)
 {
-    g_LastPanicId = id;
+    g_StkLastPanicId = id;
 
     // disable all maskable interrupts: this prevents scheduler from running again and corrupting state further
     HW_DisableInterrupts();
@@ -1985,7 +2140,7 @@ Timeout Context::ReloadTickPeriod(Timeout ticks_requested)
     // return actual clamped ticks armed
     return ticks_requested;
 }
-#endif
+#endif // STK_TICKLESS_IDLE
 
 extern "C" void STK_SYSTICK_HANDLER()
 {
@@ -2030,11 +2185,17 @@ extern "C" void STK_SYSTICK_HANDLER()
              4 continuous words via r4-r7. Either way this writes MPU->RBAR plus the
              RNR-relative alias registers (RBAR_A1[, A2, A3]) starting at
              STK_CORTEX_M_MPU_TASK_REGION_IDX.
+    \note    6 regions cannot fit in a single RBAR-alias burst (hardware aliases wrap within a
+             4-region block), so the write is split in two: a first 8-word burst (r4-r11) covers
+             regions [IDX, IDX+3] exactly as the 4-region case, then MPU->RNR is advanced to
+             IDX+4 and a second 4-word burst (r4-r7) covers regions [IDX+4, IDX+5]. RNR is then
+             restored to STK_CORTEX_M_MPU_TASK_REGION_IDX so the invariant that RNR is parked at
+             the task-region base holds for the next context switch's leading alias burst.
     \warning Logic depends on MpuInfo layout.
 */
 #if STK_CORTEX_M_TRUSTZONE_FRAME
-    #if (STK_MPU_TASK_REGIONS == 2)
-    #define STK_ASM_BLOCK_MPU_STACK_GUARD \
+    #if (STK_MPU_TASK_REGIONS == 2U)
+    #define STK_ASM_BLOCK_MPU_STACK_GUARD\
         "MOV   r1, %[st_active]          \n" /* r1 = Stack* (already in register) */\
         "LDR   r0, =%[mpu_start_of]      \n" /* r0 = i.e. &MPU->RBAR */\
         "ADD   r12, r1, %[mpu_reg_of]    \n" /* point to mpu.region[0].addr */\
@@ -2045,8 +2206,8 @@ extern "C" void STK_SYSTICK_HANDLER()
         "ADD   r12, r1, %[mpu_ns_reg_of] \n" /* point to mpu_ns.region[0].addr */\
         "LDMIA r12, {r4-r7}              \n" /* burst load 4 words into r4-r7 */\
         "STMIA r0!, {r4-r7}              \n" /* burst write into MPU_NS registers */
-    #else
-    #define STK_ASM_BLOCK_MPU_STACK_GUARD \
+    #elif (STK_MPU_TASK_REGIONS == 4U)
+    #define STK_ASM_BLOCK_MPU_STACK_GUARD\
         "MOV   r1, %[st_active]          \n" /* r1 = Stack* (already in register) */\
         "LDR   r0, =%[mpu_start_of]      \n" /* r0 = &MPU->RBAR */\
         "ADD   r12, r1, %[mpu_reg_of]    \n" /* point to mpu.region[0].addr */\
@@ -2057,22 +2218,75 @@ extern "C" void STK_SYSTICK_HANDLER()
         "ADD   r12, r1, %[mpu_ns_reg_of] \n" /* point to mpu_ns.region[0].addr */\
         "LDMIA r12, {r4-r11}             \n" /* burst load 8 words into r4-r11 */\
         "STMIA r0!, {r4-r11}             \n" /* burst write into MPU_NS registers */
+    #elif (STK_MPU_TASK_REGIONS == 6U)
+    #define STK_ASM_BLOCK_MPU_STACK_GUARD\
+        "MOV   r1, %[st_active]          \n" /* r1 = Stack* (already in register) */\
+        "LDR   r0, =%[mpu_start_of]      \n" /* r0 = &MPU->RBAR */\
+        "ADD   r12, r1, %[mpu_reg_of]    \n" /* point to mpu.region[0].addr */\
+        "LDMIA r12, {r4-r11}             \n" /* burst load 8 words (regions 0-3) into r4-r11 */\
+        "STMIA r0!, {r4-r11}             \n" /* burst write into MPU regions IDX..IDX+3 */\
+        "LDR   r0, =%[mpu_rnr_of]        \n" /* r0 = &MPU->RNR */\
+        "LDR   r12, =%[mpu_rnr_idx4]     \n" /* r12 = STK_CORTEX_M_MPU_TASK_REGION_IDX + 4 */\
+        "STR   r12, [r0]                 \n" /* MPU->RNR = IDX + 4, select second block */\
+        "LDR   r0, =%[mpu_start_of]      \n" /* r0 = &MPU->RBAR (re-point to base alias regs) */\
+        "ADD   r12, r1, %[mpu_reg4_of]   \n" /* point to mpu.region[4].addr */\
+        "LDMIA r12, {r4-r7}              \n" /* burst load 4 words (regions 4-5) into r4-r7 */\
+        "STMIA r0!, {r4-r7}              \n" /* burst write into MPU regions IDX+4..IDX+5 */\
+        "LDR   r0, =%[mpu_rnr_of]        \n" /* r0 = &MPU->RNR */\
+        "LDR   r12, =%[mpu_rnr_idx]      \n" /* r12 = STK_CORTEX_M_MPU_TASK_REGION_IDX (restore) */\
+        "STR   r12, [r0]                 \n" /* restore RNR for the next context switch */\
+        /* write PSP_NS unconditionally for Secure task too, fully spec-compliant and safe */\
+        "LDR   r0, =%[mpu_ns_start_of]   \n" /* r0 = &MPU_NS->RBAR */\
+        "ADD   r12, r1, %[mpu_ns_reg_of] \n" /* point to mpu_ns.region[0].addr */\
+        "LDMIA r12, {r4-r11}             \n" /* burst load 8 words (regions 0-3) into r4-r11 */\
+        "STMIA r0!, {r4-r11}             \n" /* burst write into MPU_NS regions IDX..IDX+3 */\
+        "LDR   r0, =%[mpu_ns_rnr_of]     \n" /* r0 = &MPU_NS->RNR */\
+        "LDR   r12, =%[mpu_rnr_idx4]     \n" /* r12 = STK_CORTEX_M_MPU_TASK_REGION_IDX + 4 */\
+        "STR   r12, [r0]                 \n" /* MPU_NS->RNR = IDX + 4, select second block */\
+        "LDR   r0, =%[mpu_ns_start_of]   \n" /* r0 = &MPU_NS->RBAR (re-point to base alias regs) */\
+        "ADD   r12, r1, %[mpu_ns_reg4_of]\n" /* point to mpu_ns.region[4].addr */\
+        "LDMIA r12, {r4-r7}              \n" /* burst load 4 words (regions 4-5) into r4-r7 */\
+        "STMIA r0!, {r4-r7}              \n" /* burst write into MPU_NS regions IDX+4..IDX+5 */\
+        "LDR   r0, =%[mpu_ns_rnr_of]     \n" /* r0 = &MPU_NS->RNR */\
+        "LDR   r12, =%[mpu_rnr_idx]      \n" /* r12 = STK_CORTEX_M_MPU_TASK_REGION_IDX (restore) */\
+        "STR   r12, [r0]                 \n" /* restore RNR for the next context switch */
+    #else
+        #error "Unsupported region count, allowed - 2, 4, 6!"
     #endif
 #else
-    #if (STK_MPU_TASK_REGIONS == 2)
-    #define STK_ASM_BLOCK_MPU_STACK_GUARD \
+    #if (STK_MPU_TASK_REGIONS == 2U)
+    #define STK_ASM_BLOCK_MPU_STACK_GUARD\
         "MOV   r1, %[st_active]          \n" /* r1 = Stack* (already in register) */\
         "LDR   r0, =%[mpu_start_of]      \n" /* r0 = i.e. &MPU->RBAR or &MPU_NS->RBAR */\
         "ADD   r12, r1, %[mpu_reg_of]    \n" /* point to mpu.region[0].addr */\
         "LDMIA r12, {r4-r7}              \n" /* burst load 4 words into r4-r7 */\
         "STMIA r0!, {r4-r7}              \n" /* burst write into MPU registers */
-    #else
-    #define STK_ASM_BLOCK_MPU_STACK_GUARD \
+    #elif (STK_MPU_TASK_REGIONS == 4U)
+    #define STK_ASM_BLOCK_MPU_STACK_GUARD\
         "MOV   r1, %[st_active]          \n" /* r1 = Stack* (already in register) */\
         "LDR   r0, =%[mpu_start_of]      \n" /* r0 = &MPU->RBAR or &MPU_NS->RBAR */\
         "ADD   r12, r1, %[mpu_reg_of]    \n" /* point to mpu.region[0].addr */\
         "LDMIA r12, {r4-r11}             \n" /* burst load 8 words into r4-r11 */\
         "STMIA r0!, {r4-r11}             \n" /* burst write into MPU registers */
+    #elif (STK_MPU_TASK_REGIONS == 6U)
+    #define STK_ASM_BLOCK_MPU_STACK_GUARD\
+        "MOV   r1, %[st_active]          \n" /* r1 = Stack* (already in register) */\
+        "LDR   r0, =%[mpu_start_of]      \n" /* r0 = &MPU->RBAR or &MPU_NS->RBAR */\
+        "ADD   r12, r1, %[mpu_reg_of]    \n" /* point to mpu.region[0].addr */\
+        "LDMIA r12, {r4-r11}             \n" /* burst load 8 words (regions 0-3) into r4-r11 */\
+        "STMIA r0!, {r4-r11}             \n" /* burst write into regions IDX..IDX+3 */\
+        "LDR   r0, =%[mpu_rnr_of]        \n" /* r0 = &MPU->RNR or &MPU_NS->RNR */\
+        "LDR   r12, =%[mpu_rnr_idx4]     \n" /* r12 = STK_CORTEX_M_MPU_TASK_REGION_IDX + 4 */\
+        "STR   r12, [r0]                 \n" /* select second block */\
+        "LDR   r0, =%[mpu_start_of]      \n" /* r0 = &MPU->RBAR or &MPU_NS->RBAR (re-point) */\
+        "ADD   r12, r1, %[mpu_reg4_of]   \n" /* point to mpu.region[4].addr */\
+        "LDMIA r12, {r4-r7}              \n" /* burst load 4 words (regions 4-5) into r4-r7 */\
+        "STMIA r0!, {r4-r7}              \n" /* burst write into regions IDX+4..IDX+5 */\
+        "LDR   r0, =%[mpu_rnr_of]        \n" /* r0 = &MPU->RNR or &MPU_NS->RNR */\
+        "LDR   r12, =%[mpu_rnr_idx]      \n" /* r12 = STK_CORTEX_M_MPU_TASK_REGION_IDX (restore) */\
+        "STR   r12, [r0]                 \n" /* restore RNR for the next context switch */
+    #else
+        #error "Unsupported region count, allowed - 2, 4, 6!"
     #endif
 #endif
 
@@ -2251,9 +2465,19 @@ extern "C" __stk_attr_naked void STK_PENDSV_HANDLER()
 #if STK_MPU_STACK_GUARD
     , [mpu_start_of]    "i" (&MPU->RBAR)
     , [mpu_reg_of]      "i" (offsetof(Stack, mpu.region[0].addr))
+    #if (STK_MPU_TASK_REGIONS == 6U)
+    , [mpu_rnr_of]      "i" (&MPU->RNR)
+    , [mpu_reg4_of]     "i" (offsetof(Stack, mpu.region[4].addr))
+    , [mpu_rnr_idx4]    "i" (STK_CORTEX_M_MPU_TASK_REGION_IDX + 4U)
+    , [mpu_rnr_idx]     "i" (STK_CORTEX_M_MPU_TASK_REGION_IDX)
+    #endif
     #if STK_CORTEX_M_TRUSTZONE_FRAME
     , [mpu_ns_start_of] "i" (&MPU_NS->RBAR)
     , [mpu_ns_reg_of]   "i" (offsetof(Stack, mpu_ns.region[0].addr))
+      #if (STK_MPU_TASK_REGIONS == 6U)
+    , [mpu_ns_rnr_of]   "i" (&MPU_NS->RNR)
+    , [mpu_ns_reg4_of]  "i" (offsetof(Stack, mpu_ns.region[4].addr))
+      #endif
     #endif
 #endif
     : "r0" /* used as a scratchpad throughout */
@@ -2351,9 +2575,19 @@ __stk_attr_naked void OnTaskStart()
 #if STK_MPU_STACK_GUARD
     , [mpu_start_of]    "i" (&MPU->RBAR)
     , [mpu_reg_of]      "i" (offsetof(Stack, mpu.region[0].addr))
+    #if (STK_MPU_TASK_REGIONS == 6U)
+    , [mpu_rnr_of]      "i" (&MPU->RNR)
+    , [mpu_reg4_of]     "i" (offsetof(Stack, mpu.region[4].addr))
+    , [mpu_rnr_idx4]    "i" (STK_CORTEX_M_MPU_TASK_REGION_IDX + 4U)
+    , [mpu_rnr_idx]     "i" (STK_CORTEX_M_MPU_TASK_REGION_IDX)
+    #endif
     #if STK_CORTEX_M_TRUSTZONE_FRAME
     , [mpu_ns_start_of] "i" (&MPU_NS->RBAR)
     , [mpu_ns_reg_of]   "i" (offsetof(Stack, mpu_ns.region[0].addr))
+      #if (STK_MPU_TASK_REGIONS == 6U)
+    , [mpu_ns_rnr_of]   "i" (&MPU_NS->RNR)
+    , [mpu_ns_reg4_of]  "i" (offsetof(Stack, mpu_ns.region[4].addr))
+      #endif
     #endif
 #endif
     : "r0" /* used as a scratchpad throughout */
@@ -2377,11 +2611,6 @@ void Context::Start()
     // enable FPU before SaveJmp as it references FPU with VMRS
     HW_EnableFullFpuAccess();
 
-    // configure MPU
-#if STK_MPU
-    ConfigureMpu();
-#endif
-
     // save jump location of the Exit trap
     STK_UNUSED(SaveJmp(m_exit_buf));
     if (m_exiting)
@@ -2400,17 +2629,16 @@ void Context::OnStart()
     // interrupts must be disabled at this point
     STK_ASSERT(HW_InterruptsDisabled());
 
-    // FPU
-    HW_EnableFullFpuAccess();
-
     // clear FPU usage status if FPU was used before kernel start
     HW_ClearFpuState();
 
     // get the first active stack from the kernel
     m_handler->OnStart(m_stack_active);
 
-    // start with initially 1 elapsed tick (after timer expires)
-    StartTickTimer(1);
+    // configure MPU
+#if STK_MPU
+    ConfigureMpu();
+#endif
 
     // set lowest priority for PendSV (SysTick priority is set in StartTickTimer)
     NVIC_SetPriority(PendSV_IRQn, STK_CORTEX_M_ISR_PRIORITY_LOWEST);
@@ -2420,6 +2648,10 @@ void Context::OnStart()
 #endif
 
     m_started = true;
+
+    // start with initially 1 elapsed tick (after timer expires), should be the last
+    // in OnStart to provide full time window to the first starting task
+    StartTickTimer(1);
 }
 
 #if STK_TICKLESS_IDLE
@@ -2464,7 +2696,7 @@ Timeout Context::Suspend()
 
     return sleep_ticks;
 }
-#endif
+#endif // STK_TICKLESS_IDLE
 
 #if STK_TICKLESS_IDLE
 void Context::Resume(Timeout elapsed_ticks)
@@ -2479,7 +2711,7 @@ void Context::Resume(Timeout elapsed_ticks)
 
     HW_EnableInterrupts();
 }
-#endif
+#endif // STK_TICKLESS_IDLE
 
 // __stk_attr_used required for Link-Time Optimization (-flto)
 extern "C" __stk_attr_used void StkSVCHandlerMain(Word *svc_args)
@@ -2542,7 +2774,7 @@ extern "C" __stk_attr_used void StkSVCHandlerMain(Word *svc_args)
             STK_KERNEL_PANIC(KERNEL_PANIC_NS_ACCESS);
         }
         break; }
-#endif
+#endif // STK_MPU
 
 #ifdef CONTROL_nPRIV_Msk
     case SVC_ENTER_CRITICAL: {
@@ -2623,7 +2855,7 @@ void StkExceptionHandlerMain(const Word *stacked_regs, Word exc_id)
         NVIC_SystemReset();
     }
 }
-#endif
+#endif // STK_USE_MEMMANAGE_HANDLER || STK_USE_HARDFAULT_HANDLER
 
 #if STK_USE_MEMMANAGE_HANDLER && defined(STK_MEMMANAGE_HANDLER)
 extern "C" __stk_attr_naked void STK_MEMMANAGE_HANDLER()
@@ -2646,7 +2878,7 @@ extern "C" __stk_attr_naked void STK_MEMMANAGE_HANDLER()
     :  /* no clobber */
     );
 }
-#endif // STK_MEMMANAGE_HANDLER
+#endif // STK_USE_MEMMANAGE_HANDLER
 
 #if STK_USE_HARDFAULT_HANDLER && defined(STK_HARDFAULT_HANDLER)
 extern "C" __stk_attr_naked void STK_HARDFAULT_HANDLER()
@@ -2707,6 +2939,7 @@ void OnTaskExit()
     }
 }
 
+STK_MPU_KERNEL_CODE_SECTION
 void OnSchedulerSleep()
 {
     // if hit here, increase the size of STK_SLEEP_TRAP_STACK_SIZE
@@ -2722,6 +2955,7 @@ void OnSchedulerSleep()
     }
 }
 
+STK_MPU_KERNEL_CODE_SECTION
 void OnSchedulerSleepOverride()
 {
     // if hit here, increase the size of STK_SLEEP_TRAP_STACK_SIZE
@@ -2737,6 +2971,7 @@ void OnSchedulerSleepOverride()
     }
 }
 
+STK_MPU_KERNEL_CODE_SECTION
 void OnSchedulerExit()
 {
     __set_CONTROL(0U); // switch to MSP
@@ -2768,12 +3003,12 @@ void PlatformArmCortexM::Start()
 static void ConfigureTaskMpu(IPlatform::IEventOverrider *overrider, Stack *stack, IStackMemory *stack_memory,
     ITask *user_task, bool non_secure)
 {
-#ifndef _STK_CORTEX_M_TRUSTZONE
+#if !STK_CORTEX_M_TRUSTZONE_FRAME
     STK_UNUSED(non_secure);
 #endif
 
     MpuRegionConfig task_mpu_cfg[TaskMpu::NUM_REGIONS];
-    uint8_t cfg_count = 0U;
+    size_t cfg_count = 0U;
 
     // merge in up to (TaskMpu::NUM_REGIONS - 1) application-defined regions
     // (task-relative slots [+1..+NUM_REGIONS-1)]; user_task is null for the internal
@@ -2797,12 +3032,27 @@ static void ConfigureTaskMpu(IPlatform::IEventOverrider *overrider, Stack *stack
                 slot_0.exec        = hw::mpu::EMpuExec::EXEC_NEVER;
             }
 
+            const hw::mpu::RegionBounds bounds_s = hw::mpu::GetRegionBounds(task_mpu_cfg[0U]);
+
             size_t regions_count = regions->GetSize();
 
-            STK_ASSERT(regions_count <= (TaskMpu::NUM_REGIONS - 1U));
-            if (regions_count > (TaskMpu::NUM_REGIONS - 1U))
+            // check if
+            for (size_t i = 0U; i < regions_count; ++i)
             {
-                regions_count = (TaskMpu::NUM_REGIONS - 1U); // defensively clamp in release builds
+                const hw::mpu::RegionBounds bounds_i = hw::mpu::GetRegionBounds((*regions)[i]);
+
+                // cancel stack region in favour of memory coverage by task's instance
+                if (hw::mpu::IsOverlapping(bounds_s, bounds_i))
+                {
+                    cfg_count = 0;
+                    break;
+                }
+            }
+
+            STK_ASSERT(regions_count <= (TaskMpu::NUM_REGIONS - cfg_count));
+            if (regions_count > (TaskMpu::NUM_REGIONS - cfg_count))
+            {
+                regions_count = (TaskMpu::NUM_REGIONS - cfg_count); // defensively clamp in release builds
             }
 
             // slot 1 or 1-3: user-defined regions, including region of *this* instance of ITask instance
@@ -2813,7 +3063,7 @@ static void ConfigureTaskMpu(IPlatform::IEventOverrider *overrider, Stack *stack
         }
     }
 
-#ifdef _STK_CORTEX_M_TRUSTZONE
+#if STK_CORTEX_M_TRUSTZONE_FRAME
     TaskMpu &task_mpu = (non_secure ? stack->mpu_ns : stack->mpu);
 #else
     TaskMpu &task_mpu = stack->mpu;
@@ -2822,7 +3072,7 @@ static void ConfigureTaskMpu(IPlatform::IEventOverrider *overrider, Stack *stack
     // any slots beyond cfg_count are left disabled by ConfigureDynamic() itself
     hw::mpu::ConfigureDynamic(task_mpu, task_mpu_cfg, cfg_count, overrider);
 }
-#endif
+#endif // STK_MPU_STACK_GUARD
 
 #if STK_CORTEX_M_TRUSTZONE_FRAME
 static void ConfigureTaskTrustZone(Stack *stack, IStackMemory *stack_memory, ITask *user_task, bool non_secure)
@@ -2988,7 +3238,10 @@ void PlatformArmCortexM::InitStack(EStackType stack_type, Stack *stack, IStackMe
 // ---------------------------------------------------------------------------
 // ARMv8-M TrustZone Non-Secure callable (NSC) gateway veneers.
 // ---------------------------------------------------------------------------
+
+// ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 #ifdef _STK_CORTEX_M_TRUSTZONE
+// ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 /*! \brief  NSC gateway: hw::CriticalSection::Enter.
 */
@@ -3079,8 +3332,9 @@ TId NSC_stk_debug_GetCurrentTId()
     return GetContext().GetCurrentTId();
 }
 
+// ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 #endif // _STK_CORTEX_M_TRUSTZONE
-// ---------------------------------------------------------------------------
+// ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 void Context::OnStop()
 {
@@ -3223,6 +3477,28 @@ void PlatformArmCortexM::Resume(Timeout elapsed_ticks)
 #else
     STK_UNUSED(elapsed_ticks);
 #endif
+}
+
+void PlatformArmCortexM::SetCpuFrequency(uint8_t core_id, uint32_t frequency)
+{
+    const hw::CriticalSection::ScopedLock cs_;
+
+    if (core_id == 0xFFU)
+    {
+        for (uint8_t i = 0U; i < STK_STATIC_ARRAY_SIZE(s_StkSystemCoreClock); ++i)
+        {
+            s_StkSystemCoreClock[i] = frequency;
+        }
+    }
+    else
+    {
+        STK_ASSERT(core_id < STK_STATIC_ARRAY_SIZE(s_StkSystemCoreClock));
+
+        if (core_id < STK_STATIC_ARRAY_SIZE(s_StkSystemCoreClock))
+        {
+            s_StkSystemCoreClock[core_id] = frequency;
+        }
+    }
 }
 
 #if STK_MPU
@@ -3470,11 +3746,13 @@ bool stk::hw::IsPrivilegedContext()
     return HW_IsPrivilegedContext();
 }
 
+STK_MPU_KERNEL_CODE_SECTION
 Cycles stk::hw::HiResClock::GetCycles()
 {
     return HiResClockImpl::GetInstance()->GetCycles();
 }
 
+STK_MPU_KERNEL_CODE_SECTION
 uint32_t stk::hw::HiResClock::GetFrequency()
 {
     const uint32_t freq = HiResClockImpl::GetInstance()->GetFrequency();
@@ -3494,101 +3772,13 @@ void stk::hw::SetTls(Word tp)
 }
 #endif // STK_TLS && !STK_INLINE_TLS
 
+// ----------------------------------------------------------------------------
+// MPU management API
+// ----------------------------------------------------------------------------
+
+// ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 #if STK_MPU
-// ----------------------------------------------------------------------------
-namespace stk {
-namespace hw {
-namespace mpu {
-// ----------------------------------------------------------------------------
-
-// Helpers to extract effective physical bounds [start, end_inclusive]
-struct RegionBounds
-{
-    Word start;
-    Word end;
-    bool valid;
-};
-
-static inline RegionBounds GetRegionBounds(const MpuRegionConfig &cfg)
-{
-    RegionBounds result = { 0U, 0U, false };
-
-    if ((cfg.size != 0U) && (cfg.access_perm != EMpuAccess::ACCESS_NONE))
-    {
-#if STK_ARCH_ARMV8_M
-    // PMSAv8: 32-byte aligned base and size
-    result.start = cfg.addr & ~31U;
-    result.end   = result.start + cfg.size - 1U;
-#else
-    // PMSAv7: naturally aligned power-of-two size
-    result.start = cfg.addr & ~(cfg.size - 1U);
-    result.end   = result.start + cfg.size - 1U;
-#endif
-    }
-
-    return result;
-}
-
-static inline bool IsOverlapping(const RegionBounds &a, const RegionBounds &b)
-{
-#if STK_ARCH_ARMV8_M
-    // standard closed-interval collision test [start, end]
-    return ((!a.valid || !b.valid) ? false : (a.start <= b.end) && (b.start <= a.end));
-#else
-    // ARMv7-M (PMSAv7) supports regions overlapping, so we always allow overlapping
-    STK_UNUSED(a);
-    STK_UNUSED(b);
-    return false;
-#endif
-}
-
-static void ValidateNoOverlaps(const MpuRegionConfig dynamic_cfg_list[], size_t dynamic_cfg_count,
-    const MpuRegionConfig static_cfg_list[], size_t static_cfg_count)
-{
-    // 1. Validate internal overlaps within dynamic list
-    for (size_t i = 0U; i < dynamic_cfg_count; ++i)
-    {
-        const RegionBounds bounds_i = GetRegionBounds(dynamic_cfg_list[i]);
-        if (!bounds_i.valid)
-        {
-            continue;
-        }
-
-        for (size_t j = i + 1U; j < dynamic_cfg_count; ++j)
-        {
-            const RegionBounds bounds_j = GetRegionBounds(dynamic_cfg_list[j]);
-            if (!bounds_j.valid)
-            {
-                continue;
-            }
-
-            // Assert failure means two active dynamic configurations cross boundaries
-            STK_ASSERT(!IsOverlapping(bounds_i, bounds_j));
-        }
-
-        // 2. Validate dynamic region 'i' against static regions from overrider
-        if (static_cfg_list != nullptr)
-        {
-            for (size_t k = 0U; k < static_cfg_count; ++k)
-            {
-                const RegionBounds static_bounds = GetRegionBounds(static_cfg_list[k]);
-                if (!static_bounds.valid)
-                {
-                    continue;
-                }
-
-                // Assert failure means a dynamic region collides with a static region
-                STK_ASSERT(!IsOverlapping(bounds_i, static_bounds));
-            }
-        }
-    }
-}
-
-// ----------------------------------------------------------------------------
-} // namespace mpu
-} // namespace hw
-} // namespace stk
-// ----------------------------------------------------------------------------
+// ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 void hw::mpu::ConfigureRegion(MpuRegion &reg, const struct MpuRegionConfig &cfg, uint32_t region_idx)
 {
@@ -3688,10 +3878,10 @@ void hw::mpu::Enable(bool enable, uint32_t control_flags, bool non_secure)
 
     if (enable)
     {
-        MPU_ptr->CTRL = control_flags | MPU_CTRL_ENABLE_Msk;
     #ifdef SCB_SHCSR_MEMFAULTENA_Msk
         SCB_ptr->SHCSR |= SCB_SHCSR_MEMFAULTENA_Msk;
     #endif
+        MPU_ptr->CTRL = control_flags | MPU_CTRL_ENABLE_Msk;
     }
     else
     {
@@ -3823,11 +4013,14 @@ void hw::mpu::ConfigureDynamic(TaskMpu &task_mpu, const struct MpuRegionConfig c
             static_cast<uint32_t>(STK_CORTEX_M_MPU_TASK_REGION_IDX + task_idx));
     }
 }
-#endif // STK_MPU
 
-// ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+// ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+#endif // STK_MPU
+// ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+// ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 #endif // !defined(_STK_CORTEX_M_TRUSTZONE_NON_SECURE)
-// ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+// ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 #if STK_MPU
 static void FaultContext_FillMpu(FaultContext::Mpu &mpu_ctx, MPU_Type *mpu_inst)
@@ -3888,14 +4081,14 @@ void FaultContext::Fill(const Word *stacked_regs, Word exc_return)
     this->bfar_valid  = ((this->CFSR & SCB_CFSR_BFARVALID_Msk) != 0U);
     this->MMFAR       = (this->mmfar_valid ? SCB->MMFAR : 0U);
     this->BFAR        = (this->bfar_valid ? SCB->BFAR : 0U);
-#endif
+#endif // STK_ARCH_ARMV6_M
 
 #if STK_MPU
     FaultContext_FillMpu(this->mpu, MPU);
     #if STK_ARCH_ARMV8_M && STK_TZ_SECURE
     FaultContext_FillMpu(this->mpu_ns, MPU_NS);
     #endif
-#endif
+#endif // STK_MPU
 }
 
 #endif // _STK_ARCH_ARM_CORTEX_M

@@ -14,8 +14,8 @@
  * ACCESS_USER, a task can touch:
  *   - its own stack (region 0, the automatic stack guard installed by the driver), and
  *   - its own TaskPrivateData buffer (region 1, supplied below),
- * and nothing else. Any attempt to read/write another task's private buffer -- or anything
- * outside those two regions -- takes a MemManage fault (stk::HW_EXCEPT_MEMACCESS) instead of
+ * and nothing else. Any attempt to read/write another task's private buffer - or anything
+ * outside those two regions - takes a MemManage fault (stk::HW_EXCEPT_MEMACCESS) instead of
  * silently corrupting a neighboring task's state.
  *
  * Required stk_config.h settings for this example:
@@ -24,7 +24,7 @@
  *   #define STK_MPU_TASK_REGIONS 2  // slot 0 = stack guard, slot 1 = our private buffer below
  *
  * All linker symbols used below (__flash_binary_start/__flash_binary_end) are already exported
- * by memmap_tz_ns.ld -- no linker script changes are needed to build this example.
+ * by memmap_tz_ns.ld - no linker script changes are needed to build this example.
  * -----------------------------------------------------------------------------------------------
  */
 

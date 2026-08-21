@@ -40,7 +40,7 @@
     \see   KERNEL_TICKLESS, STK_TICKLESS_USE_ARM_DWT, STK_TICKLESS_TICKS_MAX
 */
 #ifndef STK_TICKLESS_IDLE
-    #define STK_TICKLESS_IDLE (0)
+    #define STK_TICKLESS_IDLE (0U)
 #endif
       
 /*! \def   STK_STRICT_COMPLIANCY
@@ -48,7 +48,7 @@
     \note  Applied workarounds will break safety-critical rules (MISRA, etc).
 */
 #ifndef STK_STRICT_COMPLIANCY
-    #define STK_STRICT_COMPLIANCY (0)
+    #define STK_STRICT_COMPLIANCY (0U)
 #endif
 
 /*! \def   STK_TICKLESS_USE_ARM_DWT
@@ -60,7 +60,7 @@
            timer rearm and does not require rearm-error compensation.
 */
 #ifndef STK_TICKLESS_USE_ARM_DWT
-    #define STK_TICKLESS_USE_ARM_DWT (1)
+    #define STK_TICKLESS_USE_ARM_DWT (1U)
 #endif
 
 /*! \def   STK_TICKLESS_TICKS_MAX
@@ -74,7 +74,7 @@
     \see   STK_TICKLESS_IDLE, KERNEL_TICKLESS
 */
 #ifndef STK_TICKLESS_TICKS_MAX
-    #define STK_TICKLESS_TICKS_MAX (1000)
+    #define STK_TICKLESS_TICKS_MAX (1000U)
 #endif
 #if STK_TICKLESS_TICKS_MAX > 100000
     #error "STK_TICKLESS_TICKS_MAX is too large: cpu_ticks_requested may overflow uint32_t."
@@ -96,7 +96,7 @@
     \see   STK_TLS_PREFER_REGISTER, stk::hw::GetTlsPtr, stk::hw::SetTlsPtr
 */
 #ifndef STK_TLS
-    #define STK_TLS (0)
+    #define STK_TLS (0U)
 #endif
 
 /*! \def   STK_TLS_PREFER_REGISTER
@@ -127,9 +127,9 @@
 */
 #ifndef STK_TLS_PREFER_REGISTER
     #ifdef _STK_ARCH_RISC_V
-        #define STK_TLS_PREFER_REGISTER (1)
+        #define STK_TLS_PREFER_REGISTER (1U)
     #else
-        #define STK_TLS_PREFER_REGISTER (0)
+        #define STK_TLS_PREFER_REGISTER (0U)
     #endif
 #endif
 
@@ -137,14 +137,14 @@
     \brief If 1, enable MPU support.
 */
 #ifndef STK_MPU
-    #define STK_MPU (0)
+    #define STK_MPU (0U)
 #endif
 
 /*! \def   STK_MPU_STACK_GUARD
     \brief If 1, reprogram one MPU region to the active task's own stack on every switch.
 */
 #ifndef STK_MPU_STACK_GUARD
-    #define STK_MPU_STACK_GUARD (0)
+    #define STK_MPU_STACK_GUARD (0U)
 #endif
 
 /*! \def   STK_MPU_TASK_REGIONS
@@ -160,11 +160,18 @@
     \see   STK_MPU_STACK_GUARD, stk::TaskMpu, ITask::GetMpuRegions
 */
 #ifndef STK_MPU_TASK_REGIONS
-    #define STK_MPU_TASK_REGIONS (2)
+    #define STK_MPU_TASK_REGIONS (2U)
 #endif
 
-#if STK_MPU_STACK_GUARD && (STK_MPU_TASK_REGIONS != 2) && (STK_MPU_TASK_REGIONS != 4)
-    #error "STK_MPU_TASK_REGIONS must be defined as 2 or 4"
+#if STK_MPU_STACK_GUARD && (STK_MPU_TASK_REGIONS != 2U) && (STK_MPU_TASK_REGIONS != 4U) && (STK_MPU_TASK_REGIONS != 6U)
+    #error "STK_MPU_TASK_REGIONS must be defined as 2, 4, or 6"
+#endif
+
+/*! \def   STK_CORE_FREQ_UNIFIED
+    \brief Set to (1) if all cores of CPU have the same frequency, set (0) otherwise.
+*/
+#ifndef STK_CORE_FREQ_UNIFIED
+    #define STK_CORE_FREQ_UNIFIED (1U)
 #endif
 
 /*! \def   STK_STACK_NEEDS_TASK_ID
@@ -178,7 +185,7 @@
 */
 #if STK_SEGGER_SYSVIEW || STK_MPU_STACK_GUARD
 	#ifndef STK_STACK_NEEDS_TASK_ID
-		#define STK_STACK_NEEDS_TASK_ID (1)
+		#define STK_STACK_NEEDS_TASK_ID (1U)
 	#endif
 #endif
 
@@ -190,9 +197,16 @@
     \note  Default: 0 (disabled) unless STK_SEGGER_SYSVIEW is active.
 */
 #if !defined(STK_SYNC_DEBUG_NAMES) && STK_SEGGER_SYSVIEW
-    #define STK_SYNC_DEBUG_NAMES (1)
+    #define STK_SYNC_DEBUG_NAMES (1U)
 #elif !defined(STK_SYNC_DEBUG_NAMES)
-    #define STK_SYNC_DEBUG_NAMES (0)
+    #define STK_SYNC_DEBUG_NAMES (0U)
+#endif
+
+/*! \def   STK_STACK_GUARD
+    \brief If 1, kernel will check stack health on every context switch.
+*/
+#ifndef STK_STACK_GUARD
+    #define STK_STACK_GUARD (1U)
 #endif
 
 /*! \def   STK_VIRT_DTOR

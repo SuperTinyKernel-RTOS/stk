@@ -320,6 +320,70 @@ struct TaskFrame
 #endif
 };
 
+// Local static variables:
+STK_MPU_KERNEL_BSS_SECTION
+#if STK_CORE_FREQ_UNIFIED
+static uint32_t s_StkSystemCoreClock[1U];
+#else
+static uint32_t s_StkSystemCoreClock[STK_ARCH_CPU_COUNT];
+#endif
+
+/*! \brief    Cached spin-lock timeout, in retry-loop iterations.
+    \details  Derived from STK_SPINLOCK_TIMEOUT_US and the real core clock frequency by
+              HW_InitSpinlockTimeout(), which must be called once per hart during
+              Context::Initialize() before any spinlock is used in anger. The initial
+              value here is a conservative fallback (matches the old fixed-iteration-count
+              behavior) so that any spinlock attempt occurring before Initialize() has run
+              still has a bounded, non-zero timeout instead of panicking immediately.
+*/
+STK_MPU_KERNEL_DATA_SECTION
+static uint32_t s_StkSpinlockTimeoutIters = 0xFFFFFFFU;
+
+/*! \brief  Global lock to synchronize critical sections of multiple cores.
+*/
+STK_MPU_KERNEL_BSS_SECTION
+static volatile bool s_StkRiscvCsuLock = false;
+
+//! Panic id cache for post-mortem inspection.
+STK_MPU_KERNEL_BSS_SECTION
+static volatile EKernelPanicId g_StkLastPanicId = KERNEL_PANIC_NONE;
+
+/*! Pointer Cache --------------------------------------------------------------
+
+    ISR assembly pointer cache: stack pointers used by naked ISR handlers for
+    context switching. Indexed by hart id (0 for single-core builds). Declared
+    volatile to prevent the compiler from caching reads. Using per-hart pointers
+    fully decouples ISR assembly from Context layout and sizeof.
+*/
+
+/*! \brief  Pointer to the idle task stack, per hart. Written by scheduler,
+            read by STK_MSI_HANDLER.
+*/
+#ifdef _STK_RISCV_USE_PENDSV
+STK_MPU_KERNEL_BSS_SECTION
+Stack *volatile s_StkRiscvStackIdle[STK_ARCH_CPU_COUNT];
+
+/*! \brief  Scratch storage for the SP of the task interrupted by STK_SYSTICK_HANDLER, per hart.
+    \note   Written and read exclusively by STK_SYSTICK_HANDLER. Never touched by
+            STK_MSI_HANDLER, making it safe across mutual preemption without
+            requiring mscratch or a full Stack struct.
+*/
+STK_MPU_KERNEL_BSS_SECTION
+volatile Word s_StkRiscvSpIsrInt[STK_ARCH_CPU_COUNT];
+#endif
+
+/*! \brief  Pointer to the active task stack, per hart. Written by scheduler,
+            read by STK_MSI_HANDLER (PendSV) or STK_SYSTICK_HANDLER (non-PendSV).
+*/
+STK_MPU_KERNEL_BSS_SECTION
+Stack *volatile s_StkRiscvStackActive[STK_ARCH_CPU_COUNT];
+
+/*! \brief  Pointer to the private ISR stack, per hart. Written once by
+            Context::OnStart, read by both ISR handlers.
+*/
+STK_MPU_KERNEL_BSS_SECTION
+Stack *volatile s_StkRiscvStackIsr[STK_ARCH_CPU_COUNT];
+
 /*! \brief  Order all predecessor Read/Write with all successor Read/Write (similar to ARM's __DSB(DSB ISH)).
 */
 static __stk_forceinline void __DSB()
@@ -434,7 +498,11 @@ static __stk_forceinline void HW_ClearPendingSwitch()
 */
 static __stk_forceinline uint32_t HW_CoreClockFrequency()
 {
-    return SystemCoreClock; // CPU speed, e.g. 125/150 MHz
+#if STK_CORE_FREQ_UNIFIED
+    return s_StkSystemCoreClock[0];
+#else
+    return s_StkSystemCoreClock[STK_ARCH_GET_CPU_ID()];
+#endif
 }
 
 /*! \brief  Get mtime reference clock frequency.
@@ -443,7 +511,7 @@ static __stk_forceinline uint32_t HW_CoreClockFrequency()
 */
 static __stk_forceinline uint32_t HW_MtimeClockFrequency()
 {
-    return STK_TIMER_CLOCK_FREQUENCY; // Timer frequency, e.g. 1 MHz
+    return STK_TIMER_CLOCK_FREQUENCY; // timer frequency, e.g. 1 MHz
 }
 
 /*! \brief  Get mtime.
@@ -593,16 +661,6 @@ static __stk_forceinline bool HW_SpinLockTryLock(volatile bool &lock)
     return !__atomic_test_and_set(&lock, __ATOMIC_ACQUIRE);
 }
 
-/*! \brief    Cached spin-lock timeout, in retry-loop iterations.
-    \details  Derived from STK_SPINLOCK_TIMEOUT_US and the real core clock frequency by
-              HW_InitSpinlockTimeout(), which must be called once per hart during
-              Context::Initialize() before any spinlock is used in anger. The initial
-              value here is a conservative fallback (matches the old fixed-iteration-count
-              behavior) so that any spinlock attempt occurring before Initialize() has run
-              still has a bounded, non-zero timeout instead of panicking immediately.
-*/
-static uint32_t s_StkSpinlockTimeoutIters = 0xFFFFFFFU;
-
 /*! \brief     Acquire a spin-lock, blocking until it becomes available (RISC-V).
     \details   Calls HW_SpinLockTryLock() in a tight retry loop. On each failed attempt
                \c __stk_relax_cpu() is executed to reduce bus contention before the next
@@ -703,47 +761,6 @@ static __stk_forceinline void HW_ScheduleContextSwitch(uint8_t hart)
     (void)hart;
 #endif
 }
-
-//! Define _STK_SYSTEM_CLOCK_VAR privately by the driver if _STK_SYSTEM_CORE_CLOCK_EXTERNAL is undefined.
-#ifndef _STK_SYSTEM_CORE_CLOCK_EXTERNAL
-volatile uint32_t STK_SYSTEM_CORE_CLOCK_VAR = STK_SYSTEM_CORE_CLOCK_FREQUENCY;
-#endif
-
-/*! \brief  Global lock to synchronize critical sections of multiple cores.
-*/
-static volatile bool s_StkRiscvCsuLock = false;
-
-/*! Pointer Cache --------------------------------------------------------------
-
-    ISR assembly pointer cache: stack pointers used by naked ISR handlers for
-    context switching. Indexed by hart id (0 for single-core builds). Declared
-    volatile to prevent the compiler from caching reads. Using per-hart pointers
-    fully decouples ISR assembly from Context layout and sizeof.
-*/
-
-/*! \brief  Pointer to the idle task stack, per hart. Written by scheduler,
-            read by STK_MSI_HANDLER.
-*/
-#ifdef _STK_RISCV_USE_PENDSV
-Stack *volatile s_StkRiscvStackIdle[STK_ARCH_CPU_COUNT] = {};
-
-/*! \brief  Scratch storage for the SP of the task interrupted by STK_SYSTICK_HANDLER, per hart.
-    \note   Written and read exclusively by STK_SYSTICK_HANDLER. Never touched by
-            STK_MSI_HANDLER, making it safe across mutual preemption without
-            requiring mscratch or a full Stack struct.
-*/
-volatile Word s_StkRiscvSpIsrInt[STK_ARCH_CPU_COUNT] = {};
-#endif
-
-/*! \brief  Pointer to the active task stack, per hart. Written by scheduler,
-            read by STK_MSI_HANDLER (PendSV) or STK_SYSTICK_HANDLER (non-PendSV).
-*/
-Stack *volatile s_StkRiscvStackActive[STK_ARCH_CPU_COUNT] = {};
-
-/*! \brief  Pointer to the private ISR stack, per hart. Written once by
-            Context::OnStart, read by both ISR handlers.
-*/
-Stack *volatile s_StkRiscvStackIsr[STK_ARCH_CPU_COUNT] = {};
 
 //! ----------------------------------------------------------------------------
 
@@ -891,13 +908,7 @@ void RestoreJmp(JmpFrame &/*f*/, int32_t /*val*/)
 class HiResClockCYCLE
 {
 public:
-    static HiResClockCYCLE *GetInstance()
-    {
-        // keep declaration function-local to allow compiler stripping it from the binary if
-        // it is unused by the user code
-        static HiResClockCYCLE clock;
-        return &clock;
-    }
+    static HiResClockCYCLE *GetInstance();
 
     Cycles GetCycles()
     {
@@ -910,17 +921,20 @@ public:
     }
 };
 typedef HiResClockCYCLE HiResClockImpl;
+
+STK_MPU_KERNEL_CODE_SECTION
+HiResClockCYCLE *HiResClockCYCLE::GetInstance()
+{
+    // keep declaration function-local to allow compiler stripping it from the binary if
+    // it is unused by the user code
+    STK_MPU_KERNEL_DATA_SECTION static HiResClockCYCLE clock;
+    return &clock;
+}
 #else
 class HiResClockMTIME
 {
 public:
-    static HiResClockMTIME *GetInstance()
-    {
-        // keep declaration function-local to allow compiler stripping it from the binary if
-        // it is unused by the user code
-        static HiResClockMTIME clock;
-        return &clock;
-    }
+    static HiResClockMTIME *GetInstance();
 
     Cycles GetCycles()
     {
@@ -933,9 +947,19 @@ public:
     }
 };
 typedef HiResClockMTIME HiResClockImpl;
+
+STK_MPU_KERNEL_CODE_SECTION
+HiResClockMTIME *HiResClockMTIME::GetInstance()
+{
+    // keep declaration function-local to allow compiler stripping it from the binary if
+    // it is unused by the user code
+    STK_MPU_KERNEL_DATA_SECTION static HiResClockMTIME clock;
+    return &clock;
+}
 #endif // !STK_SUBMICORSECOND_PRECISION_TIMER
 
 //! Internal context.
+STK_MPU_KERNEL_DATA_SECTION
 static struct Context final : public PlatformContext
 {
     explicit Context() : PlatformContext(), m_stack_main(), m_stack_isr(), m_stack_isr_mem(),
@@ -958,6 +982,11 @@ static struct Context final : public PlatformContext
     {
         PlatformContext::Initialize(handler, service, exit_trap, resolution_us);
 
+        STK_STATIC_ASSERT_DESC_N(SP, offsetof(Stack, SP) == 0U,
+            "expect Stack::mode member at offset of 0 (first member)");
+        STK_ASSERT(s_StkRiscvCsuLock == false);
+        STK_ASSERT(g_StkLastPanicId == KERNEL_PANIC_NONE);
+
         // init ISR's stack
         {
             StackMemoryWrapper<STK_RISCV_ISR_STACK_SIZE> stack_isr_mem(&m_stack_isr_mem);
@@ -978,6 +1007,15 @@ static struct Context final : public PlatformContext
         m_starting    = false;
         m_started     = false;
         m_exiting     = false;
+
+        // initialize system clock if user-side code has not yet done it
+        if (s_StkSystemCoreClock[0] == 0U)
+        {
+            for (uint8_t i = 0U; i < STK_STATIC_ARRAY_SIZE(s_StkSystemCoreClock); ++i)
+            {
+                s_StkSystemCoreClock[i] = STK_SYSTEM_CORE_CLOCK_FREQUENCY;
+            }
+        }
 
         // Re-derive the s_StkRiscvCsuLock spin-lock timeout from the now-configured core
         // clock. Redundant across harts (each hart's Context::Initialize() calls this),
@@ -1204,6 +1242,23 @@ static struct Context final : public PlatformContext
 }
 s_StkPlatformContext[STK_ARCH_CPU_COUNT];
 
+__stk_attr_noinline // keep out of inlining to preserve stack frame
+__stk_attr_noreturn // never returns - a trap
+void STK_PANIC_HANDLER_DEFAULT(EKernelPanicId id)
+{
+    g_StkLastPanicId = id;
+
+    // disable all maskable interrupts: this prevents scheduler from running again and corrupting state further
+    HW_DisableInterrupts();
+
+    // spin forever: with a watchdog active this produces a clean reset, without a watchdog,
+    // a debugger can attach and inspect 'id'
+    for (;;)
+    {
+        __stk_relax_cpu();
+    }
+}
+
 void PlatformRiscV::ProcessTick()
 {
 #ifdef _STK_RISCV_USE_PENDSV
@@ -1217,26 +1272,6 @@ void PlatformRiscV::ProcessTick()
     // unsupported scenario
     STK_ASSERT(false);
 #endif
-}
-
-//! Panic id cache for post-mortem inspection.
-static volatile EKernelPanicId g_LastPanicId = KERNEL_PANIC_NONE;
-
-__stk_attr_noinline // keep out of inlining to preserve stack frame
-__stk_attr_noreturn // never returns - a trap
-void STK_PANIC_HANDLER_DEFAULT(EKernelPanicId id)
-{
-    g_LastPanicId = id;
-
-    // disable all maskable interrupts: this prevents scheduler from running again and corrupting state further
-    HW_DisableInterrupts();
-
-    // spin forever: with a watchdog active this produces a clean reset, without a watchdog,
-    // a debugger can attach and inspect 'id'
-    for (;;)
-    {
-        __stk_relax_cpu();
-    }
 }
 
 #define STK_ASM_SAVE_CONTEXT_BASE\
@@ -2171,6 +2206,28 @@ void PlatformRiscV::SetEventOverrider(IEventOverrider *overrider, bool non_secur
 Word PlatformRiscV::GetCallerSP() const
 {
     return HW_GetCallerSP();
+}
+
+void PlatformRiscV::SetCpuFrequency(uint8_t core_id, uint32_t frequency)
+{
+    const hw::CriticalSection::ScopedLock cs_;
+
+    if (core_id == 0xFFU)
+    {
+        for (uint8_t i = 0U; i < STK_STATIC_ARRAY_SIZE(s_StkSystemCoreClock); ++i)
+        {
+            s_StkSystemCoreClock[i] = frequency;
+        }
+    }
+    else
+    {
+        STK_ASSERT(core_id < STK_STATIC_ARRAY_SIZE(s_StkSystemCoreClock));
+
+        if (core_id < STK_STATIC_ARRAY_SIZE(s_StkSystemCoreClock))
+        {
+            s_StkSystemCoreClock[core_id] = frequency;
+        }
+    }
 }
 
 void PlatformRiscV::SetSpecificEventHandler(ISpecificEventHandler *handler)

@@ -49,6 +49,7 @@ public:
     TId GetTid() const override;
     Timeout Suspend() override;
     void Resume(Timeout elapsed_ticks) override;
+    void SetCpuFrequency(uint8_t core_id, uint32_t frequency) override;
 };
 
 /*! \typedef PlatformDefault

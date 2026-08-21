@@ -67,7 +67,8 @@ enum EKernelPanicId : uint32_t
     KERNEL_PANIC_BAD_STATE           = 8U,  //!< Kernel entered unexpected (bad) state.
     KERNEL_PANIC_BAD_MODE            = 9U,  //!< Kernel is in bad/unsupported mode for the current operation.
     KERNEL_PANIC_BAD_STACK_TYPE      = 10U, //!< Stack type is unknown.
-    KERNEL_PANIC_NS_ACCESS           = 11U  //!< Non-secure access to protected resource.
+    KERNEL_PANIC_NS_ACCESS           = 11U, //!< Non-secure access to protected resource.
+    KERNEL_PANIC_BAD_MEMORY_REGION   = 12U  //!< Bad memory region (ARM TrustZone: provided memory region overlaps with another one).
 };
 
 /*! \enum  EStackType
@@ -354,7 +355,7 @@ struct MpuConfig
     /*! \var     DEFAULT_MODE
         \brief   Default mode.
     */
-    static constexpr uint32_t MPU_OFF = static_cast<TId>(0U);
+    static constexpr uint32_t MPU_OFF = 0U;
 
     /*! \brief Default constructor initializing an empty, disabled MPU configuration.
     */
@@ -1217,6 +1218,15 @@ public:
     */
     virtual void Resume(Timeout elapsed_ticks) = 0;
     
+    /*! \brief     Notify the scheduler of a CPU core's operating frequency.
+        \param[in] core_id: Target CPU core ID, or 0xFF to set the frequency for all cores.
+        \param[in] frequency:  CPU core frequency in Hz.
+        \note      ISR-safe.
+        \warning   Specifying an incorrect frequency will degrade system timing accuracy.
+                   Always call this function whenever the core clock speed changes.
+    */
+    virtual void SetCpuFrequency(uint8_t core_id, uint32_t frequency) = 0;
+
 protected:
     /*! \brief Destructor.
     */
