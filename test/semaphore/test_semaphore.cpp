@@ -486,8 +486,114 @@ private:
     }
 };
 
+/*! \class AlreadySignaledOnInitTask
+    \brief Tests a semaphore constructed with \c initial_count == \c max_count,
+           e.g. \c sync::Semaphore(1, 1).
+    \note  Verifies the semaphore starts in an already-saturated state without
+           any \c Signal()/TrySignal() call: \c GetCount() reflects the initial
+           count right after construction, a \c TrySignal() at that point
+           correctly reports failure (saturated, no waiters) rather than
+           silently succeeding or asserting, and \c Wait() still drains the
+           pre-loaded permit(s) via the normal fast path.
+*/
+template <EAccessMode _AccessMode>
+class AlreadySignaledOnInitTask : public Task<_STK_SEM_STACK_SIZE, _AccessMode>
+{
+    uint8_t m_task_id;
+
+public:
+    AlreadySignaledOnInitTask(uint8_t task_id, int32_t) : m_task_id(task_id)
+    {}
+
+private:
+    void Run()
+    {
+        if (m_task_id == 0)
+        {
+            // Semaphore is constructed as sync::Semaphore(1, 1) - see RunTest call site.
+            uint16_t count_at_init = g_TestSemaphore.GetCount(); // already 1, no Signal() ever called
+
+            bool signal_while_saturated = g_TestSemaphore.TrySignal(); // saturated, no waiters: expect false
+
+            uint16_t count_after_trysignal = g_TestSemaphore.GetCount(); // must be unchanged
+
+            bool first_wait  = g_TestSemaphore.Wait(NO_WAIT); // drains the pre-loaded permit: expect true
+            bool second_wait = g_TestSemaphore.Wait(NO_WAIT); // now empty: expect false
+
+            printf("already-signaled on init: count_at_init=%d(expect 1) signal_while_saturated=%d(expect 0) "\
+                "count_after_trysignal=%d(expect 1) first_wait=%d(expect 1) second_wait=%d(expect 0)\n",
+                (int)count_at_init, (int)signal_while_saturated, (int)count_after_trysignal,
+                (int)first_wait, (int)second_wait);
+
+            if ((count_at_init == 1) && !signal_while_saturated && (count_after_trysignal == 1) &&
+                first_wait && !second_wait)
+                g_TestResult = 1;
+        }
+    }
+};
+
+/*! \class TrySignalSaturationTask
+    \brief Tests TrySignal() at the max_count boundary.
+    \note  Verifies two branches that Signal() can never exercise (it asserts
+           instead): TrySignal() returns false, and leaves the counter
+           unchanged, when the counter is already at max_count and no task is
+           waiting; and TrySignal() still succeeds via direct hand-off to a
+           waiting task even while the counter sits at max_count, without
+           incrementing the counter.
+*/
+template <EAccessMode _AccessMode>
+class TrySignalSaturationTask : public Task<_STK_SEM_STACK_SIZE, _AccessMode>
+{
+    uint8_t m_task_id;
+
+public:
+    TrySignalSaturationTask(uint8_t task_id, int32_t) : m_task_id(task_id)
+    {}
+
+private:
+    void Run()
+    {
+        if (m_task_id == 0)
+        {
+            // Semaphore starts at count=0, max_count=1 (see RunTest call site).
+            bool first_signal_ok  = g_TestSemaphore.TrySignal(); // 0 -> 1 (now saturated)
+            bool second_signal_ok = g_TestSemaphore.TrySignal(); // saturated, no waiters: expect false
+
+            uint16_t count_after_saturation = g_TestSemaphore.GetCount();
+
+            bool drained = g_TestSemaphore.Wait(NO_WAIT); // 1 -> 0, resets for the hand-off case
+
+            stk::Sleep(_STK_SEM_TEST_SHORT_SLEEP); // let task 1 block on Wait()
+
+            bool handoff_ok = g_TestSemaphore.TrySignal(); // waiter present: hands off directly
+
+            uint16_t count_after_handoff = g_TestSemaphore.GetCount(); // must stay 0 (not incremented)
+
+            stk::Sleep(_STK_SEM_TEST_SHORT_SLEEP);
+
+            printf("trysignal saturation: first=%d second=%d(expect 0) count=%d(expect 1) "\
+                "drained=%d handoff=%d(expect 1) count_after_handoff=%d(expect 0) waiter_acquired=%d(expect 1)\n",
+                (int)first_signal_ok, (int)second_signal_ok, (int)count_after_saturation, (int)drained,
+                (int)handoff_ok, (int)count_after_handoff, (int)g_SharedCounter);
+
+            if (first_signal_ok && !second_signal_ok && (count_after_saturation == 1) &&
+                drained && handoff_ok && (count_after_handoff == 0) && (g_SharedCounter == 1))
+                g_TestResult = 1;
+        }
+        else
+        if (m_task_id == 1)
+        {
+            // Blocks before task 0's hand-off TrySignal() so that call has a waiter to hand off to.
+            stk::Sleep(_STK_SEM_TEST_SHORT_SLEEP / 2);
+
+            if (g_TestSemaphore.Wait(_STK_SEM_TEST_TIMEOUT))
+                g_SharedCounter = 1;
+        }
+    }
+};
+
 // Helper function to reset test state
-static void ResetTestState(uint32_t initial_count = 0)
+static void ResetTestState(uint32_t initial_count = 0, uint32_t max_count = sync::Semaphore::COUNT_MAX)
 {
     g_TestResult  = 0;
     g_SharedCounter = 0;
@@ -497,9 +603,9 @@ static void ResetTestState(uint32_t initial_count = 0)
     for (int32_t i = 0; i < _STK_SEM_TEST_TASKS_MAX; ++i)
         g_AcquisitionOrder[i] = 0;
 
-    // Re-construct the semaphore in-place with the requested initial count
+    // Re-construct the semaphore in-place with the requested initial count and max count
     g_TestSemaphore.~Semaphore();
-    new (&g_TestSemaphore) sync::Semaphore(initial_count);
+    new (&g_TestSemaphore) sync::Semaphore(initial_count, max_count);
 }
 
 } // namespace semaphore
@@ -511,14 +617,17 @@ static bool NeedsExtendedTasks(const char *test_name)
     return (strcmp(test_name, "TimeoutWait") != 0) &&
            (strcmp(test_name, "ZeroTimeout") != 0) &&
            (strcmp(test_name, "SignalBeforeWait") != 0) &&
-           (strcmp(test_name, "BoundedBuffer") != 0);
+           (strcmp(test_name, "BoundedBuffer") != 0) &&
+           (strcmp(test_name, "TrySignalSaturation") != 0) &&
+           (strcmp(test_name, "AlreadySignaledOnInit") != 0);
 }
 
 /*! \fn    RunTest
     \brief Helper function to run a single test case.
 */
 template <class TaskType>
-static int32_t RunTest(const char *test_name, int32_t param = 0, uint32_t initial_count = 0)
+static int32_t RunTest(const char *test_name, int32_t param = 0, uint32_t initial_count = 0,
+    uint32_t max_count = sync::Semaphore::COUNT_MAX)
 {
     using namespace stk;
     using namespace stk::test;
@@ -526,7 +635,7 @@ static int32_t RunTest(const char *test_name, int32_t param = 0, uint32_t initia
 
     printf("Test: %s\n", test_name);
 
-    ResetTestState(initial_count);
+    ResetTestState(initial_count, max_count);
 
     // Create tasks based on test type
     STK_TASK TaskType task0(0, param);
@@ -617,9 +726,21 @@ int main(int argc, char **argv)
     else
         total_success++;
 
+    // Test 8: TrySignal() at the max_count boundary - rejection without a waiter, hand-off with one
+    if (RunTest<TrySignalSaturationTask<ACCESS_PRIVILEGED>>("TrySignalSaturation", 0, 0, 1) != TestContext::SUCCESS_EXIT_CODE)
+        total_failures++;
+    else
+        total_success++;
+
+    // Test 9: Semaphore(1, 1) - already-saturated state at construction time, no Signal() called
+    if (RunTest<AlreadySignaledOnInitTask<ACCESS_PRIVILEGED>>("AlreadySignaledOnInit", 0, 1, 1) != TestContext::SUCCESS_EXIT_CODE)
+        total_failures++;
+    else
+        total_success++;
+
 #endif // __ARM_ARCH_6M__
 
-    // Test 8: Stress test (no signals lost)
+    // Test 10: Stress test (no signals lost)
     if (RunTest<StressTestTask<ACCESS_PRIVILEGED>>("StressTest", 400) != TestContext::SUCCESS_EXIT_CODE)
         total_failures++;
     else
