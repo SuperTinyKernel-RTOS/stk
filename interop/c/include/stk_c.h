@@ -1083,7 +1083,7 @@ typedef struct stk_sem_t stk_sem_t;
     \param[in] membuf_size: Size of the container (must be >= sizeof(stk_sem_mem_t)).
     \param[in] initial_count: Starting value of the resource counter.
     \param[in] max_count: Maximum value the counter is allowed to reach.
-               Pass 0 to use the default maximum (65534). Must be > initial_count.
+               Pass 0 to use the default maximum (65534). Must be >= initial_count.
     \return    Semaphore handle.
 */
 stk_sem_t *stk_sem_create(stk_sem_mem_t *const membuf, 
@@ -1114,8 +1114,27 @@ bool stk_sem_trywait(stk_sem_t *sem);
 
 /*! \brief     Signal/Release a semaphore resource.
     \param[in] sem: Semaphore handle.
+    \warning   API contract: the counter must not already be at \a max_count with no task
+               waiting. Violating this triggers an assertion in a debug build. Use
+               \c stk_sem_trysignal() instead if a signal that would exceed \a max_count
+               should be tolerated (e.g. a redundant signal) rather than treated as a caller
+               error.
 */
 void stk_sem_signal(stk_sem_t *sem);
+
+/*! \brief     Try to signal/release a semaphore resource without exceeding \a max_count.
+    \details   Identical to \c stk_sem_signal(), except that if the counter is already at
+               \a max_count and no task is waiting, this returns \c false instead of
+               asserting. The check and the increment (or hand-off to a waiter) happen
+               atomically, so this is safe to call from multiple concurrent signalers
+               without racing each other the way a separate \c stk_sem_get_count() check
+               followed by \c stk_sem_signal() would.
+    \param[in] sem: Semaphore handle.
+    \return    True if signaled (incremented, or handed directly to a waiter),
+               False if the counter was already at \a max_count and nobody was waiting.
+    \warning   ISR-safe.
+*/
+bool stk_sem_trysignal(stk_sem_t *sem);
 
 /*! \brief     Get the current counter value.
     \param[in] sem: Semaphore handle.

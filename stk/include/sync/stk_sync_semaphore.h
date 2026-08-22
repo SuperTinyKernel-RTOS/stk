@@ -71,7 +71,7 @@ public:
     explicit Semaphore(uint16_t initial_count = 0U, uint16_t max_count = COUNT_MAX)
         : m_count(initial_count), m_count_max(max_count)
     {
-        STK_ASSERT(initial_count < max_count); // API contract: initial count must not exceed maximum
+        STK_ASSERT(initial_count <= max_count); // API contract: initial count must not exceed maximum
     }
 
     /*! \brief     Destructor.
@@ -105,8 +105,25 @@ public:
         \note      Gives "token" directly to the waking task. The count is not incremented, and
                    the waking task does not decrement it.
         \note      ISR-safe.
+        \warning   API contract: the counter must not already be at \a max_count with no task
+                   waiting. Violating this triggers an assertion in a debug build. Use
+                   \c TrySignal() instead if a signal that would exceed \a max_count should be
+                   tolerated (e.g. a redundant post) rather than treated as a caller error.
     */
     void Signal();
+
+    /*! \brief     Try to post a signal without exceeding \a max_count.
+        \details   Identical to \c Signal(), except that if the counter is already at
+                   \a max_count and no task is waiting, this returns \c false instead of
+                   asserting. The check and the increment (or hand-off to a waiter) happen
+                   atomically under the same critical section, so this is safe to call from
+                   multiple concurrent signalers without racing each other the way a separate
+                   \c GetCount() check followed by \c Signal() would.
+        \note      ISR-safe.
+        \return    \c true if signaled (incremented, or handed directly to a waiter),
+                   \c false if the counter was already at \a max_count and nobody was waiting.
+    */
+    bool TrySignal();
 
     /*! \brief     Get current counter value.
         \return    Advisory snapshot of the counter. May be stale by the time the
@@ -163,21 +180,41 @@ inline bool Semaphore::Wait(Timeout timeout_ticks)
 
 inline void Semaphore::Signal()
 {
+    const bool success = TrySignal();
+    STK_UNUSED(success);
+    STK_ASSERT(success); // API contract: the count must not exceed maximum
+}
+
+// ---------------------------------------------------------------------------
+// TrySignal
+// ---------------------------------------------------------------------------
+
+inline bool Semaphore::TrySignal()
+{
     const ScopedCriticalSection cs_;
+    bool success = true;
 
     if (m_wait_list.IsEmpty())
     {
-        STK_ASSERT(m_count < m_count_max); // API contract: the count must not exceed maximum
-
-        // no one is waiting, save signal for later
-        m_count = static_cast<uint16_t>(m_count + 1U);
-        __stk_full_memfence();
+        if (m_count >= m_count_max)
+        {
+            // counter already saturated and no one is waiting to hand the token to directly
+            success = false;
+        }
+        else
+        {
+            // no one is waiting, save signal for later
+            m_count = static_cast<uint16_t>(m_count + 1U);
+            __stk_full_memfence();
+        }
     }
     else
     {
         // give signal directly to the first waiting task
         WakeOne();
     }
+
+    return success;
 }
 
 } // namespace sync

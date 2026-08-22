@@ -97,7 +97,7 @@ STK primitives follow strict rules for **Interrupt Service Routine (ISR)** conte
 The following operations are ISR-safe:
 * **sync::Event**: `Set()`, `Pulse()`, `Reset()`, `TryWait()`
 * **sync::EventFlags**: `Set()`, `Clear()`, `Get()`, `TryWait()`, `Wait(NO_WAIT)`
-* **sync::Semaphore**: `Signal()`, `TryWait()`
+* **sync::Semaphore**: `TrySignal()`, `Signal()`, `TryWait()`
 * **sync::ConditionVariable**: `NotifyOne()`, `NotifyAll()`, `Wait(NO_WAIT)`
 * **sync::Pipe**: `Write(NO_WAIT)`, `WriteBulk(NO_WAIT)`, `TryWrite()`, `TryWriteBulk()`, `Read(NO_WAIT)`, `ReadBulk(NO_WAIT)`, `TryRead()`, `TryReadBulk()`, `ReadBulkTriggered(NO_WAIT)`, `TryReadBulkTriggered()`, `Reset()`
 * **sync::MessageQueue**: `Put(NO_WAIT)`, `TryPut()`, `PutFront(NO_WAIT)`, `TryPutFront()`, `Get(NO_WAIT)`, `TryGet()`, `Peek(NO_WAIT)`, `TryPeek()`, `PeekFront(NO_WAIT)`, `TryPeekFront()`, `Reset()`

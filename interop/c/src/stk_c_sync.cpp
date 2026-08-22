@@ -280,7 +280,6 @@ stk_sem_t *stk_sem_create(stk_sem_mem_t *const membuf,
 {
     STK_ASSERT(membuf != nullptr);
     STK_ASSERT(membuf_size >= sizeof(stk_sem_t));
-    STK_ASSERT(initial_count < (max_count == 0U ? Semaphore::COUNT_MAX : max_count));
     STK_STATIC_ASSERT_N((sizeof(stk_sem_t) <= sizeof(stk_sem_mem_t)),
         "stk_sem_mem_t is too small to hold stk_sem_t");
 
@@ -321,6 +320,13 @@ void stk_sem_signal(stk_sem_t *sem)
     STK_ASSERT(sem != nullptr);
 
     sem->handle.Signal();
+}
+
+bool stk_sem_trysignal(stk_sem_t *sem)
+{
+    STK_ASSERT(sem != nullptr);
+
+    return sem->handle.TrySignal();
 }
 
 uint16_t stk_sem_get_count(const stk_sem_t *sem)
