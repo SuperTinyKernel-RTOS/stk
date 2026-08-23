@@ -276,16 +276,6 @@
 			<locationURI>PARENT-6-PROJECT_LOC/stk/include/time/stk_time_util.h</locationURI>
 		</link>
 		<link>
-			<name>deps/stk/src/arch/arm</name>
-			<type>2</type>
-			<locationURI>virtual:/virtual</locationURI>
-		</link>
-		<link>
-			<name>deps/stk/src/arch/risc-v</name>
-			<type>2</type>
-			<locationURI>virtual:/virtual</locationURI>
-		</link>
-		<link>
 			<name>deps/stk/src/arch/x86</name>
 			<type>2</type>
 			<locationURI>virtual:/virtual</locationURI>
@@ -311,16 +301,6 @@
 			<locationURI>virtual:/virtual</locationURI>
 		</link>
 		<link>
-			<name>deps/stk/src/arch/arm/cortex-m</name>
-			<type>2</type>
-			<locationURI>virtual:/virtual</locationURI>
-		</link>
-		<link>
-			<name>deps/stk/src/arch/risc-v/stk_arch_risc-v.cpp</name>
-			<type>1</type>
-			<locationURI>PARENT-6-PROJECT_LOC/stk/src/arch/risc-v/stk_arch_risc-v.cpp</locationURI>
-		</link>
-		<link>
 			<name>deps/stk/src/arch/x86/win32</name>
 			<type>2</type>
 			<locationURI>virtual:/virtual</locationURI>
@@ -344,16 +324,6 @@
 			<name>deps/stk/include/arch/x86/win32/stk_arch_x86-win32.h</name>
 			<type>1</type>
 			<locationURI>PARENT-6-PROJECT_LOC/stk/include/arch/x86/win32/stk_arch_x86-win32.h</locationURI>
-		</link>
-		<link>
-			<name>deps/stk/src/arch/arm/cortex-m/stk_arch_arm-cortex-m (5).cpp</name>
-			<type>1</type>
-			<locationURI>PARENT-6-PROJECT_LOC/stk/src/arch/arm/cortex-m/stk_arch_arm-cortex-m%20(5).cpp</locationURI>
-		</link>
-		<link>
-			<name>deps/stk/src/arch/arm/cortex-m/stk_arch_arm-cortex-m.cpp</name>
-			<type>1</type>
-			<locationURI>PARENT-6-PROJECT_LOC/stk/src/arch/arm/cortex-m/stk_arch_arm-cortex-m.cpp</locationURI>
 		</link>
 		<link>
 			<name>deps/stk/src/arch/x86/win32/stk_arch_x86-win32.cpp</name>

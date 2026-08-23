@@ -121,6 +121,8 @@ inline bool Mutex::TimedLock(Timeout timeout_ticks)
     const TId owner_tid = m_owner_tid;
     bool success = false;
 
+    STK_ASSERT(current_tid != TID_NONE); // API contract: must be called inside STK task
+
     // recursive path: already owned by the calling thread
     if ((m_recursion_count != 0U) && (owner_tid == current_tid))
     {
@@ -194,8 +196,9 @@ inline void Mutex::Unlock()
 {
     const ScopedCriticalSection cs_;
 
-    STK_ASSERT(m_owner_tid == GetTid()); // API contract: caller must own the lock
-    STK_ASSERT(m_recursion_count != 0U); // API contract: must have matching Lock()
+    STK_ASSERT((m_owner_tid == GetTid()) &&
+               (m_owner_tid != TID_NONE)); // API contract: caller must own the lock
+    STK_ASSERT(m_recursion_count != 0U);   // API contract: must have matching Lock()
 
     m_recursion_count = static_cast<uint16_t>(m_recursion_count - 1U);
 
@@ -204,7 +207,10 @@ inline void Mutex::Unlock()
         IKernelService *const svc = IKernelService::GetInstance();
 
         // restore priority of the owner, noop if ISwitchStrategy::PRIORITY_INHERITANCE_API = 0
-        svc->RestoreWeight(m_owner_tid);
+        if (m_owner_tid != TID_NONE)
+        {
+            svc->RestoreWeight(m_owner_tid);
+        }
 
         if (!m_wait_list.IsEmpty())
         {

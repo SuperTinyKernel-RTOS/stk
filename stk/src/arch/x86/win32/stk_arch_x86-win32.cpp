@@ -585,7 +585,18 @@ Word Context::GetCallerSP() const
 
 TId Context::GetTid() const
 {
-    return m_handler->OnGetTid(GetCallerSP());
+    TId result;
+
+    if (m_started)
+    {
+        result = m_handler->OnGetTid(GetCallerSP());
+    }
+    else
+    {
+        result = TID_NONE;
+    }
+
+    return result;
 }
 
 void Context::SwitchToNext()

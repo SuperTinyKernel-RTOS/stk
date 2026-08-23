@@ -3414,7 +3414,16 @@ TId PlatformArmCortexM::GetTid() const
     }
     else
     {
-        result = GetContext().m_handler->OnGetTid(HW_GetCallerSP());
+        Context &ctx = GetContext();
+
+        if (ctx.m_started)
+        {
+            result = ctx.m_handler->OnGetTid(HW_GetCallerSP());
+        }
+        else
+        {
+            result = TID_NONE;
+        }
     }
     
     return result;
