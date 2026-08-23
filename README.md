@@ -841,6 +841,8 @@ File → Import... → Existing Projects into Workspace → Select root director
 
 STM32 and Raspberry Pico examples include SDK files located in `deps/target` folder.
 
+STK also provides ports for IoT functionality — lwIP and async_context/cyw43 from the Pico SDK — located in [deps/port/lwip](https://github.com/SuperTinyKernel-RTOS/stk/tree/main/deps/port/lwip) and [deps/port/rpi](https://github.com/SuperTinyKernel-RTOS/stk/tree/main/deps/port/rpi). Check [IoT example](https://github.com/SuperTinyKernel-RTOS/stk/tree/main/build/example/httpd) based on `Raspberry Pi Pico 2 W` board.
+
 #### NXP Examples
 
 Located in `build/example/project/nxp-mcuxpresso` folder.
