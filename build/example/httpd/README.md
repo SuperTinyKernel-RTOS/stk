@@ -51,12 +51,13 @@ If you add, remove, or edit any file under `content/`, just rebuild the project 
 ## Building & Running (Eclipse CDT)
 
 1. Clone the `stk` repository (this example's project and sources live inside it, unlike the NXP examples which sit in a separate repo).
-2. Make sure the Raspberry Pi Pico SDK and its toolchain (`arm-none-eabi-gcc`, CMake, Ninja) are installed and discoverable, as required by the Pico W / `cyw43` build.
-3. Before building, set your Wi-Fi credentials — the example reads them from `ENV_WIFI_SSID` and `ENV_WIFI_PASSWORD` (configure these as build-time definitions/environment variables in the project settings rather than hardcoding them in source).
-4. In Eclipse CDT (with the [Eclipse Embedded CDT](https://eclipse-embed-cdt.github.io) plugins), go to **File → Import → General → Existing Projects into Workspace** and select `build/example/project/eclipse/rpi/httpd-rp2350w`.
-5. Connect your Pico 2 W board via its SWD debug probe (e.g. Picoprobe/CMSIS-DAP) or another supported OpenOCD-compatible probe.
-6. Select the **Debug** build configuration.
-7. Build and start the debug session. The pre-build step regenerates `fsdata.c` from `content/`, the project compiles and links against the core STK sources, and the board is flashed and launched.
+2. Clone the [lwIP](https://savannah.nongnu.org/projects/lwip/) library into the `stk` repository's `deps` folder (e.g. `deps/lwip`) — it isn't bundled with `stk` and the project expects to find it there.
+3. Make sure the Raspberry Pi Pico SDK and its toolchain (`arm-none-eabi-gcc`, CMake, Ninja) are installed and discoverable, as required by the Pico W / `cyw43` build.
+4. Before building, set your Wi-Fi credentials — the example reads them from `ENV_WIFI_SSID` and `ENV_WIFI_PASSWORD` (configure these as build-time definitions/environment variables in the project settings rather than hardcoding them in source).
+5. In Eclipse CDT (with the [Eclipse Embedded CDT](https://eclipse-embed-cdt.github.io) plugins), go to **File → Import → General → Existing Projects into Workspace** and select `build/example/project/eclipse/rpi/httpd-rp2350w`.
+6. Connect your Pico 2 W board via its SWD debug probe (e.g. Picoprobe/CMSIS-DAP) or another supported OpenOCD-compatible probe.
+7. Select the **Debug** build configuration.
+8. Build and start the debug session. The pre-build step regenerates `fsdata.c` from `content/`, the project compiles and links against the core STK sources, and the board is flashed and launched.
 
 Once running, the board connects to Wi-Fi, starts the httpd/mDNS server, and prints its IP address (and `<hostname>.local` mDNS name) over the USB serial console. Point a browser at either address to reach the served page, toggle the onboard LED via the form on the page, and watch the `uptime`/`ledstate` SSI tags update.
 
