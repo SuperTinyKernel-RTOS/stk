@@ -31,15 +31,37 @@ using MyKernel = stk::Kernel<stk::KERNEL_DYNAMIC | stk::KERNEL_SYNC,
                               stk::PlatformDefault>;
 static MyKernel g_kernel;
 
+// tcpip_init() must run from inside a task's Run(), not from main() before
+// kernel.Start(): it spawns lwIP's tcpip_thread and, under
+// LWIP_STK_CUSTOM_CORE_LOCKING, wires that thread's core lock/unlock straight
+// to an async_context-backed lock whose ownership checks call stk::GetTid()
+// to identify the calling task - only meaningful once we're actually running
+// as a task under the kernel, the same restriction cyw43_arch_init() has in
+// the Pico SDK port (see deps/port/pico/README.md).
+class NetInitTask : public stk::Task<2048 /* stack words */, stk::ACCESS_PRIVILEGED>
+{
+private:
+    void Run() override
+    {
+        tcpip_init(NULL, NULL);   // spawns tcpip_thread via sys_thread_new()
+        // ... sockets, your app's networking, ...
+        while (true) { /* ... */ }
+    }
+};
+static NetInitTask g_net_init_task;
+
 int main()
 {
     g_kernel.Initialize();
+
+    // sys_arch_set_kernel() only stashes a pointer, so - unlike tcpip_init() -
+    // it's fine to call here, before kernel.Start().
     sys_arch_set_kernel(&g_kernel);   // <-- STK-specific, before tcpip_init()
 
-    tcpip_init(NULL, NULL);          // spawns tcpip_thread via sys_thread_new()
+    g_kernel.AddTask(&g_net_init_task);
     // ... g_kernel.AddTask(&my_app_task); for any of your own tasks ...
 
-    g_kernel.Start();                // never returns
+    g_kernel.Start();                 // never returns; runs NetInitTask::Run()
 }
 ```
 
