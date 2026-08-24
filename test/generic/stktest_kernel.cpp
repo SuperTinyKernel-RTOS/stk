@@ -1560,11 +1560,14 @@ TEST(Kernel, SyncWait)
     Test_SyncWait<false>();
 }
 
+#if STK_TICKLESS_IDLE
 TEST(Kernel, SyncWaitTickless)
 {
     Test_SyncWait<true>();
 }
+#endif
 
+#if STK_TICKLESS_IDLE
 TEST(Kernel, SyncWaitTicklessDuration)
 {
     Kernel<KERNEL_STATIC | KERNEL_SYNC | KERNEL_TICKLESS, 1, SwitchStrategyRR, PlatformTestMock> kernel;
@@ -1585,18 +1588,19 @@ TEST(Kernel, SyncWaitTicklessDuration)
 
     MutexMock::ScopedLock guard(mutex);
 
-    // sleep_ticks should be equal to 2 on first OnTick call
+    // sleep_ticks should be equal to 3 on first OnTick call
     EWaitResult wresult = IKernelService::GetInstance()->Wait(&sobj, &mutex, 3);
 
-    // in total 4 ticks must be elapsed, including sleep ticks
-    CHECK_EQUAL(4, platform->m_ticks_count);
+    // in total 3 ticks must be elapsed, including sleep ticks
+    CHECK_EQUAL(3, platform->m_ticks_count);
 
     // at this stage test should pass successfully by validating sleep_ticks in SyncWaitRelaxCpuContext::Process
 
     CHECK_EQUAL(WAIT_RESULT_TIMEOUT, wresult); // expect timeout
-    CHECK_EQUAL(3, g_SyncWaitRelaxCpuContext.counter);
+    CHECK_EQUAL(2, g_SyncWaitRelaxCpuContext.counter);
     CHECK_EQUAL(true, mutex.m_locked);
 }
+#endif
 
 TEST(Kernel, CheckWeightLessApi)
 {
@@ -1816,7 +1820,7 @@ TEST(Kernel, SuspendResumeTicklessOnly)
 
 TEST(Kernel, SuspendResume)
 {
-    Kernel<KERNEL_STATIC | KERNEL_TICKLESS, 1, SwitchStrategyRR, PlatformTestMock> kernel;
+    Kernel<KERNEL_STATIC | (STK_TICKLESS_IDLE ? KERNEL_TICKLESS : 0), 1, SwitchStrategyRR, PlatformTestMock> kernel;
     PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
     TaskMock<ACCESS_PRIVILEGED> task1;
 

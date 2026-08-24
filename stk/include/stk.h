@@ -134,7 +134,8 @@ protected:
         {
             STATE_NONE           = 0,        //!< No pending state flags.
             STATE_REMOVE_PENDING = (1 << 0), //!< Task returned from its Run function; slot will be freed on the next tick (KERNEL_DYNAMIC only).
-            STATE_SLEEP_PENDING  = (1 << 1)  //!< Task called Sleep/SleepUntil/Yield; strategy's OnTaskSleep() will be invoked on the next tick (sleep-aware strategies only).
+            STATE_SLEEP_PENDING  = (1 << 1), //!< Task called Sleep/SleepUntil/Yield; strategy's OnTaskSleep() will be invoked on the next tick (sleep-aware strategies only).
+            STATE_WAKE_PENDING   = (1 << 2), //!< Task wake is pending (see Wake).
         };
 
     public:
@@ -184,6 +185,11 @@ protected:
         */
         __stk_forceinline bool IsSleeping() const override { return (m_time_sleep < 0); }
 
+        /*! \brief  Check whether this task is currently sleeping infinitely.
+            \return \c true if m_time_sleep == -WAIT_INFINITE.
+        */
+        __stk_forceinline bool IsSleepInfinite() const { return (m_time_sleep == -WAIT_INFINITE); }
+
         /*! \brief  Get task identifier.
             \return TId derived from the bound ITask pointer address (unique per task instance).
         */
@@ -199,6 +205,12 @@ protected:
 
             // wakeup on a next cycle
             m_time_sleep = -1;
+
+            // notify kernel that this task, even if was going to sleep will be woken on a next tick
+            if ((m_state & KernelTask::STATE_SLEEP_PENDING) != 0U)
+            {
+                m_state |= STATE_WAKE_PENDING;
+            }
         }
 
         /*! \brief     Update the run-time scheduling weight (weighted strategies only).
@@ -438,7 +450,7 @@ protected:
         */
         struct WaitObject final : public IWaitObject
         {
-            explicit WaitObject() : m_task(nullptr), m_sync_obj(nullptr), m_timeout(false), m_time_wait(0)
+            explicit WaitObject() : m_task(nullptr), m_sync_obj(nullptr), m_timeout(false), m_time_wait(NO_WAIT)
             {}
 
             /*! \brief Destructor.
@@ -481,7 +493,7 @@ protected:
                 STK_ASSERT(IsWaiting());
 
                 m_timeout   = timeout;
-                m_time_wait = 0;
+                m_time_wait = NO_WAIT;
 
                 m_sync_obj->RemoveWaitObject(this);
                 m_sync_obj = nullptr;
@@ -503,7 +515,7 @@ protected:
                     {                  
                         m_time_wait -= elapsed_ticks;
 
-                        if (m_time_wait <= 0)
+                        if (m_time_wait <= NO_WAIT)
                         {
                             m_timeout = true;
                         }
@@ -740,15 +752,13 @@ protected:
             STK_ASSERT(ticks > 0);
 
             // set state first as kernel checks it when task IsSleeping
-            if __stk_constexpr_cpp17 (TStrategy::SLEEP_EVENT_API)
+            if (!IsSleeping())
             {
-                if (!IsSleeping())
-                {
-                    m_state |= STATE_SLEEP_PENDING;
-                }
+                m_state |= STATE_SLEEP_PENDING;
             }
 
             m_time_sleep = -ticks;
+
             __stk_full_memfence();
         }
 
@@ -1358,14 +1368,13 @@ protected:
          and remaining 1 will cause a context switch by UpdateFsmState when strategy detects
          it as a sleeping test.
     */
-    static constexpr Timeout YIELD_TICKS = 2;
+    static constexpr Timeout YIELD_TICKS = 1;
 
     /*! \brief     Check if FSM state is valid.
     */
     static __stk_forceinline bool IsValidFsmState(EFsmState state)
     {
-        return (state > FSM_STATE_NONE) &&
-               (state < FSM_STATE_MAX);
+        return ((state > FSM_STATE_NONE) && (state < FSM_STATE_MAX));
     }
 
     /*! \brief     Initialize stack of the traps.
@@ -1624,21 +1633,20 @@ protected:
         STK_ASSERT(m_strategy.GetSize() != 0);
 
         // iterate tasks and generate OnTaskSleep for a strategy for all initially sleeping tasks
-        if __stk_constexpr_cpp17 (TStrategy::SLEEP_EVENT_API)
+        for (size_t i = 0U; i < TASKS_MAX; ++i)
         {
-            for (size_t i = 0U; i < TASKS_MAX; ++i)
+            KernelTask *const task = &m_task_storage[i];
+
+            if ((task->m_state & KernelTask::STATE_SLEEP_PENDING) != 0U)
             {
-                KernelTask *const task = &m_task_storage[i];
+                STK_ASSERT(task->IsSleeping());
 
-                if (task->IsSleeping())
+                task->m_state &= ~KernelTask::STATE_SLEEP_PENDING;
+
+                // notify strategy that task is sleeping
+                if __stk_constexpr_cpp17 (TStrategy::SLEEP_EVENT_API)
                 {
-                    if ((task->m_state & KernelTask::STATE_SLEEP_PENDING) != 0U)
-                    {
-                        task->m_state &= ~KernelTask::STATE_SLEEP_PENDING;
-
-                        // notify strategy that task is sleeping
-                        m_strategy.OnTaskSleep(task);
-                    }
+                    m_strategy.OnTaskSleep(task);
                 }
             }
         }
@@ -1997,29 +2005,46 @@ protected:
                     }
                 }
 
-                // deliver sleep event to strategy
-                // note: only currently scheduled task can be pending to sleep
-                if __stk_constexpr_cpp17 (TStrategy::SLEEP_EVENT_API)
-                {
-                    if ((task->m_state & KernelTask::STATE_SLEEP_PENDING) != 0U)
-                    {
-                        task->m_state &= ~KernelTask::STATE_SLEEP_PENDING;
+                bool just_entered_sleep = false;
 
-                        // notify strategy that task is sleeping
+                // note: only currently scheduled task can be pending to sleep
+                if ((task->m_state & KernelTask::STATE_SLEEP_PENDING) != 0U)
+                {
+                    STK_ASSERT(elapsed_ticks == 1); // entry tick must be a single, uncoalesced tick
+
+                    task->m_state &= ~KernelTask::STATE_SLEEP_PENDING;
+
+                    // notify strategy that task is sleeping
+                    if __stk_constexpr_cpp17 (TStrategy::SLEEP_EVENT_API)
+                    {
                         m_strategy.OnTaskSleep(task);
+                    }
+
+                    // task was woken by Wake() and must be woken on this tick but at the same time
+                    // it must noty strategy by OnTaskWake(), so that strategy would re-schedule this task
+                    if ((task->m_state & KernelTask::STATE_WAKE_PENDING) != 0U)
+                    {
+                        task->m_state &= ~KernelTask::STATE_WAKE_PENDING;
+                    }
+                    else
+                    {
+                        just_entered_sleep = true;
                     }
                 }
 
-                // advance sleep time by a tick
-                task->m_time_sleep += elapsed_ticks;
-
-                // deliver sleep event to strategy
-                if __stk_constexpr_cpp17 (TStrategy::SLEEP_EVENT_API)
+                if (!just_entered_sleep && !task->IsSleepInfinite())
                 {
-                    // notify strategy that task woke up
-                    if (!task->IsSleeping())
+                    // advance sleep time by a tick
+                    task->m_time_sleep += elapsed_ticks;
+
+                    // deliver sleep event to strategy
+                    if __stk_constexpr_cpp17 (TStrategy::SLEEP_EVENT_API)
                     {
-                        m_strategy.OnTaskWake(task);
+                        // notify strategy that task woke up
+                        if (!task->IsSleeping())
+                        {
+                            m_strategy.OnTaskWake(task);
+                        }
                     }
                 }
             }

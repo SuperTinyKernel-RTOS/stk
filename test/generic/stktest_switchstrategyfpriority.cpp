@@ -183,13 +183,13 @@ static struct PrioritySleepRelaxCpuContext
         platform->ProcessTick();
 
         // ISR calls OnSysTick (task1 = active, task2 = idle (sleeping))
-        if (counter == 0)
+        if ((counter == 0) || (counter == 1))
         {
             CHECK_EQUAL_TEXT(active->SP, (Word)task1->GetStack(), "sleep: expecting low-priority task1");
         }
         else
         // ISR calls OnSysTick (task1 = idle (lower priority), task2 = active (higher priority))
-        if (counter == 1)
+        if (counter == 2)
         {
             CHECK_EQUAL_TEXT(active->SP, (Word)task2->GetStack(), "sleep: expecting high-priority task2");
         }

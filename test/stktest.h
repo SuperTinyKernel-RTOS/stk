@@ -87,17 +87,17 @@ public:
         m_service           = NULL;
         m_started           = false;
         m_hard_fault        = false;
-        m_switch_to_next_nr = 0;
+        m_switch_to_next_nr = 0U;
         m_exit_trap         = NULL;
         m_resolution        = 0;
-        m_context_switch_nr = 0;
-        m_ticks_count       = 0;
+        m_context_switch_nr = 0U;
+        m_ticks_count       = 0U;
         m_stack_idle        = NULL;
         m_stack_active      = NULL;
         m_overrider         = NULL;
-        m_systimer_count    = 0;
-        m_systimer_freq     = 0;
-        m_sleep_ticks       = 0;
+        m_systimer_count    = 0U;
+        m_systimer_freq     = 0U;
+        m_sleep_ticks       = 1U;
     }
 
     virtual ~PlatformTestMock()
@@ -187,7 +187,11 @@ public:
 
     void ProcessTick() override
     {
+    #if STK_TICKLESS_IDLE
+        Timeout ticks = m_sleep_ticks;
+    #else
         Timeout ticks = 1;
+    #endif
 
         if (m_event_handler->OnTick(m_stack_idle, m_stack_active
         #if STK_TICKLESS_IDLE
@@ -198,6 +202,7 @@ public:
             ++m_context_switch_nr;
         }
 
+        m_sleep_ticks = ticks;
         m_ticks_count += ticks;
     }
 

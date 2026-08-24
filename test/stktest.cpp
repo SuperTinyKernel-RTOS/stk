@@ -76,6 +76,8 @@ stk::hw::CriticalSection::Session stk::hw::CriticalSection::Enter(CriticalSectio
     STK_UNUSED(is_npriv);
 
     ++g_CriticalSectionState;
+
+    return SESSION_FLAG_NONE;
 }
 void stk::hw::CriticalSection::Exit(CriticalSection::Session is_npriv)
 {
