@@ -618,6 +618,21 @@ uint32_t stk_tick_resolution(void);
 */
 stk_tick_t stk_ticks_from_ms(stk_time_t msec);
 
+/*! \brief     Get ticks from milliseconds using current kernel tick resolution, clamped to
+               the maximum value representable by \a stk_timeout_t (\a STK_WAIT_INFINITE).
+    \param[in] ms: Milliseconds to convert.
+    \return    Equivalent tick count, clamped to \a STK_WAIT_INFINITE if it would otherwise
+               overflow.
+    \note      Equivalent to stk::GetTicksFromMsClampedToTimeout(ms). Prefer this over
+               stk_ticks_from_ms() when the result is passed directly as a \a timeout
+               argument (e.g. to stk_mutex_timed_lock()), so a large millisecond value can
+               never wrap into an unintended (or negative) timeout.
+    \note      If tick rate is 1 kHz then 1 tick = 1 ms.
+    \note      ISR-unsafe (internally calls stk_tick_resolution() which accesses the kernel service).
+    \see       stk_ticks_from_ms, STK_WAIT_INFINITE
+*/
+stk_timeout_t stk_ticks_from_ms_clamped_to_timeout(stk_timeout_t ms);
+
 /*! \brief     Get ticks from milliseconds using an explicit tick resolution.
     \param[in] msec: Milliseconds to convert.
     \param[in] resolution: Microseconds per tick (see stk_tick_resolution()).
@@ -905,8 +920,11 @@ void stk_mutex_unlock(stk_mutex_t *mtx);
 
 /*! \brief     Try to lock the mutex with a timeout.
     \param[in] mtx: Mutex handle.
-    \param[in] timeout: Max time to wait in milliseconds.
+    \param[in] timeout: Maximum time to wait in OS ticks or \a STK_WAIT_INFINITE.
     \return    True if locked successfully, False on timeout.
+    \note      If OS tick rate is 1 kHz then 1 tick = 1 ms. Use \c stk_ticks_from_ms()
+               to convert a millisecond value to ticks for best portability across
+               different tick rates.
 */
 bool stk_mutex_timed_lock(stk_mutex_t *mtx, stk_timeout_t timeout);
 
@@ -984,8 +1002,11 @@ void stk_cv_destroy(stk_cv_t *cv);
                The mutex is re-acquired before returning.
     \param[in] cv: CV handle.
     \param[in] mtx: Locked mutex handle protecting the state.
-    \param[in] timeout: Max time to wait (or \a STK_WAIT_INFINITE).
+    \param[in] timeout: Maximum time to wait in OS ticks or \a STK_WAIT_INFINITE.
     \return    True if signaled, False on timeout.
+    \note      If OS tick rate is 1 kHz then 1 tick = 1 ms. Use \c stk_ticks_from_ms()
+               to convert a millisecond value to ticks for best portability across
+               different tick rates.
 */
 bool stk_cv_wait(stk_cv_t *cv, stk_mutex_t *mtx, stk_timeout_t timeout);
 
@@ -1032,8 +1053,11 @@ void stk_event_destroy(stk_event_t *ev);
 
 /*! \brief     Wait for the event to become signaled.
     \param[in] ev:      Event handle.
-    \param[in] timeout: Max time to wait in milliseconds.
+    \param[in] timeout: Maximum time to wait in OS ticks or \a STK_WAIT_INFINITE.
     \return    True if signaled, False on timeout.
+    \note      If OS tick rate is 1 kHz then 1 tick = 1 ms. Use \c stk_ticks_from_ms()
+               to convert a millisecond value to ticks for best portability across
+               different tick rates.
 */
 bool stk_event_wait(stk_event_t *ev, stk_timeout_t timeout);
 
@@ -1098,8 +1122,11 @@ void stk_sem_destroy(stk_sem_t *sem);
 
 /*! \brief     Wait for a semaphore resource.
     \param[in] sem: Semaphore handle.
-    \param[in] timeout: Max time to wait (ticks).
+    \param[in] timeout: Maximum time to wait in OS ticks or \a STK_WAIT_INFINITE.
     \return    True if resource acquired, False on timeout.
+    \note      If OS tick rate is 1 kHz then 1 tick = 1 ms. Use \c stk_ticks_from_ms()
+               to convert a millisecond value to ticks for best portability across
+               different tick rates.
 */
 bool stk_sem_wait(stk_sem_t *sem, stk_timeout_t timeout);
 
@@ -1233,13 +1260,16 @@ uint32_t stk_ef_get(stk_ef_t *ef);
     \param[in] flags: Bitmask of flag bits to watch. Must not be 0 and must not have bit 31 set.
     \param[in] options: Combination of \c STK_EF_OPT_WAIT_ANY / \c STK_EF_OPT_WAIT_ALL
                and optionally \c STK_EF_OPT_NO_CLEAR.
-    \param[in] timeout: Maximum time to wait (ticks). Use \c STK_WAIT_INFINITE to block
-               indefinitely, \c STK_NO_WAIT for a non-blocking poll.
+    \param[in] timeout: Maximum time to wait in OS ticks or \a STK_WAIT_INFINITE.
+               Use \c STK_NO_WAIT for a non-blocking poll.
     \return    Bitmask of the matched flags on success, or a \c STK_EF_ERROR_* sentinel
                on failure. Always check \c stk_ef_is_error() before using the return
                value as a flags mask.
     \note      If the predicate becomes satisfied in the same tick that the deadline
                expires, the wait succeeds and returns the matched flags.
+    \note      If OS tick rate is 1 kHz then 1 tick = 1 ms. Use \c stk_ticks_from_ms()
+               to convert a millisecond value to ticks for best portability across
+               different tick rates.
     \warning   ISR-safe only with timeout = \c STK_NO_WAIT, ISR-unsafe otherwise.
 */
 uint32_t stk_ef_wait(stk_ef_t *ef, uint32_t flags, uint32_t options, stk_timeout_t timeout);
@@ -1338,9 +1368,12 @@ void stk_pipe_destroy(stk_pipe_t *pipe);
                expires.
     \param[in] pipe: Pipe handle.
     \param[in] data: Pointer to the element payload (must be >= element_size bytes).
-    \param[in] timeout: Max time to wait (ticks). Use \c STK_WAIT_INFINITE to block
-               indefinitely, \c STK_NO_WAIT for a non-blocking attempt.
+    \param[in] timeout: Maximum time to wait in OS ticks or \a STK_WAIT_INFINITE.
+               Use \c STK_NO_WAIT for a non-blocking attempt.
     \return    True if the element was written, False on timeout.
+    \note      If OS tick rate is 1 kHz then 1 tick = 1 ms. Use \c stk_ticks_from_ms()
+               to convert a millisecond value to ticks for best portability across
+               different tick rates.
     \warning   ISR-safe only with \a timeout = \c STK_NO_WAIT.
 */
 bool stk_pipe_write(stk_pipe_t *pipe, const void *data, stk_timeout_t timeout);
@@ -1359,9 +1392,12 @@ bool stk_pipe_trywrite(stk_pipe_t *pipe, const void *data);
                produced or the timeout expires.
     \param[in] pipe: Pipe handle.
     \param[out] data: Destination buffer (must be >= element_size bytes).
-    \param[in] timeout: Max time to wait (ticks). Use \c STK_WAIT_INFINITE to block
-               indefinitely, \c STK_NO_WAIT for a non-blocking attempt.
+    \param[in] timeout: Maximum time to wait in OS ticks or \a STK_WAIT_INFINITE.
+               Use \c STK_NO_WAIT for a non-blocking attempt.
     \return    True if an element was read, False on timeout.
+    \note      If OS tick rate is 1 kHz then 1 tick = 1 ms. Use \c stk_ticks_from_ms()
+               to convert a millisecond value to ticks for best portability across
+               different tick rates.
     \warning   ISR-safe only with \a timeout = \c STK_NO_WAIT.
 */
 bool stk_pipe_read(stk_pipe_t *pipe, void *data, stk_timeout_t timeout);
@@ -1381,10 +1417,13 @@ bool stk_pipe_tryread(stk_pipe_t *pipe, void *data);
     \param[in] src: Pointer to the source array (must hold at least \a count
                elements of \a element_size bytes each).
     \param[in] count: Number of elements to write.
-    \param[in] timeout: Max time to wait (ticks). Use \c STK_WAIT_INFINITE to block
-               indefinitely, \c STK_NO_WAIT for a non-blocking attempt.
+    \param[in] timeout: Maximum time to wait in OS ticks or \a STK_WAIT_INFINITE.
+               Use \c STK_NO_WAIT for a non-blocking attempt.
     \return    Number of elements actually written. Equal to \c count unless a timeout
                occurred.
+    \note      If OS tick rate is 1 kHz then 1 tick = 1 ms. Use \c stk_ticks_from_ms()
+               to convert a millisecond value to ticks for best portability across
+               different tick rates.
     \warning   ISR-safe only with \a timeout = \c STK_NO_WAIT.
 */
 size_t stk_pipe_write_bulk(stk_pipe_t *pipe, const void *src, size_t count, stk_timeout_t timeout);
@@ -1406,9 +1445,12 @@ size_t stk_pipe_trywrite_bulk(stk_pipe_t *pipe, const void *src, size_t count);
     \param[out] dst: Pointer to the destination array (must hold at least \a count
                elements of \a element_size bytes each).
     \param[in] count: Number of elements to read.
-    \param[in] timeout: Max time to wait (ticks). Use \c STK_WAIT_INFINITE to block
-               indefinitely, \c STK_NO_WAIT for a non-blocking attempt.
+    \param[in] timeout: Maximum time to wait in OS ticks or \a STK_WAIT_INFINITE.
+               Use \c STK_NO_WAIT for a non-blocking attempt.
     \return    Number of elements actually read. Equal to \c count unless a timeout occurred.
+    \note      If OS tick rate is 1 kHz then 1 tick = 1 ms. Use \c stk_ticks_from_ms()
+               to convert a millisecond value to ticks for best portability across
+               different tick rates.
     \warning   ISR-safe only with \a timeout = \c STK_NO_WAIT.
 */
 size_t stk_pipe_read_bulk(stk_pipe_t *pipe, void *dst, size_t count, stk_timeout_t timeout);
@@ -1434,9 +1476,12 @@ size_t stk_pipe_tryread_bulk(stk_pipe_t *pipe, void *dst, size_t count);
     \param[in] trigger: Minimum number of elements that must be available before any
                data is dequeued. Clamped to [1, max_count] internally.
     \param[in] max_count: Maximum number of elements to return in total.
-    \param[in] timeout: Max time to wait (ticks). Use \c STK_WAIT_INFINITE to block
-               indefinitely, \c STK_NO_WAIT for a non-blocking attempt.
+    \param[in] timeout: Maximum time to wait in OS ticks or \a STK_WAIT_INFINITE.
+               Use \c STK_NO_WAIT for a non-blocking attempt.
     \return    Number of elements actually read (0 if timeout fired before trigger was reached).
+    \note      If OS tick rate is 1 kHz then 1 tick = 1 ms. Use \c stk_ticks_from_ms()
+               to convert a millisecond value to ticks for best portability across
+               different tick rates.
     \warning   ISR-safe only with \a timeout = \c STK_NO_WAIT.
 */
 size_t stk_pipe_read_bulk_triggered(stk_pipe_t   *pipe,
@@ -1595,9 +1640,12 @@ void stk_msgq_destroy(stk_msgq_t *mq);
                timeout expires.
     \param[in] mq: MessageQueue handle.
     \param[in] msg: Pointer to the message payload (must be >= msg_size bytes).
-    \param[in] timeout: Max time to wait (ticks). Use \c STK_WAIT_INFINITE to block
-               indefinitely, \c STK_NO_WAIT for a non-blocking attempt.
+    \param[in] timeout: Maximum time to wait in OS ticks or \a STK_WAIT_INFINITE.
+               Use \c STK_NO_WAIT for a non-blocking attempt.
     \return    True if the message was enqueued, False on timeout.
+    \note      If OS tick rate is 1 kHz then 1 tick = 1 ms. Use \c stk_ticks_from_ms()
+               to convert a millisecond value to ticks for best portability across
+               different tick rates.
     \warning   ISR-safe only with \a timeout = \c STK_NO_WAIT.
 */
 bool stk_msgq_put(stk_msgq_t *mq, const void *msg, stk_timeout_t timeout);
@@ -1617,9 +1665,12 @@ bool stk_msgq_tryput(stk_msgq_t *mq, const void *msg);
                until space becomes available or the timeout expires.
     \param[in] mq: MessageQueue handle.
     \param[in] msg: Pointer to the message payload (must be >= msg_size bytes).
-    \param[in] timeout: Max time to wait (ticks). Use \c STK_WAIT_INFINITE to block
-               indefinitely, \c STK_NO_WAIT for a non-blocking attempt.
+    \param[in] timeout: Maximum time to wait in OS ticks or \a STK_WAIT_INFINITE.
+               Use \c STK_NO_WAIT for a non-blocking attempt.
     \return    True if the message was enqueued at the front, False on timeout.
+    \note      If OS tick rate is 1 kHz then 1 tick = 1 ms. Use \c stk_ticks_from_ms()
+               to convert a millisecond value to ticks for best portability across
+               different tick rates.
     \warning   ISR-safe only with \a timeout = \c STK_NO_WAIT.
 */
 bool stk_msgq_putfront(stk_msgq_t *mq, const void *msg, stk_timeout_t timeout);
@@ -1637,9 +1688,12 @@ bool stk_msgq_tryputfront(stk_msgq_t *mq, const void *msg);
                 empty until a message arrives or the timeout expires.
     \param[in]  mq: MessageQueue handle.
     \param[out] msg: Destination buffer (must be >= msg_size bytes).
-    \param[in]  timeout: Max time to wait (ticks). Use \c STK_WAIT_INFINITE to block
-                indefinitely, \c STK_NO_WAIT for a non-blocking attempt.
+    \param[in]  timeout: Maximum time to wait in OS ticks or \a STK_WAIT_INFINITE.
+                Use \c STK_NO_WAIT for a non-blocking attempt.
     \return     True if a message was retrieved, False on timeout.
+    \note       If OS tick rate is 1 kHz then 1 tick = 1 ms. Use \c stk_ticks_from_ms()
+                to convert a millisecond value to ticks for best portability across
+                different tick rates.
     \warning    ISR-safe only with \a timeout = \c STK_NO_WAIT.
 */
 bool stk_msgq_get(stk_msgq_t *mq, void *msg, stk_timeout_t timeout);
@@ -1660,9 +1714,12 @@ bool stk_msgq_tryget(stk_msgq_t *mq, void *msg);
                 expires.
     \param[in]  mq: MessageQueue handle.
     \param[out] msg: Destination buffer (must be >= msg_size bytes).
-    \param[in]  timeout: Max time to wait (ticks). Use \c STK_WAIT_INFINITE to block
-                indefinitely, \c STK_NO_WAIT for a non-blocking attempt.
+    \param[in]  timeout: Maximum time to wait in OS ticks or \a STK_WAIT_INFINITE.
+                Use \c STK_NO_WAIT for a non-blocking attempt.
     \return     True if a message was peeked, False on timeout.
+    \note       If OS tick rate is 1 kHz then 1 tick = 1 ms. Use \c stk_ticks_from_ms()
+                to convert a millisecond value to ticks for best portability across
+                different tick rates.
     \warning    ISR-safe only with \a timeout = \c STK_NO_WAIT.
 */
 bool stk_msgq_peek(stk_msgq_t *mq, void *msg, stk_timeout_t timeout);
@@ -1682,9 +1739,12 @@ bool stk_msgq_trypeek(stk_msgq_t *mq, void *msg);
                 empty until a message is available or the timeout expires.
     \param[in]  mq: MessageQueue handle.
     \param[out] msg: Destination buffer (must be >= msg_size bytes).
-    \param[in]  timeout: Max time to wait (ticks). Use \c STK_WAIT_INFINITE to block
-                indefinitely, \c STK_NO_WAIT for a non-blocking attempt.
+    \param[in]  timeout: Maximum time to wait in OS ticks or \a STK_WAIT_INFINITE.
+                Use \c STK_NO_WAIT for a non-blocking attempt.
     \return     True if a message was peeked, False on timeout.
+    \note       If OS tick rate is 1 kHz then 1 tick = 1 ms. Use \c stk_ticks_from_ms()
+                to convert a millisecond value to ticks for best portability across
+                different tick rates.
     \warning    ISR-safe only with \a timeout = \c STK_NO_WAIT.
 */
 bool stk_msgq_peekfront(stk_msgq_t *mq, void *msg, stk_timeout_t timeout);
@@ -1810,8 +1870,12 @@ bool stk_rwmutex_try_read_lock(stk_rwmutex_t *rw);
 
 /*! \brief     Try to acquire the read lock with a timeout.
     \param[in] rw: RWMutex handle.
-    \param[in] timeout: Max time to wait (ticks). Use STK_NO_WAIT for non-blocking.
+    \param[in] timeout: Maximum time to wait in OS ticks or \a STK_WAIT_INFINITE.
+               Use STK_NO_WAIT for non-blocking.
     \return    True if acquired, False on timeout.
+    \note      If OS tick rate is 1 kHz then 1 tick = 1 ms. Use \c stk_ticks_from_ms()
+               to convert a millisecond value to ticks for best portability across
+               different tick rates.
 */
 bool stk_rwmutex_timed_read_lock(stk_rwmutex_t *rw, stk_timeout_t timeout);
 
@@ -1836,8 +1900,12 @@ bool stk_rwmutex_trylock(stk_rwmutex_t *rw);
 
 /*! \brief     Try to acquire the write lock with a timeout.
     \param[in] rw: RWMutex handle.
-    \param[in] timeout: Max time to wait (ticks). Use STK_NO_WAIT for non-blocking.
+    \param[in] timeout: Maximum time to wait in OS ticks or \a STK_WAIT_INFINITE.
+               Use STK_NO_WAIT for non-blocking.
     \return    True if acquired, False on timeout.
+    \note      If OS tick rate is 1 kHz then 1 tick = 1 ms. Use \c stk_ticks_from_ms()
+               to convert a millisecond value to ticks for best portability across
+               different tick rates.
 */
 bool stk_rwmutex_timed_lock(stk_rwmutex_t *rw, stk_timeout_t timeout);
 

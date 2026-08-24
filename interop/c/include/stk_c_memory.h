@@ -207,11 +207,14 @@ void *stk_blockpool_alloc(stk_blockpool_t *pool);
 
 /*! \brief     Allocate one block, blocking until one becomes available or the timeout expires.
     \param[in] pool: Pool handle.
-    \param[in] timeout: Maximum time to wait in ticks.
+    \param[in] timeout: Maximum time to wait in OS ticks.
                Pass \c STK_WAIT_INFINITE to block indefinitely (same as \c stk_blockpool_alloc()),
                or \c STK_NO_WAIT for a non-blocking attempt identical to \c stk_blockpool_try_alloc().
     \return    Pointer to an uninitialized block, or \c NULL if the timeout expired
                before a block became available.
+    \note      If OS tick rate is 1 kHz then 1 tick = 1 ms. Use \c stk_ticks_from_ms()
+               to convert a millisecond value to ticks for best portability across
+               different tick rates.
     \warning   ISR-safe \b only when \a timeout = \c STK_NO_WAIT; not ISR-safe otherwise.
 */
 void *stk_blockpool_timed_alloc(stk_blockpool_t *pool, stk_timeout_t timeout);
