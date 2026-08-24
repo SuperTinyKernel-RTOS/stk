@@ -598,7 +598,7 @@ stk_tid_t stk_task_get_id(const stk_task_t *tsk)
 {
     STK_ASSERT(tsk != nullptr);
 
-    return tsk->handle.GetId();
+    return stk::GetTidFromUserTask(&tsk->handle);
 }
 
 void stk_task_destroy(stk_task_t *tsk)

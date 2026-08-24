@@ -1568,7 +1568,7 @@ bool stk_pipe_is_storage_valid(const stk_pipe_t *pipe);
     \note      The backing data buffer is allocated separately by the caller and
                passed to stk_msgq_create() via the \a buf / \a buf_size parameters.
 */
-#define STK_MSGQ_IMPL_SIZE (6 + (2 * STK_CV_IMPL_SIZE) + (STK_SYNC_DEBUG_NAMES ? 1 : 0))
+#define STK_MSGQ_IMPL_SIZE (6U + (2U * STK_CV_IMPL_SIZE) + (STK_SYNC_DEBUG_NAMES ? 1U : 0U))
 
 /*! \brief     Opaque memory container for a MessageQueue instance.
 */
