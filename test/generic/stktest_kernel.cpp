@@ -1602,6 +1602,76 @@ TEST(Kernel, SyncWaitTicklessDuration)
 }
 #endif
 
+static struct SyncWaitWakeInOneTickRelaxCpuContext
+{
+    SyncWaitWakeInOneTickRelaxCpuContext()
+    {
+        Reset();
+    }
+
+    void Reset()
+    {
+        counter        = 0;
+        platform       = NULL;
+        check_tickless = ~0;
+        sobj           = NULL;
+    }
+
+    uint32_t          counter;
+    PlatformTestMock *platform;
+    uint32_t          check_tickless;
+    SyncObjectMock   *sobj;
+
+    void Process()
+    {
+        IKernelService::GetInstance()->Wake(sobj, true);
+
+        platform->ProcessTick();
+        ++counter;
+    }
+}
+g_SyncWaitWakeInOneTickRelaxCpuContext;
+
+static void SyncWaitWakeInOneTickRelaxCpu()
+{
+    g_SyncWaitWakeInOneTickRelaxCpuContext.Process();
+}
+
+TEST(Kernel, SyncWaitWakeInOneTick)
+{
+    Kernel<KERNEL_STATIC | KERNEL_SYNC, 1, SwitchStrategyRR, PlatformTestMock> kernel;
+    PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
+    TaskMock<ACCESS_USER> task;
+
+    MutexMock mutex;
+    SyncObjectMock sobj;
+
+    g_SyncWaitWakeInOneTickRelaxCpuContext.Reset();
+    g_SyncWaitWakeInOneTickRelaxCpuContext.platform       = platform;
+    g_SyncWaitWakeInOneTickRelaxCpuContext.check_tickless = 0; // check first tick
+    g_SyncWaitWakeInOneTickRelaxCpuContext.sobj           = &sobj;
+    g_RelaxCpuHandler = SyncWaitWakeInOneTickRelaxCpu;
+
+    kernel.Initialize();
+    kernel.AddTask(&task);
+    kernel.Start();
+
+    MutexMock::ScopedLock guard(mutex);
+
+    // sleep_ticks should be equal to 3 on first OnTick call
+    EWaitResult wresult = IKernelService::GetInstance()->Wait(&sobj, &mutex, 3);
+
+    // in total 1 ticks must be elapsed, including sleep ticks because Wake was
+    // called in the same tick, so task did not really fall asleep
+    CHECK_EQUAL(1, platform->m_ticks_count);
+    CHECK_EQUAL(1, g_SyncWaitWakeInOneTickRelaxCpuContext.counter);
+
+    // at this stage test should pass successfully by validating sleep_ticks in SyncWaitRelaxCpuContext::Process
+
+    CHECK_EQUAL(WAIT_RESULT_SIGNAL, wresult); // expect Wake signal
+    CHECK_EQUAL(true, mutex.m_locked);
+}
+
 TEST(Kernel, CheckWeightLessApi)
 {
     Kernel<KERNEL_STATIC, 1, SwitchStrategyRR, PlatformTestMock> kernel;

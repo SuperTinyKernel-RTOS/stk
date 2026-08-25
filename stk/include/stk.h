@@ -1970,7 +1970,8 @@ protected:
         return UpdateTaskState(elapsed_ticks);
     }
         
-    /*! \brief     Update task state: process removals, advance sleep timers, and track HRT durations.
+    /*! \brief     Update task state: process removals, deliver sleep/wake notifications, advance
+                   sleep timers, and track HRT durations.
         \param[in] elapsed_ticks: Number of ticks elapsed since the previous call.
                    Always 1 in non-tickless mode, may be >1 in tickless mode.
         \return    In non-tickless mode: always 1.
@@ -1978,6 +1979,26 @@ protected:
                    active tasks, clamped to [1, STK_TICKLESS_TICKS_MAX]. The platform driver uses
                    this value to program the next timer wakeup interval, suppressing timer/tick ISR for
                    that many ticks when the system would otherwise be idle.
+        \note      Sleep entry/exit protocol: ScheduleSleep() sets STATE_SLEEP_PENDING and stores
+                   m_time_sleep = -ticks. This function's first pass over a newly-sleeping task (the
+                   "entry tick") consumes STATE_SLEEP_PENDING and delivers OnTaskSleep() to the
+                   strategy, but does NOT also advance m_time_sleep on that same pass - doing both in
+                   one call would let a 1-tick sleep collapse to zero elapsed time (OnTaskSleep and
+                   OnTaskWake firing back-to-back before the task was ever excluded from scheduling).
+                   The entry tick is therefore required to be a single, uncoalesced tick (asserted
+                   below); this holds because a task can only enter STATE_SLEEP_PENDING by putting
+                   itself to sleep, which means it was actively running (not idle) up to that point,
+                   so tickless coalescing, which only suppresses ticks while the CPU is idle, cannot
+                   have applied yet.
+                   If Wake()/SleepCancel() races in before the entry tick runs, STATE_WAKE_PENDING is
+                   set alongside STATE_SLEEP_PENDING. The entry tick then delivers OnTaskSleep()
+                   followed immediately by the normal advance (and OnTaskWake(), since m_time_sleep
+                   was already primed to -1 by Wake()) in the same pass, so the task still resumes on
+                   the next tick as promised, with the two notifications correctly paired instead of
+                   an orphaned OnTaskWake().
+                   Tasks sleeping via WAIT_INFINITE (IsSleepInfinite()) are excluded from the per-tick
+                   advance entirely so they never spuriously time out; only an explicit Wake() (which
+                   directly sets m_time_sleep = -1) ends an infinite sleep.
     */
     Timeout UpdateTaskState(const Timeout elapsed_ticks)
     {
@@ -2012,7 +2033,13 @@ protected:
                 {
                     STK_ASSERT(elapsed_ticks == 1); // entry tick must be a single, uncoalesced tick
 
-                    task->m_state &= ~KernelTask::STATE_SLEEP_PENDING;
+                    // if Wake() raced in before this entry tick ran, STATE_WAKE_PENDING is set:
+                    // deliver OnTaskSleep() below as usual, then fall through to the advance block
+                    // in this same pass instead of waiting an extra tick, so the paired OnTaskWake()
+                    // still fires on schedule.
+                    const bool wake_pending = (task->m_state & KernelTask::STATE_WAKE_PENDING) != 0U;
+
+                    task->m_state &= ~(KernelTask::STATE_SLEEP_PENDING | KernelTask::STATE_WAKE_PENDING);
 
                     // notify strategy that task is sleeping
                     if __stk_constexpr_cpp17 (TStrategy::SLEEP_EVENT_API)
@@ -2020,27 +2047,18 @@ protected:
                         m_strategy.OnTaskSleep(task);
                     }
 
-                    // task was woken by Wake() and must be woken on this tick but at the same time
-                    // it must noty strategy by OnTaskWake(), so that strategy would re-schedule this task
-                    if ((task->m_state & KernelTask::STATE_WAKE_PENDING) != 0U)
-                    {
-                        task->m_state &= ~KernelTask::STATE_WAKE_PENDING;
-                    }
-                    else
-                    {
-                        just_entered_sleep = true;
-                    }
+                    just_entered_sleep = !wake_pending;
                 }
 
                 if (!just_entered_sleep && !task->IsSleepInfinite())
                 {
-                    // advance sleep time by a tick
+                    // advance sleep time by number of elapsed ticks (always 1 if non-Tickless)
                     task->m_time_sleep += elapsed_ticks;
 
-                    // deliver sleep event to strategy
+                    // deliver sleep event to the strategy
                     if __stk_constexpr_cpp17 (TStrategy::SLEEP_EVENT_API)
                     {
-                        // notify strategy that task woke up
+                        // notify strategy that the task woke up
                         if (!task->IsSleeping())
                         {
                             m_strategy.OnTaskWake(task);
@@ -2060,7 +2078,7 @@ protected:
                         // check if deadline is missed (HRT failure)
                         if (task->HrtIsDeadlineMissed(task->m_hrt[0].duration))
                         {
-                            // report deadline overrun to a strategy which supports overrun recovery
+                            // report deadline overrun to the strategy which supports overrun recovery
                             if __stk_constexpr_cpp17 (TStrategy::DEADLINE_MISSED_API)
                             {                                
                                 if (!m_strategy.OnTaskDeadlineMissed(task))
@@ -2078,7 +2096,7 @@ protected:
                 }
             }
 
-            // get the number ticks the driver has to keep CPU in Idle
+            // get the number of ticks the driver has to keep CPU in Idle
             if __stk_constexpr_cpp17 (IsTicklessMode())
             {
                 if ((sleep_ticks > 1) && task->IsBusy())
