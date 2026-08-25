@@ -40,6 +40,8 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+#include "tusb_config.h"
+
 #ifndef CFG_TUH_OSAL_STK_USE_CPP
 #define CFG_TUH_OSAL_STK_USE_CPP 0
 #endif

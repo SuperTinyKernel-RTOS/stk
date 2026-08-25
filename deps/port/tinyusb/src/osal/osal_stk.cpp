@@ -22,6 +22,7 @@
 #include <new>
 #include <cstdint>
 
+#include "osal/osal.h" // for OSAL_TIMEOUT_WAIT_FOREVER
 #include "osal_stk.h"
 
 #if CFG_TUH_OSAL_STK_USE_CPP

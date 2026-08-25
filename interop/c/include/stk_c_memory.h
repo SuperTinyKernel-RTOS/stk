@@ -313,6 +313,18 @@ bool stk_blockpool_is_full(const stk_blockpool_t *pool);
 bool stk_blockpool_is_empty(const stk_blockpool_t *pool);
 
 #ifdef __cplusplus
+namespace stk { namespace memory { class BlockMemoryPool; } }
+
+/*! \brief     Get the underlying C++ \c stk::memory::BlockMemoryPool object wrapped by a \c stk_blockpool_t handle.
+    \param[in] pool: Pool handle obtained via \c stk_blockpool_create() or
+               \c stk_blockpool_create_static().
+    \return    Pointer to the wrapped \c stk::memory::BlockMemoryPool instance. Never \c NULL for a valid handle.
+    \note      C++ callers only (guarded by \c __cplusplus); not part of the C ABI.
+*/
+extern "C" stk::memory::BlockMemoryPool *stk_blockpool_get_instance(stk_blockpool_t *pool);
+#endif // __cplusplus
+
+#ifdef __cplusplus
 }
 #endif
 

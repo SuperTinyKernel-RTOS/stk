@@ -108,6 +108,15 @@ int main(int argc, char* argv[]) {
 
   board_init();
 
+  // shall be done in family.c similar to (CFG_TUSB_OS == OPT_OS_FREERTOS) case
+  {
+    // disable SysTick on init, kernel will manage it
+    SysTick->CTRL &= ~1U;
+
+    // Priority must be less than SVCall to allow Privileged/non-Privileged tasks.
+    NVIC_SetPriority(OTG_FS_IRQn, STK_CORTEX_M_SVCALL_ISR_PRIORITY + 1U);
+  }
+
   // Init values
   sampFreq = CFG_TUD_AUDIO_FUNC_1_SAMPLE_RATE;
   clkValid = 1;
@@ -139,7 +148,7 @@ int main(int argc, char* argv[]) {
 
   // Audio receive (I2S) ISR simulation
   // To simulate a ISR the priority is set to the highest
-  stk_task_t *audio_task = stk_task_create_privileged(audio_isr_task, NULL, audio_stack, AUDIO_STACK_SIZE);
+  stk_task_t *audio_task = stk_task_create_user(audio_isr_task, NULL, audio_stack, AUDIO_STACK_SIZE);
   stk_task_set_name(audio_task, "audio");
   stk_task_set_priority(audio_task, 31);
   stk_kernel_add_task(k, audio_task);

@@ -60,8 +60,6 @@ Notable `stk_config.h` settings:
 
 `STK_C_KERNEL_TYPE_CPU_0` selects the kernel flavor (static/synchronous, tickless or not) and switch strategy for CPU 0; see the "Kernel factory functions" section of `stk_c.h` for the available options.
 
-> **Note:** `stk_config.h`'s comment on `_STK_ARCH_ARM_CORTEX_M` says to undefine it for Cortex-M4 parts, but it's left defined here even though the STM32F4's core *is* a Cortex-M4. Worth double-checking against STK's docs/headers for what this macro actually gates before relying on it as-is.
-
 ## Building
 
 CMake:

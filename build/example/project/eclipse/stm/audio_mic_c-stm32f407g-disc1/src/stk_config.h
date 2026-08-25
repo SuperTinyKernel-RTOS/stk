@@ -12,11 +12,14 @@
 
 #include "cmsis_device.h"
 
-// Undefine if MCU is Arm Cortex-M4
+// ARM Cortex-M4 platform
 #define _STK_ARCH_ARM_CORTEX_M
 
 // Low-power scenario, use (0) for a high-performance processing when consumed power does not matter
 #define STK_TICKLESS_IDLE       (1U)
+
+// Max SVCall priority.
+#define STK_CORTEX_M_SVCALL_ISR_PRIORITY (0U)
 
 // For C interface:
 #define STK_C_CPU_COUNT         (1U)

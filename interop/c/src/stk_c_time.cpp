@@ -416,6 +416,31 @@ uint32_t stk_periodic_trigger_get_period(const stk_periodic_trigger_t *trig)
     return static_cast<uint32_t>(trig->handle.GetPeriod());
 }
 
+// -----------------------------------------------------------------------------
+// C++ instance access
+// -----------------------------------------------------------------------------
+
+TimerHost *stk_timerhost_get_instance(stk_timerhost_t *host)
+{
+    STK_ASSERT(host != nullptr);
+
+    return &host->handle;
+}
+
+TimerHost::Timer *stk_timer_get_instance(stk_timer_t *tmr)
+{
+    STK_ASSERT(tmr != nullptr);
+
+    return &tmr->handle;
+}
+
+PeriodicTrigger *stk_periodic_trigger_get_instance(stk_periodic_trigger_t *trig)
+{
+    STK_ASSERT(trig != nullptr);
+
+    return &trig->handle;
+}
+
 // =============================================================================
 } // extern "C"
 // =============================================================================

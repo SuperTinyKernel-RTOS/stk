@@ -15,7 +15,7 @@
 // Use tickless mode for battery-powered devices or when max power saving is required
 #define STK_TICKLESS_IDLE 1
 
-// Undefine if MCU is Arm Cortex-M4
+// ARM Cortex-M4 platform
 #define _STK_ARCH_ARM_CORTEX_M
 
 #ifdef _STK_ARCH_ARM_CORTEX_M

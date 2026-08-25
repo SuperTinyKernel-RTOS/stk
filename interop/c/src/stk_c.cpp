@@ -370,6 +370,19 @@ stk_kernel_t *stk_kernel_create(uint8_t core_nr)
     return CastCppKernelInterfaceToC(k);
 }
 
+stk::IKernel *stk_kernel_get_instance(uint8_t core_nr)
+{
+    STK_ASSERT(core_nr < STK_C_CPU_COUNT);
+
+    IKernel *const k = s_KernelMap[core_nr].kernel;
+
+    // Kernel not found: stk_kernel_get_instance() called before
+    // stk_kernel_create() or after stk_kernel_destroy().
+    STK_ASSERT(k != nullptr);
+
+    return k;
+}
+
 void stk_kernel_destroy(stk_kernel_t *k)
 {
     STK_ASSERT(k != nullptr);
@@ -599,6 +612,13 @@ stk_tid_t stk_task_get_id(const stk_task_t *tsk)
     STK_ASSERT(tsk != nullptr);
 
     return stk::GetTidFromUserTask(&tsk->handle);
+}
+
+stk::ITask *stk_task_get_instance(stk_task_t *tsk)
+{
+    STK_ASSERT(tsk != nullptr);
+
+    return &tsk->handle;
 }
 
 void stk_task_destroy(stk_task_t *tsk)

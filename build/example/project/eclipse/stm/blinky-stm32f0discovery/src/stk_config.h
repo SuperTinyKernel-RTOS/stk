@@ -13,7 +13,7 @@
 #include "cmsis_device.h"
 #include "core_cm0.h"
 
-// Undefine if MCU is Arm Cortex-M4
+// ARM Cortex-M4 platform
 #define _STK_ARCH_ARM_CORTEX_M
 
 #ifdef _STK_ARCH_ARM_CORTEX_M
