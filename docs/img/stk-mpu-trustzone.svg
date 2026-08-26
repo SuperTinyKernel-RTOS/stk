@@ -1,0 +1,112 @@
+<svg viewBox="0 0 900 620" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+
+  <!-- Background -->
+  <rect x="0" y="0" width="900" height="620" fill="#ffffff"/>
+
+  <!-- MCU outer boundary -->
+  <rect x="20" y="20" width="860" height="580" rx="14" fill="#fafafa" stroke="#94a3b8" stroke-width="2"/>
+  <text x="40" y="48" font-size="15" font-weight="700" fill="#334155">Cortex-M33 / Armv8-M MCU — TrustZone (SAU) + Per-Task MPU</text>
+
+  <!-- ============ SECURE WORLD ============ -->
+  <rect x="45" y="72" width="380" height="420" rx="12" fill="#e0ecff" stroke="#2f6fdb" stroke-width="2"/>
+  <text x="65" y="100" font-size="15" font-weight="700" fill="#173a70">Secure World — Secure Binary</text>
+
+  <!-- Kernel box -->
+  <rect x="70" y="120" width="330" height="56" rx="8" fill="#2f6fdb" stroke="#173a70" stroke-width="1.5"/>
+  <text x="235" y="144" font-size="13.5" font-weight="700" fill="#ffffff" text-anchor="middle">STK Kernel</text>
+  <text x="235" y="162" font-size="10.5" fill="#dbe8ff" text-anchor="middle">Secure — schedules &amp; applies MPU config for BOTH worlds</text>
+
+  <!-- Secure Task 1 -->
+  <rect x="70" y="196" width="330" height="70" rx="8" fill="#ffffff" stroke="#2f6fdb" stroke-width="1.5"/>
+  <text x="235" y="216" font-size="12.5" font-weight="700" fill="#173a70" text-anchor="middle">Secure Task 1 — Privileged</text>
+  <rect x="82" y="224" width="306" height="30" rx="6" fill="none" stroke="#7c3aed" stroke-width="1.5" stroke-dasharray="4 3"/>
+  <text x="235" y="243" font-size="10.5" fill="#4c1d95" text-anchor="middle">MPU region: cmd queue + GPIO bridge only</text>
+
+  <!-- blocked icon between Secure Task 1 and 2 -->
+  <circle cx="235" cy="276" r="9" fill="#ffffff" stroke="#b91c1c" stroke-width="2"/>
+  <text x="235" y="280" font-size="11" fill="#b91c1c" text-anchor="middle" font-weight="700">✕</text>
+  <text x="252" y="280" font-size="10" fill="#b91c1c" font-weight="600">blocks cross-task access</text>
+
+  <!-- Secure Task 2 -->
+  <rect x="70" y="286" width="330" height="70" rx="8" fill="#ffffff" stroke="#2f6fdb" stroke-width="1.5"/>
+  <text x="235" y="306" font-size="12.5" font-weight="700" fill="#173a70" text-anchor="middle">Secure Task 2 — Crypto / Keys</text>
+  <rect x="82" y="314" width="306" height="30" rx="6" fill="none" stroke="#7c3aed" stroke-width="1.5" stroke-dasharray="4 3"/>
+  <text x="235" y="333" font-size="10.5" fill="#4c1d95" text-anchor="middle">MPU region: key / secret store only</text>
+
+  <!-- NSC gateway box -->
+  <rect x="70" y="372" width="330" height="52" rx="8" fill="#c7d9fb" stroke="#2f6fdb" stroke-width="1.5"/>
+  <text x="235" y="393" font-size="12" font-weight="700" fill="#173a70" text-anchor="middle">NSC Gateway Functions</text>
+  <text x="235" y="409" font-size="10" fill="#1e3a63" text-anchor="middle">CMSE-checked entry points, Secure side</text>
+
+  <!-- Secure note -->
+  <text x="70" y="446" font-size="10.5" fill="#334155">Kernel validates each task's requested MPU regions and</text>
+  <text x="70" y="461" font-size="10.5" fill="#334155">copies them into Secure memory before programming the</text>
+  <text x="70" y="476" font-size="10.5" fill="#334155">hardware — a task cannot forge or race its own sandbox.</text>
+
+  <!-- ============ NON-SECURE WORLD ============ -->
+  <rect x="475" y="72" width="380" height="420" rx="12" fill="#fdecd2" stroke="#d9822b" stroke-width="2"/>
+  <text x="495" y="100" font-size="15" font-weight="700" fill="#7c4a12">Non-Secure World — Non-Secure Binary</text>
+
+  <!-- NS Task 1 -->
+  <rect x="500" y="130" width="330" height="70" rx="8" fill="#ffffff" stroke="#d9822b" stroke-width="1.5"/>
+  <text x="665" y="150" font-size="12.5" font-weight="700" fill="#7c4a12" text-anchor="middle">NS App Task 1 — Unprivileged</text>
+  <rect x="512" y="158" width="306" height="30" rx="6" fill="none" stroke="#7c3aed" stroke-width="1.5" stroke-dasharray="4 3"/>
+  <text x="665" y="177" font-size="10.5" fill="#4c1d95" text-anchor="middle">MPU region: own task memory only</text>
+
+  <!-- blocked icon between NS Task 1 and 2 -->
+  <circle cx="665" cy="210" r="9" fill="#ffffff" stroke="#b91c1c" stroke-width="2"/>
+  <text x="665" y="214" font-size="11" fill="#b91c1c" text-anchor="middle" font-weight="700">✕</text>
+  <text x="682" y="214" font-size="10" fill="#b91c1c" font-weight="600">unprivileged ≠ isolated</text>
+
+  <!-- NS Task 2 -->
+  <rect x="500" y="220" width="330" height="70" rx="8" fill="#ffffff" stroke="#d9822b" stroke-width="1.5"/>
+  <text x="665" y="240" font-size="12.5" font-weight="700" fill="#7c4a12" text-anchor="middle">NS App Task 2 — 3rd-party stack</text>
+  <rect x="512" y="248" width="306" height="30" rx="6" fill="none" stroke="#7c3aed" stroke-width="1.5" stroke-dasharray="4 3"/>
+  <text x="665" y="267" font-size="10.5" fill="#4c1d95" text-anchor="middle">MPU region: own task memory only</text>
+
+  <!-- blocked icon between NS Task 2 and 3 -->
+  <circle cx="665" cy="300" r="9" fill="#ffffff" stroke="#b91c1c" stroke-width="2"/>
+  <text x="665" y="304" font-size="11" fill="#b91c1c" text-anchor="middle" font-weight="700">✕</text>
+
+  <!-- NS Task 3 -->
+  <rect x="500" y="310" width="330" height="70" rx="8" fill="#ffffff" stroke="#d9822b" stroke-width="1.5"/>
+  <text x="665" y="330" font-size="12.5" font-weight="700" fill="#7c4a12" text-anchor="middle">NS App Task 3 — UI / drivers</text>
+  <rect x="512" y="338" width="306" height="30" rx="6" fill="none" stroke="#7c3aed" stroke-width="1.5" stroke-dasharray="4 3"/>
+  <text x="665" y="357" font-size="10.5" fill="#4c1d95" text-anchor="middle">MPU region: own task memory only</text>
+
+  <!-- NS note -->
+  <text x="500" y="406" font-size="10.5" fill="#4a2f0d">stk::tz::nsec::Kernel exposes the same STK API — but the</text>
+  <text x="500" y="421" font-size="10.5" fill="#4a2f0d">MPU regions these tasks run under are still computed and</text>
+  <text x="500" y="436" font-size="10.5" fill="#4a2f0d">applied by the Secure kernel, not by Non-Secure code itself.</text>
+
+  <!-- ============ SAU / IDAU boundary ============ -->
+  <line x1="450" y1="72" x2="450" y2="500" stroke="#dc2626" stroke-width="2.5" stroke-dasharray="7 5"/>
+  <text x="450" y="516" font-size="12" font-weight="700" fill="#b91c1c" text-anchor="middle">SAU / IDAU boundary</text>
+  <text x="450" y="531" font-size="10" fill="#b91c1c" text-anchor="middle">(Secure vs Non-Secure — coarse, hardware, always on)</text>
+
+  <!-- ============ Legend ============ -->
+  <rect x="45" y="548" width="14" height="14" fill="#2f6fdb"/>
+  <text x="65" y="559" font-size="11" fill="#334155">Secure state</text>
+
+  <rect x="165" y="548" width="14" height="14" fill="#e59a3f"/>
+  <text x="185" y="559" font-size="11" fill="#334155">Non-Secure state</text>
+
+  <rect x="310" y="548" width="20" height="14" rx="3" fill="none" stroke="#7c3aed" stroke-width="1.5" stroke-dasharray="3 2"/>
+  <text x="336" y="559" font-size="11" fill="#334155">MPU region (per task, either side)</text>
+
+  <circle cx="565" cy="555" r="8" fill="#ffffff" stroke="#b91c1c" stroke-width="1.8"/>
+  <text x="565" y="558.5" font-size="9.5" fill="#b91c1c" text-anchor="middle" font-weight="700">✕</text>
+  <text x="580" y="559" font-size="11" fill="#334155">blocked by MPU (task ↔ task)</text>
+
+  <line x1="748" y1="555" x2="770" y2="555" stroke="#dc2626" stroke-width="2.2" stroke-dasharray="5 4"/>
+  <text x="776" y="559" font-size="11" fill="#334155">SAU boundary</text>
+
+  <text x="45" y="585" font-size="10.5" fill="#64748b" font-style="italic">Two independent boundaries: SAU separates the two worlds; MPU separates every task within each world.</text>
+
+  <defs>
+    <marker id="arrowPurple" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L6,3 z" fill="#7c3aed"/>
+    </marker>
+  </defs>
+
+</svg>

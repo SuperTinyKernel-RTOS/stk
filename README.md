@@ -280,6 +280,8 @@ Armv8-M TrustZone cores expose **two separate hardware MPU instances**, Secure `
 * **Per-side stack guard.** With `STK_MPU_STACK_GUARD` enabled, the kernel reprograms **both** MPU instances on every context switch for a Non-Secure task: the Secure per-task guard region protects the Secure-side register frame saved for that task, while a completely separate Non-Secure guard region protects the task's actual Non-Secure stack - an overflow on the Non-Secure side raises a fault against `MPU_NS` alone, without the kernel ever needing to touch or trust Secure region state to catch it.
 * **Per-side fault diagnostics.** `stk::FaultContext` carries independent `mpu` (Secure) and `mpu_ns` (Non-Secure) region-table snapshots, so a single Secure-side fault handler can inspect and report the live configuration of *both* MPU instances at once, making it easy to tell a Non-Secure task probing Secure memory (SAU/IDAU violation) apart from a Non-Secure task simply overrunning its own region table (`MPU_NS` violation).
 
+![STK TrustZone + MPU mode](docs/img/stk-mpu-trustzone.svg)
+
 In practice this lets you run, for example, strict W^X plus a Privileged-only "secrets" partition on the Secure side, and a separate, independently-tuned (or entirely absent) region table on the Non-Secure side, each enforced by its own hardware MPU instance.
 
 ##### Example
