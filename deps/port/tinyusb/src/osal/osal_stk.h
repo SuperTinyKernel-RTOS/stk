@@ -42,12 +42,14 @@
 
 #include "tusb_config.h"
 
+#define CFG_TUH_OSAL_STK_VERSION (0x20260801)
+
 #ifndef CFG_TUH_OSAL_STK_USE_CPP
-#define CFG_TUH_OSAL_STK_USE_CPP 0
+#define CFG_TUH_OSAL_STK_USE_CPP (0)
 #endif
 
 #ifndef CFG_TUH_OSAL_STK_SYNC_DEBUG_NAMES
-#define CFG_TUH_OSAL_STK_SYNC_DEBUG_NAMES 0
+#define CFG_TUH_OSAL_STK_SYNC_DEBUG_NAMES (0)
 #endif
 
 #ifdef __cplusplus

@@ -266,7 +266,7 @@
 			<locationURI>PARENT-6-PROJECT_LOC/deps/port/lwip/README.md</locationURI>
 		</link>
 		<link>
-			<name>deps/port/lwip/arch</name>
+			<name>deps/port/lwip/include</name>
 			<type>2</type>
 			<locationURI>virtual:/virtual</locationURI>
 		</link>
@@ -1116,9 +1116,9 @@
 			<locationURI>PARENT-6-PROJECT_LOC/deps/lwip/src/netif/zepif.c</locationURI>
 		</link>
 		<link>
-			<name>deps/port/lwip/arch/sys_arch.h</name>
-			<type>1</type>
-			<locationURI>PARENT-6-PROJECT_LOC/deps/port/lwip/arch/sys_arch.h</locationURI>
+			<name>deps/port/lwip/include/arch</name>
+			<type>2</type>
+			<locationURI>virtual:/virtual</locationURI>
 		</link>
 		<link>
 			<name>deps/port/rpi/pico_async_context/async_context_stk.cpp</name>
@@ -2899,6 +2899,11 @@
 			<name>deps/lwip/src/netif/ppp/vj.c</name>
 			<type>1</type>
 			<locationURI>PARENT-6-PROJECT_LOC/deps/lwip/src/netif/ppp/vj.c</locationURI>
+		</link>
+		<link>
+			<name>deps/port/lwip/include/arch/sys_arch.h</name>
+			<type>1</type>
+			<locationURI>PARENT-6-PROJECT_LOC/deps/port/lwip/include/arch/sys_arch.h</locationURI>
 		</link>
 		<link>
 			<name>deps/port/rpi/pico_async_context/include/pico</name>

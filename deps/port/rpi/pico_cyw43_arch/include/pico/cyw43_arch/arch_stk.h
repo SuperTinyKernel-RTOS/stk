@@ -7,6 +7,9 @@
 #ifndef _PICO_CYW43_ARCH_ARCH_STK_H
 #define _PICO_CYW43_ARCH_ARCH_STK_H
 
+// Version of STK interface
+#define CYW43_STK_VERSION (0x20260801)
+
 // PICO_CONFIG: CYW43_NO_DEFAULT_TASK_STACK, Disables the default static allocation of the CYW43 STK task stack, type=bool, default=0, group=pico_cyw43_arch
 #ifndef CYW43_NO_DEFAULT_TASK_STACK
 #define CYW43_NO_DEFAULT_TASK_STACK (0U)

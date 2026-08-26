@@ -676,17 +676,17 @@ Internally the pool maintains an intrusive singly-linked free-list inside the st
 
 STK provides ready-to-use ports for third-party libraries, located in `deps/port`:
 
-* **lwIP** ([deps/port/lwip](https://github.com/SuperTinyKernel-RTOS/stk/tree/main/deps/port/lwip))
-* **TinyUSB** ([deps/port/tinyusb](https://github.com/SuperTinyKernel-RTOS/stk/tree/main/deps/port/tinyusb)
-* **Raspberry Pico SDK** ([deps/port/rpi](https://github.com/SuperTinyKernel-RTOS/stk/tree/main/deps/port/rpi)))
+| Component              | Path / Link                                                                                  |
+|:-----------------------|:---------------------------------------------------------------------------------------------|
+| **lwIP**               | [deps/port/lwip](https://github.com/SuperTinyKernel-RTOS/stk/tree/main/deps/port/lwip)       |
+| **TinyUSB**            | [deps/port/tinyusb](https://github.com/SuperTinyKernel-RTOS/stk/tree/main/deps/port/tinyusb) |
+| **Raspberry Pico SDK** | [deps/port/rpi](https://github.com/SuperTinyKernel-RTOS/stk/tree/main/deps/port/rpi)         |
 
 ---
 
 ## Traceable by SEGGER SystemView
 
-Scheduling can be analyzed with the [SEGGER SystemView](https://www.segger.com/products/development-tools/systemview).
-
-There is a ready to try Blinky example with SEGGER SystemView tracing enabled: `build/example/project/eclipse/stm/blinky-stm32f407g-disc1-segger`
+Scheduling can be analyzed with the [SEGGER SystemView](https://www.segger.com/products/development-tools/systemview). There is a ready to try Blinky example with SEGGER SystemView tracing enabled: [blinky-stm32f407g-disc1-segger](https://github.com/SuperTinyKernel-RTOS/stk/tree/main/build/example/project/eclipse/stm/blinky-stm32f407g-disc1-segger).
 
 ![SEGGER SystemView](docs/img/SEGGER_SystemView_STK_tasks_screenshot.png)
 

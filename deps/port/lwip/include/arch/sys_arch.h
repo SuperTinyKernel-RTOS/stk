@@ -67,6 +67,9 @@
  * Port configuration
  * -------------------------------------------------------------------------- */
 
+/** Version of STK interface. */
+#define LWIP_STK_VERSION (0x20260801)
+
 /** Set this to 1 if the stacksize passed to sys_thread_new() should be
  * interpreted as a number of stack Words (stk::Word == uintptr_t, STK-native).
  * Set to 0 to interpret it as a byte count (lwIP-like) instead. Default is 1.

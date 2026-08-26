@@ -47,6 +47,9 @@
 #include "sync/stk_sync.h"
 #include "time/stk_time.h"
 
+// Version of STK interface.
+#define ASYNC_CONTEXT_STK_VERSION (0x20260801)
+
 #ifndef ASYNC_CONTEXT_DEFAULT_STK_TASK_WEIGHT
 // Meaning depends on the application's chosen ITaskSwitchStrategy:
 //  - SwitchStrategyFixedPriority (FP32-style): treated as a fixed priority level (0..31).
