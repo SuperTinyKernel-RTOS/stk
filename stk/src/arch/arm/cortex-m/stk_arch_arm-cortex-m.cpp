@@ -529,7 +529,7 @@ static __stk_forceinline void HW_StartScheduler()
     __asm volatile("SVC %0"
     : /* output: none */
     : "I"(SVC_START_SCHEDULING)
-    : "memory" /* protect against compiler reordering */ );
+    : "memory" /* protect against compiler reordering */);
 }
 
 /*! \brief     Force an immediate context switch.
@@ -540,7 +540,7 @@ static __stk_forceinline void HW_ForceContextSwitch()
     __asm volatile("SVC %0"
     : /* output: none */
     : "I"(SVC_FORCE_SWITCH)
-    : "memory" /* protect against compiler reordering */ );
+    : "memory" /* protect against compiler reordering */);
 }
 #endif
 
@@ -555,11 +555,10 @@ static __stk_forceinline void HW_ForceContextSwitch()
 */
 static __stk_forceinline void HW_UnprivEnterCriticalSection()
 {
-    __asm volatile(
-    "SVC %0                      \n"
+    __asm volatile("SVC %0"
     : /* output: none */
     : "I"(SVC_ENTER_CRITICAL)
-    : "memory" /* protect against compiler reordering */ );
+    : "memory" /* protect against compiler reordering */);
 }
 
 /*! \brief     Exit critical section (unprivileged callers only).
@@ -573,8 +572,7 @@ static __stk_forceinline void HW_UnprivEnterCriticalSection()
 */
 static __stk_forceinline void HW_UnprivExitCriticalSection()
 {
-    __asm volatile(
-    "SVC %0                      \n"
+    __asm volatile("SVC %0"
     : /* output: none */
     : "I"(SVC_EXIT_CRITICAL)
     : "memory" /* protect against compiler reordering */);
@@ -2644,7 +2642,7 @@ void Context::OnStart()
     NVIC_SetPriority(PendSV_IRQn, STK_CORTEX_M_ISR_PRIORITY_LOWEST);
     // set highest priority for SVC interrupts to support critical section for unprivileged tasks
 #ifdef CONTROL_nPRIV_Msk
-    NVIC_SetPriority(SVCall_IRQn, STK_CORTEX_M_ISR_PRIORITY_HIGHEST);
+    NVIC_SetPriority(SVCall_IRQn, STK_CORTEX_M_SVCALL_ISR_PRIORITY);
 #endif
 
     m_started = true;

@@ -293,6 +293,13 @@ bool stk_blockpool_is_empty(const stk_blockpool_t *pool)
     return pool->handle.IsEmpty();
 }
 
+BlockMemoryPool *stk_blockpool_get_instance(stk_blockpool_t *pool)
+{
+    STK_ASSERT(pool != nullptr);
+
+    return &pool->handle;
+}
+
 // =============================================================================
 } // extern "C"
 // =============================================================================

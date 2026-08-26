@@ -12,7 +12,7 @@
 
 #include "cmsis_device.h"
 
-// MCU is ARM Cortex-M4.
+// ARM Cortex-M4 platform
 #define _STK_ARCH_ARM_CORTEX_M
 
 // Low-power scenario, use (0) for a high-performance processing when consumed power does not matter.

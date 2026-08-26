@@ -311,6 +311,21 @@ Kernel<KERNEL_DYNAMIC | KERNEL_TICKLESS | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, S
 */
 stk_kernel_t *stk_kernel_create(uint8_t core_nr);
 
+#ifdef __cplusplus
+namespace stk { class IKernel; }
+
+/*! \brief     Get the underlying C++ \c stk::IKernel object for a given core.
+    \param[in] core_nr: Core id (0U = first core, ...). Must be < \a STK_C_CPU_COUNT.
+    \return    Pointer to the \c stk::IKernel instance registered for \a core_nr.
+               Never \c NULL.
+    \note      C++ callers only (guarded by \c __cplusplus); not part of the C ABI.
+    \warning   \a core_nr must refer to a kernel already created via \c stk_kernel_create()
+               and not yet destroyed via \c stk_kernel_destroy(), otherwise this triggers
+               an assertion failure.
+*/
+extern "C" stk::IKernel *stk_kernel_get_instance(uint8_t core_nr);
+#endif // __cplusplus
+
 // =============================================================================
 // Kernel control
 // =============================================================================
@@ -589,6 +604,22 @@ const char *stk_task_get_name(const stk_task_t *tsk);
     \see       stk_tid
 */
 stk_tid_t stk_task_get_id(const stk_task_t *tsk);
+
+#ifdef __cplusplus
+namespace stk { class ITask; }
+
+/*! \brief     Get the underlying C++ \c stk::ITask object wrapped by a \c stk_task_t handle.
+    \details   Gateway for mixed C/C++ code: lets C++ callers linked against the C API reach
+               the real polymorphic task object (e.g. to pass it to a C++-only API) without
+               duplicating task bookkeeping.
+    \param[in] tsk: Task handle obtained via \c stk_task_create_privileged() or
+               \c stk_task_create_user().
+    \return    Pointer to the wrapped \c stk::ITask instance. Never \c NULL for a valid handle.
+    \note      C++ callers only (guarded by \c __cplusplus); not part of the C ABI.
+    \warning   The returned pointer is only valid for the lifetime of \a tsk.
+*/
+extern "C" stk::ITask *stk_task_get_instance(stk_task_t *tsk);
+#endif // __cplusplus
 
 // =============================================================================
 // Services available from inside tasks
@@ -928,6 +959,17 @@ void stk_mutex_unlock(stk_mutex_t *mtx);
 */
 bool stk_mutex_timed_lock(stk_mutex_t *mtx, stk_timeout_t timeout);
 
+#ifdef __cplusplus
+namespace stk { namespace sync { class Mutex; } }
+
+/*! \brief     Get the underlying C++ \c stk::sync::Mutex object wrapped by a \c stk_mutex_t handle.
+    \param[in] mtx: Mutex handle obtained via \c stk_mutex_create().
+    \return    Pointer to the wrapped \c stk::sync::Mutex instance. Never \c NULL for a valid handle.
+    \note      C++ callers only (guarded by \c __cplusplus); not part of the C ABI.
+*/
+extern "C" stk::sync::Mutex *stk_mutex_get_instance(stk_mutex_t *mtx);
+#endif // __cplusplus
+
 // ----- SpinLock --------------------------------------------------------------
 
 /*! \brief     A memory size (multiples of stk_word_t) required for SpinLock instance.
@@ -968,6 +1010,17 @@ bool stk_spinlock_trylock(stk_spinlock_t *slock);
 /*! \brief     Release the SpinLock.
 */
 void stk_spinlock_unlock(stk_spinlock_t *slock);
+
+#ifdef __cplusplus
+namespace stk { namespace sync { class SpinLock; } }
+
+/*! \brief     Get the underlying C++ \c stk::sync::SpinLock object wrapped by a \c stk_spinlock_t handle.
+    \param[in] slock: SpinLock handle obtained via \c stk_spinlock_create().
+    \return    Pointer to the wrapped \c stk::sync::SpinLock instance. Never \c NULL for a valid handle.
+    \note      C++ callers only (guarded by \c __cplusplus); not part of the C ABI.
+*/
+extern "C" stk::sync::SpinLock *stk_spinlock_get_instance(stk_spinlock_t *slock);
+#endif // __cplusplus
 
 // ----- Condition Variable ----------------------------------------------------
 
@@ -1019,6 +1072,17 @@ void stk_cv_notify_one(stk_cv_t *cv);
     \param[in] cv: CV handle.
 */
 void stk_cv_notify_all(stk_cv_t *cv);
+
+#ifdef __cplusplus
+namespace stk { namespace sync { class ConditionVariable; } }
+
+/*! \brief     Get the underlying C++ \c stk::sync::ConditionVariable object wrapped by a \c stk_cv_t handle.
+    \param[in] cv: CV handle obtained via \c stk_cv_create().
+    \return    Pointer to the wrapped \c stk::sync::ConditionVariable instance. Never \c NULL for a valid handle.
+    \note      C++ callers only (guarded by \c __cplusplus); not part of the C ABI.
+*/
+extern "C" stk::sync::ConditionVariable *stk_cv_get_instance(stk_cv_t *cv);
+#endif // __cplusplus
 
 // ----- Event -----------------------------------------------------------------
 
@@ -1085,6 +1149,17 @@ bool stk_event_reset(stk_event_t *ev);
     \param[in] ev: Event handle.
 */
 void stk_event_pulse(stk_event_t *ev);
+
+#ifdef __cplusplus
+namespace stk { namespace sync { class Event; } }
+
+/*! \brief     Get the underlying C++ \c stk::sync::Event object wrapped by a \c stk_event_t handle.
+    \param[in] ev: Event handle obtained via \c stk_event_create().
+    \return    Pointer to the wrapped \c stk::sync::Event instance. Never \c NULL for a valid handle.
+    \note      C++ callers only (guarded by \c __cplusplus); not part of the C ABI.
+*/
+extern "C" stk::sync::Event *stk_event_get_instance(stk_event_t *ev);
+#endif // __cplusplus
 
 // ----- Semaphore -------------------------------------------------------------
 
@@ -1170,6 +1245,17 @@ bool stk_sem_trysignal(stk_sem_t *sem);
     \note      ISR-safe on targets where a 16-bit aligned read is atomic.
 */
 uint16_t stk_sem_get_count(const stk_sem_t *sem);
+
+#ifdef __cplusplus
+namespace stk { namespace sync { class Semaphore; } }
+
+/*! \brief     Get the underlying C++ \c stk::sync::Semaphore object wrapped by a \c stk_sem_t handle.
+    \param[in] sem: Semaphore handle obtained via \c stk_sem_create().
+    \return    Pointer to the wrapped \c stk::sync::Semaphore instance. Never \c NULL for a valid handle.
+    \note      C++ callers only (guarded by \c __cplusplus); not part of the C ABI.
+*/
+extern "C" stk::sync::Semaphore *stk_sem_get_instance(stk_sem_t *sem);
+#endif // __cplusplus
 
 // ----- EventFlags ------------------------------------------------------------
 
@@ -1286,6 +1372,17 @@ uint32_t stk_ef_wait(stk_ef_t *ef, uint32_t flags, uint32_t options, stk_timeout
     \note      ISR-safe.
 */
 uint32_t stk_ef_trywait(stk_ef_t *ef, uint32_t flags, uint32_t options);
+
+#ifdef __cplusplus
+namespace stk { namespace sync { class EventFlags; } }
+
+/*! \brief     Get the underlying C++ \c stk::sync::EventFlags object wrapped by a \c stk_ef_t handle.
+    \param[in] ef: EventFlags handle obtained via \c stk_ef_create().
+    \return    Pointer to the wrapped \c stk::sync::EventFlags instance. Never \c NULL for a valid handle.
+    \note      C++ callers only (guarded by \c __cplusplus); not part of the C ABI.
+*/
+extern "C" stk::sync::EventFlags *stk_ef_get_instance(stk_ef_t *ef);
+#endif // __cplusplus
 
 // ----- Pipe (FIFO) -----------------------------------------------------------
 
@@ -1558,6 +1655,17 @@ bool stk_pipe_is_full(const stk_pipe_t *pipe);
 */
 bool stk_pipe_is_storage_valid(const stk_pipe_t *pipe);
 
+#ifdef __cplusplus
+namespace stk { namespace sync { class Pipe; } }
+
+/*! \brief     Get the underlying C++ \c stk::sync::Pipe object wrapped by a \c stk_pipe_t handle.
+    \param[in] pipe: Pipe handle obtained via \c stk_pipe_create().
+    \return    Pointer to the wrapped \c stk::sync::Pipe instance. Never \c NULL for a valid handle.
+    \note      C++ callers only (guarded by \c __cplusplus); not part of the C ABI.
+*/
+extern "C" stk::sync::Pipe *stk_pipe_get_instance(stk_pipe_t *pipe);
+#endif // __cplusplus
+
 // ----- MessageQueue ----------------------------------------------------------
 
 /*! \brief     A memory size (multiples of stk_word_t) required for a MessageQueue instance.
@@ -1827,6 +1935,17 @@ bool stk_msgq_is_full(const stk_msgq_t *mq);
 */
 bool stk_msgq_is_storage_valid(const stk_msgq_t *mq);
 
+#ifdef __cplusplus
+namespace stk { namespace sync { class MessageQueue; } }
+
+/*! \brief     Get the underlying C++ \c stk::sync::MessageQueue object wrapped by a \c stk_msgq_t handle.
+    \param[in] mq: MessageQueue handle obtained via \c stk_msgq_create().
+    \return    Pointer to the wrapped \c stk::sync::MessageQueue instance. Never \c NULL for a valid handle.
+    \note      C++ callers only (guarded by \c __cplusplus); not part of the C ABI.
+*/
+extern "C" stk::sync::MessageQueue *stk_msgq_get_instance(stk_msgq_t *mq);
+#endif // __cplusplus
+
 // ----- RWMutex (Reader-Writer Lock) ------------------------------------------
 
 /*! \brief     A memory size (multiples of stk_word_t) required for RWMutex instance.
@@ -1915,6 +2034,17 @@ bool stk_rwmutex_timed_lock(stk_rwmutex_t *rw, stk_timeout_t timeout);
     \param[in] rw: RWMutex handle.
 */
 void stk_rwmutex_unlock(stk_rwmutex_t *rw);
+
+#ifdef __cplusplus
+namespace stk { namespace sync { class RWMutex; } }
+
+/*! \brief     Get the underlying C++ \c stk::sync::RWMutex object wrapped by a \c stk_rwmutex_t handle.
+    \param[in] rw: RWMutex handle obtained via \c stk_rwmutex_create().
+    \return    Pointer to the wrapped \c stk::sync::RWMutex instance. Never \c NULL for a valid handle.
+    \note      C++ callers only (guarded by \c __cplusplus); not part of the C ABI.
+*/
+extern "C" stk::sync::RWMutex *stk_rwmutex_get_instance(stk_rwmutex_t *rw);
+#endif // __cplusplus
 
 #ifdef __cplusplus
 }

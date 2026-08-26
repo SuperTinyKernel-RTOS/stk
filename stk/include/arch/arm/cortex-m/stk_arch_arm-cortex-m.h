@@ -131,6 +131,14 @@
     #define STK_CORTEX_M_MPU_REGIONS_MAX (8U)
 #endif
 
+/*! \def     STK_CORTEX_M_SVCALL_ISR_PRIORITY
+    \brief   Max SVCall ISR priority.
+    \warning All other interrupts must have priority lower than \a STK_CORTEX_M_SVCALL_ISR_PRIORITY.
+*/
+#ifndef STK_CORTEX_M_SVCALL_ISR_PRIORITY
+    #define STK_CORTEX_M_SVCALL_ISR_PRIORITY (0U)
+#endif
+
 /*! \brief Hardware memory barrier: ensures visibility across cores and bus masters.
 */
 static __stk_forceinline void __stk_dmb() { __asm volatile("dmb sy" ::: "memory"); }

@@ -84,6 +84,13 @@ bool stk_mutex_timed_lock(stk_mutex_t *mtx, stk_timeout_t timeout)
     return mtx->handle.TimedLock(timeout);
 }
 
+Mutex *stk_mutex_get_instance(stk_mutex_t *mtx)
+{
+    STK_ASSERT(mtx != nullptr);
+
+    return &mtx->handle;
+}
+
 // -----------------------------------------------------------------------------
 // SpinLock
 // -----------------------------------------------------------------------------
@@ -132,6 +139,13 @@ void stk_spinlock_unlock(stk_spinlock_t *slock)
 {
     STK_ASSERT(slock != nullptr);
     slock->handle.Unlock();
+}
+
+sync::SpinLock *stk_spinlock_get_instance(stk_spinlock_t *slock)
+{
+    STK_ASSERT(slock != nullptr);
+
+    return &slock->handle;
 }
 
 // -----------------------------------------------------------------------------
@@ -186,6 +200,13 @@ void stk_cv_notify_all(stk_cv_t *cv)
     STK_ASSERT(cv != nullptr);
 
     cv->handle.NotifyAll();
+}
+
+ConditionVariable *stk_cv_get_instance(stk_cv_t *cv)
+{
+    STK_ASSERT(cv != nullptr);
+
+    return &cv->handle;
 }
 
 // -----------------------------------------------------------------------------
@@ -258,6 +279,13 @@ void stk_event_pulse(stk_event_t *ev)
     STK_ASSERT(ev != nullptr);
 
     ev->handle.Pulse();
+}
+
+Event *stk_event_get_instance(stk_event_t *ev)
+{
+    STK_ASSERT(ev != nullptr);
+
+    return &ev->handle;
 }
 
 // -----------------------------------------------------------------------------
@@ -336,6 +364,13 @@ uint16_t stk_sem_get_count(const stk_sem_t *sem)
     return sem->handle.GetCount();
 }
 
+Semaphore *stk_sem_get_instance(stk_sem_t *sem)
+{
+    STK_ASSERT(sem != nullptr);
+
+    return &sem->handle;
+}
+
 // -----------------------------------------------------------------------------
 // EventFlags
 // -----------------------------------------------------------------------------
@@ -406,6 +441,13 @@ uint32_t stk_ef_trywait(stk_ef_t *ef, uint32_t flags, uint32_t options)
     STK_ASSERT(ef != nullptr);
 
     return ef->handle.TryWait(flags, options);
+}
+
+EventFlags *stk_ef_get_instance(stk_ef_t *ef)
+{
+    STK_ASSERT(ef != nullptr);
+
+    return &ef->handle;
 }
 
 // -----------------------------------------------------------------------------
@@ -585,6 +627,13 @@ bool stk_pipe_is_storage_valid(const stk_pipe_t *pipe)
     STK_ASSERT(pipe != nullptr);
 
     return pipe->handle.IsStorageValid();
+}
+
+Pipe *stk_pipe_get_instance(stk_pipe_t *pipe)
+{
+    STK_ASSERT(pipe != nullptr);
+
+    return &pipe->handle;
 }
 
 // -----------------------------------------------------------------------------
@@ -775,6 +824,13 @@ bool stk_msgq_is_storage_valid(const stk_msgq_t *mq)
     return mq->handle.IsStorageValid();
 }
 
+MessageQueue *stk_msgq_get_instance(stk_msgq_t *mq)
+{
+    STK_ASSERT(mq != nullptr);
+
+    return &mq->handle;
+}
+
 // -----------------------------------------------------------------------------
 // RWMutex (Reader-Writer Lock)
 // -----------------------------------------------------------------------------
@@ -861,6 +917,13 @@ void stk_rwmutex_unlock(stk_rwmutex_t *rw)
     STK_ASSERT(rw != nullptr);
 
     rw->handle.Unlock();
+}
+
+sync::RWMutex *stk_rwmutex_get_instance(stk_rwmutex_t *rw)
+{
+    STK_ASSERT(rw != nullptr);
+
+    return &rw->handle;
 }
 
 // =============================================================================

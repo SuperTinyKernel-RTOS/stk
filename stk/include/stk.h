@@ -134,7 +134,8 @@ protected:
         {
             STATE_NONE           = 0,        //!< No pending state flags.
             STATE_REMOVE_PENDING = (1 << 0), //!< Task returned from its Run function; slot will be freed on the next tick (KERNEL_DYNAMIC only).
-            STATE_SLEEP_PENDING  = (1 << 1)  //!< Task called Sleep/SleepUntil/Yield; strategy's OnTaskSleep() will be invoked on the next tick (sleep-aware strategies only).
+            STATE_SLEEP_PENDING  = (1 << 1), //!< Task called Sleep/SleepUntil/Yield; strategy's OnTaskSleep() will be invoked on the next tick (sleep-aware strategies only).
+            STATE_WAKE_PENDING   = (1 << 2), //!< Task wake is pending (see Wake).
         };
 
     public:
@@ -184,6 +185,11 @@ protected:
         */
         __stk_forceinline bool IsSleeping() const override { return (m_time_sleep < 0); }
 
+        /*! \brief  Check whether this task is currently sleeping infinitely.
+            \return \c true if m_time_sleep == -WAIT_INFINITE.
+        */
+        __stk_forceinline bool IsSleepInfinite() const { return (m_time_sleep == -WAIT_INFINITE); }
+
         /*! \brief  Get task identifier.
             \return TId derived from the bound ITask pointer address (unique per task instance).
         */
@@ -199,6 +205,12 @@ protected:
 
             // wakeup on a next cycle
             m_time_sleep = -1;
+
+            // notify kernel that this task, even if was going to sleep will be woken on a next tick
+            if ((m_state & KernelTask::STATE_SLEEP_PENDING) != 0U)
+            {
+                m_state |= STATE_WAKE_PENDING;
+            }
         }
 
         /*! \brief     Update the run-time scheduling weight (weighted strategies only).
@@ -438,7 +450,7 @@ protected:
         */
         struct WaitObject final : public IWaitObject
         {
-            explicit WaitObject() : m_task(nullptr), m_sync_obj(nullptr), m_timeout(false), m_time_wait(0)
+            explicit WaitObject() : m_task(nullptr), m_sync_obj(nullptr), m_timeout(false), m_time_wait(NO_WAIT)
             {}
 
             /*! \brief Destructor.
@@ -481,7 +493,7 @@ protected:
                 STK_ASSERT(IsWaiting());
 
                 m_timeout   = timeout;
-                m_time_wait = 0;
+                m_time_wait = NO_WAIT;
 
                 m_sync_obj->RemoveWaitObject(this);
                 m_sync_obj = nullptr;
@@ -503,7 +515,7 @@ protected:
                     {                  
                         m_time_wait -= elapsed_ticks;
 
-                        if (m_time_wait <= 0)
+                        if (m_time_wait <= NO_WAIT)
                         {
                             m_timeout = true;
                         }
@@ -740,15 +752,13 @@ protected:
             STK_ASSERT(ticks > 0);
 
             // set state first as kernel checks it when task IsSleeping
-            if __stk_constexpr_cpp17 (TStrategy::SLEEP_EVENT_API)
+            if (!IsSleeping())
             {
-                if (!IsSleeping())
-                {
-                    m_state |= STATE_SLEEP_PENDING;
-                }
+                m_state |= STATE_SLEEP_PENDING;
             }
 
             m_time_sleep = -ticks;
+
             __stk_full_memfence();
         }
 
@@ -1358,14 +1368,13 @@ protected:
          and remaining 1 will cause a context switch by UpdateFsmState when strategy detects
          it as a sleeping test.
     */
-    static constexpr Timeout YIELD_TICKS = 2;
+    static constexpr Timeout YIELD_TICKS = 1;
 
     /*! \brief     Check if FSM state is valid.
     */
     static __stk_forceinline bool IsValidFsmState(EFsmState state)
     {
-        return (state > FSM_STATE_NONE) &&
-               (state < FSM_STATE_MAX);
+        return ((state > FSM_STATE_NONE) && (state < FSM_STATE_MAX));
     }
 
     /*! \brief     Initialize stack of the traps.
@@ -1624,21 +1633,20 @@ protected:
         STK_ASSERT(m_strategy.GetSize() != 0);
 
         // iterate tasks and generate OnTaskSleep for a strategy for all initially sleeping tasks
-        if __stk_constexpr_cpp17 (TStrategy::SLEEP_EVENT_API)
+        for (size_t i = 0U; i < TASKS_MAX; ++i)
         {
-            for (size_t i = 0U; i < TASKS_MAX; ++i)
+            KernelTask *const task = &m_task_storage[i];
+
+            if ((task->m_state & KernelTask::STATE_SLEEP_PENDING) != 0U)
             {
-                KernelTask *const task = &m_task_storage[i];
+                STK_ASSERT(task->IsSleeping());
 
-                if (task->IsSleeping())
+                task->m_state &= ~KernelTask::STATE_SLEEP_PENDING;
+
+                // notify strategy that task is sleeping
+                if __stk_constexpr_cpp17 (TStrategy::SLEEP_EVENT_API)
                 {
-                    if ((task->m_state & KernelTask::STATE_SLEEP_PENDING) != 0U)
-                    {
-                        task->m_state &= ~KernelTask::STATE_SLEEP_PENDING;
-
-                        // notify strategy that task is sleeping
-                        m_strategy.OnTaskSleep(task);
-                    }
+                    m_strategy.OnTaskSleep(task);
                 }
             }
         }
@@ -1962,7 +1970,8 @@ protected:
         return UpdateTaskState(elapsed_ticks);
     }
         
-    /*! \brief     Update task state: process removals, advance sleep timers, and track HRT durations.
+    /*! \brief     Update task state: process removals, deliver sleep/wake notifications, advance
+                   sleep timers, and track HRT durations.
         \param[in] elapsed_ticks: Number of ticks elapsed since the previous call.
                    Always 1 in non-tickless mode, may be >1 in tickless mode.
         \return    In non-tickless mode: always 1.
@@ -1970,6 +1979,26 @@ protected:
                    active tasks, clamped to [1, STK_TICKLESS_TICKS_MAX]. The platform driver uses
                    this value to program the next timer wakeup interval, suppressing timer/tick ISR for
                    that many ticks when the system would otherwise be idle.
+        \note      Sleep entry/exit protocol: ScheduleSleep() sets STATE_SLEEP_PENDING and stores
+                   m_time_sleep = -ticks. This function's first pass over a newly-sleeping task (the
+                   "entry tick") consumes STATE_SLEEP_PENDING and delivers OnTaskSleep() to the
+                   strategy, but does NOT also advance m_time_sleep on that same pass - doing both in
+                   one call would let a 1-tick sleep collapse to zero elapsed time (OnTaskSleep and
+                   OnTaskWake firing back-to-back before the task was ever excluded from scheduling).
+                   The entry tick is therefore required to be a single, uncoalesced tick (asserted
+                   below); this holds because a task can only enter STATE_SLEEP_PENDING by putting
+                   itself to sleep, which means it was actively running (not idle) up to that point,
+                   so tickless coalescing, which only suppresses ticks while the CPU is idle, cannot
+                   have applied yet.
+                   If Wake()/SleepCancel() races in before the entry tick runs, STATE_WAKE_PENDING is
+                   set alongside STATE_SLEEP_PENDING. The entry tick then delivers OnTaskSleep()
+                   followed immediately by the normal advance (and OnTaskWake(), since m_time_sleep
+                   was already primed to -1 by Wake()) in the same pass, so the task still resumes on
+                   the next tick as promised, with the two notifications correctly paired instead of
+                   an orphaned OnTaskWake().
+                   Tasks sleeping via WAIT_INFINITE (IsSleepInfinite()) are excluded from the per-tick
+                   advance entirely so they never spuriously time out; only an explicit Wake() (which
+                   directly sets m_time_sleep = -1) ends an infinite sleep.
     */
     Timeout UpdateTaskState(const Timeout elapsed_ticks)
     {
@@ -1997,29 +2026,43 @@ protected:
                     }
                 }
 
-                // deliver sleep event to strategy
-                // note: only currently scheduled task can be pending to sleep
-                if __stk_constexpr_cpp17 (TStrategy::SLEEP_EVENT_API)
-                {
-                    if ((task->m_state & KernelTask::STATE_SLEEP_PENDING) != 0U)
-                    {
-                        task->m_state &= ~KernelTask::STATE_SLEEP_PENDING;
+                bool just_entered_sleep = false;
 
-                        // notify strategy that task is sleeping
+                // note: only currently scheduled task can be pending to sleep
+                if ((task->m_state & KernelTask::STATE_SLEEP_PENDING) != 0U)
+                {
+                    STK_ASSERT(elapsed_ticks == 1); // entry tick must be a single, uncoalesced tick
+
+                    // if Wake() raced in before this entry tick ran, STATE_WAKE_PENDING is set:
+                    // deliver OnTaskSleep() below as usual, then fall through to the advance block
+                    // in this same pass instead of waiting an extra tick, so the paired OnTaskWake()
+                    // still fires on schedule.
+                    const bool wake_pending = (task->m_state & KernelTask::STATE_WAKE_PENDING) != 0U;
+
+                    task->m_state &= ~(KernelTask::STATE_SLEEP_PENDING | KernelTask::STATE_WAKE_PENDING);
+
+                    // notify strategy that task is sleeping
+                    if __stk_constexpr_cpp17 (TStrategy::SLEEP_EVENT_API)
+                    {
                         m_strategy.OnTaskSleep(task);
                     }
+
+                    just_entered_sleep = !wake_pending;
                 }
 
-                // advance sleep time by a tick
-                task->m_time_sleep += elapsed_ticks;
-
-                // deliver sleep event to strategy
-                if __stk_constexpr_cpp17 (TStrategy::SLEEP_EVENT_API)
+                if (!just_entered_sleep && !task->IsSleepInfinite())
                 {
-                    // notify strategy that task woke up
-                    if (!task->IsSleeping())
+                    // advance sleep time by number of elapsed ticks (always 1 if non-Tickless)
+                    task->m_time_sleep += elapsed_ticks;
+
+                    // deliver sleep event to the strategy
+                    if __stk_constexpr_cpp17 (TStrategy::SLEEP_EVENT_API)
                     {
-                        m_strategy.OnTaskWake(task);
+                        // notify strategy that the task woke up
+                        if (!task->IsSleeping())
+                        {
+                            m_strategy.OnTaskWake(task);
+                        }
                     }
                 }
             }
@@ -2035,7 +2078,7 @@ protected:
                         // check if deadline is missed (HRT failure)
                         if (task->HrtIsDeadlineMissed(task->m_hrt[0].duration))
                         {
-                            // report deadline overrun to a strategy which supports overrun recovery
+                            // report deadline overrun to the strategy which supports overrun recovery
                             if __stk_constexpr_cpp17 (TStrategy::DEADLINE_MISSED_API)
                             {                                
                                 if (!m_strategy.OnTaskDeadlineMissed(task))
@@ -2053,7 +2096,7 @@ protected:
                 }
             }
 
-            // get the number ticks the driver has to keep CPU in Idle
+            // get the number of ticks the driver has to keep CPU in Idle
             if __stk_constexpr_cpp17 (IsTicklessMode())
             {
                 if ((sleep_ticks > 1) && task->IsBusy())

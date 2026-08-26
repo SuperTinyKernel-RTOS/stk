@@ -367,6 +367,49 @@ uint32_t stk_periodic_trigger_get_period(const stk_periodic_trigger_t *trig);
 }
 #endif
 
+// =============================================================================
+// C++ instance access
+// =============================================================================
+// Deliberately outside the extern "C" block above: TimerHost::Timer is a
+// *nested* class, so unlike stk::memory::BlockMemoryPool (a top-level class,
+// forward-declarable on its own) it cannot be named until TimerHost itself is
+// a complete type. Pulling in the full definitions - and any templates or
+// free namespace-scope functions they declare - requires genuine C++ linkage,
+// which extern "C" would break. This section is invisible to C translation
+// units.
+
+#ifdef __cplusplus
+#undef STK_TIMER_COUNT_MAX
+#define STK_TIMER_COUNT_MAX (STK_C_TIMER_MAX)
+#undef STK_TIMER_HANDLER_STACK_SIZE
+#define STK_TIMER_HANDLER_STACK_SIZE (STK_C_TIMER_HANDLER_STACK_SIZE)
+#include "time/stk_time.h"
+
+/*! \brief     Get the underlying C++ \c stk::time::TimerHost object wrapped by a \c stk_timerhost_t handle.
+    \param[in] host: TimerHost handle obtained via \c stk_timerhost_get().
+    \return    Pointer to the wrapped \c stk::time::TimerHost instance. Never \c NULL for a valid handle.
+    \note      C++ callers only (guarded by \c __cplusplus); not part of the C ABI.
+*/
+extern "C" stk::time::TimerHost *stk_timerhost_get_instance(stk_timerhost_t *host);
+
+/*! \brief     Get the underlying C++ \c stk::time::TimerHost::Timer object wrapped by a \c stk_timer_t handle.
+    \param[in] tmr: Timer handle obtained via \c stk_timer_create().
+    \return    Pointer to the wrapped \c stk::time::TimerHost::Timer instance. Never \c NULL for a valid handle.
+    \note      C++ callers only (guarded by \c __cplusplus); not part of the C ABI.
+    \warning   The concrete object is an internal subclass used to bridge to the C callback;
+               do not \c static_cast or \c delete it - treat it strictly as a
+               \c stk::time::TimerHost::Timer base pointer.
+*/
+extern "C" stk::time::TimerHost::Timer *stk_timer_get_instance(stk_timer_t *tmr);
+
+/*! \brief     Get the underlying C++ \c stk::time::PeriodicTrigger object wrapped by a \c stk_periodic_trigger_t handle.
+    \param[in] trig: Trigger handle obtained via \c stk_periodic_trigger_create().
+    \return    Pointer to the wrapped \c stk::time::PeriodicTrigger instance. Never \c NULL for a valid handle.
+    \note      C++ callers only (guarded by \c __cplusplus); not part of the C ABI.
+*/
+extern "C" stk::time::PeriodicTrigger *stk_periodic_trigger_get_instance(stk_periodic_trigger_t *trig);
+#endif // __cplusplus
+
 /** @} */
 
 #endif /* STK_C_TIME_H_ */

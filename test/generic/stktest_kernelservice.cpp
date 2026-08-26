@@ -361,8 +361,14 @@ static struct SleepRelaxCpuContext
             CHECK_EQUAL_TEXT(active->SP, (size_t)task1->GetStack(), "sleep: expecting task1");
         }
         else
-        // ISR calls OnSysTick (task1 = idle, task2 = active)
         if (counter == 1)
+        {
+            // task2 still sleeping here
+            CHECK_EQUAL_TEXT(active->SP, (size_t)task1->GetStack(), "sleep: expecting task1");
+        }
+        else
+        // ISR calls OnSysTick (task1 = idle, task2 = active)
+        if (counter == 2)
         {
             CHECK_EQUAL_TEXT(active->SP, (size_t)task2->GetStack(), "sleep: expecting task2");
         }
@@ -549,13 +555,13 @@ static struct SleepAllAndWakeRelaxCpuContext
             CHECK_EQUAL(active->SP, (size_t)platform->m_stack_info[STACK_SLEEP_TRAP].stack->SP);
         }
         else
-        if (counter == 1)
+        if ((counter == 1) || (counter == 2))
         {
             // to check FSM_STATE_NONE case
         }
         else
         // ISR calls OnSysTick (task1 = active, sleep_trap = idle)
-        if (counter == 2)
+        if (counter == 3)
         {
             CHECK_EQUAL(active->SP, (size_t)task1->GetStack());
             CHECK_EQUAL(idle->SP, (size_t)platform->m_stack_info[STACK_SLEEP_TRAP].stack->SP);
@@ -588,6 +594,7 @@ TEST(KernelService, SleepAllAndWake)
     Sleep(3);
 }
 
+#if STK_TICKLESS_IDLE
 static struct SleepAndWakeTicklessRelaxCpuContext
 {
     SleepAndWakeTicklessRelaxCpuContext()
@@ -605,8 +612,8 @@ static struct SleepAndWakeTicklessRelaxCpuContext
 
         if (counter == 0)
         {
-            // expecting 2 sleep ticks (Sleep(3) = 1 + 2
-            CHECK_EQUAL(2, platform->m_ticks_count);
+            // expecting 3 sleep ticks
+            CHECK_EQUAL(3, platform->m_ticks_count);
         }
 
         ++counter;
@@ -641,6 +648,7 @@ TEST(KernelService, SleepAndWakeTickless)
     // expect only 2 context switches (1st: Task=Idle, SleepCtx=Active, 2nd: Task=Active, SleepCtx=Idle)
     CHECK_EQUAL(2, platform->m_context_switch_nr);
 }
+#endif // STK_TICKLESS_IDLE
 
 static struct SleepCancelRelaxCpuContext
 {
