@@ -930,7 +930,7 @@ protected:
 
         void InheritWeight(TId tid, Weight weight) override
         {
-            if __stk_constexpr_cpp17 (TStrategy::PRIORITY_INHERITANCE_API)
+            if __stk_constexpr_cpp17 (TStrategy::WEIGHT_API && TStrategy::PRIORITY_INHERITANCE_API)
             {
                 m_kernel->OnInheritWeight(tid, weight);
             }
@@ -938,7 +938,7 @@ protected:
 
         void RestoreWeight(TId tid, ISyncObject *sobj) override
         {
-            if __stk_constexpr_cpp17 (TStrategy::PRIORITY_INHERITANCE_API)
+            if __stk_constexpr_cpp17 (TStrategy::WEIGHT_API && TStrategy::PRIORITY_INHERITANCE_API)
             {
                 m_kernel->OnRestoreWeight(tid, sobj);
             }

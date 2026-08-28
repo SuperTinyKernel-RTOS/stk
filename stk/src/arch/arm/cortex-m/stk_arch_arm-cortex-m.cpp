@@ -488,11 +488,13 @@ struct TaskFrame
 #define STK_ASM_ENABLE_INTERRUPTS  "CPSIE i"
 
 // Local static functions:
+namespace stk {
 static void OnTaskRun(ITask *runnable);
 static void OnTaskExit();
 static void OnSchedulerSleep();
 static void OnSchedulerSleepOverride();
 static void OnSchedulerExit();
+} // namespace stk
 
 // Local static variables:
 STK_MPU_KERNEL_BSS_SECTION
@@ -869,6 +871,10 @@ static __stk_forceinline void HW_SpinLockLock(volatile bool &lock)
     }
 }
 
+// -----------------------------------------------------------------------------
+namespace stk {
+// -----------------------------------------------------------------------------
+
 /*! SaveJmp/RestoreJmp ----------------------------------------------------------
 
     ARM Cortex-M callee-saved registers per the AAPCS ABI:
@@ -1062,6 +1068,8 @@ void RestoreJmp(JmpFrame &/*f*/, int32_t /*val*/)
     );
 }
 
+// -----------------------------------------------------------------------------
+} // namespace stk
 // -----------------------------------------------------------------------------
 
 /*! \brief  Get current exception (not 0 if inside ISR).
@@ -1628,6 +1636,7 @@ static constexpr MpuRegionConfig s_StkDisabledMpuRegion =
 #endif
 
 //! Internal context.
+namespace stk {
 STK_MPU_KERNEL_DATA_SECTION
 static struct Context final : public PlatformContext
 {
@@ -1643,15 +1652,10 @@ static struct Context final : public PlatformContext
         m_csu(0U), m_csu_nesting(0U), m_started(false), m_exiting(false)
     {}
 
-    /*! \brief Destructor.
-        \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
-    */
-    STK_VIRT_DTOR ~Context() = default;
-
     void Initialize(IPlatform::IEventHandler *handler, IKernelService *service, Stack *exit_trap,
-        uint32_t resolution_us) override
+        uint32_t resolution_us)
     {
-        PlatformContext::Initialize(handler, service, exit_trap, resolution_us);
+        InitializeBase(handler, service, exit_trap, resolution_us);
 
         STK_STATIC_ASSERT_DESC_N(SP, offsetof(Stack, SP) == 0U,
             "expect Stack::mode member at offset of 0 (first member)");
@@ -1964,6 +1968,7 @@ static struct Context final : public PlatformContext
     bool          m_exiting;        //!< 'true' when is exiting the scheduling process
 }
 s_StkPlatformContext[STK_ARCH_CPU_COUNT];
+} // namespace stk
 
 //! High resolution clock for Cortex-M3+ using DWT peripheral.
 class HiResClockDWT
@@ -2492,6 +2497,7 @@ extern "C" __stk_attr_naked void STK_PENDSV_HANDLER()
     );
 }
 
+namespace stk {
 __stk_attr_naked void OnTaskStart()
 {
     // note: HW_DisableInterrupts() must be called prior calling this function
@@ -2601,6 +2607,7 @@ __stk_attr_naked void OnTaskStart()
 #endif
     );
 }
+} // namespace stk
 
 void Context::Start()
 {
@@ -2902,14 +2909,14 @@ extern "C" __stk_attr_naked void STK_HARDFAULT_HANDLER()
 #endif // STK_USE_HARDFAULT_HANDLER
 
 STK_MPU_SHARED_CODE_SECTION
-void OnTaskRun(ITask *runnable)
+void stk::OnTaskRun(ITask *runnable)
 {
     STK_ASSERT(runnable != nullptr);
     runnable->Run();
 }
 
 STK_MPU_SHARED_CODE_SECTION
-void OnTaskExit()
+void stk::OnTaskExit()
 {
     Context &ctx = GetContext();
 
@@ -2938,7 +2945,7 @@ void OnTaskExit()
 }
 
 STK_MPU_KERNEL_CODE_SECTION
-void OnSchedulerSleep()
+void stk::OnSchedulerSleep()
 {
     // if hit here, increase the size of STK_SLEEP_TRAP_STACK_SIZE
     STK_STATIC_ASSERT(STK_SLEEP_TRAP_STACK_SIZE >= STK_STACK_SIZE_MIN);
@@ -2954,7 +2961,7 @@ void OnSchedulerSleep()
 }
 
 STK_MPU_KERNEL_CODE_SECTION
-void OnSchedulerSleepOverride()
+void stk::OnSchedulerSleepOverride()
 {
     // if hit here, increase the size of STK_SLEEP_TRAP_STACK_SIZE
     STK_STATIC_ASSERT(STK_SLEEP_TRAP_STACK_SIZE >= STK_STACK_SIZE_MIN);
@@ -2970,7 +2977,7 @@ void OnSchedulerSleepOverride()
 }
 
 STK_MPU_KERNEL_CODE_SECTION
-void OnSchedulerExit()
+void stk::OnSchedulerExit()
 {
     __set_CONTROL(0U); // switch to MSP
     __set_PSP(0U);     // clear PSP (for a clean register state)

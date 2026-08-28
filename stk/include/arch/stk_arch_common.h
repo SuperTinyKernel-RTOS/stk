@@ -28,18 +28,13 @@ public:
         m_stack_active(nullptr), m_tick_resolution(0U)
     {}
 
-    /*! \brief Destructor.
-        \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
-    */
-    STK_VIRT_DTOR ~PlatformContext() = default;
-
     /*! \brief     Initialize context.
         \param[in] handler: Event handler.
         \param[in] service: Kernel service.
         \param[in] exit_trap: Exit trap's stack.
         \param[in] resolution_us: Tick resolution in microseconds (for example 1000 equals to 1 millisecond resolution).
     */
-    virtual void Initialize(IPlatform::IEventHandler *handler, IKernelService *service, Stack *exit_trap,
+    void InitializeBase(IPlatform::IEventHandler *handler, IKernelService *service, Stack *exit_trap,
         uint32_t resolution_us)
     {
         m_handler         = handler;
@@ -84,6 +79,11 @@ public:
 
 protected:
     STK_NONCOPYABLE_CLASS(PlatformContext);
+
+    /*! \brief Destructor.
+        \note  Protected by design. Prevents unsafe polymorphic delete.
+    */
+    ~PlatformContext() = default;
 };
 
 /*! \def   STK_ARCH_GET_CPU_ID

@@ -523,7 +523,7 @@ TEST(KernelService, SleepUntilMissDeadline)
     // task2 calls Sleep to become idle
     SleepUntil(now);
 
-    CHECK_EQUAL(now, GetTicks());
+    CHECK_EQUAL((int)now, (int)GetTicks());
 
     // task2 is still active as it did not sleep
     CHECK_EQUAL_TEXT(active->SP, (size_t)task2.GetStack(), "expecting task2 after sleep");
@@ -815,7 +815,7 @@ TEST(KernelService, SysTimer)
     uint64_t count = stk::GetSysTimerCount();
 
     CHECK_EQUAL(1000, freq);
-    CHECK_EQUAL(99, count);
+    CHECK_EQUAL(99, (int)count);
 }
 
 } // namespace stk

@@ -10,6 +10,8 @@
 #ifndef STK_ARCH_H_
 #define STK_ARCH_H_
 
+#include "stk_defs.h"
+
 /*! \file  stk_arch.h
     \brief Hardware Abstraction Layer (HAL) declarations for the \c stk::hw namespace.
 
@@ -458,8 +460,8 @@ public:
     */
     enum ESessionFlags : uint8_t
     {
-        SESSION_FLAG_NONE  = 0,        //!< None.
-        SESSION_FLAG_NPRIV = (1 << 0), //!< Calling context is non-Privileged.
+        SESSION_FLAG_NONE  = 0U,        //!< None.
+        SESSION_FLAG_NPRIV = (1U << 0), //!< Calling context is non-Privileged.
     };
 
     /*! \brief   Opaque session token returned by Enter() and consumed by Exit().

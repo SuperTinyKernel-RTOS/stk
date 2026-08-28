@@ -94,7 +94,7 @@ static __stk_forceinline void SetTls(Word tp)
 }
 
 // Notify stk_arch.h that we defined inline versions of GetTls/SetTls.
-#define STK_INLINE_TLS 1
+#define STK_INLINE_TLS (1)
 
 #endif // STK_TLS && STK_TLS_PREFER_REGISTER
 

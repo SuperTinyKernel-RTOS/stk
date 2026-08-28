@@ -147,6 +147,7 @@ TEST(UserTask, GetIdAndName)
     CHECK_EQUAL((const char *)NULL, taskw.GetTraceName());
 }
 
+#if STK_TZ_SECURE
 TEST(UserTask, NonTZ_GetSecureStackMemory)
 {
     TaskMock<ACCESS_USER> task;
@@ -154,7 +155,9 @@ TEST(UserTask, NonTZ_GetSecureStackMemory)
     // non-TrustZone task shall not provide anything than null
     CHECK_TRUE(nullptr == task.GetSecureStackMemory());
 }
+#endif
 
+#if STK_MPU
 TEST(UserTask, MPU_GetMpuRegions)
 {
     TaskMock<ACCESS_USER> task;
@@ -162,6 +165,7 @@ TEST(UserTask, MPU_GetMpuRegions)
     // by default Mpu configuration is not provided by the task
     CHECK_TRUE(nullptr == task.GetMpuRegions());
 }
+#endif
 
 // ============================================================================ //
 // ======================= StackMemoryWrapper ================================= //
