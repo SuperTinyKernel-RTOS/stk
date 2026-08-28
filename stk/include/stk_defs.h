@@ -167,6 +167,40 @@
     #error "STK_MPU_TASK_REGIONS must be defined as 2, 4, or 6"
 #endif
 
+/*! \def   STK_TZ_SECURE
+    \brief ARM TrustZone: Defines Secure (1) build.
+*/
+#ifndef STK_TZ_SECURE
+    #if defined(__ARM_FEATURE_CMSE) && (__ARM_FEATURE_CMSE == 3)
+        #define STK_TZ_SECURE (1)
+    #else
+        #define STK_TZ_SECURE (0)
+    #endif
+#endif
+
+/*! \def   STK_TZ_NON_SECURE
+    \brief ARM TrustZone: Defines Non-Secure (1) build.
+*/
+#ifndef STK_TZ_NON_SECURE
+    #if defined(__ARM_FEATURE_CMSE) && (__ARM_FEATURE_CMSE == 1)
+        #define STK_TZ_NON_SECURE (1)
+    #else
+        #define STK_TZ_NON_SECURE (0)
+    #endif
+#endif
+
+// ARM TrustZone Non-Secure binary configuration validation.
+#ifdef _STK_CORTEX_M_TRUSTZONE_NON_SECURE
+#if !STK_TZ_NON_SECURE
+    #error "Do not use -cmse compiler flag for Non-Secure binary compilation!"
+#endif
+#endif
+
+// Task MPU is supported only when MPU is enabled globally.
+#if STK_MPU_STACK_GUARD && !STK_MPU
+    #error "Enable MPU support (STK_MPU=1) to use per-task MPU feature (STK_MPU_STACK_GUARD=1)!"
+#endif
+
 /*! \def   STK_CORE_FREQ_UNIFIED
     \brief Set to (1) if all cores of CPU have the same frequency, set (0) otherwise.
 */
@@ -427,6 +461,8 @@
         #else
             static __stk_forceinline void __stk_debug_break() { __asm volatile("int $3"); }
         #endif
+    #else
+        static __stk_forceinline void __stk_debug_break() {}
     #endif
 #else
     static __stk_forceinline void __stk_debug_break() {}

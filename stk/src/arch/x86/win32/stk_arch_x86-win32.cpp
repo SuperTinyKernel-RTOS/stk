@@ -163,9 +163,9 @@ static struct Context final : public PlatformContext
     {}
 
     void Initialize(IPlatform::IEventHandler *handler, IKernelService *service, Stack *exit_trap,
-        uint32_t resolution_us) override
+        uint32_t resolution_us)
     {
-        PlatformContext::Initialize(handler, service, exit_trap, resolution_us);
+        InitializeBase(handler, service, exit_trap, resolution_us);
 
         m_sleep_trap   = nullptr; // set by Context::InitStack
         m_exit_trap    = nullptr; // set by Context::InitStack

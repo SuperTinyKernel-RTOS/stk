@@ -117,7 +117,7 @@ protected:
     {}
 
     /*! \brief Destructor.
-        \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
+        \note  Protected by design. Prevents unsafe polymorphic delete.
     */
     STK_VIRT_DTOR ~Task() = default;
 
@@ -169,7 +169,7 @@ protected:
     TaskW() : m_stack() {}
 
     /*! \brief Destructor.
-        \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
+        \note  Protected by design. Prevents unsafe polymorphic delete.
     */
     STK_VIRT_DTOR ~TaskW() = default;
 
@@ -204,7 +204,6 @@ public:
     }
 
     /*! \brief Destructor.
-        \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
     */
     STK_VIRT_DTOR ~StackMemoryWrapper() = default;
 
@@ -273,7 +272,7 @@ protected:
     {}
 
     /*! \brief Destructor.
-        \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
+        \note  Protected by design. Prevents unsafe polymorphic delete.
     */
     ~SyncObjectBase() = default;
 

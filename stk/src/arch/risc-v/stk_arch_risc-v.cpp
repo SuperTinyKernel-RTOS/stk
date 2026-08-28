@@ -972,15 +972,10 @@ static struct Context final : public PlatformContext
 
     {}
 
-    /*! \brief Destructor.
-        \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
-    */
-    STK_VIRT_DTOR ~Context() = default;
-
     void Initialize(IPlatform::IEventHandler *handler, IKernelService *service, Stack *exit_trap,
-        uint32_t resolution_us) override
+        uint32_t resolution_us)
     {
-        PlatformContext::Initialize(handler, service, exit_trap, resolution_us);
+        InitializeBase(handler, service, exit_trap, resolution_us);
 
         STK_STATIC_ASSERT_DESC_N(SP, offsetof(Stack, SP) == 0U,
             "expect Stack::mode member at offset of 0 (first member)");

@@ -54,7 +54,7 @@ enum EKernelMode : uint8_t
 /*! \enum  EKernelPanicId
     \brief Identifies the source of a kernel panic.
 */
-enum EKernelPanicId : uint32_t
+enum EKernelPanicId : uint8_t
 {
     KERNEL_PANIC_NONE                = 0U,  //!< Panic is absent (no fault).
     KERNEL_PANIC_SPINLOCK_DEADLOCK   = 1U,  //!< Spin-lock timeout expired: lock owner never released.
@@ -342,7 +342,9 @@ struct TaskMpu
     \brief   List of MPU regions.
     \see     ITask::GetMpuRegions, IPlatform::IEventOverrider::OnConfigureMpu
 */
+#if STK_MPU
 typedef ArrayView<const struct MpuRegionConfig> MpuRegionList;
+#endif
 
 /*! \struct  MpuConfig
     \brief   Aggregated hardware MPU setup configuration and state descriptor.
@@ -350,6 +352,7 @@ typedef ArrayView<const struct MpuRegionConfig> MpuRegionList;
              along with an overall enable flag controlling hardware MPU initialization and activation.
     \see     ITask::GetMpuRegions, IPlatform::IEventOverrider::OnConfigureMpu, MpuRegionList
 */
+#if STK_MPU
 struct MpuConfig
 {
     /*! \var     DEFAULT_MODE
@@ -372,6 +375,7 @@ struct MpuConfig
     MpuRegionList regions; //!< Fixed-capacity collection of configured MPU region descriptors.
     uint32_t      mode;    //!< Mode flags (hardware-dependent, see hw::mpu::EMpuConfigFlags).
 };
+#endif
 
 /*! \class   Stack
     \brief   Stack descriptor.
@@ -436,6 +440,12 @@ public:
 
         return space;
     }
+
+protected:
+    /*! \brief Destructor.
+        \note  Protected by design. Prevents unsafe polymorphic delete.
+    */
+    ~IStackMemory() = default;
 };
 
 /*! \class IWaitObject
@@ -478,9 +488,10 @@ public:
         \return    Returns \a true if update caused a timeout of the object, \a false otherwise.
     */
     virtual bool Tick(Timeout elapsed_ticks) = 0;
-    
+
 protected:
     /*! \brief Destructor.
+        \note  Protected by design. Prevents unsafe polymorphic delete.
     */
     ~IWaitObject() = default;
 };
@@ -524,6 +535,7 @@ public:
 
 protected:
     /*! \brief Destructor.
+        \note  Protected by design. Prevents unsafe polymorphic delete.
     */
     ~ITraceable() = default;
   
@@ -645,7 +657,7 @@ public:
 
 protected:
     /*! \brief Destructor.
-        \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
+        \note  Protected by design. Prevents unsafe polymorphic delete.
     */
     ~ISyncObject() = default;
 
@@ -704,6 +716,7 @@ public:
     
 protected:
     /*! \brief Destructor.
+        \note  Protected by design. Prevents unsafe polymorphic delete.
     */
     ~IMutex() = default;
 };
@@ -754,7 +767,9 @@ public:
         \note      Optional. ARM TrustZone only.
         \return    Pointer to the Secure stack memory.
     */
+#if STK_TZ_SECURE
     virtual IStackMemory *GetSecureStackMemory() { return nullptr; }
+#endif
 
     /*! \brief     Get up to (STK_MPU_TASK_REGIONS - 1) application-defined MPU regions for this task.
         \details   When \c STK_MPU_STACK_GUARD is enabled, each task owns \c STK_MPU_TASK_REGIONS
@@ -799,10 +814,12 @@ public:
         \endcode
         \see       TaskMpu::Configure, IPlatform::InitStack, MpuRegionList
     */
+#if STK_MPU
     virtual const MpuRegionList *GetMpuRegions() const
     {
         return nullptr;
     }
+#endif
 
     /*! \brief     Get hardware access mode of the user task.
     */
@@ -840,6 +857,12 @@ public:
                    interpret this value.
     */
     virtual const char *GetTraceName() const { return nullptr; }
+
+protected:
+    /*! \brief Destructor.
+        \note  Protected by design. Prevents unsafe polymorphic delete.
+    */
+    ~ITask() = default;
 };
 
 /*! \class IKernelTask
@@ -924,9 +947,10 @@ public:
                    will trigger an assertion in the concrete implementation.
     */
     virtual void Wake() = 0;
-    
+
 protected:
     /*! \brief Destructor.
+        \note  Protected by design. Prevents unsafe polymorphic delete.
     */
     ~IKernelTask() = default;
 };
@@ -1065,10 +1089,12 @@ public:
                        of platform initialization (e.g., point to a \c static instance).
             \see       MpuConfig, ITask::GetMpuRegions
         */
+    #if STK_MPU
         virtual const MpuConfig *OnConfigureMpu() const
         {
             return nullptr;
         }
+    #endif
 
         /*! \brief     Called by platform driver when hardware exception occurred.
             \param[in] exc_id: Hardware exception id, see \a EHwException.
@@ -1229,6 +1255,7 @@ public:
 
 protected:
     /*! \brief Destructor.
+        \note  Protected by design. Prevents unsafe polymorphic delete.
     */
     ~IPlatform() = default;
 };
@@ -1347,6 +1374,7 @@ public:
     
 protected:
     /*! \brief Destructor.
+        \note  Protected by design. Prevents unsafe polymorphic delete.
     */
     ~ITaskSwitchStrategy() = default;
 };
@@ -1509,6 +1537,7 @@ public:
     
 protected:
     /*! \brief Destructor.
+        \note  Protected by design. Prevents unsafe polymorphic delete.
     */
     ~IKernel() = default;
 };
@@ -1665,6 +1694,7 @@ public:
     
 protected:
     /*! \brief Destructor.
+        \note  Protected by design. Prevents unsafe polymorphic delete.
     */
     ~IKernelService() = default;
 

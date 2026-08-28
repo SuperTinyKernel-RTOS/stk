@@ -14,4 +14,14 @@
 
 #define _STK_ASSERT
 
+// Use TLS.
+#define STK_TLS (1)
+
+// Use MPU.
+#define STK_MPU (1)
+
+// Simulate Secure side build.
+#define STK_TZ_SECURE (1)
+#define STK_TZ_NON_SECURE (0)
+
 #endif /* STK_CONFIG_H_ */

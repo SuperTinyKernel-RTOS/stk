@@ -736,7 +736,7 @@ Update: **April 2026**
 
 Compiler: **GCC 14.2.1 (arm-none-eabi-gcc)**
 
-This table compares **SuperTinyKernel RTOS v.1.06.0** and **FreeRTOS V11.2.0** across two compiler optimization levels: `-Os` and `-Ofast`. The workload consists of a CRC32-based synthetic task running across multiple tasks/threads to measure scheduling overhead and timing determinism. Benchmark projects are located in `build/benchmark/eclipse` and the benchmark suite is located in `build/benchmark/perf`.
+This table compares **SuperTinyKernel RTOS v.1.08.x** and **FreeRTOS V11.2.0** across two compiler optimization levels: `-Os` and `-Ofast`. The workload consists of a CRC32-based synthetic task running across multiple tasks/threads to measure scheduling overhead and timing determinism. Benchmark projects are located in `build/benchmark/eclipse` and the benchmark suite is located in `build/benchmark/perf`.
 
 The benchmark suite uses CRC32 hash calculations as the task payload. The score represents the number of CRC32 calculations performed by the task within a fixed time window. A higher score indicates a more efficient scheduler, meaning the tasks have more available CPU time.
 
@@ -744,19 +744,19 @@ The benchmark suite uses CRC32 hash calculations as the task payload. The score 
 
 | Kernel       | Tasks  |   Opt    | Throughput  |   Average   | Jitter  | Flash Size  |  RAM Used   |
 |:-------------|:------:|:--------:|:-----------:|:-----------:|:-------:|:-----------:|:-----------:|
-| **STK**      |   16   | `-Ofast` | **993,008** | **62,063**  | **754** |   24.1 KB   | **20.3 KB** |
+| **STK**      |   16   | `-Ofast` | **993,937** | **62,121**  | **754** |   24.4 KB   | **19.8 KB** |
 | **FreeRTOS** |   16   | `-Ofast` |   966,017   |   60,376    |   909   | **15.0 KB** |   22.2 KB   |
-| **STK**      |   16   |  `-Os`   | **752,136** | **47,008**  | **425** |   14.9 KB   | **20.3 KB** |
+| **STK**      |   16   |  `-Os`   | **753,038** | **47,064**  | **425** |   14.9 KB   | **19.8 KB** |
 | **FreeRTOS** |   16   |  `-Os`   |   735,342   |   45,958    |   472   | **12.6 KB** |   22.2 KB   |
 | ---          |  ---   |   ---    |     ---     |     ---     |   ---   |     ---     |     ---     |
-| **STK**      |   8    | `-Ofast` | **988,862** | **123,607** |   866   |   23.0 KB   | **11.4 KB** |
+| **STK**      |   8    | `-Ofast` | **989,477** | **123,684** |   867   |   23.1 KB   | **11.1 KB** |
 | **FreeRTOS** |   8    | `-Ofast` |   932,654   |   116,581   | **613** | **14.4 KB** |   13.3 KB   |
-| **STK**      |   8    |  `-Os`   | **753,013** | **94,126**  |   659   |   14.9 KB   | **11.4 KB** |
+| **STK**      |   8    |  `-Os`   | **753,622** | **94,202**  |   659   |   14.9 KB   | **11.1 KB** |
 | **FreeRTOS** |   8    |  `-Os`   |   713,292   |   89,161    | **468** | **12.6 KB** |   13.2 KB   |
 | ---          |  ---   |   ---    |     ---     |     ---     |   ---   |     ---     |     ---     |
-| **STK**      |   4    | `-Ofast` | **989,465** | **247,366** |   742   |   22.1 KB   | **6.9 KB**  |
+| **STK**      |   4    | `-Ofast` | **989,830** | **247,457** |   742   |   22.6 KB   | **6.7 KB**  |
 | **FreeRTOS** |   4    | `-Ofast` |   881,082   |   220,270   | **671** | **14.5 KB** |   8.8 KB    |
-| **STK**      |   4    |  `-Os`   | **753,459** | **188,364** |   564   |   14.9 KB   | **6.9 KB**  |
+| **STK**      |   4    |  `-Os`   | **753,891** | **188,472** |   565   |   14.9 KB   | **6.7 KB**  |
 | **FreeRTOS** |   4    |  `-Os`   |   673,845   |   168,461   | **510** | **12.6 KB** |   8.8 KB    |
 
 ### Conclusion
@@ -764,7 +764,7 @@ The benchmark suite uses CRC32 hash calculations as the task payload. The score 
 * **Throughput:** STK consistently outperforms FreeRTOS, delivering **~12% more computational work** in direct head-to-head benchmarks. Furthermore, STK scales exceptionally well with aggressive compiler optimizations, yielding a **31% performance boost** when moving from size-optimized (`-Os`) to speed-optimized (`-Ofast`) configurations.
 * **Scheduling Overhead:** STK demonstrates exceptional scaling stability. Total throughput remains remarkably flat regardless of task count, indicating near-zero context-switching friction even as the system reaches 16 concurrent threads.
 * **Determinism:** For timing-critical applications, STK is the superior choice. In high-load scenarios (16 tasks at `-Ofast`), STK provides **~17% lower jitter** than FreeRTOS, ensuring the precise temporal alignment required for time-sensitive tasks.
-* **Resource Efficiency:** STK achieves a class-leading RAM footprint, utilizing **~21% less RAM** than FreeRTOS in 4-task scenarios and maintaining an **~8.5% RAM advantage** at 16 tasks.
+* **Resource Efficiency:** STK achieves a class-leading RAM footprint, utilizing **~24% less RAM** than FreeRTOS in 4-task scenarios and maintaining an **~11% RAM advantage** at 16 tasks.
 
 ---
 

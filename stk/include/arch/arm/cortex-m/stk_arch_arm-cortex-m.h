@@ -70,24 +70,6 @@
     #error "Multiple STK_ARCH_ARMvX flags active simultaneously! Check build environment definitions."
 #endif
 
-/*! \def   STK_TZ_SECURE
-    \brief ARM TrustZone: Defines Secure (1) build.
-*/
-#if defined(__ARM_FEATURE_CMSE) && (__ARM_FEATURE_CMSE == 3)
-    #define STK_TZ_SECURE (1)
-#else
-    #define STK_TZ_SECURE (0)
-#endif
-
-/*! \def   STK_TZ_NON_SECURE
-    \brief ARM TrustZone: Defines Non-Secure (1) build.
-*/
-#if defined(__ARM_FEATURE_CMSE) && (__ARM_FEATURE_CMSE == 1)
-    #define STK_TZ_NON_SECURE (1)
-#else
-    #define STK_TZ_NON_SECURE (0)
-#endif
-
 /*! \def   __stk_tz_nsc_entry
     \brief ARM TrustZone: attribute for Non-Secure callable gateway functions.
     \note  Places the function in the .nsc_entry section mapped to the NSC region.
@@ -229,7 +211,7 @@ static __stk_forceinline void SetTls(Word tp)
 }
 
 // Notify stk_arch.h that we defined inline versions of GetTls/SetTls.
-#define STK_INLINE_TLS 1
+#define STK_INLINE_TLS (1)
 
 // =============================================================================
 #endif // STK_TLS_PREFER_REGISTER

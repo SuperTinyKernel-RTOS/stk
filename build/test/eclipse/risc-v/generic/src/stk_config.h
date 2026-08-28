@@ -13,7 +13,7 @@
 #include "risc-v/encoding.h"
 
 // Risc-V
-#define _STK_ARCH_RISC_V
+//#define _STK_ARCH_RISC_V
 
 // Minimal stack size depending on the configured architecture (STK default is 32).
 #if (__riscv_32e != 1)
@@ -24,15 +24,15 @@
     #endif
 #endif
 
-#ifdef _STK_ARCH_RISC_V
-    // Redefine if SysTick handler name is different from SysTick_Handler
-    //#define STK_SYSTICK_HANDLER SysTick_Handler
+// Use TLS.
+#define STK_TLS (1)
+#define STK_TLS_PREFER_REGISTER (0)
 
-    // Redefine if PendSv handler name is different from PendSV_Handler
-    //#define STK_PENDSV_HANDLER PendSV_Handler
+// Use MPU.
+#define STK_MPU (1)
 
-    // Redefine if SVC handler name is different from SVC_Handler
-    //#define STK_SVC_HANDLER SVC_Handler
-#endif
+// Simulate Secure side build.
+#define STK_TZ_SECURE (1)
+#define STK_TZ_NON_SECURE (0)
 
 #endif /* STK_CONFIG_H_ */
