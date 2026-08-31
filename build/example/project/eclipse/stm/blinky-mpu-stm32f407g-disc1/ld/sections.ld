@@ -98,6 +98,18 @@
       aligned region, as the RP2040/Cortex-M33 variant of this script
       does) avoids spending a second scarce power-of-two MPU region on
       what is, from the MPU's point of view, the same RW+XN block.
+      
+   3. .stk_mpu_kernel_code (PART 3, in FLASH, executed in place, 4KB region)
+      Exported symbols: __stk_mpu_kernel_code_start / _end.
+      Populated by STK_MPU_KERNEL_CODE_SECTION. Mapped by STK strictly to 
+      PRIVILEGED READ-ONLY (ACCESS_PRIV_RO_USER_NO + EXEC_ALLOWED). Isolated 
+      from user space and shared application memory.
+
+   4. .stk_mpu_kernel_data (PART 4, RAM AT> FLASH, 4KB region)
+      Exported symbols: __stk_mpu_kernel_data_start / _end. 
+      Populated by STK_MPU_KERNEL_DATA_SECTION (initialized globals) and 
+      STK_MPU_KERNEL_BSS_SECTION (zero-initialized globals). Mapped strictly 
+      to PRIVILEGED READ-WRITE (ACCESS_PRIV_RW_USER_NO + EXEC_NEVER).
 
    Together, the initialized and zero-initialized halves of
    .stk_mpu_shared_data form one contiguous RW+XN (ACCESS_FULL, EXEC_NEVER)
@@ -218,7 +230,11 @@ SECTIONS
        
         LONG(LOADADDR(.stk_mpu_shared_data));
         LONG(ADDR(.stk_mpu_shared_data));
-        LONG(ADDR(.stk_mpu_shared_data)+SIZEOF(.stk_mpu_shared_data));
+        LONG(__stk_mpu_shared_data_raw_end);
+        
+        LONG(LOADADDR(.stk_mpu_kernel_data));
+        LONG(ADDR(.stk_mpu_kernel_data));
+        LONG(__stk_mpu_kernel_data_raw_end);
         
         __data_regions_array_end = .;
         
@@ -232,6 +248,9 @@ SECTIONS
         
         LONG(__stk_mpu_shared_bss_start);
         LONG(__stk_mpu_shared_bss_end);
+        
+        LONG(__stk_mpu_kernel_bss_start);
+        LONG(__stk_mpu_kernel_bss_end);
         
         __bss_regions_array_end = .;
 
@@ -349,6 +368,45 @@ SECTIONS
     _etext = .;
     __etext = .;
     
+    /* ======================================================================== */
+    /* PART 1: SHARED MPU CODE SECTION (RX Only)                                */
+    /* Strictly 8KB Region aligned to 8KB boundary                              */
+    /* ======================================================================== */
+    .stk_mpu_shared_code : ALIGN(8192)
+    {
+        __stk_mpu_shared_code_start = .;
+        _stk_mpu_shared_code_start = .;
+        
+        *(.stk_mpu_shared_code .stk_mpu_shared_code.*)
+        
+        . = ALIGN(4);
+        __stk_mpu_shared_code_actual_end = .;
+
+        /* Pad remaining space so the section occupies a full 8KB MPU region */
+        . = ALIGN(8192);
+        __stk_mpu_shared_code_end = .;
+        _stk_mpu_shared_code_end = .;
+    } > FLASH
+
+    /* ======================================================================== */
+    /* PART 2: ISOLATED KERNEL CODE SECTION (Privileged RX Only)                */
+    /* Strictly 4KB Region aligned to 4KB boundary                              */
+    /* ======================================================================== */
+    .stk_mpu_kernel_code : ALIGN(4096)
+    {
+        __stk_mpu_kernel_code_start = .;
+        
+        *(.stk_mpu_kernel_code .stk_mpu_kernel_code.*)
+        
+        . = ALIGN(4);
+        __stk_mpu_kernel_code_actual_end = .;
+
+        . = ALIGN(4096);
+        __stk_mpu_kernel_code_end = .;
+    } > FLASH
+    
+    /* ======================================================================== */
+    
     /* MEMORY_ARRAY */
     /*
     .ROarraySection :
@@ -431,37 +489,13 @@ SECTIONS
     {
         *(.noinit.CCMRAM .noinit.CCMRAM.*)         
     } > CCMRAM
-    
-    .noinit (NOLOAD) : ALIGN(4)
-    {
-        _noinit = .;
-        
-        *(.noinit .noinit.*) 
-        
-         . = ALIGN(4) ;
-        _end_noinit = .;   
-    } > RAM
-       
+          
+    /* Align Flash Location Counter to 4-bytes before LMA allocations */
+    . = ALIGN(4);
+          
     /* ======================================================================== */
-    /* PART 1: SHARED MPU CODE SECTION (RX Only)                                */
-    /* Aligned to a strict 8KB boundary (power-of-2 for Cortex-M4 MPU)          */
-    /* ======================================================================== */
-    .stk_mpu_shared_code : ALIGN(8192)
-    {
-        __stk_mpu_shared_code_start = .;
-        _stk_mpu_shared_code_start = .;
-        
-        *(.stk_mpu_shared_code .stk_mpu_shared_code.*)
-               
-        /* Pad to strict 8KB MPU size limit */
-        . = ALIGN(8192);
-        __stk_mpu_shared_code_end = .;
-        _stk_mpu_shared_code_end = .;
-    } > FLASH
-
-    /* ======================================================================== */
-    /* PART 2: SHARED MPU DATA SECTION (RW + XN)                                */
-    /* Aligned to a strict 8KB boundary (power-of-2 for Cortex-M4 MPU)          */
+    /* PART 3: SHARED MPU DATA SECTION (RW + XN)                                */
+    /* Strictly 16KB Region aligned to 16KB boundary                            */
     /* ======================================================================== */
     .stk_mpu_shared_data : ALIGN(16384)
     {
@@ -470,10 +504,14 @@ SECTIONS
         
         /* Initialized variables (non-zero) */
         *(.stk_mpu_shared_data .stk_mpu_shared_data.*)
+        . = ALIGN(4);
+        __stk_mpu_shared_data_raw_end = .;
         
         /* Zero-initialized variables (BSS) */
+        . = ALIGN(4); /* Force explicit 4-byte boundary for BSS start */
         __stk_mpu_shared_bss_start = .;
         *(.stk_mpu_shared_bss .stk_mpu_shared_bss.*)
+        . = ALIGN(4);
         __stk_mpu_shared_bss_end = .;
         
         /* Pad to strict 16KB MPU size limit */
@@ -481,15 +519,50 @@ SECTIONS
         __stk_mpu_shared_data_end = .;
         _stk_mpu_shared_data_end = .;
     } > RAM AT> FLASH
+    
+    /* Align Flash Location Counter to 4-bytes before next LMA allocation */
+    . = ALIGN(4);
 
-    /* Mandatory to be word aligned, _sbrk assumes this */
-    /* Set to the end of the second block so heap allocations begin safely past it */
-    PROVIDE ( end = __stk_mpu_shared_data_end ); 
-    PROVIDE ( _end = __stk_mpu_shared_data_end );
-    PROVIDE ( __end = __stk_mpu_shared_data_end );
-    PROVIDE ( __end__ = __stk_mpu_shared_data_end );
+    /* ======================================================================== */
+    /* PART 4: ISOLATED KERNEL DATA & BSS SECTION (Privileged RW Only)           */
+    /* Strictly 4KB Region aligned to 4KB boundary                              */
+    /* ======================================================================== */
+    .stk_mpu_kernel_data : ALIGN(4096)
+    {
+        __stk_mpu_kernel_data_start = .;
+        
+        /* Initialized kernel variables */
+        *(.stk_mpu_kernel_data .stk_mpu_kernel_data.*)
+        . = ALIGN(4);
+        __stk_mpu_kernel_data_raw_end = .;
+        
+        /* Zero-initialized kernel variables */
+        . = ALIGN(4); /* Force explicit 4-byte boundary for BSS start */
+        __stk_mpu_kernel_bss_start = .;
+        *(.stk_mpu_kernel_bss .stk_mpu_kernel_bss.*)
+        . = ALIGN(4);
+        __stk_mpu_kernel_bss_end = .;
+        
+        . = ALIGN(4096);
+        __stk_mpu_kernel_data_end = .;
+    } > RAM AT> FLASH
     
     /* ======================================================================== */
+
+    /* Move uninitialized RAM section here */
+    .noinit (NOLOAD) : ALIGN(4)
+    {
+        _noinit = .;
+        *(.noinit .noinit.*) 
+        . = ALIGN(4);
+        _end_noinit = .;   
+    } > RAM
+
+    /* Set heap base directly at the end of .noinit */
+    PROVIDE ( end = _end_noinit ); 
+    PROVIDE ( _end = _end_noinit );
+    PROVIDE ( __end = _end_noinit );
+    PROVIDE ( __end__ = _end_noinit );
     
     /*
      * Used for validation only, do not allocate anything here!

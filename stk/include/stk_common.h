@@ -327,9 +327,9 @@ struct TaskMpu
 {
     /*! \var   NUM_REGIONS
         \brief Number of MPU regions per task.
-        \note  Configurable via \a STK_MPU_TASK_REGIONS (2 or 4). Slot 0 is always the
-               automatic stack guard; the remaining NUM_REGIONS-1 slots are available to
-               the application via \a ITask::GetMpuRegions().
+        \note  Configurable via \a STK_MPU_TASK_REGIONS (2, 4, 6, 8, 12 or 16). Slot 0 is
+               always the automatic stack guard; the remaining NUM_REGIONS-1 slots are
+               available to the application via \a ITask::GetMpuRegions().
         \see   Stack, STK_MPU_TASK_REGIONS
     */
     static constexpr uint8_t NUM_REGIONS = STK_MPU_TASK_REGIONS;
@@ -773,8 +773,8 @@ public:
 
     /*! \brief     Get up to (STK_MPU_TASK_REGIONS - 1) application-defined MPU regions for this task.
         \details   When \c STK_MPU_STACK_GUARD is enabled, each task owns \c STK_MPU_TASK_REGIONS
-                   (2 or 4, see \ref STK_MPU_TASK_REGIONS) hardware MPU region slots. Slot 0 is
-                   always the automatic stack guard, computed by the driver from the task's own
+                   (2, 4, 6, 8, 12 or 16, see \ref STK_MPU_TASK_REGIONS) hardware MPU region slots.
+                   Slot 0 is always the automatic stack guard, computed by the driver from the task's own
                    stack memory (see IStackMemory::GetStack/GetStackSize). This hook supplies the
                    remaining \c STK_MPU_TASK_REGIONS-1 slots, letting an application additionally
                    sandbox a task to e.g. a private data buffer, a specific peripheral block, or

@@ -152,7 +152,7 @@
     \details Slot 0 is always the automatic per-task stack guard; the remaining slots
            (\c STK_MPU_TASK_REGIONS - 1) are available to the application via
            \c ITask::GetMpuRegions(). Only consumed when \c STK_MPU_STACK_GUARD is enabled.
-    \note  Supported values: 2 or 4. A smaller value frees up MPU regions for
+    \note  Supported values: 2, 4, 6, 8, 12, or 16. A smaller value frees up MPU regions for
            static/global use (see \c STK_CORTEX_M_MPU_TASK_REGION_IDX) and shrinks the
            per-task \c TaskMpu footprint and context-switch burst-copy, at the cost of
            fewer application-defined per-task regions.
@@ -163,8 +163,11 @@
     #define STK_MPU_TASK_REGIONS (2U)
 #endif
 
-#if STK_MPU_STACK_GUARD && (STK_MPU_TASK_REGIONS != 2U) && (STK_MPU_TASK_REGIONS != 4U) && (STK_MPU_TASK_REGIONS != 6U)
-    #error "STK_MPU_TASK_REGIONS must be defined as 2, 4, or 6"
+#if STK_MPU_STACK_GUARD && \
+    (STK_MPU_TASK_REGIONS != 2U) && (STK_MPU_TASK_REGIONS != 4U) && \
+    (STK_MPU_TASK_REGIONS != 6U) && (STK_MPU_TASK_REGIONS != 8U) && \
+    (STK_MPU_TASK_REGIONS != 12U) && (STK_MPU_TASK_REGIONS != 16U)
+    #error "STK_MPU_TASK_REGIONS must be defined as 2, 4, 6, 8, 12, or 16"
 #endif
 
 /*! \def   STK_TZ_SECURE

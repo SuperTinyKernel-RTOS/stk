@@ -34,12 +34,30 @@ using namespace bsp;
 // what genuinely differs per task instance: its own object memory (the 'self'
 // region).
 //
-// Final hardware region-index mapping on this 8-region MPU:
-//   Regions 0-5: static/global table returned by OnConfigureMpu() - see the
-//                detailed per-region breakdown at the top of that function.
-//   Region 6:    automatic stack guard (task-relative slot 0, kernel-managed)
-//   Region 7:    per-task 'self' region (task-relative slot 1, application-
-//                defined - see NonSecureLedTask::GetMpuRegions() below)
+// ALTERNATIVE: hardening via full MPU reprogramming on every context switch
+// -------------------------------------------------------------------------
+// STK_MPU_TASK_REGIONS can instead be set to the maximum number of MPU regions
+// the target supports per task (8 on STM32F4's 8-region MPU; up to 16 on parts
+// with a larger MPU). GetMpuRegions() below already contains the logic for
+// this: when STK_MPU_TASK_REGIONS equals the hardware's max region count, it
+// copies the entire global region table (see GetGlobalMpuRegions()) into the
+// per-task region list alongside the task's own 'self' region, so every
+// region - global and per-task alike - is rewritten from scratch on every
+// context switch, rather than the global regions being configured once and
+// left in place across switches (as they are with STK_MPU_TASK_REGIONS=2).
+//
+// This is useful as a defense-in-depth measure against a compromised task
+// that manages to escalate to Privileged mode and tamper with the MPU: with
+// the static/global configuration, a rogue region write could persist and
+// affect every task scheduled afterwards, since only the small per-task slot
+// is normally reprogrammed at each switch. With full reprogramming, any such
+// tampering is wiped out and replaced with the known-good table at the very
+// next context switch, so its effect can never outlive the task's own
+// timeslice. The tradeoff is cost: writing every region's RBAR/attribute
+// registers on each switch is more cycles than the partial update used here,
+// so this is best reserved for systems where the additional protection is
+// worth the extra context-switch overhead (e.g. when running less-trusted or
+// third-party task code).
 // ---------------------------------------------------------------------------
 
 // Size of the task's stack (number of stk::Word)
@@ -82,6 +100,120 @@ struct HwCommand
     stk::Word param_0;
 };
 STK_MPU_SHARED_DATA_SECTION static stk::sync::PipeT<HwCommand, 4> s_HwCmdQueue;
+
+static stk::MpuRegionList GetGlobalMpuRegions()
+{
+    // ---------------------------------------------------------------------------
+    // MPU (Memory Protection Unit) setup for STM32F4 (Cortex-M4, ARMv7-M MPU, 8 regions)
+    // ---------------------------------------------------------------------------
+    // This adds coarse-grained memory sandboxing that applies globally, regardless
+    // of which task is running:
+    //   Region 0: Flash        - read-only, executable       (code + rodata)
+    //   Region 1: SRAM         - read/write, execute-never   (data, stacks, heap)
+    //   Region 2: NULL guard   - first 256 bytes, no access at all (catches null derefs)
+    //   Region 3: Reserved     - currently a disabled/zero-sized placeholder (see NOTE)
+    //   Region 4: Shared code  - read/execute, common code shared by every task
+    //   Region 5: Shared data  - read/write, globals shared by every task
+    //
+    // Regions 4/5 are configured here (instead of per-task, as they would be with
+    // STK_MPU_TASK_REGIONS=4) because this example builds with STK_MPU_TASK_REGIONS=2:
+    // each task only gets 1 application-defined region slot, reserved below for the
+    // task's own (per-instance) object memory. 'Shared code'/'shared data' are
+    // identical for every task instance, so a single global region covers all of them
+    // at once - and the region budget for this scales accordingly:
+    // STK_CORTEX_M_MPU_TASK_REGION_IDX == STK_CORTEX_M_MPU_REGIONS_MAX - STK_MPU_TASK_REGIONS,
+    // i.e. 8 - 2 == 6 static regions available here (vs. only 4 with 4 task regions).
+    //
+    // (If STK_MPU_TASK_REGIONS is instead set to the hardware's max region count,
+    // this whole table is copied into each task's own region list and reprogrammed
+    // on every context switch instead of being configured once here - see the
+    // "ALTERNATIVE" note near the top of this file.)
+    //
+    // Adjust FLASH_SIZE_BYTES / SRAM_SIZE_BYTES below to match your exact STM32F4
+    // part (e.g. STM32F407: 1 MB flash / 192 KB SRAM; STM32F429: 2 MB / 256 KB).
+    // MPU region sizes must be a power of two, so pick the next power-of-two that
+    // covers your actual flash/RAM size.
+
+    using namespace stk;
+    using namespace stk::hw::mpu;
+
+    enum EMemPartition : uint32_t
+    {
+        FLASH_BASE_ADDR   = 0x08000000UL,
+        FLASH_SIZE_BYTES  = 1024 * 1024,   // 1 MB -> ARM_MPU_REGION_SIZE_1MB
+        SRAM_BASE_ADDR    = 0x20000000UL,
+        SRAM_SIZE_BYTES   = 128  * 1024,   // 128 KB -> ARM_MPU_REGION_SIZE_128KB
+        CCMRAM_BASE_ADDR  = 0x10000000UL,  // 64KB CCM block - currently unused below
+        PERIPH_BASE_ADDR  = 0x40000000UL,  // currently unused below - see NOTE above
+        PERIPH_SIZE_BYTES = 512  * 1024 * 1024 // covers the whole peripheral aperture
+    };
+
+    extern char __stk_mpu_shared_code_start[];
+    extern char __stk_mpu_shared_code_end[];
+    extern char __stk_mpu_shared_data_start[];
+    extern char __stk_mpu_shared_data_end[];
+
+    extern char __stk_mpu_kernel_code_start[];
+    extern char __stk_mpu_kernel_code_end[];
+    extern char __stk_mpu_kernel_data_start[];
+    extern char __stk_mpu_kernel_data_end[];
+
+    static const stk::MpuRegionConfig mpu_table[] =
+    {
+        {   // REGION 0: Flash - Privileged RO / User RO, executable, cacheable
+            .addr        = FLASH_BASE_ADDR,
+            .size        = FLASH_SIZE_BYTES,
+            .access_perm = ACCESS_PRIV_RO_USER_RO,
+            .mem_type    = TYPE_NORMAL_CACHEABLE,
+            .share       = SHARE_NON,
+            .exec        = EXEC_ALLOWED
+        },
+        {   // REGION 1: SRAM - full RW, execute-never (blocks code injection into RAM)
+            .addr        = SRAM_BASE_ADDR,
+            .size        = SRAM_SIZE_BYTES,
+            .access_perm = ACCESS_PRIV_RW_USER_NO,
+            .mem_type    = TYPE_NORMAL_CACHEABLE,
+            .share       = SHARE_NON,
+            .exec        = EXEC_NEVER
+        },
+        {   // REGION 2: STK Kernel Code Space (Privileged Executable)
+            .addr        = hw::PtrToWord(__stk_mpu_kernel_code_start),
+            .size        = hw::PtrToWord(__stk_mpu_kernel_code_end) - hw::PtrToWord(__stk_mpu_kernel_code_start),
+            .access_perm = hw::mpu::ACCESS_PRIV_RO_USER_NO,
+            .mem_type    = hw::mpu::TYPE_NORMAL_CACHEABLE,
+            .share       = hw::mpu::SHARE_NON,
+            .exec        = hw::mpu::EXEC_ALLOWED
+        },
+        {   // REGION 3: STK Kernel State & Data (Privileged-Only Access)
+            .addr        = hw::PtrToWord(__stk_mpu_kernel_data_start),
+            .size        = hw::PtrToWord(__stk_mpu_kernel_data_end) - hw::PtrToWord(__stk_mpu_kernel_data_start),
+            .access_perm = hw::mpu::ACCESS_PRIV_RW_USER_NO,
+            .mem_type    = hw::mpu::TYPE_NORMAL_CACHEABLE,
+            .share       = hw::mpu::SHARE_NON,
+            .exec        = hw::mpu::EXEC_NEVER
+        },
+        {   // REGION 4: Shared code - Privileged RO / User RO, executable, common
+            //           to every task (STK_MPU_SHARED_CODE_SECTION)
+            .addr        = hw::PtrToWord(__stk_mpu_shared_code_start),
+            .size        = hw::PtrToWord(__stk_mpu_shared_code_end) - hw::PtrToWord(__stk_mpu_shared_code_start),
+            .access_perm = ACCESS_PRIV_RO_USER_RO,
+            .mem_type    = TYPE_NORMAL_CACHEABLE,
+            .share       = SHARE_NON,
+            .exec        = EXEC_ALLOWED
+        },
+        {   // REGION 5: Shared data - full RW, execute-never, common to every task
+            //           (STK_MPU_SHARED_DATA_SECTION / STK_MPU_SHARED_BSS_SECTION)
+            .addr        = hw::PtrToWord(__stk_mpu_shared_data_start),
+            .size        = hw::PtrToWord(__stk_mpu_shared_data_end) - hw::PtrToWord(__stk_mpu_shared_data_start),
+            .access_perm = ACCESS_FULL,
+            .mem_type    = TYPE_NORMAL_CACHEABLE,
+            .share       = SHARE_NON,
+            .exec        = EXEC_NEVER
+        }
+    };
+
+    return stk::MpuRegionList(mpu_table, STK_STATIC_ARRAY_SIZE(mpu_table));
+}
 
 // Task's core (thread)
 template <stk::EAccessMode _AccessMode>
@@ -144,41 +276,37 @@ private:
     const stk::MpuRegionList *GetMpuRegions() const override
     {
         using namespace stk;
+        using namespace stk::hw::mpu;
 
-        // With STK_MPU_TASK_REGIONS=2 each task only has one application-defined
-        // slot available (task-relative slot 1, following the automatic stack
-        // guard in slot 0). 'Shared code' and 'shared data' are identical across
-        // all 4 task instances, so they are configured once as global regions in
-        // PlatformEventHandler::OnConfigureMpu() instead of being repeated here;
-        // this single slot is reserved for what is genuinely per-instance: access
-        // to the task's own object memory.
-        static MpuRegionConfig s_self_region[] =
+        // leave last slot for a stack protector
+        static MpuRegionConfig task_regions[STK_MPU_TASK_REGIONS - 1];
+
+        // on every context switch global regions will be re-programmed which is
+        // a defensive measure if compromised task escalated to Privileged and
+        // attempted to modify MPU regions
+        if (STK_MPU_TASK_REGIONS == 8)
         {
+            const stk::MpuRegionList global_mpu = GetGlobalMpuRegions();
+            for (size_t i = 0; i < global_mpu.GetSize(); ++i)
             {
-              // note: region_idx is driver-owned - the kernel always overwrites it to the
-              // correct task-relative slot (slot 1 -> hardware Region 7, see the file-level
-              // region-index mapping at the top of this file); the value here is
-              // informational only and never actually read by the driver.
-              .addr        = 0U, // patched below with 'this'
-              .size        = TASK_MEMORY_SIZE, // cover whole allocated region of the task instance
-              .access_perm = hw::mpu::ACCESS_FULL,
-              .mem_type    = hw::mpu::TYPE_NORMAL_CACHEABLE,
-              .share       = hw::mpu::SHARE_NON,
-              .exec        = hw::mpu::EXEC_NEVER
+                task_regions[i] = global_mpu[i];
             }
-        };
+        }
 
-        // Unlike the static table in PlatformEventHandler::OnConfigureMpu() (identical
-        // for every task/call), this table is recomputed on every call: there are 4
-        // NonSecureLedTask instances sharing this same GetMpuRegions() code, and each one
-        // must only be granted access to its own object memory - 'this' points at the
-        // start of that instance's TASK_MEMORY_SIZE-byte block (see s_LedTaskMem[]), so the
-        // base address is patched in here right before the table is handed back to the
-        // kernel for this task.
-        s_self_region[0].addr = hw::PtrToWord(this);
+        // allow access to self
+        const MpuRegionConfig self =
+        {
+            .addr        = hw::PtrToWord(this), // 'this'
+            .size        = TASK_MEMORY_SIZE,    // cover whole allocated region of the task instance
+            .access_perm = hw::mpu::ACCESS_FULL,
+            .mem_type    = hw::mpu::TYPE_NORMAL_CACHEABLE,
+            .share       = hw::mpu::SHARE_NON,
+            .exec        = hw::mpu::EXEC_NEVER
+        };
+        task_regions[STK_STATIC_ARRAY_SIZE(task_regions) - 1] = self;
 
         static const stk::MpuRegionList mpu_regions(
-            s_self_region, STK_STATIC_ARRAY_SIZE(s_self_region));
+            task_regions, STK_STATIC_ARRAY_SIZE(task_regions));
 
         return &mpu_regions;
     }
@@ -217,126 +345,12 @@ class PlatformEventHandler final : public stk::IPlatform::IEventOverrider
 {
     const stk::MpuConfig *OnConfigureMpu() const override
     {
-        using namespace stk;
-        using namespace stk::hw::mpu;
-
-        // ---------------------------------------------------------------------------
-        // MPU (Memory Protection Unit) setup for STM32F4 (Cortex-M4, ARMv7-M MPU, 8 regions)
-        // ---------------------------------------------------------------------------
-        // This adds coarse-grained memory sandboxing that applies globally, regardless
-        // of which task is running:
-        //   Region 0: Flash        - read-only, executable       (code + rodata)
-        //   Region 1: SRAM         - read/write, execute-never   (data, stacks, heap)
-        //   Region 2: NULL guard   - first 256 bytes, no access at all (catches null derefs)
-        //   Region 3: Reserved     - currently a disabled/zero-sized placeholder (see NOTE)
-        //   Region 4: Shared code  - read/execute, common code shared by every task
-        //   Region 5: Shared data  - read/write, globals shared by every task
-        //
-        // NOTE - documentation/config mismatch found while reviewing this table: Region 3
-        // below is configured with size=0 and ACCESS_NONE, which is effectively a disabled
-        // placeholder entry, NOT a Peripherals region or a second NULL guard. The
-        // PERIPH_BASE_ADDR/PERIPH_SIZE_BYTES/CCMRAM_BASE_ADDR constants in EMemPartition
-        // below are defined but never referenced by mpu_table - meaning non-privileged
-        // tasks currently have NO MPU-mapped access to the peripheral bus at all via this
-        // table. If peripheral access from user-mode tasks is required, Region 3 should be
-        // repurposed to map PERIPH_BASE_ADDR/PERIPH_SIZE_BYTES (Device memory type,
-        // execute-never); otherwise consider removing the unused enum constants.
-        //
-        // Regions 4/5 are configured here (instead of per-task, as they would be with
-        // STK_MPU_TASK_REGIONS=4) because this example builds with STK_MPU_TASK_REGIONS=2:
-        // each task only gets 1 application-defined region slot, reserved below for the
-        // task's own (per-instance) object memory. 'Shared code'/'shared data' are
-        // identical for every task instance, so a single global region covers all of them
-        // at once - and the region budget for this scales accordingly:
-        // STK_CORTEX_M_MPU_TASK_REGION_IDX == STK_CORTEX_M_MPU_REGIONS_MAX - STK_MPU_TASK_REGIONS,
-        // i.e. 8 - 2 == 6 static regions available here (vs. only 4 with 4 task regions).
-        //
-        // Adjust FLASH_SIZE_BYTES / SRAM_SIZE_BYTES below to match your exact STM32F4
-        // part (e.g. STM32F407: 1 MB flash / 192 KB SRAM; STM32F429: 2 MB / 256 KB).
-        // MPU region sizes must be a power of two, so pick the next power-of-two that
-        // covers your actual flash/RAM size.
-        enum EMemPartition : uint32_t
-        {
-            FLASH_BASE_ADDR   = 0x08000000UL,
-            FLASH_SIZE_BYTES  = 1024 * 1024,   // 1 MB -> ARM_MPU_REGION_SIZE_1MB
-            SRAM_BASE_ADDR    = 0x20000000UL,
-            SRAM_SIZE_BYTES   = 128  * 1024,   // 128 KB -> ARM_MPU_REGION_SIZE_128KB
-            CCMRAM_BASE_ADDR  = 0x10000000UL,  // 64KB CCM block - currently unused below
-            PERIPH_BASE_ADDR  = 0x40000000UL,  // currently unused below - see NOTE above
-            PERIPH_SIZE_BYTES = 512  * 1024 * 1024 // covers the whole peripheral aperture
-        };
-
-        extern char __stk_mpu_shared_code_start[];
-        extern char __stk_mpu_shared_code_end[];
-        extern char __stk_mpu_shared_data_start[];
-        extern char __stk_mpu_shared_data_end[];
-
-        // Static (boot-time, non per-task) region table. hw::mpu takes raw byte
-        // address/size directly - ConfigureTable() works out the ARMv7-M
-        // size-field and RBAR/RASR bit layout internally, so there's no manual
-        // register math or CMSIS ARM_MPU_* helper involved.
-        static const stk::MpuRegionConfig mpu_table[] =
-        {
-            {   // REGION 0: Flash - Privileged RO / User RO, executable, cacheable
-                .addr        = FLASH_BASE_ADDR,
-                .size        = FLASH_SIZE_BYTES,
-                .access_perm = ACCESS_PRIV_RO_USER_RO,
-                .mem_type    = TYPE_NORMAL_CACHEABLE,
-                .share       = SHARE_NON,
-                .exec        = EXEC_ALLOWED
-            },
-            {   // REGION 1: SRAM - full RW, execute-never (blocks code injection into RAM)
-                .addr        = SRAM_BASE_ADDR,
-                .size        = SRAM_SIZE_BYTES,
-                .access_perm = ACCESS_PRIV_RW_USER_NO,
-                .mem_type    = TYPE_NORMAL_CACHEABLE,
-                .share       = SHARE_NON,
-                .exec        = EXEC_NEVER
-            },
-            {   // REGION 2: NULL guard - first 256 bytes, no access at all
-                .addr        = 0x00000000UL,
-                .size        = 256U,
-                .access_perm = ACCESS_HW_NO_ACCESS,
-                .mem_type    = TYPE_STRONGLY_ORDERED,
-                .share       = SHARE_NON,
-                .exec        = EXEC_NEVER
-            },
-            {   // REGION 3: reserved/disabled placeholder (size=0, no access) - not currently
-                //           mapping anything; see the NOTE above EMemPartition for how to
-                //           repurpose this slot for a Peripherals region if needed
-                .addr        = 0U,
-                .size        = 0U,
-                .access_perm = ACCESS_NONE,
-                .mem_type    = TYPE_STRONGLY_ORDERED,
-                .share       = SHARE_NON,
-                .exec        = EXEC_ALLOWED
-            },
-            {   // REGION 4: Shared code - Privileged RO / User RO, executable, common
-                //           to every task (STK_MPU_SHARED_CODE_SECTION)
-                .addr        = hw::PtrToWord(__stk_mpu_shared_code_start),
-                .size        = hw::PtrToWord(__stk_mpu_shared_code_end) - hw::PtrToWord(__stk_mpu_shared_code_start),
-                .access_perm = ACCESS_PRIV_RO_USER_RO,
-                .mem_type    = TYPE_NORMAL_CACHEABLE,
-                .share       = SHARE_NON,
-                .exec        = EXEC_ALLOWED
-            },
-            {   // REGION 5: Shared data - full RW, execute-never, common to every task
-                //           (STK_MPU_SHARED_DATA_SECTION / STK_MPU_SHARED_BSS_SECTION)
-                .addr        = hw::PtrToWord(__stk_mpu_shared_data_start),
-                .size        = hw::PtrToWord(__stk_mpu_shared_data_end) - hw::PtrToWord(__stk_mpu_shared_data_start),
-                .access_perm = ACCESS_FULL,
-                .mem_type    = TYPE_NORMAL_CACHEABLE,
-                .share       = SHARE_NON,
-                .exec        = EXEC_NEVER
-            }
-        };
-
         // set MPU regions and notify driver that we want to enable MPU
         static const stk::MpuConfig mpu_config
         (
-            stk::MpuRegionList(mpu_table, STK_STATIC_ARRAY_SIZE(mpu_table)),
-            (hw::mpu::MPU_CFG_PRIVILEGED_BG_MEM |
-             hw::mpu::MPU_CFG_CLEAR_ON_INIT)
+            GetGlobalMpuRegions(),
+            (stk::hw::mpu::MPU_CFG_PRIVILEGED_BG_MEM |
+             stk::hw::mpu::MPU_CFG_CLEAR_ON_INIT)
         );
 
         return &mpu_config;
