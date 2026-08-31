@@ -681,6 +681,7 @@ STK provides ready-to-use ports for third-party libraries, located in `deps/port
 | Component              | Path / Link                                                                                  |
 |:-----------------------|:---------------------------------------------------------------------------------------------|
 | **lwIP**               | [deps/port/lwip](https://github.com/SuperTinyKernel-RTOS/stk/tree/main/deps/port/lwip)       |
+| **mbedTLS**            | [deps/port/mbedtls](https://github.com/SuperTinyKernel-RTOS/stk/tree/main/deps/port/mbedtls) |
 | **TinyUSB**            | [deps/port/tinyusb](https://github.com/SuperTinyKernel-RTOS/stk/tree/main/deps/port/tinyusb) |
 | **Raspberry Pico SDK** | [deps/port/rpi](https://github.com/SuperTinyKernel-RTOS/stk/tree/main/deps/port/rpi)         |
 
