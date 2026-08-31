@@ -21,21 +21,10 @@
 // Enable MPU support
 #define STK_MPU              (1)
 #define STK_MPU_STACK_GUARD  (1)
-#define STK_MPU_TASK_REGIONS (2)
+#define STK_MPU_TASK_REGIONS (2) // set to 8 for more protection of MPU against modifications (reprogrammed fully on every context switch)
 
 // Let STK process MemManage and HardFault ISRs
 #define STK_USE_MEMMANAGE_HANDLER (1)
 #define STK_USE_HARDFAULT_HANDLER (1)
-
-#ifdef _STK_ARCH_ARM_CORTEX_M
-    // Redefine if SysTick handler name is different from SysTick_Handler
-    //#define STK_SYSTICK_HANDLER SysTick_Handler
-
-    // Redefine if PendSv handler name is different from PendSV_Handler
-    //#define STK_PENDSV_HANDLER PendSV_Handler
-
-    // Redefine if SVC handler name is different from SVC_Handler
-    //#define STK_SVC_HANDLER SVC_Handler
-#endif
 
 #endif /* STK_CONFIG_H_ */
