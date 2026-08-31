@@ -73,7 +73,10 @@ async_context_t *cyw43_arch_init_default_async_context(void)
     config.task_stack = s_cyw43_async_context_stk_task_stack;
 #endif
     if (async_context_stk_init(&s_cyw43_async_context_stk, &config))
-    { return &s_cyw43_async_context_stk.core; }
+    {
+        return &s_cyw43_async_context_stk.core;
+    }
+
     return NULL;
 }
 
@@ -83,7 +86,10 @@ int cyw43_arch_init(void)
     if (!context)
     {
         context = cyw43_arch_init_default_async_context();
-        if (!context) { return PICO_ERROR_GENERIC; }
+        if (!context)
+        {
+            return PICO_ERROR_GENERIC;
+        }
         cyw43_arch_set_async_context(context);
     }
     bool ok = cyw43_driver_init(context);
