@@ -84,6 +84,8 @@ private:
 
 void RunExample()
 {
+    HAL_GetUIDw0();
+
     using namespace stk;
 
     Led::InitAll(false);

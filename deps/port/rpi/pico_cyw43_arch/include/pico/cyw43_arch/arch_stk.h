@@ -17,7 +17,11 @@
 
 // PICO_CONFIG: CYW43_TASK_STACK_SIZE, Stack size for the CYW43 STK task in 4-byte words, type=int, default=1024, group=pico_cyw43_arch
 #ifndef CYW43_TASK_STACK_SIZE
-#define CYW43_TASK_STACK_SIZE (1024U)
+    #ifdef MBEDTLS_CONFIG_FILE
+        #define CYW43_TASK_STACK_SIZE (2048U) // mbedTLS needs more stack memory
+    #else
+        #define CYW43_TASK_STACK_SIZE (1024U)
+    #endif
 #endif
 
 // PICO_CONFIG: CYW43_TASK_PRIORITY, Priority for the CYW43 STK task, type=int, default=IDLE_PRIORITY (0) + 4, group=pico_cyw43_arch
