@@ -323,20 +323,25 @@ struct MpuRegion
     \warning Fields marked with 'Offset' have static position in the structure and can't move (driver dependent).
 */
 #if STK_MPU && STK_MPU_STACK_GUARD
-struct TaskMpu
+template <uint8_t REGIONS_COUNT>
+struct TaskMpuT
 {
     /*! \var   NUM_REGIONS
         \brief Number of MPU regions per task.
-        \note  Configurable via \a STK_MPU_TASK_REGIONS (2, 4, 6, 8, 12 or 16). Slot 0 is
-               always the automatic stack guard; the remaining NUM_REGIONS-1 slots are
+        \note  Configurable via \a STK_MPU_TASK_REGIONS (2, 4, 6, 8, 12 or 16). Last available slot is
+               always the automatic stack guard; the other remaining NUM_REGIONS-1 slots are
                available to the application via \a ITask::GetMpuRegions().
         \see   Stack, STK_MPU_TASK_REGIONS
     */
-    static constexpr uint8_t NUM_REGIONS = STK_MPU_TASK_REGIONS;
+    static constexpr uint8_t NUM_REGIONS = REGIONS_COUNT;
 
     MpuRegion region[NUM_REGIONS]; //!< Array of MPU regions of size NUM_REGIONS.
 };
-#endif
+//! Per-task MPU region. If TrustZone then relates to MPU on Secure side.
+typedef TaskMpuT<STK_MPU_TASK_REGIONS> TaskMpu;
+//! Per-task MPU region related to MPU_NS on TrustZone's Non-Secure side.
+typedef TaskMpuT<STK_MPU_TASK_REGIONS_NS> TaskMpuNs;
+#endif // STK_MPU && STK_MPU_STACK_GUARD
 
 /*! \typedef MpuRegions
     \brief   List of MPU regions.
@@ -383,19 +388,19 @@ struct MpuConfig
 */
 struct Stack
 {
-    Word     SP;          //!< Offset 0: Stack Pointer (SP) register (note: must always be at offset 0).
-    uint32_t access_mode; //!< Bitfield with hardware access mode of the task (see \a EAccessMode).
+    Word      SP;          //!< Offset 0: Stack Pointer (SP) register (note: must always be at offset 0).
+    uint32_t  access_mode; //!< Bitfield with hardware access mode of the task (see \a EAccessMode).
 #if STK_MPU && STK_MPU_STACK_GUARD
-    TaskMpu  mpu;         //!< MPU regions of the task (if TrustZone: always Secure side for any task).
+    TaskMpu   mpu;         //!< MPU regions of the task (if TrustZone: always Secure side for any task).
     #ifdef _STK_CORTEX_M_TRUSTZONE
-    TaskMpu  mpu_ns;      //!< MPU regions of Non-Secure side task (only for TrustZone).
+    TaskMpuNs mpu_ns;      //!< MPU regions of Non-Secure side task (only for TrustZone).
     #endif
 #endif
 #if STK_TLS && !STK_TLS_PREFER_REGISTER
-    Word     tls;         //!< Thread-local storage if not using ARM Cortex-M R9 register for a fast inline access to TLS.
+    Word      tls;         //!< Thread-local storage if not using ARM Cortex-M R9 register for a fast inline access to TLS.
 #endif
 #if STK_STACK_NEEDS_TASK_ID
-    TId      tid;         //!< Task id (see \a STK_SEGGER_SYSVIEW, \a STK_MPU_STACK_GUARD).
+    TId       tid;         //!< Task id (see \a STK_SEGGER_SYSVIEW, \a STK_MPU_STACK_GUARD).
 #endif
 };
 
