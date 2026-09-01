@@ -1053,6 +1053,20 @@ static struct Context final : public PlatformContext
             s_StkRiscvStackIdle[hart] = m_stack_idle;
         #endif
 
+        #if STK_SEGGER_SYSVIEW
+            if (m_stack_idle->tid != SYS_TASK_ID_SLEEP)
+            {
+                // previous task went idle
+                SEGGER_SYSVIEW_OnTaskStopReady(m_stack_idle->tid, TRACE_EVENT_SWITCH);
+            }
+
+            if (m_stack_active->tid != SYS_TASK_ID_SLEEP)
+            {
+                // current task resumed execution
+                SEGGER_SYSVIEW_OnTaskStartExec(m_stack_active->tid);
+            }
+        #endif
+
             HW_ScheduleContextSwitch(hart);
         }
 
@@ -1815,6 +1829,11 @@ void Context::OnStart()
     m_started  = true;
     m_starting = false;
 
+    // start recording task execution start
+#if STK_SEGGER_SYSVIEW
+    SEGGER_SYSVIEW_OnTaskStartExec(m_stack_active->tid);
+#endif
+
     // enable SV exception
 #ifdef _STK_RISCV_USE_PENDSV
     set_csr(mie, MIP_MSIP);
@@ -1902,12 +1921,12 @@ static STK_RISCV_ISR_SECTION void OnSchedulerSleep()
     // if hit here, increase the size of STK_SLEEP_TRAP_STACK_SIZE
     STK_STATIC_ASSERT(STK_SLEEP_TRAP_STACK_SIZE >= STK_STACK_SIZE_MIN);
 
-#if STK_SEGGER_SYSVIEW
-    SEGGER_SYSVIEW_OnIdle();
-#endif
-
     for (;;)
     {
+    #if STK_SEGGER_SYSVIEW
+        SEGGER_SYSVIEW_OnIdle();
+    #endif
+
         HW_EnterSleepMode();
     }
 }
@@ -1917,12 +1936,12 @@ static STK_RISCV_ISR_SECTION void OnSchedulerSleepOverride()
     // if hit here, increase the size of STK_SLEEP_TRAP_STACK_SIZE
     STK_STATIC_ASSERT(STK_SLEEP_TRAP_STACK_SIZE >= STK_STACK_SIZE_MIN);
 
-#if STK_SEGGER_SYSVIEW
-    SEGGER_SYSVIEW_OnIdle();
-#endif
-
     for (;;)
     {
+    #if STK_SEGGER_SYSVIEW
+        SEGGER_SYSVIEW_OnIdle();
+    #endif
+
         GetContext().OnSleepOverride();
     }
 }

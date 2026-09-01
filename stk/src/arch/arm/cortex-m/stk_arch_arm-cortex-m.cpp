@@ -512,6 +512,12 @@ static void OnTaskExit();
 static void OnSchedulerSleep();
 static void OnSchedulerSleepOverride();
 static void OnSchedulerExit();
+#if STK_SEGGER_SYSVIEW
+static void SendSysDesc()
+{
+    SEGGER_SYSVIEW_SendSysDesc("SuperTinyKernel RTOS (STK)");
+}
+#endif
 } // namespace stk
 
 // Local static variables:
@@ -1738,7 +1744,7 @@ static struct Context final : public PlatformContext
             HW_CoreClockFrequency(),
             HW_CoreClockFrequency(),
             nullptr,
-            SendSysDesc);
+            stk::SendSysDesc);
     #endif
     }
 
@@ -1754,15 +1760,6 @@ static struct Context final : public PlatformContext
         #endif
         ))
         {
-        #if STK_SEGGER_SYSVIEW
-            Context &ctx = GetContext();
-            SEGGER_SYSVIEW_OnTaskStopExec();
-            if (ctx.m_stack_active->tid != SYS_TASK_ID_SLEEP)
-            {
-                SEGGER_SYSVIEW_OnTaskStartExec(ctx.m_stack_active->tid);
-            }
-        #endif
-
             HW_ScheduleContextSwitch();
         }
     }
@@ -2212,6 +2209,35 @@ extern "C" void STK_SYSTICK_HANDLER()
 #endif
 }
 
+#if STK_SEGGER_SYSVIEW
+    #define STK_SYSVIEW_CALL(func)\
+        "PUSH       {r0-r3, r7, r11, r12, LR}  \n"\
+        "BL         " #func "                  \n"\
+        "POP        {r0-r3, r7, r11, r12, LR}  \n"
+#endif
+
+#if STK_SEGGER_SYSVIEW
+extern "C" void StkSystemView_OnContextSwitch(void)
+{
+    Context &ctx = GetContext();
+
+    // exit from PendSV
+    SEGGER_SYSVIEW_RecordExitISR();
+
+    if (ctx.m_stack_idle->tid != SYS_TASK_ID_SLEEP)
+    {
+        // previous task went idle
+        SEGGER_SYSVIEW_OnTaskStopReady(ctx.m_stack_idle->tid, TRACE_EVENT_SWITCH);
+    }
+
+    if (ctx.m_stack_active->tid != SYS_TASK_ID_SLEEP)
+    {
+        // current task resumed execution
+        SEGGER_SYSVIEW_OnTaskStartExec(ctx.m_stack_active->tid);
+    }
+}
+#endif
+
 /*! \def     STK_ASM_BLOCK_MPU_STACK_GUARD
     \brief   Set MPU region(s) for a task.
     \note    Must follow the CONTROL register restore (see PrivilegeFrame).
@@ -2513,6 +2539,11 @@ extern "C" __stk_attr_naked void STK_PENDSV_HANDLER()
 
     STK_ASM_DISABLE_INTERRUPTS " \n"
 
+    // start tracing
+#if STK_SEGGER_SYSVIEW
+    STK_SYSVIEW_CALL(SEGGER_SYSVIEW_RecordEnterISR)
+#endif
+
     // save the Secure PSP unconditionally; it is the spine of the entire context
     // frame regardless of whether the task was interrupted inside Secure or
     // Non-Secure code; PSP_NS, CONTROL_NS, and both PSPLIMs are embedded inside
@@ -2643,6 +2674,11 @@ extern "C" __stk_attr_naked void STK_PENDSV_HANDLER()
 
     // Restore PSP.
     "MSR        PSP, r0          \n"
+
+    // stop tracing
+#if STK_SEGGER_SYSVIEW
+    STK_SYSVIEW_CALL(StkSystemView_OnContextSwitch)
+#endif
 
     STK_ASM_ENABLE_INTERRUPTS "  \n"
 
@@ -2882,6 +2918,11 @@ void Context::OnStart()
 #endif
 
     m_started = true;
+
+    // start recording task execution start
+#if STK_SEGGER_SYSVIEW
+    SEGGER_SYSVIEW_OnTaskStartExec(m_stack_active->tid);
+#endif
 
     // start with initially 1 elapsed tick (after timer expires), should be the last
     // in OnStart to provide full time window to the first starting task
@@ -3179,12 +3220,13 @@ void stk::OnSchedulerSleep()
     // if hit here, increase the size of STK_SLEEP_TRAP_STACK_SIZE
     STK_STATIC_ASSERT(STK_SLEEP_TRAP_STACK_SIZE >= STK_STACK_SIZE_MIN);
 
-#if STK_SEGGER_SYSVIEW
-    SEGGER_SYSVIEW_OnIdle();
-#endif
-
     for (;;)
     {
+        // record Idle state
+    #if STK_SEGGER_SYSVIEW
+        SEGGER_SYSVIEW_OnIdle();
+    #endif
+
         HW_EnterSleepMode();
     }
 }
@@ -3195,12 +3237,13 @@ void stk::OnSchedulerSleepOverride()
     // if hit here, increase the size of STK_SLEEP_TRAP_STACK_SIZE
     STK_STATIC_ASSERT(STK_SLEEP_TRAP_STACK_SIZE >= STK_STACK_SIZE_MIN);
 
-#if STK_SEGGER_SYSVIEW
-    SEGGER_SYSVIEW_OnIdle();
-#endif
-
     for (;;)
     {
+        // record Idle state
+    #if STK_SEGGER_SYSVIEW
+        SEGGER_SYSVIEW_OnIdle();
+    #endif
+
         GetContext().OnSleepOverride();
     }
 }
@@ -3214,13 +3257,6 @@ void stk::OnSchedulerExit()
     // jump back to SaveJmp's return site with m_exiting already set to true
     RestoreJmp(GetContext().m_exit_buf, 0);
 }
-
-#if STK_SEGGER_SYSVIEW
-static void SendSysDesc()
-{
-    SEGGER_SYSVIEW_SendSysDesc("SuperTinyKernel RTOS (STK)");
-}
-#endif
 
 void PlatformArmCortexM::Initialize(IEventHandler *event_handler, IKernelService *service, uint32_t resolution_us,
     Stack *exit_trap)

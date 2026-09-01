@@ -108,8 +108,9 @@ enum ESystemTaskId : uint32_t
 enum ETraceEventId : uint32_t
 {
     TRACE_EVENT_UNKNOWN = 0,        //!< Unknown / uninitialized trace event.
-    TRACE_EVENT_SWITCH  = 1000 + 1, //!< Task context switch event (task became active).
-    TRACE_EVENT_SLEEP   = 1000 + 2  //!< Task entered sleep / blocked state.
+    TRACE_EVENT_SWITCH  = 1000 + 0, //!< Task blocked by the context switch.
+    TRACE_EVENT_SLEEP   = 1000 + 1, //!< Task entered a sleep state.
+    TRACE_EVENT_WAIT    = 1000 + 2, //!< Task suspended on a sync object.
 };
 
 /*! \enum  EWaitResult

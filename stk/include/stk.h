@@ -1459,7 +1459,9 @@ protected:
         // start tracing new task
         SEGGER_SYSVIEW_OnTaskCreate(task->GetUserStackPtr()->tid);
         if (IsStarted())
+        {
             SendTaskTraceInfo(task);
+        }
     #endif
 
         m_strategy.AddTask(task);
@@ -1686,10 +1688,6 @@ protected:
 
         // is in running state
         m_kstate = KSTATE_RUNNING;
-
-    #if STK_SEGGER_SYSVIEW
-        SEGGER_SYSVIEW_OnTaskStartExec(m_task_now->tid);
-    #endif
     }
 
     /*! \brief  Called by the platform driver after a scheduler stop (all tasks have exited).
@@ -1776,6 +1774,11 @@ protected:
             }
         }
 
+        // trace blocked on Sleep
+    #if STK_SEGGER_SYSVIEW
+        SEGGER_SYSVIEW_OnTaskStopReady(task->GetUserStackPtr()->tid, TRACE_EVENT_SLEEP);
+    #endif
+
         // note: we do not spin long here, kernel will switch this task out from scheduling on the next tick
         task->BusyWaitWhileSleeping();
     }
@@ -1805,6 +1808,11 @@ protected:
             }
         }
 
+        // trace blocked on on SleepUntil
+    #if STK_SEGGER_SYSVIEW
+        SEGGER_SYSVIEW_OnTaskStopReady(task->GetUserStackPtr()->tid, TRACE_EVENT_SLEEP);
+    #endif
+
         // note: we do not spin long here, kernel will switch this task out from scheduling on the next tick
         task->BusyWaitWhileSleeping();
         return result;
@@ -1830,6 +1838,11 @@ protected:
         {
             KernelTask *const task = FindTaskByStack(stack);
             STK_ASSERT(task != nullptr);
+
+            // task is being stopped and will terminate
+        #if STK_SEGGER_SYSVIEW
+            SEGGER_SYSVIEW_OnTaskStopExec();
+        #endif
 
             // notify kernel to execute removal
             task->ScheduleRemoval();
@@ -1864,6 +1877,11 @@ protected:
 
             // start sleeping infinitely, we rely on a Wake call via WaitObject
             task->ScheduleSleep(WAIT_INFINITE);
+
+            // trace blocked on sync object's Wait
+        #if STK_SEGGER_SYSVIEW
+            SEGGER_SYSVIEW_OnTaskStopReady(task->GetUserStackPtr()->tid, TRACE_EVENT_WAIT);
+        #endif
 
             // unlock mutex locked externally, so that we could wait in a busy-waiting loop
             mutex->Unlock();
@@ -2291,11 +2309,6 @@ protected:
                 }
             }
 
-        #if STK_SEGGER_SYSVIEW
-            SEGGER_SYSVIEW_OnTaskStopReady(now->GetUserStackPtr()->tid, TRACE_EVENT_SWITCH);
-            SEGGER_SYSVIEW_OnTaskStartReady(next->GetUserStackPtr()->tid);
-        #endif
-            
             switch_context = true;
         }
 
@@ -2326,10 +2339,6 @@ protected:
 
         m_task_now = next;
 
-    #if STK_SEGGER_SYSVIEW
-        SEGGER_SYSVIEW_OnTaskStartReady(next->GetUserStackPtr()->tid);
-    #endif
-
         if __stk_constexpr_cpp17 (IsHrtMode())
         {
             next->HrtOnSwitchedIn();
@@ -2356,10 +2365,6 @@ protected:
         active = &m_sleep_trap[0].stack;
 
         m_task_now = util::DListCast::ListEntryToParent<KernelTask>(m_strategy.GetFirst());
-
-    #if STK_SEGGER_SYSVIEW
-        SEGGER_SYSVIEW_OnTaskStopReady(now->GetUserStackPtr()->tid, TRACE_EVENT_SLEEP);
-    #endif
 
         if __stk_constexpr_cpp17 (IsHrtMode())
         {
@@ -2430,13 +2435,13 @@ protected:
     {
         STK_ASSERT(task->IsBusy());
 
-        SEGGER_SYSVIEW_TASKINFO info =
+        const SEGGER_SYSVIEW_TASKINFO info =
         {
             .TaskID    = task->GetUserStackPtr()->tid,
             .sName     = task->GetUserTask()->GetTraceName(),
-            .Prio      = 0,
+            .Prio      = static_cast<U32>(task->GetWeight()),
             .StackBase = hw::PtrToWord(task->GetUserTask()->GetStack()),
-            .StackSize = task->GetUserTask()->GetStackSize() * sizeof(Word)
+            .StackSize = (task->GetUserTask()->GetStackSize() * sizeof(Word))
         };
         SEGGER_SYSVIEW_SendTaskInfo(&info);
     }
