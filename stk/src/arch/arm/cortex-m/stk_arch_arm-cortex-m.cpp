@@ -80,6 +80,22 @@ using namespace stk;
     #define STK_CORTEX_M_MPU_TASK_REGION_IDX (STK_CORTEX_M_MPU_REGIONS_MAX - STK_MPU_TASK_REGIONS)
 #endif
 
+/*! \def     STK_CORTEX_M_MPU_TASK_REGION_IDX_NS
+    \brief   Base MPU region index reserved for per-task stack protection.
+    \note    Defaults to the last \ref STK_MPU_TASK_REGIONS_NS slots (\c STK_CORTEX_M_MPU_REGIONS_MAX - \ref STK_MPU_TASK_REGIONS_NS).
+    \warning Context-switch burst writes use RBAR aliases (RBAR_A1..A3) which wrap within 4-region hardware blocks.
+             For \c STK_MPU_TASK_REGIONS_NS \c <= \c 4, index must satisfy:
+             \c (IDX \c % \c 4) \c <= \c (4 \c - \c STK_MPU_TASK_REGIONS_NS). For \c STK_MPU_TASK_REGIONS_NS \c > \c 4
+             (i.e. \c 6, \c 8, \c 12, or \c 16), the burst is split into consecutive 4-region blocks (a first, full
+             4-region block IDX..IDX+3, followed by one or more further blocks - a final 2-region block for
+             \c 6, or further full 4-region blocks for \c 8, \c 12, or \c 16), which requires the base to be
+             block-aligned: \c (IDX \c % \c 4) \c == \c 0.
+    \see     STK_ASM_BLOCK_MPU_STACK_GUARD, STK_MPU_TASK_REGIONS_NS
+*/
+#ifndef STK_CORTEX_M_MPU_TASK_REGION_IDX_NS
+    #define STK_CORTEX_M_MPU_TASK_REGION_IDX_NS (STK_CORTEX_M_MPU_REGIONS_MAX - STK_MPU_TASK_REGIONS_NS)
+#endif
+
 //! If (1), manage Link Register (LR) per task.
 #define STK_CORTEX_M_MANAGE_LR (__CORTEX_M >= 3U)
 
@@ -1482,9 +1498,10 @@ void ConfigureStatic(const MpuRegionConfig cfg_list[], size_t cfg_count, uint32_
     \param[in] cfg_list: Array of region configurations (cfg_list[i] maps to region[i]).
     \param[in] cfg_count: Number of entries in cfg_list. Must be <= TaskMpu::NUM_REGIONS.
     \param[in] overrider: Event overrider interface pointer.
+    \param[in] non_secure: (ARMv8-M TrustZone) Target MPU_NS alias when true; ignored on ARMv7-M.
 */
 void ConfigureDynamic(TaskMpu &task_mpu, const struct MpuRegionConfig cfg_list[], const size_t cfg_count,
-    IPlatform::IEventOverrider *overrider);
+    IPlatform::IEventOverrider *overrider, bool non_secure);
 
 /*! \brief     Write a computed region descriptor to a live MPU region slot.
     \details   Sets MPU->RNR = index, then writes reg.addr to MPU->RBAR and reg.attr to
@@ -1672,6 +1689,18 @@ static struct Context final : public PlatformContext
             (STK_MPU_TASK_REGIONS == 2U) || (STK_MPU_TASK_REGIONS == 4U) || (STK_MPU_TASK_REGIONS == 6U) ||
             (STK_MPU_TASK_REGIONS == 8U) || (STK_MPU_TASK_REGIONS == 12U) || (STK_MPU_TASK_REGIONS == 16U),
             "STK_MPU_TASK_REGIONS must be defined as 2, 4, 6, 8, 12 or 16");
+        #ifdef _STK_CORTEX_M_TRUSTZONE
+        STK_STATIC_ASSERT_DESC_N(mpu_ns,
+            (STK_MPU_TASK_REGIONS_NS <= 4U)
+                ? ((STK_CORTEX_M_MPU_TASK_REGION_IDX_NS % 4U) <= (4U - STK_MPU_TASK_REGIONS_NS))
+                : ((STK_CORTEX_M_MPU_TASK_REGION_IDX_NS % 4U) == 0U),
+            "STK_CORTEX_M_MPU_TASK_REGION_IDX_NS is not aligned correctly for the RNR-relative "
+            "alias burst write at the configured STK_MPU_TASK_REGIONS_NS width");
+        STK_STATIC_ASSERT_DESC_N(mpu_task_regions_ns,
+            (STK_MPU_TASK_REGIONS_NS == 2U) || (STK_MPU_TASK_REGIONS_NS == 4U) || (STK_MPU_TASK_REGIONS_NS == 6U) ||
+            (STK_MPU_TASK_REGIONS_NS == 8U) || (STK_MPU_TASK_REGIONS_NS == 12U) || (STK_MPU_TASK_REGIONS_NS == 16U),
+            "STK_MPU_TASK_REGIONS_NS must be defined as 2, 4, 6, 8, 12 or 16");
+        #endif
         // make sure linker declares __stk_mpu_shared_xxx regions correctly, i.e. code and data
         // sections must contain data
         STK_ASSERT(hw::PtrToWord(__stk_mpu_shared_code_end) - hw::PtrToWord(__stk_mpu_shared_code_start) > 0U);
@@ -2199,61 +2228,149 @@ extern "C" void STK_SYSTICK_HANDLER()
              MPU->RNR is advanced to IDX+4*N to select it. Once all blocks are written, RNR is
              restored to STK_CORTEX_M_MPU_TASK_REGION_IDX so the invariant that RNR is parked at
              the task-region base holds for the next context switch's leading alias burst.
+    \note    STK_ASM_BLOCK_MPU_S_STACK_GUARD programs the (Secure, or the only) MPU and is
+             always defined, sized/indexed by STK_MPU_TASK_REGIONS and
+             STK_CORTEX_M_MPU_TASK_REGION_IDX. STK_ASM_BLOCK_MPU_NS_STACK_GUARD programs MPU_NS
+             and is only defined when STK_CORTEX_M_TRUSTZONE_FRAME is set; it is sized/indexed
+             independently by STK_MPU_TASK_REGIONS_NS and STK_CORTEX_M_MPU_TASK_REGION_IDX_NS
+             (own mpu_ns_rnr_idx[4|8|12] operands), so the two MPUs' region counts and base
+             indices may differ freely. Both expect r1 to already hold Stack* (see
+             STK_ASM_BLOCK_MPU_STACK_GUARD, which sets r1 and then stitches the two together)
+             and both clobber r0, r4-r11, r12.
     \warning Logic depends on MpuInfo layout.
 */
+#if (STK_MPU_TASK_REGIONS == 2U)
+#define STK_ASM_BLOCK_MPU_S_STACK_GUARD\
+    "LDR   r0, =%[mpu_start_of]      \n" /* r0 = &MPU->RBAR */\
+    "ADD   r12, r1, %[mpu_reg_of]    \n" /* point to mpu.region[0] */\
+    "LDMIA r12, {r4-r7}              \n" /* burst load 4 words */\
+    "STMIA r0, {r4-r7}               \n" /* write MPU RBAR..RLAR_A1 (r0 remains anchored) */
+#elif (STK_MPU_TASK_REGIONS == 4U)
+#define STK_ASM_BLOCK_MPU_S_STACK_GUARD\
+    "LDR   r0, =%[mpu_start_of]      \n" /* r0 = &MPU->RBAR */\
+    "ADD   r12, r1, %[mpu_reg_of]    \n" /* point to mpu.region[0] */\
+    "LDMIA r12, {r4-r11}             \n" /* burst load 8 words */\
+    "STMIA r0, {r4-r11}              \n" /* write MPU RBAR..RLAR_A3 (r0 remains anchored) */
+#elif (STK_MPU_TASK_REGIONS == 6U)
+#define STK_ASM_BLOCK_MPU_S_STACK_GUARD\
+    "LDR   r0, =%[mpu_start_of]      \n" /* r0 = &MPU->RBAR */\
+    \
+    /* Block 1 (Regions 0-3 / 8 words) */\
+    "ADD   r12, r1, %[mpu_reg_of]    \n" /* point to mpu.region[0] */\
+    "LDMIA r12, {r4-r11}             \n" /* burst load 8 words */\
+    "STMIA r0, {r4-r11}              \n" /* write MPU RBAR..RLAR_A3 */\
+    \
+    /* Block 2 (Regions 4-5 / 4 words) */\
+    "LDR   r12, =%[mpu_rnr_idx4]     \n" /* r12 = IDX + 4 */\
+    "STR   r12, [r0, #-4]            \n" /* MPU->RNR = IDX + 4 (RNR is RBAR - 4) */\
+    "ADD   r12, r1, %[mpu_reg4_of]   \n" /* point to mpu.region[4] */\
+    "LDMIA r12, {r4-r7}              \n" /* burst load 4 words */\
+    "STMIA r0, {r4-r7}               \n" /* write MPU RBAR..RLAR_A1 */\
+    \
+    /* Restore RNR */\
+    "LDR   r12, =%[mpu_rnr_idx]      \n" /* r12 = IDX */\
+    "STR   r12, [r0, #-4]            \n" /* restore MPU->RNR */
+#elif (STK_MPU_TASK_REGIONS == 8U)
+#define STK_ASM_BLOCK_MPU_S_STACK_GUARD\
+    "LDR   r0, =%[mpu_start_of]      \n" /* r0 = &MPU->RBAR */\
+    \
+    /* Block 1 (Regions 0-3 / 8 words) */\
+    "ADD   r12, r1, %[mpu_reg_of]    \n" /* point to mpu.region[0] */\
+    "LDMIA r12, {r4-r11}             \n" /* burst load 8 words */\
+    "STMIA r0, {r4-r11}              \n" /* write MPU RBAR..RLAR_A3 */\
+    \
+    /* Block 2 (Regions 4-7 / 8 words) */\
+    "LDR   r12, =%[mpu_rnr_idx4]     \n" /* r12 = IDX + 4 */\
+    "STR   r12, [r0, #-4]            \n" /* MPU->RNR = IDX + 4 (RNR is RBAR - 4) */\
+    "ADD   r12, r1, %[mpu_reg4_of]   \n" /* point to mpu.region[4] */\
+    "LDMIA r12, {r4-r11}             \n" /* burst load 8 words */\
+    "STMIA r0, {r4-r11}              \n" /* write MPU RBAR..RLAR_A3 */\
+    \
+    /* Restore RNR */\
+    "LDR   r12, =%[mpu_rnr_idx]      \n" /* r12 = IDX */\
+    "STR   r12, [r0, #-4]            \n" /* restore MPU->RNR */
+#elif (STK_MPU_TASK_REGIONS == 12U)
+#define STK_ASM_BLOCK_MPU_S_STACK_GUARD\
+    "LDR   r0, =%[mpu_start_of]      \n" /* r0 = &MPU->RBAR */\
+    \
+    /* Block 1 (Regions 0-3 / 8 words) */\
+    "ADD   r12, r1, %[mpu_reg_of]    \n" /* point to mpu.region[0] */\
+    "LDMIA r12, {r4-r11}             \n" /* burst load 8 words */\
+    "STMIA r0, {r4-r11}              \n" /* write MPU RBAR..RLAR_A3 */\
+    \
+    /* Block 2 (Regions 4-7 / 8 words) */\
+    "LDR   r12, =%[mpu_rnr_idx4]     \n" /* r12 = IDX + 4 */\
+    "STR   r12, [r0, #-4]            \n" /* MPU->RNR = IDX + 4 (RNR is RBAR - 4) */\
+    "ADD   r12, r1, %[mpu_reg4_of]   \n" /* point to mpu.region[4] */\
+    "LDMIA r12, {r4-r11}             \n" /* burst load 8 words */\
+    "STMIA r0, {r4-r11}              \n" /* write MPU RBAR..RLAR_A3 */\
+    \
+    /* Block 3 (Regions 8-11 / 8 words) */\
+    "LDR   r12, =%[mpu_rnr_idx8]     \n" /* r12 = IDX + 8 */\
+    "STR   r12, [r0, #-4]            \n" /* MPU->RNR = IDX + 8 */\
+    "ADD   r12, r1, %[mpu_reg8_of]   \n" /* point to mpu.region[8] */\
+    "LDMIA r12, {r4-r11}             \n" /* burst load 8 words */\
+    "STMIA r0, {r4-r11}              \n" /* write MPU RBAR..RLAR_A3 */\
+    \
+    /* Restore RNR */\
+    "LDR   r12, =%[mpu_rnr_idx]      \n" /* r12 = IDX */\
+    "STR   r12, [r0, #-4]            \n" /* restore MPU->RNR */
+#elif (STK_MPU_TASK_REGIONS == 16U)
+#define STK_ASM_BLOCK_MPU_S_STACK_GUARD\
+    "LDR   r0, =%[mpu_start_of]      \n" /* r0 = &MPU->RBAR */\
+    \
+    /* Block 1 (Regions 0-3 / 8 words) */\
+    "ADD   r12, r1, %[mpu_reg_of]    \n" /* point to mpu.region[0] */\
+    "LDMIA r12, {r4-r11}             \n" /* burst load 8 words */\
+    "STMIA r0, {r4-r11}              \n" /* write MPU RBAR..RLAR_A3 */\
+    \
+    /* Block 2 (Regions 4-7 / 8 words) */\
+    "LDR   r12, =%[mpu_rnr_idx4]     \n" /* r12 = IDX + 4 */\
+    "STR   r12, [r0, #-4]            \n" /* MPU->RNR = IDX + 4 (RNR is RBAR - 4) */\
+    "ADD   r12, r1, %[mpu_reg4_of]   \n" /* point to mpu.region[4] */\
+    "LDMIA r12, {r4-r11}             \n" /* burst load 8 words */\
+    "STMIA r0, {r4-r11}              \n" /* write MPU RBAR..RLAR_A3 */\
+    \
+    /* Block 3 (Regions 8-11 / 8 words) */\
+    "LDR   r12, =%[mpu_rnr_idx8]     \n" /* r12 = IDX + 8 */\
+    "STR   r12, [r0, #-4]            \n" /* MPU->RNR = IDX + 8 */\
+    "ADD   r12, r1, %[mpu_reg8_of]   \n" /* point to mpu.region[8] */\
+    "LDMIA r12, {r4-r11}             \n" /* burst load 8 words */\
+    "STMIA r0, {r4-r11}              \n" /* write MPU RBAR..RLAR_A3 */\
+    \
+    /* Block 4 (Regions 12-15 / 8 words) */\
+    "LDR   r12, =%[mpu_rnr_idx12]    \n" /* r12 = IDX + 12 */\
+    "STR   r12, [r0, #-4]            \n" /* MPU->RNR = IDX + 12 */\
+    "ADD   r12, r1, %[mpu_reg12_of]  \n" /* point to mpu.region[12] */\
+    "LDMIA r12, {r4-r11}             \n" /* burst load 8 words */\
+    "STMIA r0, {r4-r11}              \n" /* write MPU RBAR..RLAR_A3 */\
+    \
+    /* Restore RNR */\
+    "LDR   r12, =%[mpu_rnr_idx]      \n" /* r12 = IDX */\
+    "STR   r12, [r0, #-4]            \n" /* restore MPU->RNR */
+#else
+    #error "Unsupported region count, allowed - 2, 4, 6, 8, 12, 16!"
+#endif
+
 #if STK_CORTEX_M_TRUSTZONE_FRAME
-    #if (STK_MPU_TASK_REGIONS == 2U)
-    #define STK_ASM_BLOCK_MPU_STACK_GUARD\
-        "MOV   r1, %[st_active]          \n" /* r1 = Stack* */\
-        \
-        /* Secure MPU (2 regions / 4 words) */\
-        "LDR   r0, =%[mpu_start_of]      \n" /* r0 = &MPU->RBAR */\
-        "ADD   r12, r1, %[mpu_reg_of]    \n" /* point to mpu.region[0] */\
-        "LDMIA r12, {r4-r7}              \n" /* burst load 4 words */\
-        "STMIA r0, {r4-r7}               \n" /* write MPU RBAR..RLAR_A1 (r0 remains anchored) */\
+    #if (STK_MPU_TASK_REGIONS_NS == 2U)
+    #define STK_ASM_BLOCK_MPU_NS_STACK_GUARD\
         \
         /* Non-Secure Dual MPU (2 regions / 4 words) */\
         "LDR   r0, =%[mpu_ns_start_of]   \n" /* r0 = &MPU_NS->RBAR */\
         "ADD   r12, r1, %[mpu_ns_reg_of] \n" /* point to mpu_ns.region[0] */\
         "LDMIA r12, {r4-r7}              \n" /* burst load 4 words */\
         "STMIA r0, {r4-r7}               \n" /* write MPU_NS RBAR..RLAR_A1 */
-    #elif (STK_MPU_TASK_REGIONS == 4U)
-    #define STK_ASM_BLOCK_MPU_STACK_GUARD\
-        "MOV   r1, %[st_active]          \n" /* r1 = Stack* */\
-        \
-        /* Secure MPU (4 regions / 8 words) */\
-        "LDR   r0, =%[mpu_start_of]      \n" /* r0 = &MPU->RBAR */\
-        "ADD   r12, r1, %[mpu_reg_of]    \n" /* point to mpu.region[0] */\
-        "LDMIA r12, {r4-r11}             \n" /* burst load 8 words */\
-        "STMIA r0, {r4-r11}              \n" /* write MPU RBAR..RLAR_A3 (r0 remains anchored) */\
+    #elif (STK_MPU_TASK_REGIONS_NS == 4U)
+    #define STK_ASM_BLOCK_MPU_NS_STACK_GUARD\
         \
         /* Non-Secure Dual MPU (4 regions / 8 words) */\
         "LDR   r0, =%[mpu_ns_start_of]   \n" /* r0 = &MPU_NS->RBAR */\
         "ADD   r12, r1, %[mpu_ns_reg_of] \n" /* point to mpu_ns.region[0] */\
         "LDMIA r12, {r4-r11}             \n" /* burst load 8 words */\
         "STMIA r0, {r4-r11}              \n" /* write MPU_NS RBAR..RLAR_A3 */
-    #elif (STK_MPU_TASK_REGIONS == 6U)
-    #define STK_ASM_BLOCK_MPU_STACK_GUARD\
-        "MOV   r1, %[st_active]          \n" /* r1 = Stack* */\
-        \
-        /* Secure MPU (6 regions) */\
-        "LDR   r0, =%[mpu_start_of]      \n" /* r0 = &MPU->RBAR */\
-        \
-        /* Block 1 (Regions 0-3 / 8 words) */\
-        "ADD   r12, r1, %[mpu_reg_of]    \n" /* point to mpu.region[0] */\
-        "LDMIA r12, {r4-r11}             \n" /* burst load 8 words */\
-        "STMIA r0, {r4-r11}              \n" /* write MPU RBAR..RLAR_A3 */\
-        \
-        /* Block 2 (Regions 4-5 / 4 words) */\
-        "LDR   r12, =%[mpu_rnr_idx4]     \n" /* r12 = IDX + 4 */\
-        "STR   r12, [r0, #-4]            \n" /* MPU->RNR = IDX + 4 (RNR is RBAR - 4) */\
-        "ADD   r12, r1, %[mpu_reg4_of]   \n" /* point to mpu.region[4] */\
-        "LDMIA r12, {r4-r7}              \n" /* burst load 4 words */\
-        "STMIA r0, {r4-r7}               \n" /* write MPU RBAR..RLAR_A1 */\
-        \
-        /* Restore Secure RNR */\
-        "LDR   r12, =%[mpu_rnr_idx]      \n" /* r12 = IDX */\
-        "STR   r12, [r0, #-4]            \n" /* restore MPU->RNR */\
+    #elif (STK_MPU_TASK_REGIONS_NS == 6U)
+    #define STK_ASM_BLOCK_MPU_NS_STACK_GUARD\
         \
         /* Non-Secure Dual MPU (6 regions) */\
         "LDR   r0, =%[mpu_ns_start_of]   \n" /* r0 = &MPU_NS->RBAR */\
@@ -2264,37 +2381,17 @@ extern "C" void STK_SYSTICK_HANDLER()
         "STMIA r0, {r4-r11}              \n" /* write MPU_NS RBAR..RLAR_A3 */\
         \
         /* NS Block 2 (Regions 4-5 / 4 words) */\
-        "LDR   r12, =%[mpu_rnr_idx4]     \n" /* r12 = IDX + 4 */\
+        "LDR   r12, =%[mpu_ns_rnr_idx4]     \n" /* r12 = IDX + 4 */\
         "STR   r12, [r0, #-4]            \n" /* MPU_NS->RNR = IDX + 4 */\
         "ADD   r12, r1, %[mpu_ns_reg4_of]\n" /* point to mpu_ns.region[4] */\
         "LDMIA r12, {r4-r7}              \n" /* burst load 4 words */\
         "STMIA r0, {r4-r7}               \n" /* write MPU_NS RBAR..RLAR_A1 */\
         \
         /* Restore NS RNR */\
-        "LDR   r12, =%[mpu_rnr_idx]      \n" /* r12 = IDX */\
+        "LDR   r12, =%[mpu_ns_rnr_idx]      \n" /* r12 = IDX */\
         "STR   r12, [r0, #-4]            \n" /* restore MPU_NS->RNR */
-    #elif (STK_MPU_TASK_REGIONS == 8U)
-    #define STK_ASM_BLOCK_MPU_STACK_GUARD\
-        "MOV   r1, %[st_active]          \n" /* r1 = Stack* */\
-        \
-        /* Secure MPU (8 regions) */\
-        "LDR   r0, =%[mpu_start_of]      \n" /* r0 = &MPU->RBAR */\
-        \
-        /* Block 1 (Regions 0-3 / 8 words) */\
-        "ADD   r12, r1, %[mpu_reg_of]    \n" /* point to mpu.region[0] */\
-        "LDMIA r12, {r4-r11}             \n" /* burst load 8 words */\
-        "STMIA r0, {r4-r11}              \n" /* write MPU RBAR..RLAR_A3 */\
-        \
-        /* Block 2 (Regions 4-7 / 8 words) */\
-        "LDR   r12, =%[mpu_rnr_idx4]     \n" /* r12 = IDX + 4 */\
-        "STR   r12, [r0, #-4]            \n" /* MPU->RNR = IDX + 4 (RNR is RBAR - 4) */\
-        "ADD   r12, r1, %[mpu_reg4_of]   \n" /* point to mpu.region[4] */\
-        "LDMIA r12, {r4-r11}             \n" /* burst load 8 words */\
-        "STMIA r0, {r4-r11}              \n" /* write MPU RBAR..RLAR_A3 */\
-        \
-        /* Restore Secure RNR */\
-        "LDR   r12, =%[mpu_rnr_idx]      \n" /* r12 = IDX */\
-        "STR   r12, [r0, #-4]            \n" /* restore MPU->RNR */\
+    #elif (STK_MPU_TASK_REGIONS_NS == 8U)
+    #define STK_ASM_BLOCK_MPU_NS_STACK_GUARD\
         \
         /* Non-Secure Dual MPU (8 regions) */\
         "LDR   r0, =%[mpu_ns_start_of]   \n" /* r0 = &MPU_NS->RBAR */\
@@ -2305,44 +2402,17 @@ extern "C" void STK_SYSTICK_HANDLER()
         "STMIA r0, {r4-r11}              \n" /* write MPU_NS RBAR..RLAR_A3 */\
         \
         /* NS Block 2 (Regions 4-7 / 8 words) */\
-        "LDR   r12, =%[mpu_rnr_idx4]     \n" /* r12 = IDX + 4 */\
+        "LDR   r12, =%[mpu_ns_rnr_idx4]     \n" /* r12 = IDX + 4 */\
         "STR   r12, [r0, #-4]            \n" /* MPU_NS->RNR = IDX + 4 */\
         "ADD   r12, r1, %[mpu_ns_reg4_of]\n" /* point to mpu_ns.region[4] */\
         "LDMIA r12, {r4-r11}             \n" /* burst load 8 words */\
         "STMIA r0, {r4-r11}              \n" /* write MPU_NS RBAR..RLAR_A3 */\
         \
         /* Restore NS RNR */\
-        "LDR   r12, =%[mpu_rnr_idx]      \n" /* r12 = IDX */\
+        "LDR   r12, =%[mpu_ns_rnr_idx]      \n" /* r12 = IDX */\
         "STR   r12, [r0, #-4]            \n" /* restore MPU_NS->RNR */
-    #elif (STK_MPU_TASK_REGIONS == 12U)
-    #define STK_ASM_BLOCK_MPU_STACK_GUARD\
-        "MOV   r1, %[st_active]          \n" /* r1 = Stack* */\
-        \
-        /* Secure MPU (12 regions / 3 blocks) */\
-        "LDR   r0, =%[mpu_start_of]      \n" /* r0 = &MPU->RBAR */\
-        \
-        /* Block 1 (Regions 0-3 / 8 words) */\
-        "ADD   r12, r1, %[mpu_reg_of]    \n" /* point to mpu.region[0] */\
-        "LDMIA r12, {r4-r11}             \n" /* burst load 8 words */\
-        "STMIA r0, {r4-r11}              \n" /* write MPU RBAR..RLAR_A3 */\
-        \
-        /* Block 2 (Regions 4-7 / 8 words) */\
-        "LDR   r12, =%[mpu_rnr_idx4]     \n" /* r12 = IDX + 4 */\
-        "STR   r12, [r0, #-4]            \n" /* MPU->RNR = IDX + 4 (RNR is RBAR - 4) */\
-        "ADD   r12, r1, %[mpu_reg4_of]   \n" /* point to mpu.region[4] */\
-        "LDMIA r12, {r4-r11}             \n" /* burst load 8 words */\
-        "STMIA r0, {r4-r11}              \n" /* write MPU RBAR..RLAR_A3 */\
-        \
-        /* Block 3 (Regions 8-11 / 8 words) */\
-        "LDR   r12, =%[mpu_rnr_idx8]     \n" /* r12 = IDX + 8 */\
-        "STR   r12, [r0, #-4]            \n" /* MPU->RNR = IDX + 8 */\
-        "ADD   r12, r1, %[mpu_reg8_of]   \n" /* point to mpu.region[8] */\
-        "LDMIA r12, {r4-r11}             \n" /* burst load 8 words */\
-        "STMIA r0, {r4-r11}              \n" /* write MPU RBAR..RLAR_A3 */\
-        \
-        /* Restore Secure RNR */\
-        "LDR   r12, =%[mpu_rnr_idx]      \n" /* r12 = IDX */\
-        "STR   r12, [r0, #-4]            \n" /* restore MPU->RNR */\
+    #elif (STK_MPU_TASK_REGIONS_NS == 12U)
+    #define STK_ASM_BLOCK_MPU_NS_STACK_GUARD\
         \
         /* Non-Secure Dual MPU (12 regions / 3 blocks) */\
         "LDR   r0, =%[mpu_ns_start_of]   \n" /* r0 = &MPU_NS->RBAR */\
@@ -2353,58 +2423,24 @@ extern "C" void STK_SYSTICK_HANDLER()
         "STMIA r0, {r4-r11}              \n" /* write MPU_NS RBAR..RLAR_A3 */\
         \
         /* NS Block 2 (Regions 4-7 / 8 words) */\
-        "LDR   r12, =%[mpu_rnr_idx4]     \n" /* r12 = IDX + 4 */\
+        "LDR   r12, =%[mpu_ns_rnr_idx4]     \n" /* r12 = IDX + 4 */\
         "STR   r12, [r0, #-4]            \n" /* MPU_NS->RNR = IDX + 4 */\
         "ADD   r12, r1, %[mpu_ns_reg4_of]\n" /* point to mpu_ns.region[4] */\
         "LDMIA r12, {r4-r11}             \n" /* burst load 8 words */\
         "STMIA r0, {r4-r11}              \n" /* write MPU_NS RBAR..RLAR_A3 */\
         \
         /* NS Block 3 (Regions 8-11 / 8 words) */\
-        "LDR   r12, =%[mpu_rnr_idx8]     \n" /* r12 = IDX + 8 */\
+        "LDR   r12, =%[mpu_ns_rnr_idx8]     \n" /* r12 = IDX + 8 */\
         "STR   r12, [r0, #-4]            \n" /* MPU_NS->RNR = IDX + 8 */\
         "ADD   r12, r1, %[mpu_ns_reg8_of]\n" /* point to mpu_ns.region[8] */\
         "LDMIA r12, {r4-r11}             \n" /* burst load 8 words */\
         "STMIA r0, {r4-r11}              \n" /* write MPU_NS RBAR..RLAR_A3 */\
         \
         /* Restore NS RNR */\
-        "LDR   r12, =%[mpu_rnr_idx]      \n" /* r12 = IDX */\
+        "LDR   r12, =%[mpu_ns_rnr_idx]      \n" /* r12 = IDX */\
         "STR   r12, [r0, #-4]            \n" /* restore MPU_NS->RNR */
-    #elif (STK_MPU_TASK_REGIONS == 16U)
-    #define STK_ASM_BLOCK_MPU_STACK_GUARD\
-        "MOV   r1, %[st_active]          \n" /* r1 = Stack* */\
-        \
-        /* Secure MPU (16 regions / 4 blocks) */\
-        "LDR   r0, =%[mpu_start_of]      \n" /* r0 = &MPU->RBAR */\
-        \
-        /* Block 1 (Regions 0-3 / 8 words) */\
-        "ADD   r12, r1, %[mpu_reg_of]    \n" /* point to mpu.region[0] */\
-        "LDMIA r12, {r4-r11}             \n" /* burst load 8 words */\
-        "STMIA r0, {r4-r11}              \n" /* write MPU RBAR..RLAR_A3 */\
-        \
-        /* Block 2 (Regions 4-7 / 8 words) */\
-        "LDR   r12, =%[mpu_rnr_idx4]     \n" /* r12 = IDX + 4 */\
-        "STR   r12, [r0, #-4]            \n" /* MPU->RNR = IDX + 4 (RNR is RBAR - 4) */\
-        "ADD   r12, r1, %[mpu_reg4_of]   \n" /* point to mpu.region[4] */\
-        "LDMIA r12, {r4-r11}             \n" /* burst load 8 words */\
-        "STMIA r0, {r4-r11}              \n" /* write MPU RBAR..RLAR_A3 */\
-        \
-        /* Block 3 (Regions 8-11 / 8 words) */\
-        "LDR   r12, =%[mpu_rnr_idx8]     \n" /* r12 = IDX + 8 */\
-        "STR   r12, [r0, #-4]            \n" /* MPU->RNR = IDX + 8 */\
-        "ADD   r12, r1, %[mpu_reg8_of]   \n" /* point to mpu.region[8] */\
-        "LDMIA r12, {r4-r11}             \n" /* burst load 8 words */\
-        "STMIA r0, {r4-r11}              \n" /* write MPU RBAR..RLAR_A3 */\
-        \
-        /* Block 4 (Regions 12-15 / 8 words) */\
-        "LDR   r12, =%[mpu_rnr_idx12]    \n" /* r12 = IDX + 12 */\
-        "STR   r12, [r0, #-4]            \n" /* MPU->RNR = IDX + 12 */\
-        "ADD   r12, r1, %[mpu_reg12_of]  \n" /* point to mpu.region[12] */\
-        "LDMIA r12, {r4-r11}             \n" /* burst load 8 words */\
-        "STMIA r0, {r4-r11}              \n" /* write MPU RBAR..RLAR_A3 */\
-        \
-        /* Restore Secure RNR */\
-        "LDR   r12, =%[mpu_rnr_idx]      \n" /* r12 = IDX */\
-        "STR   r12, [r0, #-4]            \n" /* restore MPU->RNR */\
+    #elif (STK_MPU_TASK_REGIONS_NS == 16U)
+    #define STK_ASM_BLOCK_MPU_NS_STACK_GUARD\
         \
         /* Non-Secure Dual MPU (16 regions / 4 blocks) */\
         "LDR   r0, =%[mpu_ns_start_of]   \n" /* r0 = &MPU_NS->RBAR */\
@@ -2415,153 +2451,44 @@ extern "C" void STK_SYSTICK_HANDLER()
         "STMIA r0, {r4-r11}              \n" /* write MPU_NS RBAR..RLAR_A3 */\
         \
         /* NS Block 2 (Regions 4-7 / 8 words) */\
-        "LDR   r12, =%[mpu_rnr_idx4]     \n" /* r12 = IDX + 4 */\
+        "LDR   r12, =%[mpu_ns_rnr_idx4]     \n" /* r12 = IDX + 4 */\
         "STR   r12, [r0, #-4]            \n" /* MPU_NS->RNR = IDX + 4 */\
         "ADD   r12, r1, %[mpu_ns_reg4_of]\n" /* point to mpu_ns.region[4] */\
         "LDMIA r12, {r4-r11}             \n" /* burst load 8 words */\
         "STMIA r0, {r4-r11}              \n" /* write MPU_NS RBAR..RLAR_A3 */\
         \
         /* NS Block 3 (Regions 8-11 / 8 words) */\
-        "LDR   r12, =%[mpu_rnr_idx8]     \n" /* r12 = IDX + 8 */\
+        "LDR   r12, =%[mpu_ns_rnr_idx8]     \n" /* r12 = IDX + 8 */\
         "STR   r12, [r0, #-4]            \n" /* MPU_NS->RNR = IDX + 8 */\
         "ADD   r12, r1, %[mpu_ns_reg8_of]\n" /* point to mpu_ns.region[8] */\
         "LDMIA r12, {r4-r11}             \n" /* burst load 8 words */\
         "STMIA r0, {r4-r11}              \n" /* write MPU_NS RBAR..RLAR_A3 */\
         \
         /* NS Block 4 (Regions 12-15 / 8 words) */\
-        "LDR   r12, =%[mpu_rnr_idx12]    \n" /* r12 = IDX + 12 */\
+        "LDR   r12, =%[mpu_ns_rnr_idx12]    \n" /* r12 = IDX + 12 */\
         "STR   r12, [r0, #-4]            \n" /* MPU_NS->RNR = IDX + 12 */\
         "ADD   r12, r1, %[mpu_ns_reg12_of]\n" /* point to mpu_ns.region[12] */\
         "LDMIA r12, {r4-r11}             \n" /* burst load 8 words */\
         "STMIA r0, {r4-r11}              \n" /* write MPU_NS RBAR..RLAR_A3 */\
         \
         /* Restore NS RNR */\
-        "LDR   r12, =%[mpu_rnr_idx]      \n" /* r12 = IDX */\
+        "LDR   r12, =%[mpu_ns_rnr_idx]      \n" /* r12 = IDX */\
         "STR   r12, [r0, #-4]            \n" /* restore MPU_NS->RNR */
-    #else
-        #error "Unsupported region count, allowed - 2, 4, 6, 8, 12, 16!"
-    #endif
-#else
-    #if (STK_MPU_TASK_REGIONS == 2U)
-    #define STK_ASM_BLOCK_MPU_STACK_GUARD\
-        "MOV   r1, %[st_active]          \n" /* r1 = Stack* */\
-        "LDR   r0, =%[mpu_start_of]      \n" /* r0 = &MPU->RBAR */\
-        "ADD   r12, r1, %[mpu_reg_of]    \n" /* point to mpu.region[0] */\
-        "LDMIA r12, {r4-r7}              \n" /* burst load 4 words */\
-        "STMIA r0, {r4-r7}               \n" /* write MPU RBAR..RLAR_A1 (r0 remains anchored) */
-    #elif (STK_MPU_TASK_REGIONS == 4U)
-    #define STK_ASM_BLOCK_MPU_STACK_GUARD\
-        "MOV   r1, %[st_active]          \n" /* r1 = Stack* */\
-        "LDR   r0, =%[mpu_start_of]      \n" /* r0 = &MPU->RBAR */\
-        "ADD   r12, r1, %[mpu_reg_of]    \n" /* point to mpu.region[0] */\
-        "LDMIA r12, {r4-r11}             \n" /* burst load 8 words */\
-        "STMIA r0, {r4-r11}              \n" /* write MPU RBAR..RLAR_A3 (r0 remains anchored) */
-    #elif (STK_MPU_TASK_REGIONS == 6U)
-    #define STK_ASM_BLOCK_MPU_STACK_GUARD\
-        "MOV   r1, %[st_active]          \n" /* r1 = Stack* */\
-        "LDR   r0, =%[mpu_start_of]      \n" /* r0 = &MPU->RBAR */\
-        \
-        /* Block 1 (Regions 0-3 / 8 words) */\
-        "ADD   r12, r1, %[mpu_reg_of]    \n" /* point to mpu.region[0] */\
-        "LDMIA r12, {r4-r11}             \n" /* burst load 8 words */\
-        "STMIA r0, {r4-r11}              \n" /* write MPU RBAR..RLAR_A3 */\
-        \
-        /* Block 2 (Regions 4-5 / 4 words) */\
-        "LDR   r12, =%[mpu_rnr_idx4]     \n" /* r12 = IDX + 4 */\
-        "STR   r12, [r0, #-4]            \n" /* MPU->RNR = IDX + 4 (RNR is RBAR - 4) */\
-        "ADD   r12, r1, %[mpu_reg4_of]   \n" /* point to mpu.region[4] */\
-        "LDMIA r12, {r4-r7}              \n" /* burst load 4 words */\
-        "STMIA r0, {r4-r7}               \n" /* write MPU RBAR..RLAR_A1 */\
-        \
-        /* Restore RNR */\
-        "LDR   r12, =%[mpu_rnr_idx]      \n" /* r12 = IDX */\
-        "STR   r12, [r0, #-4]            \n" /* restore MPU->RNR */
-    #elif (STK_MPU_TASK_REGIONS == 8U)
-    #define STK_ASM_BLOCK_MPU_STACK_GUARD\
-        "MOV   r1, %[st_active]          \n" /* r1 = Stack* */\
-        "LDR   r0, =%[mpu_start_of]      \n" /* r0 = &MPU->RBAR */\
-        \
-        /* Block 1 (Regions 0-3 / 8 words) */\
-        "ADD   r12, r1, %[mpu_reg_of]    \n" /* point to mpu.region[0] */\
-        "LDMIA r12, {r4-r11}             \n" /* burst load 8 words */\
-        "STMIA r0, {r4-r11}              \n" /* write MPU RBAR..RLAR_A3 */\
-        \
-        /* Block 2 (Regions 4-7 / 8 words) */\
-        "LDR   r12, =%[mpu_rnr_idx4]     \n" /* r12 = IDX + 4 */\
-        "STR   r12, [r0, #-4]            \n" /* MPU->RNR = IDX + 4 (RNR is RBAR - 4) */\
-        "ADD   r12, r1, %[mpu_reg4_of]   \n" /* point to mpu.region[4] */\
-        "LDMIA r12, {r4-r11}             \n" /* burst load 8 words */\
-        "STMIA r0, {r4-r11}              \n" /* write MPU RBAR..RLAR_A3 */\
-        \
-        /* Restore RNR */\
-        "LDR   r12, =%[mpu_rnr_idx]      \n" /* r12 = IDX */\
-        "STR   r12, [r0, #-4]            \n" /* restore MPU->RNR */
-    #elif (STK_MPU_TASK_REGIONS == 12U)
-    #define STK_ASM_BLOCK_MPU_STACK_GUARD\
-        "MOV   r1, %[st_active]          \n" /* r1 = Stack* */\
-        "LDR   r0, =%[mpu_start_of]      \n" /* r0 = &MPU->RBAR */\
-        \
-        /* Block 1 (Regions 0-3 / 8 words) */\
-        "ADD   r12, r1, %[mpu_reg_of]    \n" /* point to mpu.region[0] */\
-        "LDMIA r12, {r4-r11}             \n" /* burst load 8 words */\
-        "STMIA r0, {r4-r11}              \n" /* write MPU RBAR..RLAR_A3 */\
-        \
-        /* Block 2 (Regions 4-7 / 8 words) */\
-        "LDR   r12, =%[mpu_rnr_idx4]     \n" /* r12 = IDX + 4 */\
-        "STR   r12, [r0, #-4]            \n" /* MPU->RNR = IDX + 4 (RNR is RBAR - 4) */\
-        "ADD   r12, r1, %[mpu_reg4_of]   \n" /* point to mpu.region[4] */\
-        "LDMIA r12, {r4-r11}             \n" /* burst load 8 words */\
-        "STMIA r0, {r4-r11}              \n" /* write MPU RBAR..RLAR_A3 */\
-        \
-        /* Block 3 (Regions 8-11 / 8 words) */\
-        "LDR   r12, =%[mpu_rnr_idx8]     \n" /* r12 = IDX + 8 */\
-        "STR   r12, [r0, #-4]            \n" /* MPU->RNR = IDX + 8 */\
-        "ADD   r12, r1, %[mpu_reg8_of]   \n" /* point to mpu.region[8] */\
-        "LDMIA r12, {r4-r11}             \n" /* burst load 8 words */\
-        "STMIA r0, {r4-r11}              \n" /* write MPU RBAR..RLAR_A3 */\
-        \
-        /* Restore RNR */\
-        "LDR   r12, =%[mpu_rnr_idx]      \n" /* r12 = IDX */\
-        "STR   r12, [r0, #-4]            \n" /* restore MPU->RNR */
-    #elif (STK_MPU_TASK_REGIONS == 16U)
-    #define STK_ASM_BLOCK_MPU_STACK_GUARD\
-        "MOV   r1, %[st_active]          \n" /* r1 = Stack* */\
-        "LDR   r0, =%[mpu_start_of]      \n" /* r0 = &MPU->RBAR */\
-        \
-        /* Block 1 (Regions 0-3 / 8 words) */\
-        "ADD   r12, r1, %[mpu_reg_of]    \n" /* point to mpu.region[0] */\
-        "LDMIA r12, {r4-r11}             \n" /* burst load 8 words */\
-        "STMIA r0, {r4-r11}              \n" /* write MPU RBAR..RLAR_A3 */\
-        \
-        /* Block 2 (Regions 4-7 / 8 words) */\
-        "LDR   r12, =%[mpu_rnr_idx4]     \n" /* r12 = IDX + 4 */\
-        "STR   r12, [r0, #-4]            \n" /* MPU->RNR = IDX + 4 (RNR is RBAR - 4) */\
-        "ADD   r12, r1, %[mpu_reg4_of]   \n" /* point to mpu.region[4] */\
-        "LDMIA r12, {r4-r11}             \n" /* burst load 8 words */\
-        "STMIA r0, {r4-r11}              \n" /* write MPU RBAR..RLAR_A3 */\
-        \
-        /* Block 3 (Regions 8-11 / 8 words) */\
-        "LDR   r12, =%[mpu_rnr_idx8]     \n" /* r12 = IDX + 8 */\
-        "STR   r12, [r0, #-4]            \n" /* MPU->RNR = IDX + 8 */\
-        "ADD   r12, r1, %[mpu_reg8_of]   \n" /* point to mpu.region[8] */\
-        "LDMIA r12, {r4-r11}             \n" /* burst load 8 words */\
-        "STMIA r0, {r4-r11}              \n" /* write MPU RBAR..RLAR_A3 */\
-        \
-        /* Block 4 (Regions 12-15 / 8 words) */\
-        "LDR   r12, =%[mpu_rnr_idx12]    \n" /* r12 = IDX + 12 */\
-        "STR   r12, [r0, #-4]            \n" /* MPU->RNR = IDX + 12 */\
-        "ADD   r12, r1, %[mpu_reg12_of]  \n" /* point to mpu.region[12] */\
-        "LDMIA r12, {r4-r11}             \n" /* burst load 8 words */\
-        "STMIA r0, {r4-r11}              \n" /* write MPU RBAR..RLAR_A3 */\
-        \
-        /* Restore RNR */\
-        "LDR   r12, =%[mpu_rnr_idx]      \n" /* r12 = IDX */\
-        "STR   r12, [r0, #-4]            \n" /* restore MPU->RNR */
     #else
         #error "Unsupported region count, allowed - 2, 4, 6, 8, 12, 16!"
     #endif
 #endif
 
+#if STK_CORTEX_M_TRUSTZONE_FRAME
+    #define STK_ASM_BLOCK_MPU_STACK_GUARD\
+        "MOV   r1, %[st_active]          \n" /* r1 = Stack* */\
+        STK_ASM_BLOCK_MPU_S_STACK_GUARD\
+        STK_ASM_BLOCK_MPU_NS_STACK_GUARD
+#else
+    #define STK_ASM_BLOCK_MPU_STACK_GUARD\
+        "MOV   r1, %[st_active]          \n" /* r1 = Stack* */\
+        STK_ASM_BLOCK_MPU_S_STACK_GUARD
+#endif
 
 extern "C" __stk_attr_naked void STK_PENDSV_HANDLER()
 {
@@ -2754,14 +2681,18 @@ extern "C" __stk_attr_naked void STK_PENDSV_HANDLER()
     #if STK_CORTEX_M_TRUSTZONE_FRAME
     , [mpu_ns_start_of] "i" (&MPU_NS->RBAR)
     , [mpu_ns_reg_of]   "i" (offsetof(Stack, mpu_ns.region[0].addr))
-      #if (STK_MPU_TASK_REGIONS > 4U)
-    , [mpu_ns_reg4_of]  "i" (offsetof(Stack, mpu_ns.region[4].addr))
+      #if (STK_MPU_TASK_REGIONS_NS > 4U)
+    , [mpu_ns_rnr_idx]   "i" (STK_CORTEX_M_MPU_TASK_REGION_IDX_NS)
+    , [mpu_ns_reg4_of]   "i" (offsetof(Stack, mpu_ns.region[4].addr))
+    , [mpu_ns_rnr_idx4]  "i" (STK_CORTEX_M_MPU_TASK_REGION_IDX_NS + 4U)
       #endif
-      #if (STK_MPU_TASK_REGIONS > 8U)
-    , [mpu_ns_reg8_of]  "i" (offsetof(Stack, mpu_ns.region[8].addr))
+      #if (STK_MPU_TASK_REGIONS_NS > 8U)
+    , [mpu_ns_reg8_of]   "i" (offsetof(Stack, mpu_ns.region[8].addr))
+    , [mpu_ns_rnr_idx8]  "i" (STK_CORTEX_M_MPU_TASK_REGION_IDX_NS + 8U)
       #endif
-      #if (STK_MPU_TASK_REGIONS > 12U)
-    , [mpu_ns_reg12_of] "i" (offsetof(Stack, mpu_ns.region[12].addr))
+      #if (STK_MPU_TASK_REGIONS_NS > 12U)
+    , [mpu_ns_reg12_of]  "i" (offsetof(Stack, mpu_ns.region[12].addr))
+    , [mpu_ns_rnr_idx12] "i" (STK_CORTEX_M_MPU_TASK_REGION_IDX_NS + 12U)
       #endif
     #endif
 #endif
@@ -2877,14 +2808,18 @@ __stk_attr_naked void OnTaskStart()
     #if STK_CORTEX_M_TRUSTZONE_FRAME
     , [mpu_ns_start_of] "i" (&MPU_NS->RBAR)
     , [mpu_ns_reg_of]   "i" (offsetof(Stack, mpu_ns.region[0].addr))
-      #if (STK_MPU_TASK_REGIONS > 4U)
-    , [mpu_ns_reg4_of]  "i" (offsetof(Stack, mpu_ns.region[4].addr))
+      #if (STK_MPU_TASK_REGIONS_NS > 4U)
+    , [mpu_ns_rnr_idx]   "i" (STK_CORTEX_M_MPU_TASK_REGION_IDX_NS)
+    , [mpu_ns_reg4_of]   "i" (offsetof(Stack, mpu_ns.region[4].addr))
+    , [mpu_ns_rnr_idx4]  "i" (STK_CORTEX_M_MPU_TASK_REGION_IDX_NS + 4U)
       #endif
-      #if (STK_MPU_TASK_REGIONS > 8U)
-    , [mpu_ns_reg8_of]  "i" (offsetof(Stack, mpu_ns.region[8].addr))
+      #if (STK_MPU_TASK_REGIONS_NS > 8U)
+    , [mpu_ns_reg8_of]   "i" (offsetof(Stack, mpu_ns.region[8].addr))
+    , [mpu_ns_rnr_idx8]  "i" (STK_CORTEX_M_MPU_TASK_REGION_IDX_NS + 8U)
       #endif
-      #if (STK_MPU_TASK_REGIONS > 12U)
-    , [mpu_ns_reg12_of] "i" (offsetof(Stack, mpu_ns.region[12].addr))
+      #if (STK_MPU_TASK_REGIONS_NS > 12U)
+    , [mpu_ns_reg12_of]  "i" (offsetof(Stack, mpu_ns.region[12].addr))
+    , [mpu_ns_rnr_idx12] "i" (STK_CORTEX_M_MPU_TASK_REGION_IDX_NS + 12U)
       #endif
     #endif
 #endif
@@ -3377,7 +3312,7 @@ static void ConfigureTaskMpu(IPlatform::IEventOverrider *overrider, Stack *stack
 #endif
 
     // any slots beyond cfg_count are left disabled by ConfigureDynamic() itself
-    hw::mpu::ConfigureDynamic(task_mpu, task_mpu_cfg, cfg_count, overrider);
+    hw::mpu::ConfigureDynamic(task_mpu, task_mpu_cfg, cfg_count, overrider, non_secure);
 }
 #endif // STK_MPU_STACK_GUARD
 
@@ -4233,7 +4168,9 @@ void hw::mpu::ConfigureStatic(const MpuRegionConfig cfg_list[], size_t cfg_count
     bool non_secure)
 {
     STK_ASSERT((cfg_list != nullptr) || (cfg_count == 0U));
-    STK_ASSERT((cfg_count <= STK_CORTEX_M_MPU_TASK_REGION_IDX) || (STK_CORTEX_M_MPU_TASK_REGION_IDX == 0U));
+
+    const size_t region_idx = (non_secure ? STK_CORTEX_M_MPU_TASK_REGION_IDX_NS : STK_CORTEX_M_MPU_TASK_REGION_IDX);
+    STK_ASSERT((cfg_count <= region_idx) || (region_idx == 0U));
 
     // validate static table configuration against internal overlaps before writing hardware
     ValidateNoOverlaps(nullptr, 0U, cfg_list, cfg_count);
@@ -4256,7 +4193,7 @@ void hw::mpu::ConfigureStatic(const MpuRegionConfig cfg_list[], size_t cfg_count
     // disable every remaining static-region slot so a shorter table than a previous
     // call can never leave stale configuration active in hardware; callers no longer
     // need to supply placeholder/empty entries just to occupy unused regions
-    for (; index < STK_CORTEX_M_MPU_TASK_REGION_IDX; ++index)
+    for (; index < region_idx; ++index)
     {
         MpuRegion reg;
         ConfigureRegion(reg, s_StkDisabledMpuRegion, static_cast<uint32_t>(index));
@@ -4281,19 +4218,22 @@ void hw::mpu::ConfigureStatic(const MpuRegionConfig cfg_list[], size_t cfg_count
     #endif
 
         // point to the start of the per-task config area
-        MPU_ptr->RNR = STK_CORTEX_M_MPU_TASK_REGION_IDX;
+        MPU_ptr->RNR = region_idx;
     }
 
     Enable(true, control_flags, non_secure);
 }
 
 void hw::mpu::ConfigureDynamic(TaskMpu &task_mpu, const struct MpuRegionConfig cfg_list[],
-    const size_t cfg_count, IPlatform::IEventOverrider *overrider)
+    const size_t cfg_count, IPlatform::IEventOverrider *overrider, bool non_secure)
 {
     STK_ASSERT((cfg_list != nullptr) || (cfg_count == 0U));
-    STK_ASSERT(cfg_count <= TaskMpu::NUM_REGIONS);
 
-    const size_t clamped_count = ((cfg_count <= TaskMpu::NUM_REGIONS) ? cfg_count : TaskMpu::NUM_REGIONS);
+    const size_t region_idx = (non_secure ? STK_CORTEX_M_MPU_TASK_REGION_IDX_NS : STK_CORTEX_M_MPU_TASK_REGION_IDX);
+    const size_t task_mpu_regions = (non_secure ? TaskMpuNs::NUM_REGIONS : TaskMpu::NUM_REGIONS);
+    STK_ASSERT(cfg_count <= task_mpu_regions);
+
+    const size_t clamped_count = Min(cfg_count, task_mpu_regions);
 
     // retrieve static regions directly via overrider getter
     MpuRegionList static_regions(nullptr, 0);
@@ -4309,24 +4249,23 @@ void hw::mpu::ConfigureDynamic(TaskMpu &task_mpu, const struct MpuRegionConfig c
     // validate task region list internal consistency
     ValidateNoOverlaps(static_regions.GetPtr(), static_regions.GetSize(), cfg_list, clamped_count);
 
-    // cfg_list[i] always targets task-relative slot i (hardware region
-    // STK_CORTEX_M_MPU_TASK_REGION_IDX + i): the index is derived from array position
-    // rather than being supplied by the caller
+    // cfg_list[i] always targets task-relative slot i (hardware region region_idx + i): the index
+    // is derived from array position rather than being supplied by the caller
     size_t task_idx = 0U;
     for (; task_idx < clamped_count; ++task_idx)
     {
         ConfigureRegion(task_mpu.region[task_idx], cfg_list[task_idx],
-            static_cast<uint32_t>(STK_CORTEX_M_MPU_TASK_REGION_IDX + task_idx));
+            static_cast<uint32_t>(region_idx + task_idx));
     }
 
     // fill any remaining task slots with a disabled-region descriptor so callers no
     // longer need to supply placeholder/empty entries just to occupy unused slots;
-    // this only updates the in-memory shadow table -- it takes effect in hardware on
+    // this only updates the in-memory shadow table, it takes effect in hardware on
     // the next context switch into this task, via STK_ASM_BLOCK_MPU_STACK_GUARD
-    for (; task_idx < TaskMpu::NUM_REGIONS; ++task_idx)
+    for (; task_idx < task_mpu_regions; ++task_idx)
     {
         ConfigureRegion(task_mpu.region[task_idx], s_StkDisabledMpuRegion,
-            static_cast<uint32_t>(STK_CORTEX_M_MPU_TASK_REGION_IDX + task_idx));
+            static_cast<uint32_t>(region_idx + task_idx));
     }
 }
 

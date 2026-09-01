@@ -162,12 +162,20 @@
 #ifndef STK_MPU_TASK_REGIONS
     #define STK_MPU_TASK_REGIONS (2U)
 #endif
-
+#ifndef STK_MPU_TASK_REGIONS_NS
+    #define STK_MPU_TASK_REGIONS_NS (STK_MPU_TASK_REGIONS)
+#endif
 #if STK_MPU_STACK_GUARD && \
     (STK_MPU_TASK_REGIONS != 2U) && (STK_MPU_TASK_REGIONS != 4U) && \
     (STK_MPU_TASK_REGIONS != 6U) && (STK_MPU_TASK_REGIONS != 8U) && \
     (STK_MPU_TASK_REGIONS != 12U) && (STK_MPU_TASK_REGIONS != 16U)
-    #error "STK_MPU_TASK_REGIONS must be defined as 2, 4, 6, 8, 12, or 16"
+    #error "STK_MPU_TASK_REGIONS_S must be defined as 2, 4, 6, 8, 12, or 16"
+#endif
+#if STK_MPU_STACK_GUARD && \
+    (STK_MPU_TASK_REGIONS_NS != 2U) && (STK_MPU_TASK_REGIONS_NS != 4U) && \
+    (STK_MPU_TASK_REGIONS_NS != 6U) && (STK_MPU_TASK_REGIONS_NS != 8U) && \
+    (STK_MPU_TASK_REGIONS_NS != 12U) && (STK_MPU_TASK_REGIONS_NS != 16U)
+    #error "STK_MPU_TASK_REGIONS_NS must be defined as 2, 4, 6, 8, 12, or 16"
 #endif
 
 /*! \def   STK_TZ_SECURE
