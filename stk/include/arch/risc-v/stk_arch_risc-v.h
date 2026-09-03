@@ -27,8 +27,7 @@ public:
     /*! \brief Destructor.
         \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
     */
-    ~PlatformRiscV()
-    {}
+    STK_VIRT_DTOR ~PlatformRiscV() = default;
 
     /*! \class IEventHandler
         \brief RISC-V specific event handler.
@@ -50,6 +49,7 @@ public:
     Cycles GetSysTimerCount() const override;
     uint32_t GetSysTimerFrequency() const override;
     void SwitchToNext() override;
+    void ForceContextSwitch(TId id) override;
     void Sleep(Timeout ticks) override;
     bool SleepUntil(Ticks timestamp) override;
     EWaitResult Wait(ISyncObject *sync_obj, IMutex *mutex, Timeout timeout) override;

@@ -17,7 +17,7 @@
 #define _STK_ARCH_ARM_CORTEX_M
 
 #define STK_SEGGER_SYSVIEW (1)
-#define STK_TICKLESS_IDLE  (0)
+#define STK_TICKLESS_IDLE  (1)
 
 #if STK_SEGGER_SYSVIEW
 #include <SEGGER_SYSVIEW.h>

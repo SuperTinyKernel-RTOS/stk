@@ -207,7 +207,7 @@ protected:
             m_time_sleep = -1;
 
             // notify kernel that this task, even if was going to sleep will be woken on a next tick
-            if ((m_state & KernelTask::STATE_SLEEP_PENDING) != 0U)
+            if ((m_state & STATE_SLEEP_PENDING) != 0U)
             {
                 m_state |= STATE_WAKE_PENDING;
             }
@@ -411,7 +411,7 @@ protected:
 
             /*! Pointer to a pending AddTaskRequest stored on the requesting task's stack.
                 Non-null while the request is in flight, cleared to null by UpdateTaskRequest()
-                once the new task has been added, signalling completion to the requesting task.
+                once the new task has been added, signaling completion to the requesting task.
                 \see AddTaskRequest, RequestAddTask, UpdateTaskRequest
             */
             AddTaskRequest *add_task_req;
@@ -764,8 +764,10 @@ protected:
 
         /*! \brief  Block further execution of the task's context while in sleeping state.
         */
-        void BusyWaitWhileSleeping() const
+        void BusyWaitWhileSleeping(Kernel *kernel) const
         {
+            kernel->m_platform.ForceContextSwitch(GetTid());
+
             while (IsSleeping())
             {
                 __stk_relax_cpu();
@@ -1203,13 +1205,21 @@ public:
 
                 // check if suspending self
                 self = (task == m_task_now);
+
+                // trace blocked via Suspend
+                if (self)
+                {
+                #if STK_SEGGER_SYSVIEW
+                    SEGGER_SYSVIEW_OnTaskStopReady(task->GetUserStackPtr()->tid, TRACE_EVENT_SUSPEND);
+                #endif
+                }
             }
         }
 
         // note: we do not spin long here, kernel will switch this task out from scheduling on the next tick
         if (self)
         {
-            m_task_now->BusyWaitWhileSleeping();
+            m_task_now->BusyWaitWhileSleeping(this);
         }
     }
 
@@ -1333,6 +1343,14 @@ public:
     /*! \brief  Get kernel state.
     */
     EKernelState GetState() const override { return m_kstate; }
+
+    // Used by tests only, not Public API:
+#ifdef _STK_UNDER_TEST
+    void ScheduleSleepOnActiveTask(Timeout ticks)
+    {
+        m_task_now->ScheduleSleep(ticks);
+    }
+#endif
 
 protected:
     /*! \enum  EFsmState
@@ -1749,6 +1767,27 @@ protected:
         return UpdateFsmState(idle, active);
     }
 
+    bool OnForceContextSwitch(TId id, Stack *&idle, Stack *&active)
+    {
+        bool switch_context = false;
+        KernelTask *const task = m_task_now;
+
+        // note: called from inside ISR, therefore protection by critical section is not needed
+
+        // current task is busy-waiting to be de-scheduled
+        if ((task->GetTid() == id) && task->IsSleeping())
+        {
+            if ((task->m_state & KernelTask::STATE_SLEEP_PENDING) != 0U)
+            {
+                ProcessTaskPendingSleep(task);
+
+                switch_context = UpdateFsmState(idle, active);
+            }
+        }
+
+        return switch_context;
+    }
+
     void OnTaskSwitch(Word caller_SP) override
     {
         OnTaskSleep(caller_SP, YIELD_TICKS);
@@ -1771,16 +1810,16 @@ protected:
             if (ticks > 0)
             {
                 task->ScheduleSleep(ticks);
+
+                // trace blocked on Sleep
+            #if STK_SEGGER_SYSVIEW
+                SEGGER_SYSVIEW_OnTaskStopReady(task->GetUserStackPtr()->tid, TRACE_EVENT_SLEEP);
+            #endif
             }
         }
 
-        // trace blocked on Sleep
-    #if STK_SEGGER_SYSVIEW
-        SEGGER_SYSVIEW_OnTaskStopReady(task->GetUserStackPtr()->tid, TRACE_EVENT_SLEEP);
-    #endif
-
         // note: we do not spin long here, kernel will switch this task out from scheduling on the next tick
-        task->BusyWaitWhileSleeping();
+        task->BusyWaitWhileSleeping(this);
     }
 
     bool OnTaskSleepUntil(Word caller_SP, Ticks timestamp) override
@@ -1801,6 +1840,11 @@ protected:
             {
                 const Ticks infinite_ticks = WAIT_INFINITE;              
                 task->ScheduleSleep(static_cast<Timeout>(Min(delta, infinite_ticks)));
+
+                // trace blocked on on SleepUntil
+            #if STK_SEGGER_SYSVIEW
+                SEGGER_SYSVIEW_OnTaskStopReady(task->GetUserStackPtr()->tid, TRACE_EVENT_SLEEP);
+            #endif
             }
             else
             {
@@ -1808,13 +1852,12 @@ protected:
             }
         }
 
-        // trace blocked on on SleepUntil
-    #if STK_SEGGER_SYSVIEW
-        SEGGER_SYSVIEW_OnTaskStopReady(task->GetUserStackPtr()->tid, TRACE_EVENT_SLEEP);
-    #endif
-
         // note: we do not spin long here, kernel will switch this task out from scheduling on the next tick
-        task->BusyWaitWhileSleeping();
+        if (result)
+        {
+            task->BusyWaitWhileSleeping(this);
+        }
+
         return result;
     }
 
@@ -1887,7 +1930,7 @@ protected:
             mutex->Unlock();
 
             // note: we do not spin long here, kernel will switch this task out from scheduling on the next tick
-            task->BusyWaitWhileSleeping();
+            task->BusyWaitWhileSleeping(this);
 
             // re-lock mutex when returning to the task's execution space
             mutex->Lock();
@@ -1987,6 +2030,18 @@ protected:
 
         return UpdateTaskState(elapsed_ticks);
     }
+
+    void ProcessTaskPendingSleep(KernelTask *const task)
+    {
+        task->m_state &= ~(KernelTask::STATE_SLEEP_PENDING | KernelTask::STATE_WAKE_PENDING);
+
+        // notify strategy that task is sleeping
+        if __stk_constexpr_cpp17 (TStrategy::SLEEP_EVENT_API)
+        {
+            m_strategy.OnTaskSleep(task);
+        }
+    }
+
         
     /*! \brief     Update task state: process removals, deliver sleep/wake notifications, advance
                    sleep timers, and track HRT durations.
@@ -2055,15 +2110,9 @@ protected:
                     // deliver OnTaskSleep() below as usual, then fall through to the advance block
                     // in this same pass instead of waiting an extra tick, so the paired OnTaskWake()
                     // still fires on schedule.
-                    const bool wake_pending = (task->m_state & KernelTask::STATE_WAKE_PENDING) != 0U;
+                    const bool wake_pending = ((task->m_state & KernelTask::STATE_WAKE_PENDING) != 0U);
 
-                    task->m_state &= ~(KernelTask::STATE_SLEEP_PENDING | KernelTask::STATE_WAKE_PENDING);
-
-                    // notify strategy that task is sleeping
-                    if __stk_constexpr_cpp17 (TStrategy::SLEEP_EVENT_API)
-                    {
-                        m_strategy.OnTaskSleep(task);
-                    }
+                    ProcessTaskPendingSleep(task);
 
                     just_entered_sleep = !wake_pending;
                 }
