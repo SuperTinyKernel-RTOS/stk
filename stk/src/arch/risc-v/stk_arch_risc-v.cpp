@@ -359,10 +359,10 @@ static volatile EKernelPanicId g_StkLastPanicId = KERNEL_PANIC_NONE;
 /*! \brief  Pointer to the idle task stack, per hart. Written by scheduler,
             read by STK_MSI_HANDLER.
 */
-#ifdef _STK_RISCV_USE_PENDSV
 STK_MPU_KERNEL_BSS_SECTION
 Stack *volatile s_StkRiscvStackIdle[STK_ARCH_CPU_COUNT];
 
+#ifdef _STK_RISCV_USE_PENDSV
 /*! \brief  Scratch storage for the SP of the task interrupted by STK_SYSTICK_HANDLER, per hart.
     \note   Written and read exclusively by STK_SYSTICK_HANDLER. Never touched by
             STK_MSI_HANDLER, making it safe across mutual preemption without
@@ -484,13 +484,25 @@ static __stk_forceinline void HW_StopMTimer()
     clear_csr(mie, MIP_MTIP);
 }
 
+/*! \brief     Switch context by scheduling PendSV interrupt.
+    \param[in] hart: Hard id.
+*/
+static __stk_forceinline void HW_ScheduleContextSwitch(uint8_t hart)
+{
+    // Pend Machine Software Interrupt (MSI) - equivalent of ARM's PENDSVSET
+    volatile uint32_t *msip = (volatile uint32_t *)(STK_RISCV_CLINT_BASE_ADDR);
+    msip[hart] = 1U; // set pending
+    __DSB();
+}
+
 /*! \brief Clear pending switch by SV exception.
+    \note  Unconditional (not gated by _STK_RISCV_USE_PENDSV): the MSI interrupt is now
+           always enabled, since Context::OnForceContextSwitch() relies on it for
+           asynchronous/forced switches even on the single-handler (non-PendSV) tick path.
 */
 static __stk_forceinline void HW_ClearPendingSwitch()
 {
-#ifdef _STK_RISCV_USE_PENDSV
     clear_csr(mie, MIP_MSIP);
-#endif
 }
 
 /*! \brief  Get CPU core clock frequency.
@@ -746,20 +758,6 @@ static void HW_InitSpinlockTimeout()
     // when narrowing to uint32_t
     s_StkSpinlockTimeoutIters = static_cast<uint32_t>(
         stk::Min(stk::Max(iters, static_cast<Cycles>(0x1000U)), static_cast<Cycles>(0xFFFFFFFFU)));
-}
-
-/*! \brief Switch context by scheduling PendSV interrupt.
-*/
-static __stk_forceinline void HW_ScheduleContextSwitch(uint8_t hart)
-{
-#ifdef _STK_RISCV_USE_PENDSV
-    // Pend Machine Software Interrupt (MSI) - equivalent of ARM's PENDSVSET
-    volatile uint32_t *msip = (volatile uint32_t *)(STK_RISCV_CLINT_BASE_ADDR);
-    msip[hart] = 1U; // set pending
-    __DSB();
-#else
-    (void)hart;
-#endif
 }
 
 //! ----------------------------------------------------------------------------
@@ -1067,7 +1065,9 @@ static struct Context final : public PlatformContext
             }
         #endif
 
+        #ifdef _STK_RISCV_USE_PENDSV
             HW_ScheduleContextSwitch(hart);
+        #endif
         }
 
     #if STK_TICKLESS_IDLE
@@ -1167,6 +1167,26 @@ static struct Context final : public PlatformContext
         // rearm timer: use the ISR-entry mtime snapshot as the absolute base so
         // any CPU cycles consumed by OnTick do not accumulate as period drift
         RearmTimer(mtime_now, error);
+    }
+
+    __stk_forceinline void OnForceContextSwitch(TId id)
+    {
+        if (m_handler->OnForceContextSwitch(id, m_stack_idle, m_stack_active))
+        {
+            // refresh ISR asm pointer cache so STK_MSI_HANDLER reads the correct
+            // (possibly new) active/idle stack SP
+            //
+            // note: unlike ProcessTick(), the idle slot is refreshed unconditionally here,
+            // not just under _STK_RISCV_USE_PENDSV; a forced switch can be requested from
+            // arbitrary task/ISR context (not necessarily from inside STK_SYSTICK_HANDLER),
+            // so it can never be applied inline - it always goes through STK_MSI_HANDLER
+            const uint8_t hart = HW_GetHartId();
+            s_StkRiscvStackActive[hart] = m_stack_active;
+            s_StkRiscvStackIdle[hart]   = m_stack_idle;
+
+            // always pend the MSI, regardless of _STK_RISCV_USE_PENDSV
+            HW_ScheduleContextSwitch(hart);
+        }
     }
 
     void StartTickTimer(Timeout elapsed_ticks)
@@ -1631,6 +1651,29 @@ extern "C" STK_RISCV_ISR_SECTION __stk_attr_naked void STK_SYSTICK_HANDLER()
     : /* inputs: all addresses loaded as linker symbols via "la" */
     : /* clobbers: none - the asm string owns all registers */);
 }
+#endif // _STK_RISCV_USE_PENDSV
+
+/*! \brief STK_MSI_HANDLER
+
+    Performs the actual raw stack-pointer swap for a context switch, driven by the CLINT
+    Machine Software Interrupt (MSIP), triggered via HW_PendForceSwitch().
+
+    Compiled and wired unconditionally (regardless of _STK_RISCV_USE_PENDSV):
+
+     - PendSV builds:     this is the ONLY place a switch is ever applied - both
+                          tick-decided (via HW_ScheduleContextSwitch) and forced
+                          (via HW_PendForceSwitch) switches go through here.
+
+     - Non-PendSV builds: tick-decided switches are still applied inline within
+                          STK_SYSTICK_HANDLER itself (see below) for lower overhead; this
+                          handler is used ONLY for forced (asynchronous) switches requested
+                          via Context::OnForceContextSwitch(), which can be called from
+                          arbitrary task/ISR context where no inline swap is possible.
+
+    Reads s_StkRiscvStackIdle[hart] for the task being switched OUT and
+    s_StkRiscvStackActive[hart] for the task being switched IN - both are refreshed by the
+    caller (ProcessTick() or OnForceContextSwitch()) immediately before triggering this ISR.
+*/
 extern "C" STK_RISCV_ISR_SECTION __stk_attr_naked void STK_MSI_HANDLER()
 {
     __asm volatile(
@@ -1688,7 +1731,8 @@ extern "C" STK_RISCV_ISR_SECTION __stk_attr_naked void STK_MSI_HANDLER()
     : [clint_msip_base] "i" (STK_RISCV_CLINT_BASE_ADDR) /* other inputs: all addresses loaded as linker symbols via "la" */
     : /* clobbers: none - the asm string owns all registers */);
 }
-#else // !_STK_RISCV_USE_PENDSV
+
+#ifndef _STK_RISCV_USE_PENDSV
 /* STK_SYSTICK_HANDLER
 
 RISC-V machine-timer ISR: Saves the interrupted task's full context, switches
@@ -1818,9 +1862,7 @@ void Context::OnStart()
     // initialize ISR asm pointer cache
     s_StkRiscvStackIsr[hart]    = &m_stack_isr; // set once here, the ISR stack never moves
     s_StkRiscvStackActive[hart] = m_stack_active;
-#ifdef _STK_RISCV_USE_PENDSV
     s_StkRiscvStackIdle[hart]   = m_stack_idle;
-#endif
 
     // start with initially 1 elapsed tick (after timer expires)
     StartTickTimer(1);
@@ -1834,10 +1876,10 @@ void Context::OnStart()
     SEGGER_SYSVIEW_OnTaskStartExec(m_stack_active->tid);
 #endif
 
-    // enable SV exception
-#ifdef _STK_RISCV_USE_PENDSV
+    // enable SV exception (MSI)
+    // note: unconditional - even the single-handler (non-PendSV) tick path needs this,
+    // since Context::OnForceContextSwitch() always triggers a switch via STK_MSI_HANDLER
     set_csr(mie, MIP_MSIP);
-#endif
 }
 
 STK_RISCV_ISR void STK_SVC_HANDLER()
@@ -2131,6 +2173,19 @@ uint32_t PlatformRiscV::GetSysTimerFrequency() const
 void PlatformRiscV::SwitchToNext()
 {
     GetContext().m_handler->OnTaskSwitch(HW_GetCallerSP());
+}
+
+void PlatformRiscV::ForceContextSwitch(TId id)
+{
+    Word cs;
+    HW_CriticalSectionStart(cs);
+
+    Context &ctx = GetContext();
+    STK_ASSERT(ctx.m_started);
+
+    ctx.OnForceContextSwitch(id);
+
+    HW_CriticalSectionEnd(cs);
 }
 
 void PlatformRiscV::Sleep(Timeout ticks)

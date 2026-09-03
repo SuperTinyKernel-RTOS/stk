@@ -149,6 +149,8 @@ static struct Context final : public PlatformContext
         m_exit_trap(nullptr),
         m_winmm_dll(nullptr),
         m_timer_thread(nullptr),
+        m_switch_event(nullptr),
+        m_pending_switch_id(TID_NONE),
         m_tls(TLS_OUT_OF_INDEXES),
         m_tasks(),
         m_task_threads(),
@@ -167,22 +169,29 @@ static struct Context final : public PlatformContext
     {
         InitializeBase(handler, service, exit_trap, resolution_us);
 
-        m_sleep_trap   = nullptr; // set by Context::InitStack
-        m_exit_trap    = nullptr; // set by Context::InitStack
-        m_winmm_dll    = nullptr;
-        m_timer_thread = nullptr;
-        m_started      = false;
-        m_stop_signal  = false;
-        m_csu_nesting  = 0;
-        m_timer_tid    = 0;
+        m_sleep_trap        = nullptr; // set by Context::InitStack
+        m_exit_trap         = nullptr; // set by Context::InitStack
+        m_winmm_dll         = nullptr;
+        m_timer_thread      = nullptr;
+        m_started           = false;
+        m_stop_signal       = false;
+        m_csu_nesting       = 0;
+        m_timer_tid         = 0;
+        m_pending_switch_id = TID_NONE;
     #if STK_TICKLESS_IDLE
-        m_sleep_ticks  = 0;
+        m_sleep_ticks       = 0;
     #endif
+
+        // auto-reset: used by a task's own thread to hand a forced context
+        // switch off to TimerThread, since only TimerThread (or a thread other
+        // than the one being switched) may safely call SwitchContext()
+        m_switch_event = CreateEventA(nullptr, FALSE, FALSE, nullptr);
+        STK_ASSERT(m_switch_event != nullptr);
 
     #if STK_TLS
         if ((m_tls = TlsAlloc()) == TLS_OUT_OF_INDEXES)
         {
-            assert(false);
+            STK_ASSERT(false);
             return;
         }
     #endif
@@ -199,6 +208,12 @@ static struct Context final : public PlatformContext
             TlsFree(m_tls);
     #endif
 
+        if (m_switch_event != nullptr)
+        {
+            CloseHandle(m_switch_event);
+            m_switch_event = nullptr;
+        }
+
         UnloadWindowsAPI();
     }
 
@@ -206,11 +221,13 @@ static struct Context final : public PlatformContext
     {
         HMODULE winmm = GetModuleHandleA("Winmm");
         if (winmm == nullptr)
+        {
             m_winmm_dll = winmm = LoadLibraryA("Winmm.dll");
-        assert(winmm != nullptr);
+        }
+        STK_ASSERT(winmm != nullptr);
 
         timeBeginPeriod = (timeBeginPeriodF)GetProcAddress(winmm, "timeBeginPeriod");
-        assert(timeBeginPeriod != nullptr);
+        STK_ASSERT(timeBeginPeriod != nullptr);
 
         timeBeginPeriod(1);
     }
@@ -267,6 +284,8 @@ static struct Context final : public PlatformContext
     void ProcessTick();
     void SwitchContext();
     void SwitchToNext();
+    void ForceContextSwitch(TId id);
+    void OnForceContextSwitch();
     void Sleep(Timeout ticks);
     bool SleepUntil(Ticks timestamp);
     EWaitResult Wait(ISyncObject *sync_obj, IMutex *mutex, Timeout timeout);
@@ -330,6 +349,8 @@ static struct Context final : public PlatformContext
     Stack                         *m_exit_trap;
     HMODULE                        m_winmm_dll;     //!< Winmm.dll (loaded with LoadLibrary)
     HANDLE                         m_timer_thread;  //!< timer thread handle
+    HANDLE                         m_switch_event;  //!< signaled by a task thread to ask TimerThread to perform a forced context switch on its behalf
+    TId                            m_pending_switch_id; //!< target task id of the pending forced switch requested via m_switch_event
     DWORD                          m_tls;           //!< TLS
     std::list<TaskContext *>       m_tasks;         //!< list of task internal contexts
     std::vector<HANDLE>            m_task_threads;  //!< task threads
@@ -369,20 +390,42 @@ static DWORD WINAPI TimerThread(LPVOID param)
 {
     (void)param;
 
+    Context &ctx = GetContext();
     DWORD wait_ms = TicksToMs(1U);
-    GetContext().m_timer_tid = GetCurrentThreadId();
+    ctx.m_timer_tid = GetCurrentThreadId();
 
-    while (WaitForSingleObject(GetContext().m_timer_thread, wait_ms) == WAIT_TIMEOUT)
+    // wait_handles[0] is TimerThread's own handle: since it can only become
+    // signaled once this very thread exits, waiting on it can never actually
+    // be satisfied from inside itself - it's used purely so the call below
+    // behaves like a precise timed sleep (kept as in the original code).
+    // wait_handles[1] lets a task thread wake TimerThread early to request a
+    // forced context switch be serviced (see Context::ForceContextSwitch()).
+    HANDLE wait_handles[] = { ctx.m_timer_thread, ctx.m_switch_event };
+
+    for (;;)
     {
-        if (GetContext().m_stop_signal)
+        DWORD result = WaitForMultipleObjects(STK_STATIC_ARRAY_SIZE(wait_handles), wait_handles, FALSE, wait_ms);
+
+        if (ctx.m_stop_signal)
         {
             break;
         }
 
-        GetContext().ProcessTick();
+        if (result == (WAIT_OBJECT_0 + 1))
+        {
+            // a task requested a forced context switch: SwitchContext() must
+            // never be invoked by the task thread that might itself need to
+            // be suspended, so it's serviced here instead.
+            ctx.OnForceContextSwitch();
+            continue;
+        }
+
+        STK_ASSERT(result == WAIT_TIMEOUT);
+
+        ctx.ProcessTick();
 
     #if STK_TICKLESS_IDLE
-        wait_ms = TicksToMs(GetContext().m_sleep_ticks);
+        wait_ms = TicksToMs(ctx.m_sleep_ticks);
     #endif
     }
 
@@ -514,7 +557,7 @@ void Context::ProcessTick()
     #endif
     ))
     {
-        GetContext().SwitchContext();
+        SwitchContext();
     }
 
 #if STK_TICKLESS_IDLE
@@ -548,7 +591,7 @@ void Context::SwitchContext()
         }
     }
     else
-    if (m_stack_active == GetContext().m_exit_trap)
+    if (m_stack_active == m_exit_trap)
     {
         // pass
     }
@@ -602,6 +645,34 @@ TId Context::GetTid() const
 void Context::SwitchToNext()
 {
     m_handler->OnTaskSwitch(GetCallerSP());
+}
+
+void Context::ForceContextSwitch(TId id)
+{
+    if (GetCurrentThreadId() == m_timer_tid)
+    {
+        // running on TimerThread: execute forced context switch
+        if (m_handler->OnForceContextSwitch(id, m_stack_idle, m_stack_active))
+        {
+            SwitchContext();
+        }
+    }
+    else
+    {
+        // notify TimerThread to cause a context switch
+        m_pending_switch_id = id;
+        SetEvent(m_switch_event);
+    }
+}
+
+void Context::OnForceContextSwitch()
+{
+    Win32ScopedCriticalSection __cs(m_cs);
+
+    if (m_handler->OnForceContextSwitch(m_pending_switch_id, m_stack_idle, m_stack_active))
+    {
+        SwitchContext();
+    }
 }
 
 void Context::Sleep(Timeout ticks)
@@ -714,6 +785,11 @@ uint32_t PlatformX86Win32::GetSysTimerFrequency() const
 void PlatformX86Win32::SwitchToNext()
 {
     GetContext().SwitchToNext();
+}
+
+void PlatformX86Win32::ForceContextSwitch(TId id)
+{
+    GetContext().ForceContextSwitch(id);
 }
 
 void PlatformX86Win32::Sleep(Timeout ticks)

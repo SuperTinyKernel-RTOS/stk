@@ -267,6 +267,11 @@ public:
         m_core_freq[core_id] = frequency;
     }
 
+    void ForceContextSwitch(TId id)
+    {
+        STK_UNUSED(id);
+    }
+
     IKernelService  *m_service;
     Stack           *m_exit_trap;
     int32_t          m_resolution;

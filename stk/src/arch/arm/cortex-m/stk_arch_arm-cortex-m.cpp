@@ -215,8 +215,14 @@ using namespace stk;
     #define STK_SPINLOCK_MIN_CYCLES_PER_ITER (4U)
 #endif
 
-//! Enables SVC_FORCE_SWITCH (reserved, do not use).
-//#define STK_CORTEX_M_FORCE_SWITCH
+/*! \def     STK_CORTEX_M_FORCE_SWITCH
+    \brief   Enables SVC_FORCE_SWITCH (when enabled task can cause a forced context switch
+             when entering Sleep or Wait).
+    \see     HW_SpinLockLock, IPlatform::ForceContextSwitch
+*/
+#ifndef STK_CORTEX_M_FORCE_SWITCH
+    #define STK_CORTEX_M_FORCE_SWITCH (1)
+#endif
 
 /*! \enum    ESvcCommandId
     \brief   Supervisor Call (SVC) command identifiers for kernel service requests.
@@ -232,7 +238,7 @@ enum ESvcCommandId : uint8_t
 #if STK_MPU
   , SVC_BOOST_PRIV             //!< Elevate current task execution privilege mode temporarily.
 #endif
-#ifdef STK_CORTEX_M_FORCE_SWITCH
+#if STK_CORTEX_M_FORCE_SWITCH
   , SVC_FORCE_SWITCH           //!< Trigger an immediate asynchronous task context switch.
 #endif
 };
@@ -520,6 +526,14 @@ static void SendSysDesc()
 #endif
 } // namespace stk
 
+// Wrapper to survive LTO optimization.
+#if STK_SEGGER_SYSVIEW
+extern "C" __stk_attr_used void StkSystemView_RecordEnterISR()
+{
+    SEGGER_SYSVIEW_RecordEnterISR();
+}
+#endif
+
 // Local static variables:
 STK_MPU_KERNEL_BSS_SECTION
 #if STK_CORE_FREQ_UNIFIED
@@ -553,20 +567,25 @@ static volatile EKernelPanicId g_StkLastPanicId = KERNEL_PANIC_NONE;
 static __stk_forceinline void HW_StartScheduler()
 {
     __asm volatile("SVC %0"
-    : /* output: none */
-    : "I"(SVC_START_SCHEDULING)
-    : "memory" /* protect against compiler reordering */);
+        : /* output: none */
+        : "I"(SVC_START_SCHEDULING)
+        : "memory" /* protect against compiler reordering */
+    );
 }
 
 /*! \brief     Force an immediate context switch.
 */
-#ifdef STK_CORTEX_M_FORCE_SWITCH
-static __stk_forceinline void HW_ForceContextSwitch()
+#if STK_CORTEX_M_FORCE_SWITCH
+static __stk_forceinline void HW_ForceContextSwitch(TId id)
 {
-    __asm volatile("SVC %0"
-    : /* output: none */
-    : "I"(SVC_FORCE_SWITCH)
-    : "memory" /* protect against compiler reordering */);
+    __asm volatile(
+        "MOV r0, %0     \n"     /* move id parameter into r0 */
+        "SVC %1         \n"     /* trigger SVC interrupt */
+        : /* output: none */
+        : "r" (id),
+          "I" (SVC_FORCE_SWITCH) /* 'r' uses any general register, mapped to r0 in assembly */
+        : "r0", "memory"        /* r0 is clobbered with id, protect against compiler reordering */
+    );
 }
 #endif
 
@@ -582,9 +601,10 @@ static __stk_forceinline void HW_ForceContextSwitch()
 static __stk_forceinline void HW_UnprivEnterCriticalSection()
 {
     __asm volatile("SVC %0"
-    : /* output: none */
-    : "I"(SVC_ENTER_CRITICAL)
-    : "memory" /* protect against compiler reordering */);
+        : /* output: none */
+        : "I"(SVC_ENTER_CRITICAL)
+        : "memory" /* protect against compiler reordering */
+    );
 }
 
 /*! \brief     Exit critical section (unprivileged callers only).
@@ -599,9 +619,10 @@ static __stk_forceinline void HW_UnprivEnterCriticalSection()
 static __stk_forceinline void HW_UnprivExitCriticalSection()
 {
     __asm volatile("SVC %0"
-    : /* output: none */
-    : "I"(SVC_EXIT_CRITICAL)
-    : "memory" /* protect against compiler reordering */);
+        : /* output: none */
+        : "I"(SVC_EXIT_CRITICAL)
+        : "memory" /* protect against compiler reordering */
+    );
 }
 
 /*! \brief     Disable CPU interrupts.
@@ -1785,6 +1806,14 @@ static struct Context final : public PlatformContext
         HW_EnableInterrupts();
     }
 
+    __stk_forceinline void OnForceContextSwitch(TId id)
+    {
+        if (m_handler->OnForceContextSwitch(id, m_stack_idle, m_stack_active))
+        {
+            HW_ScheduleContextSwitch();
+        }
+    }
+
     __stk_forceinline void OnEnterCriticalSection(uint32_t current_ses)
     {
         if (m_csu_nesting == 0U)
@@ -2176,6 +2205,7 @@ Timeout Context::ReloadTickPeriod(Timeout ticks_requested)
 
 extern "C" void STK_SYSTICK_HANDLER()
 {
+    // start tracing
 #if STK_SEGGER_SYSVIEW
     SEGGER_SYSVIEW_RecordEnterISR();
 #endif
@@ -2203,6 +2233,7 @@ extern "C" void STK_SYSTICK_HANDLER()
         ctx.ProcessTick();
     }
 
+    // stop tracing & send packets to host
 #if STK_SEGGER_SYSVIEW
     SEGGER_SYSVIEW_RecordExitISR();
     SEGGER_SYSVIEW_IsStarted();
@@ -2217,7 +2248,7 @@ extern "C" void STK_SYSTICK_HANDLER()
 #endif
 
 #if STK_SEGGER_SYSVIEW
-extern "C" void StkSystemView_OnContextSwitch(void)
+extern "C" __stk_attr_used void StkSystemView_OnContextSwitch(void)
 {
     Context &ctx = GetContext();
 
@@ -2541,7 +2572,7 @@ extern "C" __stk_attr_naked void STK_PENDSV_HANDLER()
 
     // start tracing
 #if STK_SEGGER_SYSVIEW
-    STK_SYSVIEW_CALL(SEGGER_SYSVIEW_RecordEnterISR)
+    STK_SYSVIEW_CALL(StkSystemView_RecordEnterISR)
 #endif
 
     // save the Secure PSP unconditionally; it is the spine of the entire context
@@ -2991,6 +3022,11 @@ void Context::Resume(Timeout elapsed_ticks)
 // __stk_attr_used required for Link-Time Optimization (-flto)
 extern "C" __stk_attr_used void StkSVCHandlerMain(Word *svc_args)
 {
+    // start tracing
+#if STK_SEGGER_SYSVIEW
+    SEGGER_SYSVIEW_RecordEnterISR();
+#endif
+
     // Word is typedef uintptr_t (stk_common.h) - the only integer type the Standard
     // blesses for lossless pointer round-trips (MISRA C++ 5-2-8, CERT INT36-C)
     STK_STATIC_ASSERT_DESC_N(PTR, sizeof(Word) == sizeof(void *),
@@ -3029,9 +3065,13 @@ extern "C" __stk_attr_used void StkSVCHandlerMain(Word *svc_args)
         }
         break; }
 
-#ifdef STK_CORTEX_M_FORCE_SWITCH
+#if STK_CORTEX_M_FORCE_SWITCH
     case SVC_FORCE_SWITCH: {
-        HW_ScheduleContextSwitch();
+        Context &ctx = GetContext();
+
+        STK_ASSERT(ctx.m_started);
+
+        ctx.OnForceContextSwitch(frame->R0);
         break; }
 #endif
 
@@ -3077,6 +3117,11 @@ extern "C" __stk_attr_used void StkSVCHandlerMain(Word *svc_args)
         STK_KERNEL_PANIC(KERNEL_PANIC_UNKNOWN_SVC);
         break; }
     }
+
+    // stop tracing
+#if STK_SEGGER_SYSVIEW
+    SEGGER_SYSVIEW_RecordExitISR();
+#endif
 }
 
 // details: "How to Write an SVC Function", https://developer.arm.com/documentation/ka004005/latest
@@ -3661,6 +3706,11 @@ uint32_t PlatformArmCortexM::GetSysTimerFrequency() const
 void PlatformArmCortexM::SwitchToNext()
 {
     GetContext().m_handler->OnTaskSwitch(HW_GetCallerSP());
+}
+
+void PlatformArmCortexM::ForceContextSwitch(TId id)
+{
+    HW_ForceContextSwitch(id);
 }
 
 void PlatformArmCortexM::Sleep(Timeout ticks)

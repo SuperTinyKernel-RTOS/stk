@@ -111,6 +111,7 @@ enum ETraceEventId : uint32_t
     TRACE_EVENT_SWITCH  = 1000 + 0, //!< Task blocked by the context switch.
     TRACE_EVENT_SLEEP   = 1000 + 1, //!< Task entered a sleep state.
     TRACE_EVENT_WAIT    = 1000 + 2, //!< Task suspended on a sync object.
+    TRACE_EVENT_SUSPEND = 1000 + 3, //!< Task suspended via Suspend.
 };
 
 /*! \enum  EWaitResult
@@ -1009,8 +1010,9 @@ public:
                         \code
                         #define STK_SYSTICK_HANDLER _STK_SYSTICK_HANDLER_DISABLE
                         \endcode
+            \return     True if context switch is required, False otherwise.
         */
-        virtual bool OnTick(Stack *&idle, Stack *&enable
+        virtual bool OnTick(Stack *&idle, Stack *&active
         #if STK_TICKLESS_IDLE
             , Timeout &ticks
         #endif
@@ -1057,6 +1059,14 @@ public:
             \param[in]  suspended: \c true if scheduling was successfully suspended, \c false otherwise.
         */
         virtual void OnSuspend(bool suspended) = 0;
+
+        /*! \brief      Called when task state change forces a context switch (Sleep, SleepUntil, Wait).
+            \param[in]  id: Task id causing this forced context switch.
+            \param[out] idle: Stack of the task which must enter Idle state.
+            \param[out] active: Stack of the task which must enter Active state (to which context will switch).
+            \return     True if context switch is required, False otherwise.
+        */
+        virtual bool OnForceContextSwitch(TId id, Stack *&idle, Stack *&active) = 0;
     };
 
     /*! \class IEventOverrider
@@ -1168,6 +1178,10 @@ public:
     /*! \brief     Switch to a next task.
     */
     virtual void SwitchToNext() = 0;
+
+    /*! \brief     Force context switch.
+    */
+    virtual void ForceContextSwitch(TId id) = 0;
 
     /*! \brief     Put calling process into a sleep state.
         \note      Unlike Delay this function does not waste CPU cycles and allows kernel to put CPU into a low-power state.

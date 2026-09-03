@@ -40,6 +40,21 @@ public:
         Stack *idle = nullptr, *active = nullptr;
         KernelMock::UpdateFsmState(idle, active);
     }
+
+    // Expose protected Kernel::OnForceContextSwitch() so it can be driven directly,
+    // simulating the ISR callback issued by the platform driver's ForceContextSwitch()
+    bool CallForceContextSwitch(TId id, Stack *&idle, Stack *&active)
+    {
+        return KernelMock::OnForceContextSwitch(id, idle, active);
+    }
+
+    // Put the currently running task into a pending-sleep state directly (bypasses
+    // KernelTask::BusyWaitWhileSleeping()'s spin-loop, which is not applicable in this
+    // single-threaded test harness)
+    void ScheduleSleepOnActiveTask(Timeout ticks)
+    {
+        BaseType::ScheduleSleepOnActiveTask(ticks);
+    }
 };
 
 TEST_GROUP(Kernel)
@@ -578,6 +593,89 @@ TEST(Kernel, ContextSwitchCorruptedFsmMode)
     kernel.ForceUpdateInvalidFsmState(false);
     platform->ProcessTick();
     CHECK_EQUAL(KERNEL_PANIC_BAD_STATE, test::g_PanicValue);
+}
+
+TEST(Kernel, ForceContextSwitch)
+{
+    KernelMock<KERNEL_STATIC, 2, SwitchStrategyRR, PlatformTestMock> kernel;
+    TaskMock<ACCESS_USER> task1, task2;
+    PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
+    Stack *idle = nullptr, *active = nullptr;
+    const TId task1_id = GetTidFromUserTask(&task1);
+
+    kernel.Initialize();
+    kernel.AddTask(&task1);
+    kernel.AddTask(&task2);
+    kernel.Start();
+
+    // task1 is the running task after Start()
+    CHECK_EQUAL((Word)task1.GetStack(), platform->m_stack_active->SP);
+
+    // task1 called Sleep()/SleepUntil(), which set it into a pending-sleep state and
+    // is now busy-waiting inside BusyWaitWhileSleeping() for the ISR to de-schedule it
+    kernel.ScheduleSleepOnActiveTask(5);
+
+    // ISR handles the platform driver's ForceContextSwitch(task1_id) request
+    const bool result = kernel.CallForceContextSwitch(task1_id, idle, active);
+
+    CHECK_TRUE(result);
+    CHECK_TRUE(idle != NULL);
+    CHECK_TRUE(active != NULL);
+
+    // task1 (now sleeping) is switched out to Idle
+    CHECK_EQUAL((Word)task1.GetStack(), idle->SP);
+
+    // task2 becomes Active
+    CHECK_EQUAL((Word)task2.GetStack(), active->SP);
+
+    // task1 is no longer the running task (task2 is, after the switch above), so a
+    // further ISR call reporting task1's id no longer matches and is a no-op
+    idle = nullptr;
+    active = nullptr;
+
+    CHECK_FALSE(kernel.CallForceContextSwitch(task1_id, idle, active));
+    CHECK_TRUE(idle == NULL);
+    CHECK_TRUE(active == NULL);
+}
+
+TEST(Kernel, ForceContextSwitchTidMismatch)
+{
+    KernelMock<KERNEL_STATIC, 2, SwitchStrategyRR, PlatformTestMock> kernel;
+    TaskMock<ACCESS_USER> task1, task2;
+    Stack *idle = nullptr, *active = nullptr;
+    const TId task2_id = GetTidFromUserTask(&task2);
+
+    kernel.Initialize();
+    kernel.AddTask(&task1);
+    kernel.AddTask(&task2);
+    kernel.Start();
+
+    // task1 is running and pending-sleep, but the ISR reports a force context switch
+    // for task2's id, which is not the currently running task
+    kernel.ScheduleSleepOnActiveTask(5);
+
+    CHECK_FALSE(kernel.CallForceContextSwitch(task2_id, idle, active));
+    CHECK_TRUE(idle == NULL);
+    CHECK_TRUE(active == NULL);
+}
+
+TEST(Kernel, ForceContextSwitchNotSleeping)
+{
+    KernelMock<KERNEL_STATIC, 2, SwitchStrategyRR, PlatformTestMock> kernel;
+    TaskMock<ACCESS_USER> task1, task2;
+    Stack *idle = nullptr, *active = nullptr;
+    const TId task1_id = GetTidFromUserTask(&task1);
+
+    kernel.Initialize();
+    kernel.AddTask(&task1);
+    kernel.AddTask(&task2);
+    kernel.Start();
+
+    // task1 is running but never called Sleep()/SleepUntil(): there is nothing pending
+    // for the ISR to de-schedule
+    CHECK_FALSE(kernel.CallForceContextSwitch(task1_id, idle, active));
+    CHECK_TRUE(idle == NULL);
+    CHECK_TRUE(active == NULL);
 }
 
 TEST(Kernel, SingleTask)
