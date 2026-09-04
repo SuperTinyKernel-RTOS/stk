@@ -866,6 +866,80 @@ TEST(Kernel, OnTaskExitSchedule)
     CHECK_EQUAL(active->SP, (Word)task2.GetStack());
 }
 
+static struct SyncWaitingTaskExitScheduleContext
+{
+    SyncWaitingTaskExitScheduleContext()
+    {
+        Reset();
+    }
+
+    void Reset()
+    {
+        kernel   = NULL;
+        task1    = NULL;
+        platform = NULL;
+    }
+
+    IKernel          *kernel;
+    ITask            *task1;
+    PlatformTestMock *platform;
+
+    void Process()
+    {
+        platform->ProcessTick();
+
+        // Wait object affects sleep_ticks, not a task
+        {
+            kernel->ScheduleTaskRemoval(task1);
+        }
+    }
+}
+g_SyncWaitingTaskExitScheduleContext;
+
+static void SyncWaitingTaskExitScheduleCpu()
+{
+    g_SyncWaitingTaskExitScheduleContext.Process();
+}
+
+TEST(Kernel, OnWaitingTaskExitSchedule)
+{
+    Kernel<KERNEL_DYNAMIC | KERNEL_SYNC, 2, SwitchStrategyRR, PlatformTestMock> kernel;
+    TaskMock<ACCESS_PRIVILEGED> task1, task2;
+    PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
+    Stack *&active = platform->m_stack_active;
+
+    MutexMock mutex;
+    SyncObjectMock sobj;
+
+    g_SyncWaitingTaskExitScheduleContext.Reset();
+    g_SyncWaitingTaskExitScheduleContext.kernel   = &kernel;
+    g_SyncWaitingTaskExitScheduleContext.platform = platform;
+    g_SyncWaitingTaskExitScheduleContext.task1    = &task1;
+    g_RelaxCpuHandler = SyncWaitingTaskExitScheduleCpu;
+
+    kernel.Initialize();
+    kernel.AddTask(&task1);
+    kernel.AddTask(&task2);
+    kernel.Start();
+
+    // task1 is active after Start
+    CHECK_EQUAL(active->SP, (Word)task1.GetStack());
+
+    {
+        MutexMock::ScopedLock guard(mutex);
+
+        EWaitResult wresult = IKernelService::GetInstance()->Wait(&sobj, &mutex, 2);
+
+        wresult = WAIT_RESULT_SIGNAL;
+    }
+
+    platform->ProcessTick();
+
+    // task1 was removed by the tick, task2 is the only active
+    CHECK_EQUAL(1, kernel.GetSwitchStrategy()->GetSize());
+    CHECK_EQUAL(active->SP, (Word)task2.GetStack());
+}
+
 TEST(Kernel, OnTaskNotFoundBySP)
 {
     Kernel<KERNEL_STATIC, 1, SwitchStrategyRR, PlatformTestMock> kernel;
