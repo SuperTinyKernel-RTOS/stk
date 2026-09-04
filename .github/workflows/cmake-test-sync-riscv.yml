@@ -90,6 +90,11 @@ jobs:
             cmake_flag: TEST_MSGQUEUE=ON
             elf: test-msgqueue.elf
             dir: msgqueue
+            
+          - name: sync::Barrier
+            cmake_flag: TEST_BARRIER=ON
+            elf: test-barrier.elf
+            dir: barrier
 
         board:
           - name: "Generic"

@@ -32,6 +32,7 @@
     | **Mutex**             | \c None                                                                                                                                            |
     | **RWMutex**           | \c None                                                                                                                                            |
     | **ConditionVariable** | \c NotifyOne(), \c NotifyAll(), \c Wait(NO_WAIT)                                                                                                   |
+    | **Barrier**           | \c None                                                                                                                                            |
     | **Pipe**              | \c Write(NO_WAIT), \c WriteBulk(NO_WAIT), \c TryWrite(), \c TryWriteBulk(), \c Read(NO_WAIT), \c ReadBulk(NO_WAIT), \c TryRead(), \c TryReadBulk() |
     | **MessageQueue**      | \c Put(NO_WAIT), \c TryPut(), \c Get(NO_WAIT), \c TryGet(), \c Reset()                                                                             |
 
@@ -59,5 +60,6 @@ namespace sync {
 #include "stk_sync_eventflags.h"
 #include "stk_sync_pipe.h"
 #include "stk_sync_msgqueue.h"
+#include "stk_sync_barrier.h"
 
 #endif /* STK_SYNC_H_ */

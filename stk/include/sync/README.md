@@ -88,6 +88,14 @@ A synchronization primitive that allows multiple concurrent readers or one exclu
 - **RAII Guards**: `ScopedTimedReadMutex` and `ScopedTimedLock` acquire on construction and release automatically on scope exit.
 - **Low-Power Aware**: Waiting tasks are suspended by the kernel.
 
+### 11. Barrier (`sync::Barrier`)
+A cyclic rendezvous point that blocks a fixed-size group of tasks until all of them have arrived.
+- **Cyclic**: Automatically resets after releasing the group, ready for the next round without re-creation.
+- **Generation Tracking**: An internal generation counter distinguishes successive rounds and guards against spurious wakeups.
+- **Last-Arriver Signal**: `Wait()` returns `true` for the single task that triggers release of the group, `false` for all others — useful for once-per-round bookkeeping.
+- **Built on Mutex/ConditionVariable**: Composed from `sync::Mutex` and `sync::ConditionVariable`.
+- **Low-Power Aware**: Waiting tasks are suspended by the kernel.
+
 ---
 
 ## ISR Safety
