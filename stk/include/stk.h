@@ -543,6 +543,22 @@ protected:
                 sync_obj->AddWaitObject(this);
             }
 
+            /*! \brief  Cancel an in-progress wait without waking the owning task.
+                \note   Used when the owning task is being forcibly removed (see
+                        KernelTask::ScheduleRemoval()) while blocked on a synchronization object.
+                        Unlike Wake(), this does not touch m_task's sleep state or set m_timeout -
+                        the task is being torn down and will never observe the wait result.
+                \note   No-op if not currently waiting.
+            */
+            void CancelWait()
+            {
+                if (IsWaiting())
+                {
+                    m_sync_obj->RemoveWaitObject(this);
+                    m_sync_obj = nullptr;
+                }
+            }
+
             KernelTask   *m_task;      //!< Back-pointer to the owning KernelTask. Set once at construction; never changes.
             ISyncObject  *m_sync_obj;  //!< Sync object this wait is registered with, or \c NULL when not waiting.
             volatile bool m_timeout;   //!< \c true if the wait expired due to timeout rather than a Wake() signal.
@@ -607,6 +623,14 @@ protected:
         */
         void ScheduleRemoval()
         {
+            // if blocked on a sync object, detach first - otherwise the WaitObject stays linked
+            // in the sync object's wait list after Unbind() frees this slot, and a later
+            // Wake()/WakeAll() would corrupt whatever task the slot gets rebound to
+            if __stk_constexpr_cpp17 (IsSyncMode())
+            {
+                m_wait_obj->CancelWait();
+            }
+
             // make this task sleeping to switch it out from scheduling process
             ScheduleSleep(WAIT_INFINITE);
 
@@ -1888,7 +1912,12 @@ protected:
         #endif
 
             // notify kernel to execute removal
-            task->ScheduleRemoval();
+            {
+                // make change to HRT/sleep/removal state atomic (same as OnTaskSleep/OnTaskSleepUntil)
+                const hw::CriticalSection::ScopedLock cs_;
+
+                task->ScheduleRemoval();
+            }
         }
         else
         {
