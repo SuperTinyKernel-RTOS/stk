@@ -132,10 +132,11 @@ protected:
         */
         enum EStateFlags : uint32_t
         {
-            STATE_NONE           = 0,        //!< No pending state flags.
-            STATE_REMOVE_PENDING = (1 << 0), //!< Task returned from its Run function; slot will be freed on the next tick (KERNEL_DYNAMIC only).
-            STATE_SLEEP_PENDING  = (1 << 1), //!< Task called Sleep/SleepUntil/Yield; strategy's OnTaskSleep() will be invoked on the next tick (sleep-aware strategies only).
-            STATE_WAKE_PENDING   = (1 << 2), //!< Task wake is pending (see Wake).
+            STATE_NONE           = 0U,        //!< No pending state flags.
+            STATE_REMOVE_PENDING = (1U << 0), //!< Task returned from its Run function; slot will be freed on the next tick (KERNEL_DYNAMIC only).
+            STATE_SLEEP_PENDING  = (1U << 1), //!< Task called Sleep/SleepUntil/Yield; strategy's OnTaskSleep() will be invoked on the next tick (sleep-aware strategies only).
+            STATE_WAKE_PENDING   = (1U << 2), //!< Task wake is pending (see Wake).
+            STATE_SUSPENDED      = (1U << 3), //!< Task is suspended by SuspendTask.
         };
 
     public:
@@ -450,7 +451,8 @@ protected:
         */
         struct WaitObject final : public IWaitObject
         {
-            explicit WaitObject() : m_task(nullptr), m_sync_obj(nullptr), m_timeout(false), m_time_wait(NO_WAIT)
+            explicit WaitObject() : m_task(nullptr), m_sync_obj(nullptr), m_time_wait(NO_WAIT),
+                m_state(STATE_NONE)
             {}
 
             /*! \brief Destructor.
@@ -473,15 +475,46 @@ protected:
             */
             TId GetTid() const override { return m_task->GetTid(); }
 
-            /*! \brief  Check whether the wait expired due to timeout.
-                \return \c true if the wait timed out before being signalled, \c false if woken by Wake().
+            /*! \brief  Get current state.
+                \return State value.
+                \see    EState
             */
-            bool IsTimeout() const override { return m_timeout; }
+            EState GetState() const override { return m_state; }
 
             /*! \brief  Check if busy with waiting.
                 \return \c true if waiting, \c false if not.
             */
             bool IsWaiting() const { return (m_sync_obj != nullptr); }
+
+            /*! \brief  Get wait result.
+                \return Result value.
+                \see    OnTaskWait, EWaitResult
+            */
+            EWaitResult GetWaitResult() const
+            {
+                STK_ASSERT(!IsWaiting());
+
+                switch (GetState())
+                {
+                case STATE_TIMEOUT:
+                    return WAIT_RESULT_TIMEOUT;
+                case STATE_CANCELLED:
+                    return WAIT_RESULT_CANCELED;
+                default: {
+                    STK_ASSERT(m_state == STATE_SIGNALED);
+                    return WAIT_RESULT_SIGNAL; }
+                }
+            }
+
+            /*! \brief  Clear state.
+                \see    OnTaskWait
+            */
+            void ClearState()
+            {
+                STK_ASSERT(!IsWaiting());
+
+                m_state = STATE_NONE;
+            }
 
             /*! \brief     Wake the waiting task (called by ISyncObject when it signals).
                 \param[in] timeout: \c true if woken because the timeout expired, \c false if signalled.
@@ -492,7 +525,7 @@ protected:
             {
                 STK_ASSERT(IsWaiting());
 
-                m_timeout   = timeout;
+                m_state     = (timeout ? STATE_TIMEOUT : STATE_SIGNALED);
                 m_time_wait = NO_WAIT;
 
                 m_sync_obj->RemoveWaitObject(this);
@@ -511,18 +544,18 @@ protected:
             {
                 if (m_time_wait != WAIT_INFINITE)
                 {
-                    if (!m_timeout)
+                    if (m_state == STATE_WAIT)
                     {                  
                         m_time_wait -= elapsed_ticks;
 
                         if (m_time_wait <= NO_WAIT)
                         {
-                            m_timeout = true;
+                            m_state = STATE_TIMEOUT;
                         }
                     }
                 }
 
-                return !m_timeout;
+                return (m_state == STATE_WAIT);
             }
 
             /*! \brief     Configure and arm this wait object for a new wait operation.
@@ -538,7 +571,7 @@ protected:
 
                 m_sync_obj  = sync_obj;
                 m_time_wait = timeout;
-                m_timeout   = false;
+                m_state     = STATE_WAIT;
 
                 sync_obj->AddWaitObject(this);
             }
@@ -550,19 +583,45 @@ protected:
                         the task is being torn down and will never observe the wait result.
                 \note   No-op if not currently waiting.
             */
-            void CancelWait()
+            void CancelNoWake()
             {
                 if (IsWaiting())
                 {
+                    m_state = STATE_CANCELLED;
+
                     m_sync_obj->RemoveWaitObject(this);
                     m_sync_obj = nullptr;
                 }
             }
 
-            KernelTask   *m_task;      //!< Back-pointer to the owning KernelTask. Set once at construction; never changes.
-            ISyncObject  *m_sync_obj;  //!< Sync object this wait is registered with, or \c NULL when not waiting.
-            volatile bool m_timeout;   //!< \c true if the wait expired due to timeout rather than a Wake() signal.
-            Timeout       m_time_wait; //!< Ticks remaining until timeout. Decremented each tick; WAIT_INFINITE means no timeout.
+            /*! \brief  Cancel an in-progress wait and wake the owning task early.
+                \note   Used by IKernel::CancelTaskWait() to interrupt a task blocked in
+                        OnTaskWait(), e.g. for cancellable I/O or shutdown sequences.
+                        Unlike CancelNoWake(), this DOES wake the task - the task is not being
+                        torn down, it needs to legitimately resume execution and observe the
+                        result via IsCanceled().
+                \note   Sets m_canceled instead of m_timeout, so the caller can distinguish a
+                        cancelled wait (WAIT_RESULT_CANCELED) from a genuine timeout or signal.
+                \note   Caller (IKernel::CancelTaskWait()) is responsible for checking IsWaiting()
+                        before calling this - it asserts rather than no-op, mirroring Wake().
+            */
+            void Cancel()
+            {
+                STK_ASSERT(IsWaiting());
+
+                m_state     = STATE_CANCELLED;
+                m_time_wait = NO_WAIT;
+
+                m_sync_obj->RemoveWaitObject(this);
+                m_sync_obj = nullptr;
+
+                m_task->Wake();
+            }
+
+            KernelTask     *m_task;      //!< Back-pointer to the owning KernelTask. Set once at construction; never changes.
+            ISyncObject    *m_sync_obj;  //!< Sync object this wait is registered with, or \c NULL when not waiting.
+            Timeout         m_time_wait; //!< Ticks remaining until timeout. Decremented each tick; WAIT_INFINITE means no timeout.
+            volatile EState m_state;     //!< State of the object, see WaitObject::EState.
         };
 
         /*! \brief     Bind this slot to a user task: set access mode, task ID, and initialize the stack.
@@ -628,7 +687,7 @@ protected:
             // Wake()/WakeAll() would corrupt whatever task the slot gets rebound to
             if __stk_constexpr_cpp17 (IsSyncMode())
             {
-                m_wait_obj->CancelWait();
+                m_wait_obj->CancelNoWake();
             }
 
             // make this task sleeping to switch it out from scheduling process
@@ -1218,6 +1277,9 @@ public:
             KernelTask *const task = FindTaskByUserTask(user_task);
             STK_ASSERT(task != nullptr);
 
+            // nesting not supported, must not be suspended by SuspendTask
+            STK_ASSERT((task->m_state & KernelTask::STATE_SUSPENDED) == 0U);
+
             // only suspend if the task is currently awake: if it is already sleeping
             // (e.g. blocked on a mutex or timed Sleep), do not overwrite m_time_sleep,
             // that would corrupt the original sleep state and, for sync-object waits,
@@ -1237,6 +1299,9 @@ public:
                     SEGGER_SYSVIEW_OnTaskStopReady(task->GetUserStackPtr()->tid, TRACE_EVENT_SUSPEND);
                 #endif
                 }
+
+                // set state
+                task->m_state |= KernelTask::STATE_SUSPENDED;
             }
         }
 
@@ -1249,6 +1314,8 @@ public:
 
     /*! \brief     Resume task.
         \param[in] user_task: Pointer to the user task to resume.
+        \warning   Must not be called on a task blocked in OnTaskWait() on a sync object - asserts.
+                   Use CancelTaskWait() instead.
     */
     void ResumeTask(ITask *user_task) override
     {
@@ -1260,9 +1327,46 @@ public:
         KernelTask *const task = FindTaskByUserTask(user_task);
         STK_ASSERT(task != nullptr);
 
-        if (task->IsSleeping())
+        // must be suspended by SuspendTask, otherwise noop
+        if ((task->m_state & KernelTask::STATE_SUSPENDED) != 0U)
         {
-            task->Wake();
+            // clear state
+            task->m_state &= ~KernelTask::STATE_SUSPENDED;
+
+            // wake up
+            if (task->IsSleeping())
+            {
+                task->Wake();
+            }
+        }
+    }
+
+    /*! \brief     Cancel task's in-progress wait on a synchronization object.
+        \param[in] user_task: Pointer to the user task whose wait should be cancelled.
+    */
+    void CancelTaskWait(ITask *user_task) override
+    {
+        STK_ASSERT(user_task != nullptr);
+
+        if __stk_constexpr_cpp17 (IsSyncMode())
+        {
+            // avoid race with OnTick
+            const hw::CriticalSection::ScopedLock cs_;
+
+            KernelTask *const task = FindTaskByUserTask(user_task);
+            STK_ASSERT(task != nullptr);
+
+            // only cancel if actually blocked in OnTaskWait() on a sync object; no-op otherwise
+            // (e.g. task is running, suspended via SuspendTask(), or plainly sleeping)
+            if (task->m_wait_obj->IsWaiting())
+            {
+                task->m_wait_obj->Cancel();
+            }
+        }
+        else
+        {
+            // kernel operating mode must include KERNEL_SYNC for tasks to be able to wait
+            STK_ASSERT(false);
         }
     }
 
@@ -1964,7 +2068,13 @@ protected:
             // re-lock mutex when returning to the task's execution space
             mutex->Lock();
 
-            return (task->m_wait_obj->IsTimeout() ? WAIT_RESULT_TIMEOUT : WAIT_RESULT_SIGNAL);
+            // extract result from current state
+            const EWaitResult result = task->m_wait_obj->GetWaitResult();
+
+            // clear state to STATE_NONE
+            task->m_wait_obj->ClearState();
+
+            return result;
         }
         else
         {
