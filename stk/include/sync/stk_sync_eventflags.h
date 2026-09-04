@@ -102,6 +102,10 @@ public:
     /*! \brief Return sentinel: called from an ISR with a blocking timeout. */
     static const uint32_t ERROR_ISR       = 0x80000004U;
 
+    /*! \brief Return sentinel: the wait was cancelled via IKernel::CancelTaskWait()
+               before the flag condition was met (independent of the deadline). */
+    static const uint32_t ERROR_CANCELED  = 0x80000008U;
+
     /*! \brief Reserved error mask. Any return value with bit 31 set is an error. */
     static const uint32_t ERROR_MASK      = 0x80000000U;
 
@@ -190,6 +194,9 @@ public:
         \note      If the predicate becomes satisfied in the same tick that the deadline
                    expires, the wait succeeds and returns the matched flags. The timeout
                    is only reported when the condition is not met at deadline time.
+        \note      Returns \c ERROR_CANCELED, not \c ERROR_TIMEOUT, if the wait was
+                   interrupted via \c IKernel::CancelTaskWait() before either the flag
+                   condition was met or the deadline expired.
         \warning   ISR-safe only with \a timeout_ticks = \c NO_WAIT, ISR-unsafe otherwise.
     */
     uint32_t Wait(uint32_t flags, uint32_t options = OPT_WAIT_ANY, Timeout timeout_ticks = WAIT_INFINITE);
@@ -314,16 +321,28 @@ inline uint32_t EventFlags::Wait(uint32_t flags, uint32_t options, Timeout timeo
                 remaining = (now >= deadline ? NO_WAIT : (deadline - now));
             }
 
-            if (!m_cv.Wait(cs_, remaining))
+            const EWaitResult wr = m_cv.WaitEx(cs_, remaining);
+
+            if (wr == WAIT_RESULT_CANCELED)
             {
-                // timeout: mark failure and flag the loop to terminate
+                // cancelled by IKernel::CancelTaskWait(): stop immediately, do not
+                // reinterpret as a timeout and do not keep spinning on the predicate
+                final_result = ERROR_CANCELED;
+                break;
+            }
+            else if (wr != WAIT_RESULT_SIGNAL)
+            {
+                // timeout (either a real deadline miss, or NO_WAIT after 'remaining'
+                // collapsed to NO_WAIT): mark failure and flag the loop to terminate
                 final_result = ERROR_TIMEOUT;
                 break;
             }
+            // else: WAIT_RESULT_SIGNAL - a Set() woke us for re-evaluation (possibly a
+            // spurious/partial match under WAIT_ALL); loop back and re-check IsSatisfied()
         }
 
-        // If we didn't time out, the predicate was satisfied successfully
-        if (final_result != ERROR_TIMEOUT)
+        // If we didn't time out or get cancelled, the predicate was satisfied successfully
+        if ((final_result != ERROR_TIMEOUT) && (final_result != ERROR_CANCELED))
         {
             // predicate satisfied: determine which flags matched
             final_result = (((options & OPT_WAIT_ALL) == OPT_WAIT_ALL) ? flags : (m_flags & flags));

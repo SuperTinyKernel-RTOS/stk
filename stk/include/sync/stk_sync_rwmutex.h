@@ -214,12 +214,27 @@ inline bool RWMutex::TimedReadLock(Timeout timeout_ticks)
     bool success = true;
     ScopedCriticalSection cs_;
 
+    const bool timed_wait = (timeout_ticks != WAIT_INFINITE) && (timeout_ticks != NO_WAIT);
+
+    // capture an absolute deadline once, before entering the wait loop,
+    // this prevents the timeout from being silently restarted on each
+    // spurious wakeup
+    const Timeout deadline = (timed_wait ?
+        static_cast<Timeout>(GetTicks() + timeout_ticks) : timeout_ticks);
+
     // wait if there is an active writer or if writers are waiting (Writer Preference)
     while (m_writer_active || (m_writers_waiting != 0U))
     {
-        if (!m_cv_readers.Wait(cs_, timeout_ticks))
+        Timeout remaining = deadline;
+        if (timed_wait)
         {
-            success = false; // timeout
+            const Timeout now = static_cast<Timeout>(GetTicks());
+            remaining = (now >= deadline ? NO_WAIT : (deadline - now));
+        }
+
+        if (!m_cv_readers.Wait(cs_, remaining))
+        {
+            success = false; // timeout (or cancellation, see ConditionVariable::Wait())
             break;
         }
 
@@ -269,12 +284,28 @@ inline bool RWMutex::TimedLock(Timeout timeout_ticks)
 
     m_writers_waiting = static_cast<uint16_t>(m_writers_waiting + 1U);
 
+    const bool timed_wait = (timeout_ticks != WAIT_INFINITE) && (timeout_ticks != NO_WAIT);
+
+    // capture an absolute deadline once, before entering the wait loop,
+    // this prevents the timeout from being silently restarted on each
+    // spurious wakeup
+    const Timeout deadline = (timed_wait ?
+        static_cast<Timeout>(GetTicks() + timeout_ticks) : timeout_ticks);
+
     // wait until there are no active readers and no active writer
     while (m_writer_active || (m_readers != 0U))
     {
-        if (!m_cv_writers.Wait(cs_, timeout_ticks))
+        Timeout remaining = deadline;
+        if (timed_wait)
         {
-            // timed out: withdraw from the waiting writers queue
+            const Timeout now = static_cast<Timeout>(GetTicks());
+            remaining = (now >= deadline ? NO_WAIT : (deadline - now));
+        }
+
+        if (!m_cv_writers.Wait(cs_, remaining))
+        {
+            // timed out (or cancelled, see ConditionVariable::Wait()): withdraw from the
+            // waiting writers queue
             m_writers_waiting = static_cast<uint16_t>(m_writers_waiting - 1U);
             success = false;
             break;

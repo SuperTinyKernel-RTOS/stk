@@ -54,6 +54,20 @@ namespace sync {
 class Barrier final : public ITraceable
 {
 public:
+    /*! \enum  EResult
+        \brief Outcome of a Barrier::WaitEx() call.
+    */
+    enum EResult : uint8_t
+    {
+        BARRIER_RELEASED,     //!< Released because the barrier tripped; this task was not the last arrival.
+        BARRIER_LAST_ARRIVAL, //!< This task was the last arrival and tripped the barrier.
+        BARRIER_CANCELED      //!< Wait was cancelled via IKernel::CancelTaskWait() before the barrier
+                              //!< tripped. This task's arrival is rolled back (does not count toward
+                              //!< the generation it was waiting on) so bookkeeping stays consistent for
+                              //!< the remaining parties - it does not, and cannot, make the barrier trip
+                              //!< without a replacement arrival.
+    };
+
     /*! \brief     Constructor.
         \param[in] count: Number of tasks that must call \c Wait() before any of them is released.
         \note      \a count must not be 0.
@@ -71,11 +85,24 @@ public:
     /*! \brief     Block the calling task until \a count tasks have called \c Wait().
         \details   Once the last task arrives, all currently waiting tasks are woken up and the
                    barrier resets itself so it can be reused for the next round.
+        \note      Cannot be interrupted by a timeout (there is none), but can be interrupted by
+                   \c IKernel::CancelTaskWait(). This overload cannot report that, it returns
+                   \c false the same as a normal (non-last) release. Use \c WaitEx() to tell the
+                   two apart.
         \warning   ISR-unsafe.
         \return    True if the calling task was the last one to arrive (and thus released the
                    others), false if the calling task was one of the released waiters.
     */
-    bool Wait();
+    bool Wait() { return (WaitEx() == BARRIER_LAST_ARRIVAL); }
+
+    /*! \brief     Block the calling task until \a count tasks have called \c Wait(), preserving
+                   the full outcome.
+        \details   Identical to \c Wait(), except the caller can distinguish a normal release,
+                   being the last arrival, and a cancellation via \c IKernel::CancelTaskWait().
+        \warning   ISR-unsafe.
+        \return    \c BARRIER_LAST_ARRIVAL, \c BARRIER_RELEASED, or \c BARRIER_CANCELED.
+    */
+    EResult WaitEx();
 
     /*! \brief     Get the number of tasks required to trip the barrier.
         \warning   ISR-safe.
@@ -93,12 +120,12 @@ private:
 };
 
 // ---------------------------------------------------------------------------
-// Wait
+// WaitEx
 // ---------------------------------------------------------------------------
 
-inline bool Barrier::Wait()
+inline Barrier::EResult Barrier::WaitEx()
 {
-    bool is_last = false;
+    EResult result = BARRIER_RELEASED;
 
     STK_ASSERT(!hw::IsInsideISR()); // API contract: caller must not be in ISR
 
@@ -114,7 +141,7 @@ inline bool Barrier::Wait()
 
         m_cond.NotifyAll();
 
-        is_last = true;
+        result = BARRIER_LAST_ARRIVAL;
     }
     else
     {
@@ -122,13 +149,23 @@ inline bool Barrier::Wait()
         // we are still in the same generation we entered with
         while (gen == m_generation)
         {
-            STK_UNUSED(m_cond.Wait(m_mutex, WAIT_INFINITE));
+            if (m_cond.WaitEx(m_mutex, WAIT_INFINITE) == WAIT_RESULT_CANCELED)
+            {
+                // bail out before the barrier tripped: undo our own arrival so the count
+                // stays consistent for whichever tasks remain in this generation - do NOT
+                // let the barrier trip short-handed on our behalf
+                ++m_count;
+                result = BARRIER_CANCELED;
+                break;
+            }
+            // else: WAIT_RESULT_SIGNAL - NotifyAll() always pairs with ++m_generation, so a
+            // genuine signal here means gen != m_generation already and the loop exits next check
         }
     }
 
     m_mutex.Unlock();
 
-    return is_last;
+    return result;
 }
 
 } // namespace sync

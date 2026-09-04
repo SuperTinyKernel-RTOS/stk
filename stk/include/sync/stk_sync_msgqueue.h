@@ -327,9 +327,25 @@ inline bool MessageQueue::Put(const void *msg_ptr, Timeout timeout_ticks)
     ScopedCriticalSection cs_;
     bool success = true;
 
+    const bool timed_wait = (timeout_ticks != WAIT_INFINITE) && (timeout_ticks != NO_WAIT);
+
+    // capture an absolute deadline once, before entering the wait loop; a different
+    // producer can steal the just-freed slot between NotifyOne_CS() and this task
+    // re-acquiring the critical section (Mesa-style wakeup, not a direct handoff),
+    // so re-passing the original timeout_ticks on each retry would silently restart it
+    const Timeout deadline = (timed_wait ?
+        static_cast<Timeout>(GetTicks() + timeout_ticks) : timeout_ticks);
+
     while (m_count == m_capacity)
     {
-        if (!m_cv_not_full.Wait(cs_, timeout_ticks))
+        Timeout remaining = deadline;
+        if (timed_wait)
+        {
+            const Timeout now = static_cast<Timeout>(GetTicks());
+            remaining = (now >= deadline ? NO_WAIT : (deadline - now));
+        }
+
+        if (!m_cv_not_full.Wait(cs_, remaining))
         {
             success = false;
             break;
@@ -360,9 +376,25 @@ inline bool MessageQueue::PutFront(const void *msg_ptr, Timeout timeout_ticks)
     ScopedCriticalSection cs_;
     bool success = true;
 
+    const bool timed_wait = (timeout_ticks != WAIT_INFINITE) && (timeout_ticks != NO_WAIT);
+
+    // capture an absolute deadline once, before entering the wait loop; a different
+    // producer can steal the just-freed slot between NotifyOne_CS() and this task
+    // re-acquiring the critical section (Mesa-style wakeup, not a direct handoff),
+    // so re-passing the original timeout_ticks on each retry would silently restart it
+    const Timeout deadline = (timed_wait ?
+        static_cast<Timeout>(GetTicks() + timeout_ticks) : timeout_ticks);
+
     while (m_count == m_capacity)
     {
-        if (!m_cv_not_full.Wait(cs_, timeout_ticks))
+        Timeout remaining = deadline;
+        if (timed_wait)
+        {
+            const Timeout now = static_cast<Timeout>(GetTicks());
+            remaining = (now >= deadline ? NO_WAIT : (deadline - now));
+        }
+
+        if (!m_cv_not_full.Wait(cs_, remaining))
         {
             success = false;
             break;
@@ -395,9 +427,25 @@ inline bool MessageQueue::Get(void *msg_ptr, Timeout timeout_ticks)
     ScopedCriticalSection cs_;
     bool success = true;
 
+    const bool timed_wait = (timeout_ticks != WAIT_INFINITE) && (timeout_ticks != NO_WAIT);
+
+    // capture an absolute deadline once, before entering the wait loop; a different
+    // consumer can steal the just-produced message between NotifyOne_CS() and this
+    // task re-acquiring the critical section (Mesa-style wakeup, not a direct handoff),
+    // so re-passing the original timeout_ticks on each retry would silently restart it
+    const Timeout deadline = (timed_wait ?
+        static_cast<Timeout>(GetTicks() + timeout_ticks) : timeout_ticks);
+
     while (m_count == 0U)
     {
-        if (!m_cv_not_empty.Wait(cs_, timeout_ticks))
+        Timeout remaining = deadline;
+        if (timed_wait)
+        {
+            const Timeout now = static_cast<Timeout>(GetTicks());
+            remaining = (now >= deadline ? NO_WAIT : (deadline - now));
+        }
+
+        if (!m_cv_not_empty.Wait(cs_, remaining))
         {
             success = false;
             break;
@@ -427,9 +475,25 @@ inline bool MessageQueue::Peek(void *msg_ptr, Timeout timeout_ticks)
     ScopedCriticalSection cs_;
     bool success = true;
 
+    const bool timed_wait = (timeout_ticks != WAIT_INFINITE) && (timeout_ticks != NO_WAIT);
+
+    // capture an absolute deadline once, before entering the wait loop; a different
+    // consumer can drain the queue via Get()/TryGet() between NotifyOne_CS() and this
+    // task re-acquiring the critical section (Mesa-style wakeup, not a direct handoff),
+    // so re-passing the original timeout_ticks on each retry would silently restart it
+    const Timeout deadline = (timed_wait ?
+        static_cast<Timeout>(GetTicks() + timeout_ticks) : timeout_ticks);
+
     while (m_count == 0U)
     {
-        if (!m_cv_not_empty.Wait(cs_, timeout_ticks))
+        Timeout remaining = deadline;
+        if (timed_wait)
+        {
+            const Timeout now = static_cast<Timeout>(GetTicks());
+            remaining = (now >= deadline ? NO_WAIT : (deadline - now));
+        }
+
+        if (!m_cv_not_empty.Wait(cs_, remaining))
         {
             success = false;
             break;
@@ -457,9 +521,25 @@ inline bool MessageQueue::PeekFront(void *msg_ptr, Timeout timeout_ticks)
     ScopedCriticalSection cs_;
     bool success = true;
 
+    const bool timed_wait = (timeout_ticks != WAIT_INFINITE) && (timeout_ticks != NO_WAIT);
+
+    // capture an absolute deadline once, before entering the wait loop; a different
+    // consumer can drain the queue via Get()/TryGet() between NotifyOne_CS() and this
+    // task re-acquiring the critical section (Mesa-style wakeup, not a direct handoff),
+    // so re-passing the original timeout_ticks on each retry would silently restart it
+    const Timeout deadline = (timed_wait ?
+        static_cast<Timeout>(GetTicks() + timeout_ticks) : timeout_ticks);
+
     while (m_count == 0U)
     {
-        if (!m_cv_not_empty.Wait(cs_, timeout_ticks))
+        Timeout remaining = deadline;
+        if (timed_wait)
+        {
+            const Timeout now = static_cast<Timeout>(GetTicks());
+            remaining = (now >= deadline ? NO_WAIT : (deadline - now));
+        }
+
+        if (!m_cv_not_empty.Wait(cs_, remaining))
         {
             success = false;
             break;
