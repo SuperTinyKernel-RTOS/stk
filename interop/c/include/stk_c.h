@@ -2046,6 +2046,67 @@ namespace stk { namespace sync { class RWMutex; } }
 extern "C" stk::sync::RWMutex *stk_rwmutex_get_instance(stk_rwmutex_t *rw);
 #endif // __cplusplus
 
+// ----- Barrier -----------------------------------------------------------------
+
+/*! \brief     A memory size (multiples of stk_word_t) required for Barrier instance.
+    \note      Composed of one Mutex (\a STK_MUTEX_IMPL_SIZE), one ConditionVariable
+               (\a STK_CV_IMPL_SIZE), three uint32_t counters (threshold, count,
+               generation), plus Barrier's own debug name if enabled.
+*/
+#define STK_BARRIER_IMPL_SIZE (STK_MUTEX_IMPL_SIZE + STK_CV_IMPL_SIZE + 4U + (STK_SYNC_DEBUG_NAMES ? 1U : 0U))
+
+/*! \brief     Opaque memory container for a Barrier instance.
+*/
+typedef struct stk_barrier_mem_t {
+    stk_word_t data[STK_BARRIER_IMPL_SIZE] __stk_c_aligned;
+} stk_barrier_mem_t;
+
+/*! \brief     Opaque handle to a Barrier instance.
+*/
+typedef struct stk_barrier_t stk_barrier_t;
+
+/*! \brief     Create a Barrier (using provided memory).
+    \param[in] membuf: Pointer to static memory container.
+    \param[in] membuf_size: Size of the container (must be >= sizeof(stk_barrier_mem_t)).
+    \param[in] count: Number of tasks that must call \c stk_barrier_wait() before any of
+               them is released. Must not be 0.
+    \return    Barrier handle.
+*/
+stk_barrier_t *stk_barrier_create(stk_barrier_mem_t *const membuf, uint32_t membuf_size, uint32_t count);
+
+/*! \brief     Destroy a Barrier.
+    \param[in] barrier: Barrier handle.
+*/
+void stk_barrier_destroy(stk_barrier_t *barrier);
+
+/*! \brief     Block the calling task until \a count tasks have called \c stk_barrier_wait().
+    \details   Once the last task arrives, all currently waiting tasks are woken up and the
+               barrier resets itself so it can be reused for the next round.
+    \param[in] barrier: Barrier handle.
+    \return    True if the calling task was the last one to arrive (and thus released the
+               others), False if the calling task was one of the released waiters.
+    \warning   ISR-unsafe.
+*/
+bool stk_barrier_wait(stk_barrier_t *barrier);
+
+/*! \brief     Get the number of tasks required to trip the barrier.
+    \param[in] barrier: Barrier handle.
+    \return    Construction-time threshold.
+    \note      ISR-safe.
+*/
+uint32_t stk_barrier_get_threshold(const stk_barrier_t *barrier);
+
+#ifdef __cplusplus
+namespace stk { namespace sync { class Barrier; } }
+
+/*! \brief     Get the underlying C++ \c stk::sync::Barrier object wrapped by a \c stk_barrier_t handle.
+    \param[in] barrier: Barrier handle obtained via \c stk_barrier_create().
+    \return    Pointer to the wrapped \c stk::sync::Barrier instance. Never \c NULL for a valid handle.
+    \note      C++ callers only (guarded by \c __cplusplus); not part of the C ABI.
+*/
+extern "C" stk::sync::Barrier *stk_barrier_get_instance(stk_barrier_t *barrier);
+#endif // __cplusplus
+
 #ifdef __cplusplus
 }
 #endif

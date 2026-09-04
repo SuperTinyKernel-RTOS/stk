@@ -926,6 +926,63 @@ sync::RWMutex *stk_rwmutex_get_instance(stk_rwmutex_t *rw)
     return &rw->handle;
 }
 
+// -----------------------------------------------------------------------------
+// Barrier
+// -----------------------------------------------------------------------------
+struct stk_barrier_t
+{
+    explicit stk_barrier_t(uint32_t count) : handle(count)
+    {}
+
+    Barrier handle;
+};
+
+stk_barrier_t *stk_barrier_create(stk_barrier_mem_t *const membuf, uint32_t membuf_size, uint32_t count)
+{
+    STK_ASSERT(membuf != nullptr);
+    STK_ASSERT(membuf_size >= sizeof(stk_barrier_t));
+    STK_ASSERT(count != 0U);
+    STK_STATIC_ASSERT_N((sizeof(stk_barrier_t) <= sizeof(stk_barrier_mem_t)),
+        "stk_barrier_mem_t is too small to hold stk_barrier_t");
+
+    stk_barrier_t *result = nullptr;
+    if ((membuf_size >= sizeof(stk_barrier_t)) && (count != 0U))
+    {
+        result = new (membuf->data) stk_barrier_t(count);
+    }
+
+    return result;
+}
+
+void stk_barrier_destroy(stk_barrier_t *barrier)
+{
+    if (barrier != nullptr)
+    {
+        barrier->~stk_barrier_t();
+    }
+}
+
+bool stk_barrier_wait(stk_barrier_t *barrier)
+{
+    STK_ASSERT(barrier != nullptr);
+
+    return barrier->handle.Wait();
+}
+
+uint32_t stk_barrier_get_threshold(const stk_barrier_t *barrier)
+{
+    STK_ASSERT(barrier != nullptr);
+
+    return barrier->handle.GetThreshold();
+}
+
+Barrier *stk_barrier_get_instance(stk_barrier_t *barrier)
+{
+    STK_ASSERT(barrier != nullptr);
+
+    return &barrier->handle;
+}
+
 // =============================================================================
 } // extern "C"
 // =============================================================================
