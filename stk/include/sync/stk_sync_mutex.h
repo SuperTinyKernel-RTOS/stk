@@ -156,7 +156,7 @@ inline bool Mutex::TimedLock(Timeout timeout_ticks)
         svc->InheritWeight(owner_tid, GetUserTaskFromTid(current_tid)->GetWeight());
 
         // mutex owned by another thread (slow path/blocking)
-        if (svc->Wait(this, &cs_, timeout_ticks) == WAIT_RESULT_TIMEOUT)
+        if (svc->Wait(this, &cs_, timeout_ticks) != WAIT_RESULT_SIGNAL)
         {
             // if owner did not change, undo priority boost to avoid stuck elevated priority: lookup for a
             // higher weight within existing wait objects, noop if ISwitchStrategy::PRIORITY_INHERITANCE_API = 0

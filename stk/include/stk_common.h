@@ -119,9 +119,10 @@ enum ETraceEventId : uint32_t
 */
 enum EWaitResult : int8_t
 {
-    WAIT_RESULT_FAIL    = -1, //!< IKernelService::Wait returned with error without waiting.
-    WAIT_RESULT_SIGNAL  = 0,  //!< The wake was caused by a signal.
-    WAIT_RESULT_TIMEOUT = 1   //!< The wake was caused by a timeout expiry.
+    WAIT_RESULT_FAIL     = -1, //!< IKernelService::Wait returned with error without waiting.
+    WAIT_RESULT_SIGNAL   = 0,  //!< The wake was caused by a signal.
+    WAIT_RESULT_TIMEOUT  = 1,  //!< The wake was caused by a timeout expiry.
+    WAIT_RESULT_CANCELED = 2   //!< The wait was cancelled by another task via IKernel::CancelTaskWait(), independent of signal/timeout.
 };
 
 /*! \enum  EHwException
@@ -471,6 +472,18 @@ public:
     */
     typedef DLEntryType ListEntryType;
 
+    /*! \enum  EState
+        \brief State of the WaitObject.
+    */
+    enum EState : uint8_t
+    {
+        STATE_NONE = 0U,
+        STATE_WAIT,      //!< Wait is active.
+        STATE_SIGNALED,  //!< Wake signaled.
+        STATE_TIMEOUT,   //!< Wait expired due to timeout rather than a Wake() signal.
+        STATE_CANCELLED  //!< Wait was cancelled via Cancel() rather than Wake()/timeout.
+    };
+
     /*! \brief     Get thread Id of the task owning .
         \return    Thread Id.
     */
@@ -484,10 +497,11 @@ public:
     */
     virtual void Wake(bool timeout) = 0;
 
-    /*! \brief     Check if task woke up due to a timeout.
-        \return    Returns \a true if timeout, \a false otherwise.
+    /*! \brief     Get current state.
+        \return    State value.
+        \see       EState
     */
-    virtual bool IsTimeout() const = 0;
+    virtual EState GetState() const = 0;
 
     /*! \brief     Update wait object's waiting time.
         \param[in] elapsed_ticks: Number of ticks elapsed between this and previous calls, in case of
@@ -1477,8 +1491,23 @@ public:
 
     /*! \brief     Resume task.
         \param[in] user_task: Pointer to the user task to resume.
+        \warning   Must not be called on a task currently blocked in IKernelService::Wait() on a
+                    synchronization object - asserts in that case. Use CancelTaskWait() instead to
+                    interrupt that kind of wait.
     */
     virtual void ResumeTask(ITask *user_task) = 0;
+
+    /*! \brief     Cancel a task's in-progress wait on a synchronization object, waking it early.
+        \param[in] user_task: Pointer to the user task whose wait should be cancelled.
+        \note      Only has effect if the task is currently blocked in IKernelService::Wait()
+                    (i.e. inside OnTaskWait()). No-op otherwise (e.g. task is running, suspended, or
+                    sleeping via Sleep()/SleepUntil()).
+        \note      The cancelled task's IKernelService::Wait() call returns WAIT_RESULT_CANCELED -
+                    distinct from WAIT_RESULT_SIGNAL (resource was NOT acquired/signalled) and
+                    WAIT_RESULT_TIMEOUT (the timeout, if any, had not yet expired).
+        \note      KERNEL_SYNC mode only.
+    */
+    virtual void CancelTaskWait(ITask *user_task) = 0;
 
     /*! \brief     Enumerate kernel tasks.
         \param[in] tasks: Reference to the ArrayView of IKernelTask pointers.
