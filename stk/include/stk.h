@@ -501,6 +501,8 @@ protected:
                 case STATE_CANCELLED:
                     return WAIT_RESULT_CANCELED;
                 default: {
+                    STK_ASSERT(m_state != STATE_NONE);
+                    STK_ASSERT(m_state != STATE_WAIT);
                     STK_ASSERT(m_state == STATE_SIGNALED);
                     return WAIT_RESULT_SIGNAL; }
                 }
@@ -2065,14 +2067,14 @@ protected:
             // note: we do not spin long here, kernel will switch this task out from scheduling on the next tick
             task->BusyWaitWhileSleeping(this);
 
+            // extract & clear this wait's result BEFORE mutex->Lock(): a contended Lock() recurses
+            // into OnTaskWait() and reuses this same per-task WaitObject, which would otherwise
+            // silently overwrite/clear our still-unread result
+            const EWaitResult result = task->m_wait_obj->GetWaitResult();
+            task->m_wait_obj->ClearState();
+
             // re-lock mutex when returning to the task's execution space
             mutex->Lock();
-
-            // extract result from current state
-            const EWaitResult result = task->m_wait_obj->GetWaitResult();
-
-            // clear state to STATE_NONE
-            task->m_wait_obj->ClearState();
 
             return result;
         }
