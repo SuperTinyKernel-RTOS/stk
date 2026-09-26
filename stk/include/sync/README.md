@@ -26,6 +26,7 @@ An RAII-style low-level synchronization primitive that disables interrupts on th
 ### 2. Mutex (`sync::Mutex`)
 A recursive mutual exclusion primitive used to protect shared resources.
 - **Features**: Supports `Lock`, `TryLock`, `Unlock`, and `TimedLock`.
+- **Priority Inheritance**: Temporarily boosts the priority of the lock owner when a higher-priority task blocks on `Lock()`/`TimedLock()`, mitigating priority inversion; the boost is restored automatically on `Unlock()` (no-op on switch strategies that don't support priority inheritance).
 - **Low-Power Aware**: Waiting tasks are suspended by the kernel.
 
 ### 3. Spinlock (`sync::SpinLock`)
@@ -37,6 +38,8 @@ A high-performance recursive spinlock for very short critical sections.
 ### 4. Condition Variable (`sync::ConditionVariable`)
 Used in conjunction with a Mutex to wait for specific application states.
 - **Features**: `Wait`, `NotifyOne`, and `NotifyAll`.
+- **Cancellable Waits**: `WaitEx()` returns the full `EWaitResult` (`WAIT_RESULT_SIGNAL`, `WAIT_RESULT_TIMEOUT`, `WAIT_RESULT_CANCELED`), letting callers distinguish a timeout from a wait cancelled via `IKernel::CancelTaskWait()`.
+- **Critical-Section Variants**: `NotifyOne_CS()`/`NotifyAll_CS()` skip the internal critical-section entry/exit for callers that already hold one (e.g. other primitives built on top of `ConditionVariable`); ISR-safe under the same rules as `NotifyOne()`/`NotifyAll()`.
 - **Real-time**: Releases mutex and suspends task atomically, ensuring no "lost wake-up" signals.
 - **Low-Power Aware**: Waiting tasks are suspended by the kernel.
 
@@ -50,6 +53,7 @@ A binary signaling primitive supporting Auto-reset and Manual-reset modes.
 ### 6. Semaphore (`sync::Semaphore`)
 A counting signaling primitive used for resource tracking or producer-consumer patterns.
 - **Direct Handover**: When semaphore is signaled, kernel immediately transfers the resource to the first waiting task (FIFO ordering).
+- **Bounded Signal**: `TrySignal()` posts without exceeding `max_count`, returning `false` instead of asserting — safe for multiple concurrent signalers where a redundant post should be tolerated rather than treated as a caller error.
 - **Low-Power Aware**: Waiting tasks are suspended by the kernel.
 
 ### 7. Pipe (`sync::Pipe` / `sync::PipeT<T, Capacity>`)
@@ -77,6 +81,7 @@ A 32-bit multi-flag synchronization primitive for coordinating multiple independ
 - **AND semantics** (`OPT_WAIT_ALL`): Unblocks only when all requested flag bits are simultaneously set.
 - **Non-destructive read**: `Get()` returns a snapshot of the flags word without consuming any bit.
 - **Selective clear**: By default matched bits are atomically cleared on a successful `Wait()`; pass `OPT_NO_CLEAR` to suppress this, allowing multiple concurrent waiters to each satisfy on the same `Set()`.
+- **Cancellable Waits**: `Wait()` returns `ERROR_CANCELED` (distinct from `ERROR_TIMEOUT`) if the wait was interrupted via `IKernel::CancelTaskWait()` before the requested flag condition was met.
 - **Low-Power Aware**: Waiting tasks are suspended by the kernel.
 
 ### 10. Reader-Writer Mutex (`sync::RWMutex`)
@@ -86,6 +91,7 @@ A synchronization primitive that allows multiple concurrent readers or one exclu
 - **Exclusive Access**: `Lock()` provides exclusive write access; blocks all other readers and writers.
 - **Timeout Support**: `TimedReadLock()` and `TimedLock()` with configurable timeouts.
 - **RAII Guards**: `ScopedTimedReadMutex` and `ScopedTimedLock` acquire on construction and release automatically on scope exit.
+- **Non-Recursive**: Unlike `sync::Mutex` and `sync::SpinLock`, a task must not call `ReadLock()` or `Lock()` again before releasing it — doing so will deadlock.
 - **Low-Power Aware**: Waiting tasks are suspended by the kernel.
 
 ### 11. Barrier (`sync::Barrier`)
@@ -93,6 +99,8 @@ A cyclic rendezvous point that blocks a fixed-size group of tasks until all of t
 - **Cyclic**: Automatically resets after releasing the group, ready for the next round without re-creation.
 - **Generation Tracking**: An internal generation counter distinguishes successive rounds and guards against spurious wakeups.
 - **Last-Arriver Signal**: `Wait()` returns `true` for the single task that triggers release of the group, `false` for all others — useful for once-per-round bookkeeping.
+- **Cancellable Waits**: `WaitEx()` returns the full `EResult` (`BARRIER_RELEASED`, `BARRIER_LAST_ARRIVAL`, `BARRIER_CANCELED`), distinguishing a wait cancelled via `IKernel::CancelTaskWait()` from a normal release; a cancelled arrival is rolled back so it can't trip the barrier short-handed.
+- **Introspection**: `GetThreshold()` returns the configured party count.
 - **Built on Mutex/ConditionVariable**: Composed from `sync::Mutex` and `sync::ConditionVariable`.
 - **Low-Power Aware**: Waiting tasks are suspended by the kernel.
 
@@ -106,7 +114,7 @@ The following operations are ISR-safe:
 * **sync::Event**: `Set()`, `Pulse()`, `Reset()`, `TryWait()`
 * **sync::EventFlags**: `Set()`, `Clear()`, `Get()`, `TryWait()`, `Wait(NO_WAIT)`
 * **sync::Semaphore**: `TrySignal()`, `Signal()`, `TryWait()`
-* **sync::ConditionVariable**: `NotifyOne()`, `NotifyAll()`, `Wait(NO_WAIT)`
+* **sync::ConditionVariable**: `NotifyOne()`, `NotifyOne_CS()`, `NotifyAll()`, `NotifyAll_CS()`, `Wait(NO_WAIT)` (the `_CS` variants require the caller to already hold a critical section)
 * **sync::Pipe**: `Write(NO_WAIT)`, `WriteBulk(NO_WAIT)`, `TryWrite()`, `TryWriteBulk()`, `Read(NO_WAIT)`, `ReadBulk(NO_WAIT)`, `TryRead()`, `TryReadBulk()`, `ReadBulkTriggered(NO_WAIT)`, `TryReadBulkTriggered()`, `Reset()`
 * **sync::MessageQueue**: `Put(NO_WAIT)`, `TryPut()`, `PutFront(NO_WAIT)`, `TryPutFront()`, `Get(NO_WAIT)`, `TryGet()`, `Peek(NO_WAIT)`, `TryPeek()`, `PeekFront(NO_WAIT)`, `TryPeekFront()`, `Reset()`
 

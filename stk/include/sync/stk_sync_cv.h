@@ -83,16 +83,32 @@ public:
     /*! \brief     Wait for a signal.
         \details   Atomically releases \a mutex and blocks the calling task. The \a mutex is
                    re-acquired before the function returns, regardless of whether the wake
-                   was caused by a signal or a timeout.
+                   was caused by a signal, a timeout, or a cancellation.
         \param[in] mutex: An \a IMutex-compatible lock that must be held by the calling task
                    before Wait() is called. The kernel releases it atomically during suspension
                    and re-acquires it on wake.
         \param[in] timeout_ticks: Maximum time to wait (ticks). Use \a WAIT_INFINITE to block
                    indefinitely, \a NO_WAIT to return immediately without blocking.
-        \return    \c true if signaled, \c false if timeout occurred or \a NO_WAIT was passed.
+        \return    \c true if signaled, \c false if the wait did not end in a signal (timeout,
+                   cancellation via IKernel::CancelTaskWait(), or \a NO_WAIT was passed).
+        \note      Collapses the distinction between timeout and cancellation. Use \c WaitEx()
+                   if the caller needs to tell them apart.
         \warning   ISR-safe only with timeout_ticks=NO_WAIT, ISR-unsafe otherwise.
     */
     bool Wait(IMutex &mutex, Timeout timeout_ticks = WAIT_INFINITE);
+
+    /*! \brief     Wait for a signal, preserving the full wait outcome.
+        \details   Identical to \c Wait(), except the caller gets the raw \c EWaitResult
+                   instead of a collapsed bool, so a cancellation (via
+                   \c IKernel::CancelTaskWait()) can be distinguished from a timeout.
+        \param[in] mutex: Same as \c Wait().
+        \param[in] timeout_ticks: Same as \c Wait(). \a NO_WAIT always yields
+                   \c WAIT_RESULT_TIMEOUT without blocking (consistent with a poll that
+                   found the condition not yet met).
+        \return    \c WAIT_RESULT_SIGNAL, \c WAIT_RESULT_TIMEOUT, or \c WAIT_RESULT_CANCELED.
+        \warning   ISR-safe only with timeout_ticks=NO_WAIT, ISR-unsafe otherwise.
+    */
+    EWaitResult WaitEx(IMutex &mutex, Timeout timeout_ticks = WAIT_INFINITE);
 
     /*! \brief     Wake one waiting task.
         \note      ISR-safe.
@@ -126,18 +142,30 @@ private:
 
 inline bool ConditionVariable::Wait(IMutex &mutex, Timeout timeout_ticks)
 {
+    return (WaitEx(mutex, timeout_ticks) == WAIT_RESULT_SIGNAL);
+}
+
+// ---------------------------------------------------------------------------
+// WaitEx
+// ---------------------------------------------------------------------------
+
+inline EWaitResult ConditionVariable::WaitEx(IMutex &mutex, Timeout timeout_ticks)
+{
     // API contract: mutex must be locked by the calling task before Wait() is called.
     // The kernel releases it atomically during suspension and re-acquires it on wake.
-    bool success = false;
+
+    // NO_WAIT never touches the kernel wait path: treat it the same as an
+    // immediately-expired timeout (consistent with the pre-existing bool Wait() semantics).
+    EWaitResult result = WAIT_RESULT_TIMEOUT;
 
     if (timeout_ticks != NO_WAIT)
     {
         STK_ASSERT(!hw::IsInsideISR()); // API contract: caller must not be in ISR if timeout_ticks!=NO_WAIT
-        
-        success = (IKernelService::GetInstance()->Wait(this, &mutex, timeout_ticks) == WAIT_RESULT_SIGNAL);
+
+        result = IKernelService::GetInstance()->Wait(this, &mutex, timeout_ticks);
     }
 
-    return success;
+    return result;
 }
 
 // ---------------------------------------------------------------------------

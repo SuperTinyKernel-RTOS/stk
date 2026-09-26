@@ -1022,6 +1022,18 @@ namespace stk { namespace sync { class SpinLock; } }
 extern "C" stk::sync::SpinLock *stk_spinlock_get_instance(stk_spinlock_t *slock);
 #endif // __cplusplus
 
+// ----- Wait Result (shared) ---------------------------------------------------
+
+/*! \brief     Outcome of a cancellable, timed kernel wait (see stk_cv_wait_ex()).
+    \note      It is a direct match for stk::EWaitResult.
+*/
+typedef enum stk_wait_result_t {
+    STK_WAIT_RESULT_FAIL     = -1, //!< The kernel returned an error without actually waiting.
+    STK_WAIT_RESULT_SIGNAL   = 0,  //!< The wake was caused by a signal.
+    STK_WAIT_RESULT_TIMEOUT  = 1,  //!< The wake was caused by a timeout expiry.
+    STK_WAIT_RESULT_CANCELED = 2   //!< The wait was cancelled by another task, independent of signal/timeout.
+} stk_wait_result_t;
+
 // ----- Condition Variable ----------------------------------------------------
 
 /*! \brief     A memory size (multiples of stk_word_t) required for ConditionVariable instance.
@@ -1056,12 +1068,31 @@ void stk_cv_destroy(stk_cv_t *cv);
     \param[in] cv: CV handle.
     \param[in] mtx: Locked mutex handle protecting the state.
     \param[in] timeout: Maximum time to wait in OS ticks or \a STK_WAIT_INFINITE.
-    \return    True if signaled, False on timeout.
+    \return    True if signaled, False if the wait did not end in a signal (timeout or
+               an externally cancelled wait).
+    \note      Collapses the distinction between timeout and cancellation. Use
+               \c stk_cv_wait_ex() if the caller needs to tell them apart.
     \note      If OS tick rate is 1 kHz then 1 tick = 1 ms. Use \c stk_ticks_from_ms()
                to convert a millisecond value to ticks for best portability across
                different tick rates.
 */
 bool stk_cv_wait(stk_cv_t *cv, stk_mutex_t *mtx, stk_timeout_t timeout);
+
+/*! \brief     Wait for a signal on the condition variable, preserving the full outcome.
+    \details   Identical to \c stk_cv_wait(), except the caller gets the raw
+               \c stk_wait_result_t instead of a collapsed bool, so a cancellation can
+               be distinguished from a timeout.
+    \param[in] cv: CV handle.
+    \param[in] mtx: Locked mutex handle protecting the state.
+    \param[in] timeout: Maximum time to wait in OS ticks or \a STK_WAIT_INFINITE.
+    \return    \c STK_WAIT_RESULT_SIGNAL, \c STK_WAIT_RESULT_TIMEOUT, or
+               \c STK_WAIT_RESULT_CANCELED.
+    \note      If OS tick rate is 1 kHz then 1 tick = 1 ms. Use \c stk_ticks_from_ms()
+               to convert a millisecond value to ticks for best portability across
+               different tick rates.
+    \warning   ISR-safe only with timeout = \c STK_NO_WAIT, ISR-unsafe otherwise.
+*/
+stk_wait_result_t stk_cv_wait_ex(stk_cv_t *cv, stk_mutex_t *mtx, stk_timeout_t timeout);
 
 /*! \brief     Wake one task waiting on the condition variable.
     \param[in] cv: CV handle.
@@ -1270,6 +1301,7 @@ extern "C" stk::sync::Semaphore *stk_sem_get_instance(stk_sem_t *sem);
 #define STK_EF_ERROR_PARAMETER (0x80000001U) /*!< flags argument is 0 or has bit 31 set */
 #define STK_EF_ERROR_TIMEOUT   (0x80000002U) /*!< Timeout expired before the flag condition was met */
 #define STK_EF_ERROR_ISR       (0x80000004U) /*!< Wait called from an ISR with a blocking timeout */
+#define STK_EF_ERROR_CANCELED  (0x80000008U) /*!< Wait was cancelled before the flag condition was met */
 #define STK_EF_ERROR_MASK      (0x80000000U) /*!< Mask for testing any error; bit 31 set means error */
 
 /*! \brief     Returns true if a value returned by stk_ef_set(), stk_ef_clear(),
@@ -1353,6 +1385,8 @@ uint32_t stk_ef_get(stk_ef_t *ef);
                value as a flags mask.
     \note      If the predicate becomes satisfied in the same tick that the deadline
                expires, the wait succeeds and returns the matched flags.
+    \note      Returns \c STK_EF_ERROR_CANCELED, not \c STK_EF_ERROR_TIMEOUT, if the wait
+               was cancelled before either the flag condition was met or the deadline expired.
     \note      If OS tick rate is 1 kHz then 1 tick = 1 ms. Use \c stk_ticks_from_ms()
                to convert a millisecond value to ticks for best portability across
                different tick rates.
@@ -2079,15 +2113,37 @@ stk_barrier_t *stk_barrier_create(stk_barrier_mem_t *const membuf, uint32_t memb
 */
 void stk_barrier_destroy(stk_barrier_t *barrier);
 
+/*! \brief     Outcome of a stk_barrier_wait_ex() call.
+    \note      It is a direct match for stk::sync::Barrier::EResult.
+*/
+typedef enum stk_barrier_result_t {
+    STK_BARRIER_RELEASED     = 0, //!< Released because the barrier tripped; this task was not the last arrival.
+    STK_BARRIER_LAST_ARRIVAL = 1, //!< This task was the last arrival and tripped the barrier.
+    STK_BARRIER_CANCELED     = 2  //!< Wait was cancelled before the barrier tripped; this task's arrival
+                                   //!< was rolled back and does not count toward the generation it was waiting on.
+} stk_barrier_result_t;
+
 /*! \brief     Block the calling task until \a count tasks have called \c stk_barrier_wait().
     \details   Once the last task arrives, all currently waiting tasks are woken up and the
                barrier resets itself so it can be reused for the next round.
     \param[in] barrier: Barrier handle.
+    \note      Cannot report a cancellation - returns False the same as a normal (non-last)
+               release. Use \c stk_barrier_wait_ex() to tell the two apart.
+    \warning   ISR-unsafe.
     \return    True if the calling task was the last one to arrive (and thus released the
                others), False if the calling task was one of the released waiters.
-    \warning   ISR-unsafe.
 */
 bool stk_barrier_wait(stk_barrier_t *barrier);
+
+/*! \brief     Block the calling task until \a count tasks have arrived, preserving the
+               full outcome.
+    \details   Identical to \c stk_barrier_wait(), except the caller can distinguish a
+               normal release, being the last arrival, and a cancellation.
+    \param[in] barrier: Barrier handle.
+    \return    \c STK_BARRIER_LAST_ARRIVAL, \c STK_BARRIER_RELEASED, or \c STK_BARRIER_CANCELED.
+    \warning   ISR-unsafe.
+*/
+stk_barrier_result_t stk_barrier_wait_ex(stk_barrier_t *barrier);
 
 /*! \brief     Get the number of tasks required to trip the barrier.
     \param[in] barrier: Barrier handle.

@@ -27,16 +27,26 @@ pure C API with no C++ headers required in your source files.
 - [Timing Services](#timing-services)
   - [Sleep vs Delay](#sleep-vs-delay)
   - [Time Conversion Helpers](#time-conversion-helpers)
+  - [Raw System Timer](#raw-system-timer)
   - [High-Resolution Clock](#high-resolution-clock)
+- [Kernel Introspection and Control](#kernel-introspection-and-control)
+  - [Enumerating Tasks](#enumerating-tasks)
+  - [Manual Tick Injection](#manual-tick-injection)
+  - [Tickless Scheduling Suspend/Resume](#tickless-scheduling-suspendresume)
+  - [Platform Event Overrider](#platform-event-overrider)
+  - [Dynamic Kernel/Task Cleanup](#dynamic-kerneltask-cleanup)
 - [Synchronization Primitives](#synchronization-primitives)
   - [Critical Section](#critical-section)
   - [Mutex](#mutex)
   - [SpinLock](#spinlock)
+  - [Condition Variable](#condition-variable)
   - [Semaphore](#semaphore)
   - [Event](#event)
   - [EventFlags](#eventflags)
+  - [Pipe](#pipe)
   - [Message Queue](#message-queue)
   - [Reader-Writer Lock](#reader-writer-lock)
+  - [Barrier](#barrier)
 - [Memory: Block Pool](#memory-block-pool)
 - [Software Timers](#software-timers)
 - [Thread-Local Storage (TLS)](#thread-local-storage-tls)
@@ -308,6 +318,12 @@ stk_kernel_resume_task(k, t);
 
 Prefer `stk_sleep_ms()` in normal tasks; use `stk_yield()` in HRT tasks.
 
+Wake a sleeping task early from another task or an ISR:
+
+```c
+stk_sleep_cancel(stk_task_get_id(t));   /* no-op if the task isn't sleeping */
+```
+
 ### Time Conversion Helpers
 
 ```c
@@ -316,6 +332,13 @@ int64_t ticks = stk_ticks_from_ms(250);    /* 250 ms → ticks */
 int64_t ms    = stk_ms_from_ticks(ticks);  /* ticks → ms */
 int64_t now   = stk_time_now_ms();         /* ms since kernel start */
 int64_t t     = stk_ticks();               /* raw tick counter */
+```
+
+### Raw System Timer
+
+```c
+stk_cycle_t t0 = stk_sys_timer_count();     /* raw 64-bit hardware counter, ISR-safe */
+uint32_t freq  = stk_sys_timer_frequency(); /* counter frequency in Hz, ISR-safe */
 ```
 
 ### High-Resolution Clock
@@ -335,6 +358,91 @@ int64_t us = stk_hires_time_us();
 
 ---
 
+## Kernel Introspection and Control
+
+### Enumerating Tasks
+
+```c
+stk_task_t *tasks[STK_C_KERNEL_MAX_TASKS];
+size_t n = stk_kernel_enumerate_tasks(k, tasks, STK_C_KERNEL_MAX_TASKS);
+for (size_t i = 0; i < n; i++) {
+    printf("%s\n", stk_task_get_name(tasks[i]));
+}
+```
+
+`stk_kernel_enumerate_tasks()` is ISR-safe.
+
+### Manual Tick Injection
+
+If the platform driver's built-in SysTick handler is disabled
+(`STK_SYSTICK_HANDLER = _STK_SYSTICK_HANDLER_DISABLE` in `stk_config.h`), drive
+the scheduler from your own tick ISR instead:
+
+```c
+void my_tick_isr(void) {
+    stk_kernel_process_tick(k);   /* ISR-safe; call at the configured tick rate */
+}
+```
+
+`stk_kernel_process_hard_fault(k)` triggers the kernel's safe-state handler
+(normally invoked automatically when an HRT task misses its deadline) and
+never returns. It is exposed for custom fault handlers or test harnesses.
+
+### Tickless Scheduling Suspend/Resume
+
+These pair together for `KERNEL_TICKLESS` kernels and are distinct from
+`stk_kernel_suspend_task()` / `stk_kernel_resume_task()`, which suspend a
+single task rather than the whole scheduler:
+
+```c
+/* Entering low-power state: */
+stk_timeout_t sleep_ticks = stk_kernel_suspend(k); /* ISR-safe */
+/* Program a hardware timer for sleep_ticks, enter WFI ... */
+
+/* On wake: */
+stk_kernel_resume(k, elapsed_ticks);               /* ISR-safe */
+```
+
+### Platform Event Overrider
+
+Intercept the kernel's idle-sleep and hard-fault handling before it reaches
+the platform driver's default behaviour:
+
+```c
+static bool on_sleep(stk_timeout_t sleep_ticks, void *user_data) {
+    /* return true if handled (kernel skips its own sleep logic) */
+    return false;
+}
+
+static bool on_hard_fault(void *user_data) {
+    return false; /* let the platform driver halt the system */
+}
+
+static stk_event_overrider_t overrider = {
+    .on_sleep = on_sleep,
+    .on_hard_fault = on_hard_fault,
+    .user_data = NULL,
+};
+
+/* After stk_kernel_init(), before stk_kernel_start(): */
+stk_kernel_set_event_overrider(k, &overrider);
+```
+
+Pass `NULL` to remove a previously installed overrider. Not ISR-safe; the
+struct must remain valid for the kernel's lifetime (static/global storage).
+
+### Dynamic Kernel/Task Cleanup
+
+```c
+stk_task_destroy(finished_task);   /* task must have exited or been removed */
+stk_kernel_destroy(k);             /* kernel must not be running */
+```
+
+Only valid for dynamically created kernels/tasks whose tasks have all exited
+or been removed.
+
+---
+
 ## Synchronization Primitives
 
 All primitives require `KERNEL_SYNC` in the kernel flags. Memory for each
@@ -342,17 +450,24 @@ primitive is supplied by the caller — no heap allocation occurs.
 
 ### Critical Section
 
-Disables context switches on the current core. Supports nesting.
+Disables context switches on the current core. Supports nesting (one `exit`
+per `enter`). There is no handle or backing memory to manage — the critical
+section is a global, per-core resource accessed through free functions:
 
 ```c
-static stk_cs_mem_t cs_mem;
-stk_cs_t *cs = stk_cs_create(&cs_mem, sizeof(cs_mem));
-
-stk_cs_enter(cs);
+stk_critical_section_enter();
 /* protected region */
-stk_cs_exit(cs);
+stk_critical_section_exit();
+```
 
-stk_cs_destroy(cs);
+Use the `_ex()` variants when the calling context's privilege level cannot be
+auto-detected (e.g. code that may run from either a privileged or user-mode
+task) or when threading a session value through manually:
+
+```c
+stk_cs_session_t ses = stk_critical_section_enter_ex(STK_DEFAULT_CS_SESSION);
+/* protected region */
+stk_critical_section_exit_ex(ses);
 ```
 
 > Critical sections protect against context switches only, not hardware
@@ -384,6 +499,47 @@ stk_spinlock_lock(sl);
 stk_spinlock_unlock(sl);
 ```
 
+### Condition Variable
+
+Always paired with a locked mutex protecting the guarded state.
+
+```c
+static stk_cv_mem_t cv_mem;
+stk_cv_t *cv = stk_cv_create(&cv_mem, sizeof(cv_mem));
+
+/* Waiter: */
+stk_mutex_lock(mtx);
+while (!condition_met) {
+    bool ok = stk_cv_wait(cv, mtx, STK_WAIT_INFINITE); /* atomically unlocks mtx while
+                                                            waiting, re-locks before return */
+}
+stk_mutex_unlock(mtx);
+
+/* Signaler: */
+stk_cv_notify_one(cv);   /* wake one waiter */
+stk_cv_notify_all(cv);   /* wake all waiters */
+
+stk_cv_destroy(cv);
+```
+
+`stk_cv_wait()` collapses timeout and cancellation into a single `false`
+result. To tell them apart, use `stk_cv_wait_ex()`:
+
+```c
+stk_wait_result_t r = stk_cv_wait_ex(cv, mtx, 100 /* ticks */);
+switch (r) {
+case STK_WAIT_RESULT_SIGNAL:   /* woken by notify */          break;
+case STK_WAIT_RESULT_TIMEOUT:  /* timeout expired */          break;
+case STK_WAIT_RESULT_CANCELED: /* wait was cancelled */        break;
+case STK_WAIT_RESULT_FAIL:     /* kernel error, did not wait */ break;
+}
+```
+
+`stk_wait_result_t` is shared by other cancellable timed waits in the API
+(e.g. `stk_barrier_wait_ex()`).
+
+> ISR-safe only with `timeout = STK_NO_WAIT`; ISR-unsafe otherwise.
+
 ### Semaphore
 
 ```c
@@ -411,9 +567,9 @@ static stk_event_mem_t ev_mem;
 stk_event_t *ev = stk_event_create(&ev_mem, sizeof(ev_mem), false);
 
 /* From ISR or another task: */
-stk_event_set(ev);                                /* signal — ISR-safe */
-stk_event_reset(ev);                              /* clear — ISR-safe */
-stk_event_pulse(ev);                              /* signal then immediately reset */
+bool changed = stk_event_set(ev);   /* signal — ISR-safe; true if it was non-signaled */
+changed = stk_event_reset(ev);      /* clear — ISR-safe; true if it was signaled */
+stk_event_pulse(ev);                /* signal then immediately reset */
 
 /* Waiting task: */
 bool ok = stk_event_wait(ev, STK_WAIT_INFINITE);  /* blocks */
@@ -450,15 +606,67 @@ if (stk_ef_is_error(fired)) { /* timeout or invalid flags */ }
 stk_ef_destroy(ef);
 ```
 
+### Pipe
+
+A fixed-size-element FIFO, simpler than the Message Queue (no front-insert or
+peek), with bulk and threshold-triggered read support.
+
+```c
+typedef struct { uint32_t id; uint8_t data[16]; } Sample;
+
+#define PIPE_CAP 16
+
+static stk_pipe_mem_t s_pipe_mem;
+static uint8_t        s_pipe_buf[STK_PIPE_BUF_SIZE(PIPE_CAP, sizeof(Sample))];
+
+stk_pipe_t *pipe = stk_pipe_create(&s_pipe_mem, sizeof(s_pipe_mem),
+                                    s_pipe_buf, sizeof(s_pipe_buf),
+                                    PIPE_CAP, sizeof(Sample));
+
+/* Single element: */
+Sample s = { .id = 1 };
+stk_pipe_write(pipe, &s, STK_WAIT_INFINITE);      /* blocks if full */
+bool ok = stk_pipe_trywrite(pipe, &s);            /* ISR-safe, non-blocking */
+
+Sample in;
+stk_pipe_read(pipe, &in, STK_WAIT_INFINITE);      /* blocks if empty */
+bool got = stk_pipe_tryread(pipe, &in);           /* ISR-safe, non-blocking */
+
+/* Bulk transfer: */
+Sample batch[4];
+size_t n = stk_pipe_write_bulk(pipe, batch, 4, STK_WAIT_INFINITE);
+n = stk_pipe_read_bulk(pipe, batch, 4, STK_WAIT_INFINITE);
+
+/* Block until at least `trigger` elements are available, then drain up to max_count: */
+n = stk_pipe_read_bulk_triggered(pipe, batch, /*trigger=*/2, /*max_count=*/4,
+                                  STK_WAIT_INFINITE);
+
+stk_pipe_reset(pipe);   /* discard all elements, ISR-safe */
+
+/* Query (all ISR-safe): */
+stk_pipe_get_capacity(pipe);
+stk_pipe_get_count(pipe);
+stk_pipe_get_space(pipe);
+stk_pipe_is_empty(pipe);
+stk_pipe_is_full(pipe);
+
+stk_pipe_destroy(pipe);
+```
+
+> ISR-safe only with `timeout = STK_NO_WAIT` (or the `try*` variants, which
+> are always ISR-safe).
+
 ### Message Queue
 
-Zero-copy message queue that copies a fixed-size payload.
+Zero-copy message queue that copies a fixed-size payload. Unlike Pipe, it
+also supports front-insertion (priority messages) and non-destructive peek.
 
 ```c
 typedef struct { uint32_t id; uint8_t data[16]; } Msg;
 
 static stk_msgq_mem_t mq_mem;
-static uint8_t        mq_buf[8 * sizeof(Msg)];   /* capacity × message size */
+static uint8_t        mq_buf[8 * sizeof(Msg)];   /* capacity × message size, or
+                                                     use STK_MSGQ_BUF_SIZE(8, sizeof(Msg)) */
 
 stk_msgq_t *mq = stk_msgq_create(&mq_mem, sizeof(mq_mem),
                                   mq_buf, sizeof(mq_buf),
@@ -467,6 +675,7 @@ stk_msgq_t *mq = stk_msgq_create(&mq_mem, sizeof(mq_mem),
 /* Producer (ISR-safe with STK_NO_WAIT): */
 Msg out = { .id = 42 };
 stk_msgq_put(mq, &out, STK_NO_WAIT);
+stk_msgq_putfront(mq, &out, STK_NO_WAIT);   /* priority insert — becomes the next Get() */
 
 /* Consumer: */
 Msg in;
@@ -474,8 +683,22 @@ if (stk_msgq_get(mq, &in, STK_WAIT_INFINITE)) {
     /* process in */
 }
 
+/* Non-destructive peek (leaves the message in the queue): */
+stk_msgq_peek(mq, &in, STK_NO_WAIT);        /* peeks the oldest (next-to-Get) message */
+stk_msgq_peekfront(mq, &in, STK_NO_WAIT);   /* peeks the most recently front-inserted one */
+
+stk_msgq_reset(mq);   /* discard all messages, ISR-safe */
+
 stk_msgq_destroy(mq);
 ```
+
+Non-blocking `try*` variants exist for every blocking call above
+(`stk_msgq_tryput`, `stk_msgq_tryputfront`, `stk_msgq_tryget`,
+`stk_msgq_trypeek`, `stk_msgq_trypeekfront`) and are all ISR-safe. Query
+helpers: `stk_msgq_get_capacity()`, `stk_msgq_get_msg_size()`,
+`stk_msgq_get_count()`, `stk_msgq_get_space()`, `stk_msgq_is_empty()`,
+`stk_msgq_is_full()`, `stk_msgq_is_storage_valid()`, and
+`stk_msgq_get_buffer()` (raw pointer to the backing byte buffer).
 
 ### Reader-Writer Lock
 
@@ -497,6 +720,38 @@ stk_rwmutex_lock(rw);
 stk_rwmutex_unlock(rw);
 
 stk_rwmutex_destroy(rw);
+```
+
+### Barrier
+
+Blocks a fixed number of tasks until they have all arrived, then releases
+them together and resets itself for reuse.
+
+```c
+static stk_barrier_mem_t bar_mem;
+stk_barrier_t *bar = stk_barrier_create(&bar_mem, sizeof(bar_mem), 3 /* task count */);
+
+/* In each of the 3 participating tasks: */
+bool was_last = stk_barrier_wait(bar);   /* ISR-unsafe */
+if (was_last) {
+    /* this task tripped the barrier */
+}
+
+stk_barrier_get_threshold(bar);   /* construction-time count, ISR-safe */
+
+stk_barrier_destroy(bar);
+```
+
+`stk_barrier_wait()` collapses a normal release and a cancellation into a
+single `false`. Use `stk_barrier_wait_ex()` to distinguish all three outcomes:
+
+```c
+stk_barrier_result_t r = stk_barrier_wait_ex(bar);
+switch (r) {
+case STK_BARRIER_LAST_ARRIVAL: /* this task tripped the barrier */ break;
+case STK_BARRIER_RELEASED:     /* released along with the others */ break;
+case STK_BARRIER_CANCELED:     /* wait cancelled; arrival rolled back */ break;
+}
 ```
 
 ---
@@ -528,7 +783,10 @@ if (pkt) {
     /* hand to consumer, consumer calls stk_blockpool_free() */
 }
 
-stk_blockpool_free(pool, pkt);   /* ISR-safe; wakes blocked allocators */
+bool ok = stk_blockpool_free(pool, pkt);   /* ISR-safe; wakes a blocked allocator.
+                                               Returns false if ptr is NULL, out of
+                                               range, or misaligned. */
+pkt = NULL;   /* avoid double-free */
 ```
 
 ### Heap storage
@@ -536,6 +794,15 @@ stk_blockpool_free(pool, pkt);   /* ISR-safe; wakes blocked allocators */
 ```c
 stk_blockpool_t *pool = stk_blockpool_create(PKT_COUNT, PKT_SIZE, "pkt_pool");
 if (!stk_blockpool_is_storage_valid(pool)) { /* allocation failed */ }
+```
+
+### Destroying a pool
+
+```c
+stk_blockpool_destroy(pool);   /* frees heap storage if owned; not ISR-safe.
+                                   Asserts if any task is still blocked in
+                                   stk_blockpool_alloc()/timed_alloc(). */
+pool = NULL;
 ```
 
 ### Blocking allocation
@@ -549,9 +816,10 @@ void *blk = stk_blockpool_try_alloc(pool);                /* non-blocking, ISR-s
 ### Query
 
 ```c
-stk_blockpool_get_capacity(pool);   /* total blocks */
-stk_blockpool_get_used_count(pool); /* currently allocated */
-stk_blockpool_get_free_count(pool); /* available */
+stk_blockpool_get_capacity(pool);    /* total blocks */
+stk_blockpool_get_block_size(pool);  /* aligned per-block size in bytes */
+stk_blockpool_get_used_count(pool);  /* currently allocated */
+stk_blockpool_get_free_count(pool);  /* available */
 stk_blockpool_is_full(pool);
 stk_blockpool_is_empty(pool);
 ```
@@ -580,27 +848,44 @@ void on_timer(stk_timerhost_t *host, stk_timer_t *timer, void *user_data) {
 
 stk_timer_t *tmr = stk_timer_create(on_timer, NULL);
 
-/* --- Start: delay=10 ticks before first fire, period=50 ticks (repeating) --- */
-stk_timer_start(host, tmr, 10, 50);
+/* --- Start: delay=10 ticks before first fire, period=50 ticks (repeating) ---
+   Every control call below returns bool: true on success, false if the
+   timer's preconditions weren't met or the internal command queue is full. */
+bool ok = stk_timer_start(host, tmr, 10, 50);
 
 /* --- One-shot: period=0 means fire once --- */
-stk_timer_start(host, tmr, 100, 0);
+ok = stk_timer_start(host, tmr, 100, 0);
 
 /* --- Control --- */
-stk_timer_stop(host, tmr);
-stk_timer_reset(host, tmr);                     /* restart the current delay */
-stk_timer_restart(host, tmr, 20, 50);           /* stop then start with new params */
-stk_timer_start_or_reset(host, tmr, 20, 50);    /* start if idle, reset if active */
-stk_timer_set_period(host, tmr, 100);           /* change period while running */
+ok = stk_timer_stop(host, tmr);
+ok = stk_timer_reset(host, tmr);                     /* restart the current delay */
+ok = stk_timer_restart(host, tmr, 20, 50);           /* atomic stop+start with new params */
+ok = stk_timer_start_or_reset(host, tmr, 20, 50);    /* start if idle, reset if active */
+ok = stk_timer_set_period(host, tmr, 100);           /* new period takes effect next reload;
+                                                          follow with stk_timer_reset() to
+                                                          apply it immediately */
 
 /* --- Query --- */
 stk_timer_is_active(tmr);
 stk_timer_get_period(tmr);
+stk_timer_get_deadline(tmr);           /* absolute expiration tick of the next fire */
+stk_timer_get_timestamp(tmr);          /* tick count at which it last expired */
 stk_timer_get_remaining_ticks(tmr);
 
 /* --- Cleanup --- */
 stk_timer_stop(host, tmr);
 stk_timer_destroy(tmr);
+```
+
+### TimerHost Management
+
+```c
+stk_timerhost_is_empty(host);        /* true if no timers are currently active */
+stk_timerhost_get_size(host);        /* number of currently active timers */
+stk_timerhost_get_time_now(host);    /* host's last tick-count snapshot */
+
+bool ok = stk_timerhost_shutdown(host);  /* stops all active timers; host must
+                                             not be used afterward */
 ```
 
 ### Periodic Trigger (polling alternative)
@@ -618,10 +903,21 @@ stk_periodic_trigger_t *trig = stk_periodic_trigger_create(
 
 while (1) {
     if (stk_periodic_trigger_poll(trig)) {
-        /* runs every 50 ticks */
+        /* runs every 50 ticks; absolute-time scheduling keeps long-term
+           frequency stable even if a call is delayed */
     }
     stk_yield();
 }
+
+/* Change period while preserving phase progress toward the next firing: */
+stk_periodic_trigger_set_period(trig, 100);
+
+/* Reset and (re)start counting from the current tick, without changing period: */
+stk_periodic_trigger_restart(trig);
+
+stk_periodic_trigger_get_period(trig);   /* currently configured period in ticks */
+
+stk_periodic_trigger_destroy(trig);      /* NULL-safe no-op */
 ```
 
 ---
@@ -639,18 +935,20 @@ typedef struct {
 static my_tls_t my_data = { 0, NULL };
 
 void my_task(void *arg) {
-    STK_TLS_SET(&my_data);          /* store pointer into TLS slot */
+    STK_TLS_SET_T(&my_data);          /* store pointer into TLS slot */
 
     while (1) {
-        my_tls_t *tls = STK_TLS_GET(my_tls_t);
+        my_tls_t *tls = STK_TLS_GET_T(my_tls_t);
         tls->counter++;
         stk_sleep_ms(100);
     }
 }
 ```
 
-`STK_TLS_GET(type)` expands to `((type *)stk_tls_get())`.
-`STK_TLS_SET(ptr)` expands to `stk_tls_set((void *)(ptr))`.
+`STK_TLS_GET_T(type)` expands to `((type *)stk_tls_get())`.
+`STK_TLS_SET_T(ptr)` expands to `stk_tls_set((void *)(ptr))`.
+The untyped `stk_tls_get()` / `stk_tls_set(ptr)` functions underneath these
+macros are also available directly.
 
 ---
 
@@ -681,6 +979,16 @@ is not active. Always call `stk_timer_stop()` first.
 `stk_kernel_suspend_task()` on the currently running task blocks until the
 scheduler switches it out. If a critical section is held at that point, the
 system will deadlock.
+
+**Destroying a Pool/Pipe/MessageQueue with blocked tasks** — `stk_blockpool_destroy()`,
+`stk_pipe_destroy()`, and `stk_msgq_destroy()` all assert in debug builds if
+any task is still blocked in a call on that object. Make sure producers and
+consumers have stopped before tearing one down.
+
+**`stk_kernel_suspend()`/`stk_kernel_resume()` vs `stk_kernel_suspend_task()`/
+`stk_kernel_resume_task()`** — The former pair suspends and resumes the whole
+scheduler (used for tickless idle entry/exit); the latter pair suspends and
+resumes one specific task. They are not interchangeable.
 
 ---
 

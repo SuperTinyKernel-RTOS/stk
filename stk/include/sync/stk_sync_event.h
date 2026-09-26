@@ -288,10 +288,10 @@ inline void Event::RemoveWaitObject(IWaitObject *wobj)
 
     // kernel invariant: auto-reset is applied here, not at the Set()/Pulse() call site,
     // when a task wakes due to a signal (not a timeout), the event transitions back to
-    // non-signaled so that subsequent Wait() calls block until the next Set().
+    // non-signaled so that subsequent Wait() calls block until the next Set()
     if (!m_manual_reset && m_signaled)
     {
-        if (!wobj->IsTimeout())
+        if (wobj->GetState() == IWaitObject::STATE_SIGNALED)
         {
             m_signaled = false;
             __stk_full_memfence();

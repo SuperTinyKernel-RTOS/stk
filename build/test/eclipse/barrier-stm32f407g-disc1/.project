@@ -231,6 +231,11 @@
 			<locationURI>PARENT-4-PROJECT_LOC/stk/include/sync/stk_sync.h</locationURI>
 		</link>
 		<link>
+			<name>deps/stk/include/sync/stk_sync_barrier.h</name>
+			<type>1</type>
+			<locationURI>PARENT-4-PROJECT_LOC/stk/include/sync/stk_sync_barrier.h</locationURI>
+		</link>
+		<link>
 			<name>deps/stk/include/sync/stk_sync_cs.h</name>
 			<type>1</type>
 			<locationURI>PARENT-4-PROJECT_LOC/stk/include/sync/stk_sync_cs.h</locationURI>
@@ -246,6 +251,11 @@
 			<locationURI>PARENT-4-PROJECT_LOC/stk/include/sync/stk_sync_event.h</locationURI>
 		</link>
 		<link>
+			<name>deps/stk/include/sync/stk_sync_eventflags.h</name>
+			<type>1</type>
+			<locationURI>PARENT-4-PROJECT_LOC/stk/include/sync/stk_sync_eventflags.h</locationURI>
+		</link>
+		<link>
 			<name>deps/stk/include/sync/stk_sync_mutex.h</name>
 			<type>1</type>
 			<locationURI>PARENT-4-PROJECT_LOC/stk/include/sync/stk_sync_mutex.h</locationURI>
@@ -256,9 +266,9 @@
 			<locationURI>PARENT-4-PROJECT_LOC/stk/include/sync/stk_sync_pipe.h</locationURI>
 		</link>
 		<link>
-			<name>deps/stk/include/sync/stk_sync_barrier.h</name>
+			<name>deps/stk/include/sync/stk_sync_rwmutex.h</name>
 			<type>1</type>
-			<locationURI>PARENT-4-PROJECT_LOC/stk/include/sync/stk_sync_barrier.h</locationURI>
+			<locationURI>PARENT-4-PROJECT_LOC/stk/include/sync/stk_sync_rwmutex.h</locationURI>
 		</link>
 		<link>
 			<name>deps/stk/include/sync/stk_sync_semaphore.h</name>

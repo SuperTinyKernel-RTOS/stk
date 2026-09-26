@@ -213,8 +213,11 @@ public:
 
     /*! \brief     Return a previously allocated block to the pool.
         \details   Pushes the block back onto the free-list head in O(1) and wakes
-                   exactly one task blocked inside \c Alloc() or \c TimedAlloc(),
-                   if any. The woken task is guaranteed to find a free block available.
+                   exactly one task blocked inside \c Alloc() or \c TimedAlloc(), if any,
+                   so it can re-check for a free block. Under contention from \c TryAlloc()
+                   (including from another task or an ISR racing in before the woken task
+                   is scheduled), that task may find the block already taken and continue
+                   waiting rather than being guaranteed one on this wake.
         \param[in] ptr: Pointer previously returned by \c Alloc(), \c TimedAlloc(), or
                    \c TryAlloc(). Must not be \c nullptr and must belong to this pool
                    instance. Bounds and alignment are validated; failures trigger an
@@ -408,11 +411,28 @@ inline void *BlockMemoryPool::TimedAlloc(Timeout timeout_ticks)
         sync::ScopedCriticalSection cs_;
         bool is_timeout = false;
 
+        const bool timed_wait = (timeout_ticks != WAIT_INFINITE) && (timeout_ticks != NO_WAIT);
+
+        // capture an absolute deadline once, before entering the wait loop; a different
+        // allocator (TryAlloc() from another task or an ISR) can steal the just-freed
+        // block between NotifyOne_CS() and this task re-acquiring the critical section
+        // (Mesa-style wakeup, not a direct handoff - see Free()'s note), so re-passing
+        // the original timeout_ticks on each retry would silently restart it
+        const Timeout deadline = (timed_wait ?
+            static_cast<Timeout>(GetTicks() + timeout_ticks) : timeout_ticks);
+
         while (m_free_list == nullptr)
         {
+            Timeout remaining = deadline;
+            if (timed_wait)
+            {
+                const Timeout now = static_cast<Timeout>(GetTicks());
+                remaining = (now >= deadline ? NO_WAIT : (deadline - now));
+            }
+
             // Atomically release the critical section, suspend the task, and
             // re-acquire before returning - no CPU cycles wasted while waiting.
-            if (!m_cv.Wait(cs_, timeout_ticks))
+            if (!m_cv.Wait(cs_, remaining))
             {
                 is_timeout = true; // timeout expired
                 break;

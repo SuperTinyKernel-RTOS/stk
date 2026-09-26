@@ -188,6 +188,24 @@ bool stk_cv_wait(stk_cv_t *cv, stk_mutex_t *mtx, stk_timeout_t timeout)
     return cv->handle.Wait(mtx->handle, timeout);
 }
 
+stk_wait_result_t stk_cv_wait_ex(stk_cv_t *cv, stk_mutex_t *mtx, stk_timeout_t timeout)
+{
+    STK_ASSERT(cv != nullptr);
+    STK_ASSERT(mtx != nullptr);
+
+    stk_wait_result_t result;
+
+    switch (cv->handle.WaitEx(mtx->handle, timeout))
+    {
+    case WAIT_RESULT_SIGNAL:   result = STK_WAIT_RESULT_SIGNAL;   break;
+    case WAIT_RESULT_TIMEOUT:  result = STK_WAIT_RESULT_TIMEOUT;  break;
+    case WAIT_RESULT_CANCELED: result = STK_WAIT_RESULT_CANCELED; break;
+    default:                   result = STK_WAIT_RESULT_FAIL;     break;
+    }
+
+    return result;
+}
+
 void stk_cv_notify_one(stk_cv_t *cv)
 {
     STK_ASSERT(cv != nullptr);
@@ -967,6 +985,22 @@ bool stk_barrier_wait(stk_barrier_t *barrier)
     STK_ASSERT(barrier != nullptr);
 
     return barrier->handle.Wait();
+}
+
+stk_barrier_result_t stk_barrier_wait_ex(stk_barrier_t *barrier)
+{
+    STK_ASSERT(barrier != nullptr);
+
+    stk_barrier_result_t result;
+
+    switch (barrier->handle.WaitEx())
+    {
+    case Barrier::BARRIER_LAST_ARRIVAL: result = STK_BARRIER_LAST_ARRIVAL; break;
+    case Barrier::BARRIER_CANCELED:     result = STK_BARRIER_CANCELED;     break;
+    default:                            result = STK_BARRIER_RELEASED;     break;
+    }
+
+    return result;
 }
 
 uint32_t stk_barrier_get_threshold(const stk_barrier_t *barrier)
