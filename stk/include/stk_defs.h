@@ -74,7 +74,7 @@
     \see   STK_TICKLESS_IDLE, KERNEL_TICKLESS
 */
 #ifndef STK_TICKLESS_TICKS_MAX
-    #define STK_TICKLESS_TICKS_MAX (1000U)
+    #define STK_TICKLESS_TICKS_MAX (1000)
 #endif
 #if STK_TICKLESS_TICKS_MAX > 100000
     #error "STK_TICKLESS_TICKS_MAX is too large: cpu_ticks_requested may overflow uint32_t."
@@ -783,13 +783,13 @@ static constexpr T AlignPow2(T v, T align) noexcept
 static __stk_forceinline uint32_t CountLeadingZeros(const uint32_t value) noexcept
 {
     uint32_t ret_val;
-    uint32_t temp_val = value;
 
 #if defined(__GNUC__) || defined(__clang__)
-    ret_val = static_cast<uint32_t>(__builtin_clz(temp_val));
+    ret_val = static_cast<uint32_t>(__builtin_clz(value));
 #elif defined(__ICCARM__)
-    ret_val = static_cast<uint32_t>(__CLZ(temp_val));
+    ret_val = static_cast<uint32_t>(__CLZ(value));
 #else
+    uint32_t temp_val = value;
     uint32_t count = 0U;
 
     // note: binary search requires temp_val > 0 to resolve to a max of 31 leading zeros safely

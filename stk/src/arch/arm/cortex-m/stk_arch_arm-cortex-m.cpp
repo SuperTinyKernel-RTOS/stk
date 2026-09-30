@@ -199,7 +199,7 @@ using namespace stk;
     \see     HW_SpinLockLock, STK_SPINLOCK_MIN_CYCLES_PER_ITER, KERNEL_PANIC_SPINLOCK_DEADLOCK
 */
 #ifndef STK_SPINLOCK_TIMEOUT_US
-    #define STK_SPINLOCK_TIMEOUT_US (5U * 1000U * 1000U) // 5 sec
+    #define STK_SPINLOCK_TIMEOUT_US (5LL * 1000LL * 1000LL) // 5 sec
 #endif
 
 /*! \def     STK_SPINLOCK_MIN_CYCLES_PER_ITER
@@ -733,7 +733,7 @@ static __stk_forceinline void HW_EnterSleepMode()
     \details   Uses a GCC built-in atomic test-and-set with acquire memory ordering,
                mapping to an LDREX/STREX sequence on ARMv7-M. If the lock byte was
                already set the operation fails immediately without modifying state.
-    \param[in] lock: Spin-lock state variable. Must be \c false (released) initially.
+    \param[in] slock: Spin-lock state variable. Must be \c false (released) initially.
     \retval    true  Lock was free and has been acquired by the caller.
     \retval    false Lock was already held, caller must retry or back off.
     \note      ISR-safe. May be called from both thread and handler mode.
@@ -741,9 +741,9 @@ static __stk_forceinline void HW_EnterSleepMode()
                a preceding successful HW_SpinLockTryLock() or HW_SpinLockLock().
     \see       HW_SpinLockLock, HW_SpinLockUnlock
 */
-static __stk_forceinline bool HW_SpinLockTryLock(volatile bool &lock)
+static __stk_forceinline bool HW_SpinLockTryLock(volatile bool &slock)
 {
-    return !__atomic_test_and_set(&lock, __ATOMIC_ACQUIRE);
+    return !__atomic_test_and_set(&slock, __ATOMIC_ACQUIRE);
 }
 
 /*! \brief     Release a spin-lock (M3/M4/M7).
@@ -752,15 +752,15 @@ static __stk_forceinline bool HW_SpinLockTryLock(volatile bool &lock)
                before clearing the lock byte with a GCC atomic clear at release ordering.
                This ensures that any core or bus master that subsequently acquires the
                lock observes all writes made while the lock was held.
-    \param[in] lock: Spin-lock state variable previously acquired by the caller.
+    \param[in] slock: Spin-lock state variable previously acquired by the caller.
     \warning   Caller must own the lock. Releasing an unowned lock is an unrecoverable
                error and triggers STK_KERNEL_PANIC(KERNEL_PANIC_SPINLOCK_DEADLOCK).
     \note      ISR-safe.
     \see       HW_SpinLockTryLock, HW_SpinLockLock
 */
-static __stk_forceinline void HW_SpinLockUnlock(volatile bool &lock)
+static __stk_forceinline void HW_SpinLockUnlock(volatile bool &slock)
 {
-    if (lock == false)
+    if (slock == false)
     {
         STK_KERNEL_PANIC(KERNEL_PANIC_SPINLOCK_DEADLOCK); // release attempt of unowned lock
     }
@@ -773,7 +773,7 @@ static __stk_forceinline void HW_SpinLockUnlock(volatile bool &lock)
     __asm volatile("dmb ishst" ::: "memory");
 #endif
 
-    __atomic_clear(&lock, __ATOMIC_RELEASE);
+    __atomic_clear(&slock, __ATOMIC_RELEASE);
 }
 #elif defined(RP2040_H) || defined(RP2350_H)
 // Raspberry RP2040 dual-core M0+ implementation, using Hardware Spinlock 0 (SIO base 0xd0000000 + offset)
@@ -785,7 +785,7 @@ static __stk_forceinline void HW_SpinLockUnlock(volatile bool &lock)
                return means another core holds it. On success the software \a lock flag
                is set to \c true and a full DMB is issued to order all subsequent
                memory accesses behind the acquire point.
-    \param[in] lock: Software spin-lock state variable. Reflects lock ownership for
+    \param[in] slock: Software spin-lock state variable. Reflects lock ownership for
                the local core, the hardware SIO spinlock arbitrates between cores.
     \retval    true  Hardware spinlock was free and has been acquired by the caller.
     \retval    false Hardware spinlock was already held by the other core.
@@ -794,9 +794,9 @@ static __stk_forceinline void HW_SpinLockUnlock(volatile bool &lock)
                in the application.
     \see       HW_SpinLockLock, HW_SpinLockUnlock
 */
-static __stk_forceinline bool HW_SpinLockTryLock(volatile bool &lock)
+static __stk_forceinline bool HW_SpinLockTryLock(volatile bool &slock)
 {
-    bool success = (STK_SIO_SPINLOCK == 0 ? false : ((lock) = true, true));
+    bool success = (STK_SIO_SPINLOCK == 0 ? false : ((slock) = true, true));
     __stk_dmb();
 
     return success;
@@ -808,7 +808,7 @@ static __stk_forceinline bool HW_SpinLockTryLock(volatile bool &lock)
                The hardware register must be written last: once released, the other core
                may immediately acquire and begin modifying shared state, so all local
                writes must be complete and visible before that point.
-    \param[in] lock: Software spin-lock state variable previously acquired by the caller.
+    \param[in] slock: Software spin-lock state variable previously acquired by the caller.
     \warning   Caller must own the lock. Releasing an unowned lock is an unrecoverable
                error and triggers STK_KERNEL_PANIC(KERNEL_PANIC_SPINLOCK_DEADLOCK).
                Only the software \a lock flag is verified at runtime, the hardware SIO
@@ -818,13 +818,13 @@ static __stk_forceinline bool HW_SpinLockTryLock(volatile bool &lock)
     \note      ISR-safe.
     \see       HW_SpinLockTryLock, HW_SpinLockLock
 */
-static __stk_forceinline void HW_SpinLockUnlock(volatile bool &lock)
+static __stk_forceinline void HW_SpinLockUnlock(volatile bool &slock)
 {
-    if (!lock)
+    if (!slock)
         STK_KERNEL_PANIC(KERNEL_PANIC_SPINLOCK_DEADLOCK); // release attempt of unowned lock
 
     __stk_dmb();
-    (lock) = false;
+    (slock) = false;
     STK_SIO_SPINLOCK = 1; // writing any value releases the hardware lock
 }
 
@@ -839,23 +839,23 @@ static __stk_forceinline void HW_SpinLockUnlock(volatile bool &lock)
                function returns false with no side-effects. On success a DMB is issued
                before releasing the critical section to ensure the lock acquisition is
                visible to any bus master before the caller proceeds.
-    \param[in] lock: Spin-lock state variable. Must be \c false (released) initially.
+    \param[in] slock: Spin-lock state variable. Must be \c false (released) initially.
     \retval    true  Lock was free and has been acquired by the caller.
     \retval    false Lock was already held, caller must retry or back off.
     \note      ISR-safe, but temporarily disables interrupts during the test-and-set.
     \see       HW_SpinLockLock, HW_SpinLockUnlock
 */
-static __stk_forceinline bool HW_SpinLockTryLock(volatile bool &lock)
+static __stk_forceinline bool HW_SpinLockTryLock(volatile bool &slock)
 {
     const uint32_t ses = HW_CriticalSectionStart();
 
-    if (lock)
+    if (slock)
     {
         HW_CriticalSectionEnd(ses);
         return false;
     }
 
-    lock = true;
+    slock = true;
     __stk_dmb();
 
     HW_CriticalSectionEnd(ses);
@@ -867,19 +867,19 @@ static __stk_forceinline bool HW_SpinLockTryLock(volatile bool &lock)
                visible to the bus before clearing the lock flag. No critical section is
                needed for the store itself since a single-byte write on Cortex-M0 is
                inherently atomic with respect to the local core.
-    \param[in] lock: Spin-lock state variable previously acquired by the caller.
+    \param[in] slock: Spin-lock state variable previously acquired by the caller.
     \warning   Caller must own the lock. Releasing an unowned lock is an unrecoverable
                error and triggers STK_KERNEL_PANIC(KERNEL_PANIC_SPINLOCK_DEADLOCK).
     \note      ISR-safe.
     \see       HW_SpinLockTryLock, HW_SpinLockLock
 */
-static __stk_forceinline void HW_SpinLockUnlock(volatile bool &lock)
+static __stk_forceinline void HW_SpinLockUnlock(volatile bool &slock)
 {
-    if (!lock)
+    if (!slock)
         STK_KERNEL_PANIC(KERNEL_PANIC_SPINLOCK_DEADLOCK); // release attempt of unowned lock
 
     __stk_dmb();
-    lock = false;
+    slock = false;
 }
 #endif // CONTROL_nPRIV_Msk
 
@@ -893,7 +893,7 @@ static __stk_forceinline void HW_SpinLockUnlock(volatile bool &lock)
                the time the counter expires, the kernel invariant has been violated (the
                lock owner exited without releasing) and STK_KERNEL_PANIC() is called with
                \c KERNEL_PANIC_SPINLOCK_DEADLOCK.
-    \param[in] lock: Spin-lock state variable. Must be \c false (released) initially.
+    \param[in] slock: Spin-lock state variable. Must be \c false (released) initially.
     \note      ISR-safe. The timeout represents a roughly constant wall-clock duration
                (STK_SPINLOCK_TIMEOUT_US) rather than a fixed iteration count, so it no
                longer needs re-tuning when optimization level, LTO, or core clock speed
@@ -902,12 +902,12 @@ static __stk_forceinline void HW_SpinLockUnlock(volatile bool &lock)
                implementation uses a critical section internally and will deadlock.
     \see       HW_SpinLockTryLock, HW_SpinLockUnlock, HW_InitSpinlockTimeout
 */
-static __stk_forceinline void HW_SpinLockLock(volatile bool &lock)
+static __stk_forceinline void HW_SpinLockLock(volatile bool &slock)
 {
-    uint32_t timeout = s_StkSpinlockTimeoutIters;
-    while (!HW_SpinLockTryLock(lock))
+    uint32_t timeout_itrs = s_StkSpinlockTimeoutIters;
+    while (!HW_SpinLockTryLock(slock))
     {
-        if (--timeout == 0U)
+        if (--timeout_itrs == 0U)
         {
             // invariant violated: the lock owner exited without releasing
             STK_KERNEL_PANIC(KERNEL_PANIC_SPINLOCK_DEADLOCK);
@@ -1260,7 +1260,9 @@ static __stk_forceinline void HW_ClearPendingSwitch()
 */
 static __stk_forceinline void HW_SysTickStart(uint32_t period_ticks)
 {
-    const uint32_t result = SysTick_Config(static_cast<uint32_t>(ConvertTimeUsToClockCycles(HW_CoreClockFrequency(), period_ticks)));
+    const Ticks period_ticks_64 = static_cast<Ticks>(period_ticks);
+  
+    const uint32_t result = SysTick_Config(static_cast<uint32_t>(ConvertTimeUsToClockCycles(HW_CoreClockFrequency(), period_ticks_64)));
     STK_ASSERT(result == 0U);
     STK_UNUSED(result);
 
@@ -1308,22 +1310,22 @@ static __stk_forceinline uint32_t HW_SysTickValueAfterDisable()
     __DSB();
 
     // check for a QEMU case and discard elapsed result
-    uint32_t val = HW_SysTickValue();
-    if (val == 0U)
+    uint32_t ticks = HW_SysTickValue();
+    if (ticks == 0U)
     {
-        val = SysTick->LOAD;
+        ticks = SysTick->LOAD;
     }
 
-    return val;
+    return ticks;
 }
 
 /*! \brief     Get number of elapsed ticks of the current period of SysTick timer peripheral.
     \param[in] val: a value of SysTick->VAL register.
 */
 __stk_attr_unused /* can be unused due to configuration */
-static __stk_forceinline uint32_t HW_SysTickElapsed(uint32_t val)
+static __stk_forceinline uint32_t HW_SysTickElapsed(uint32_t ticks)
 {
-    return SysTick->LOAD - val;
+    return SysTick->LOAD - ticks;
 }
 
 /*! \brief Rearm SysTick timer peripheral with new period.
@@ -1688,7 +1690,7 @@ static struct Context final : public PlatformContext
 {
     typedef IPlatform::IEventOverrider eovrd_t;
 
-    explicit Context() : PlatformContext(), m_exit_buf(), m_overrider(nullptr),
+    Context() : PlatformContext(), m_exit_buf(), m_overrider(nullptr),
     #if STK_CORTEX_M_TRUSTZONE_FRAME
         m_overrider_ns(nullptr),
     #endif
@@ -1922,7 +1924,8 @@ static struct Context final : public PlatformContext
     
     uint32_t GetTickResolutionInClockCycles()
     {
-        return static_cast<uint32_t>(ConvertTimeUsToClockCycles(HW_CoreClockFrequency(), static_cast<Ticks>(m_tick_resolution)));
+        const Ticks resolution_ticks = static_cast<Ticks>(m_tick_resolution);
+        return static_cast<uint32_t>(ConvertTimeUsToClockCycles(HW_CoreClockFrequency(), resolution_ticks));
     }
 
 #if STK_MPU
@@ -2038,9 +2041,7 @@ public:
     HiResClockDWT() : m_acc(0U), m_prev(0U)
     {
         HW_DWTEnableCounter();
-
         m_prev = HW_DWTGetCounter();
-        m_acc  = 0U;
     }
 
     static HiResClockDWT *GetInstance();
@@ -2085,15 +2086,19 @@ public:
 
     Cycles GetCycles()
     {
+        const Ticks resolution_ticks = static_cast<Ticks>(GetContext().m_tick_resolution);
+      
         // On M0, combine the coarse OS ticks with the fine-grained SysTick counter
-        const Cycles cycles = ConvertTimeUsToClockCycles(HW_CoreClockFrequency(),
-            static_cast<Ticks>(stk::GetTicks() * GetContext().m_tick_resolution));
+        const Cycles cycles = ConvertTimeUsToClockCycles(HW_CoreClockFrequency(), (stk::GetTicks() * resolution_ticks));
 
-        const uint32_t val  = HW_SysTickValue(); // down-counter (cycles remaining in current tick)
-        const uint32_t load = SysTick->LOAD;     // current reload value
+        const uint32_t val   = HW_SysTickValue(); // down-counter (cycles remaining in current tick)
+        const uint32_t load  = SysTick->LOAD;     // current reload value
+        const uint32_t delta = load - val;        // delta
+        
+        const Cycles delta_cycles = static_cast<Cycles>(delta);
 
         // total elapsed cycles
-        return cycles + static_cast<Cycles>(load - val);
+        return cycles + delta_cycles;
     }
 
     uint32_t GetFrequency()
@@ -2142,64 +2147,72 @@ void PlatformArmCortexM::ProcessTick()
 #if STK_TICKLESS_IDLE
 Timeout Context::ReloadTickPeriod(Timeout ticks_requested)
 {
+    Timeout clamped_ticks;
+  
     const uint32_t SYSTICK_MAX_LOAD = 0x00FFFFFFU; // SysTick LOAD register is 24-bit
     const uint32_t tick_resolution = GetTickResolutionInClockCycles();
-    if (tick_resolution == 0U)
+    if (tick_resolution != 0U)
+    {       
+        // guard against uint32_t overflow in the reload calculation
+        STK_ASSERT((static_cast<uint64_t>(ticks_requested) * tick_resolution) <= UINT32_MAX);
+
+        // clamp ticks_requested so that cpu_ticks_requested fits into 24-bit SysTick LOAD register
+        // without clamping large sleep tick counts silently truncate LOAD, causing the timer to fire far too early
+        // breaking the timing
+        const uint32_t max_ticks = SYSTICK_MAX_LOAD / tick_resolution;
+        if (ticks_requested > static_cast<Timeout>(max_ticks))
+        {
+            clamped_ticks = static_cast<Timeout>(max_ticks);
+        }
+        else
+        {
+            clamped_ticks = ticks_requested;
+        }
+
+        // start counting how many CPU cycles further instructions take until SysTick timer is enabled again;
+        // without DWT we will have tick error of around 80 cycles depending on CPU model and compiler optimization
+    #if (__CORTEX_M > 1) && STK_TICKLESS_USE_ARM_DWT
+        const uint32_t error = HW_DWTGetCounter();
+        __stk_compiler_barrier(); // prevent reordering, we measure all cycles of instructions below this point
+    #endif
+
+        // pause SysTick
+        HW_SysTickDisable();
+
+        // get already elapsed CPU cycles since SysTick ISR invocation up to SysTick timer stop (see above)
+        // to account for them for a new period value
+        const uint32_t elapsed_till_stop = HW_SysTickElapsed(HW_SysTickValueAfterDisable());
+
+        // OnTick() should not consume more than next period
+        STK_ASSERT(static_cast<Timeout>(elapsed_till_stop / tick_resolution) <= clamped_ticks);
+
+        const uint32_t cpu_ticks_requested = static_cast<uint32_t>(clamped_ticks) * tick_resolution;
+
+        // substract number of cycles elapsed till SysTick stop + error from previous round
+        uint32_t new_load = cpu_ticks_requested - elapsed_till_stop - m_sleep_error;
+
+        // clamp: rearm overhead must never push new_load into underflow
+        if (new_load > cpu_ticks_requested)
+        {
+            new_load = cpu_ticks_requested;
+        }
+
+        // reload with elapsed ticks accounted
+        HW_SysTickRearm(new_load);
+
+    #if (__CORTEX_M > 1) && STK_TICKLESS_USE_ARM_DWT
+        // calculate error: subtract cycles consumed by the rearm sequence itself in the next round
+        m_sleep_error = HW_DWTGetCounter() - error;
+    #endif
+    }
+    else
     {
         STK_ASSERT(false);
-        return NO_WAIT;
+        clamped_ticks = NO_WAIT;
     }
-        
-    // guard against uint32_t overflow in the reload calculation
-    STK_ASSERT(static_cast<uint64_t>(ticks_requested) * tick_resolution <= UINT32_MAX);
-
-    // clamp ticks_requested so that cpu_ticks_requested fits into 24-bit SysTick LOAD register
-    // without clamping large sleep tick counts silently truncate LOAD, causing the timer to fire far too early
-    // breaking the timing
-    const Timeout max_ticks = static_cast<Timeout>(SYSTICK_MAX_LOAD / tick_resolution);
-    if (ticks_requested > max_ticks)
-    {
-        ticks_requested = max_ticks;
-    }
-
-    // start counting how many CPU cycles further instructions take until SysTick timer is enabled again;
-    // without DWT we will have tick error of around 80 cycles depending on CPU model and compiler optimization
-#if (__CORTEX_M > 1) && STK_TICKLESS_USE_ARM_DWT
-    const uint32_t error = HW_DWTGetCounter();
-    __stk_compiler_barrier(); // prevent reordering, we measure all cycles of instructions below this point
-#endif
-
-    // pause SysTick
-    HW_SysTickDisable();
-
-    // get already elapsed CPU cycles since SysTick ISR invocation up to SysTick timer stop (see above)
-    // to account for them for a new period value
-    const uint32_t elapsed_till_stop = HW_SysTickElapsed(HW_SysTickValueAfterDisable());
-
-    // OnTick() should not consume more than next period
-    STK_ASSERT(static_cast<Timeout>(elapsed_till_stop / tick_resolution) <= static_cast<Timeout>(ticks_requested));
-
-    const uint32_t cpu_ticks_requested = static_cast<uint32_t>(ticks_requested) * tick_resolution;
-
-    // substract number of cycles elapsed till SysTick stop + error from previous round
-    uint32_t new_load = cpu_ticks_requested - elapsed_till_stop - m_sleep_error;
-
-    // clamp: rearm overhead must never push new_load into underflow
-    if (new_load > cpu_ticks_requested)
-    {
-        new_load = cpu_ticks_requested;
-    }
-
-    // reload with elapsed ticks accounted
-    HW_SysTickRearm(new_load);
-
-#if (__CORTEX_M > 1) && STK_TICKLESS_USE_ARM_DWT
-    // calculate error: subtract cycles consumed by the rearm sequence itself in the next round
-    m_sleep_error = HW_DWTGetCounter() - error;
-#endif
-
+    
     // return actual clamped ticks armed
-    return ticks_requested;
+    return clamped_ticks;
 }
 #endif // STK_TICKLESS_IDLE
 
@@ -2215,7 +2228,8 @@ extern "C" void STK_SYSTICK_HANDLER()
 #ifdef HAL_MODULE_ENABLED // STM32 HAL
     // make sure STM32 HAL gets timing information as it depends on SysTick in delaying procedures
 #if STK_TICKLESS_IDLE
-    uwTick += static_cast<uint32_t>(ctx.m_sleep_ticks * ctx.m_tick_resolution);
+    const uint32_t sleep_ticks = static_cast<uint32_t>(ctx.m_sleep_ticks);
+    uwTick += (sleep_ticks * ctx.m_tick_resolution);
 #else
     HAL_IncTick();
 #endif
@@ -2963,43 +2977,47 @@ void Context::OnStart()
 #if STK_TICKLESS_IDLE
 Timeout Context::Suspend()
 {
+    Timeout sleep_ticks;
+  
     const uint32_t tick_resolution = GetTickResolutionInClockCycles();
-    if (tick_resolution == 0U)
+    if (tick_resolution != 0U)
+    {
+        HW_DisableInterrupts();
+
+        // pause SysTick in order to read elapsed value
+        HW_SysTickDisable();
+
+        // get already elapsed CPU cycles since SysTick ISR invocation up to SysTick timer stop (see above)
+        // to account for them for a new period value
+        const uint32_t elapsed = HW_SysTickElapsed(HW_SysTickValueAfterDisable());
+
+        // stop SysTick timer
+        HW_SysTickStop();
+
+        // clear pending PendSV exception
+        HW_ClearPendingSwitch();
+
+        // notify core about suspension (it will also yield currently active task forcibly)
+        m_handler->OnSuspend(true);
+
+        // update tasks and out currently active task (if any) into a sleep, it will cause a switch
+        // to a sleep trap after HW_EnableInterrupts, otherwise not
+        Timeout no_sleep = 0;
+        OnTick(no_sleep);
+
+        // get already elapsed ticks since the OnTick and a call to Suspend(), we shall account for this
+        // period and return only the remainder
+        const uint32_t elapsed_ticks = elapsed / tick_resolution;
+        sleep_ticks = Max(m_sleep_ticks - static_cast<Timeout>(elapsed_ticks), static_cast<Timeout>(0));
+
+        HW_EnableInterrupts();
+    }
+    else
     {
         STK_ASSERT(false);
-        return NO_WAIT;
+        sleep_ticks = NO_WAIT;
     }
-
-    HW_DisableInterrupts();
-
-    // pause SysTick in order to read elapsed value
-    HW_SysTickDisable();
-
-    // get already elapsed CPU cycles since SysTick ISR invocation up to SysTick timer stop (see above)
-    // to account for them for a new period value
-    const uint32_t elapsed = HW_SysTickElapsed(HW_SysTickValueAfterDisable());
-
-    // stop SysTick timer
-    HW_SysTickStop();
-
-    // clear pending PendSV exception
-    HW_ClearPendingSwitch();
-
-    // notify core about suspension (it will also yield currently active task forcibly)
-    m_handler->OnSuspend(true);
-
-    // update tasks and out currently active task (if any) into a sleep, it will cause a switch
-    // to a sleep trap after HW_EnableInterrupts, otherwise not
-    Timeout no_sleep = 0;
-    OnTick(no_sleep);
-
-    // get already elapsed ticks since the OnTick and a call to Suspend(), we shall account for this
-    // period and return only the remainder
-    const Timeout elapsed_ticks = static_cast<Timeout>(elapsed / tick_resolution);
-    const Timeout sleep_ticks = Max(m_sleep_ticks - elapsed_ticks, static_cast<Timeout>(0));
-
-    HW_EnableInterrupts();
-
+    
     return sleep_ticks;
 }
 #endif // STK_TICKLESS_IDLE
@@ -3030,7 +3048,7 @@ extern "C" __stk_attr_used void StkSVCHandlerMain(Word *svc_args)
     // Word is typedef uintptr_t (stk_common.h) - the only integer type the Standard
     // blesses for lossless pointer round-trips (MISRA C++ 5-2-8, CERT INT36-C)
     STK_STATIC_ASSERT_DESC_N(PTR, sizeof(Word) == sizeof(void *),
-        "Word must be uintptr_t width for safe pointer round-trip via frame->PC");
+        "Word must be uintptr_t width for safe pointer round-trip via exc_frame->PC");
 
     // priority 0 (NMI, HardFault) unaffected: SVC (priority 0 per OnStart()) remains
     // reachable so SVC_EXIT_CRITICAL can always unwind
@@ -3038,12 +3056,12 @@ extern "C" __stk_attr_used void StkSVCHandlerMain(Word *svc_args)
         "NVIC priority bit width exceeds safe shift range");
 
     // 'volatile': R0 is written back to stacked memory, compiler must not eliminate the store
-    volatile hw::ExceptionFrame *const frame = reinterpret_cast<volatile hw::ExceptionFrame *>(svc_args);
+    volatile hw::ExceptionFrame *const exc_frame = reinterpret_cast<volatile hw::ExceptionFrame *>(svc_args);
 
     // details: https://developer.arm.com/documentation/ka004005/latest
     // Thumb SVC encoding: [15:8] = 0xDF, [7:0] = imm8
     // opcode lives two bytes (one Thumb halfword) before the stacked PC:
-    const uint8_t       *const insn_ptr = hw::WordToPtr<const uint8_t>(frame->PC - 2U);
+    const uint8_t       *const insn_ptr = hw::WordToPtr<const uint8_t>(exc_frame->PC - 2U);
     const ESvcCommandId  command        = static_cast<ESvcCommandId>(*insn_ptr);
 
     switch (command)
@@ -3071,7 +3089,7 @@ extern "C" __stk_attr_used void StkSVCHandlerMain(Word *svc_args)
 
         STK_ASSERT(ctx.m_started);
 
-        ctx.OnForceContextSwitch(frame->R0);
+        ctx.OnForceContextSwitch(exc_frame->R0);
         break; }
 #endif
 
@@ -3079,8 +3097,8 @@ extern "C" __stk_attr_used void StkSVCHandlerMain(Word *svc_args)
     case SVC_BOOST_PRIV: {
         // limit access to Privilege escalation to STK_MPU_SHARED_CODE_SECTION functions only
         // which are read-only and immutable
-        if ((frame->PC >= hw::PtrToWord(__stk_mpu_shared_code_start)) &&
-            (frame->PC <= hw::PtrToWord(__stk_mpu_shared_code_end)))
+        if ((exc_frame->PC >= hw::PtrToWord(__stk_mpu_shared_code_start)) &&
+            (exc_frame->PC <= hw::PtrToWord(__stk_mpu_shared_code_end)))
         {
             __set_CONTROL(__get_CONTROL() & ~CONTROL_nPRIV_Msk);
         }
@@ -3233,7 +3251,7 @@ void stk::OnTaskRun(ITask *runnable)
 STK_MPU_SHARED_CODE_SECTION
 void stk::OnTaskExit()
 {
-    Context &ctx = GetContext();
+    const Context &ctx = GetContext();
 
     const uint32_t cs = HW_CriticalSectionStart();
 
@@ -3456,7 +3474,7 @@ void PlatformArmCortexM::InitStack(EStackType stack_type, Stack *stack, IStackMe
         "ExceptionFrame layout must match the ARMv7-M hardware exception frame exactly");
     STK_ASSERT(stack_memory->GetStackSize() > STK_CORTEX_M_TOTAL_REGISTER_COUNT);
 
-    Context &ctx = GetContext();
+    const Context &ctx = GetContext();
 
 #ifdef _STK_CORTEX_M_TRUSTZONE
     bool is_non_secure_task = false;
@@ -3742,7 +3760,7 @@ TId PlatformArmCortexM::GetTid() const
     }
     else
     {
-        Context &ctx = GetContext();
+        const Context &ctx = GetContext();
 
         if (ctx.m_started)
         {
@@ -3760,7 +3778,7 @@ TId PlatformArmCortexM::GetTid() const
 void PlatformArmCortexM::ProcessHardFault()
 {
     bool is_handled = false;
-    Context &ctx = GetContext();
+    const Context &ctx = GetContext();
 
     if (ctx.m_overrider != nullptr)
     {
@@ -4024,9 +4042,11 @@ stk::hw::CriticalSection::Session stk::hw::CriticalSection::Enter(const Critical
 {
     stk::hw::CriticalSection::Session ret;
 
-    const bool is_priv = ((ses & SESSION_FLAG_NPRIV) == 0U) && (HW_IsPrivilegedContext() || HW_IsHandlerMode());
+    const bool is_priv_ses = ((ses & SESSION_FLAG_NPRIV) == 0U);
+    const bool is_priv_ctx = HW_IsPrivilegedContext();
+    const bool is_handler  = HW_IsHandlerMode();
 
-    if (is_priv)
+    if (is_priv_ses && (is_priv_ctx || is_handler))
     {
         GetContext().EnterCriticalSection();
         ret = SESSION_FLAG_NONE;
