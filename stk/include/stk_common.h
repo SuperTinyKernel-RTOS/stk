@@ -651,7 +651,8 @@ public:
     */
     static inline void WakeOne(IWaitObject::ListHeadType &wlist)
     {
-        if (IWaitObject *const obj = util::DListCast::ListEntryToParent<IWaitObject>(wlist.GetFirst()))
+        IWaitObject *const obj = util::DListCast::ListEntryToParent<IWaitObject>(wlist.GetFirst());
+        if (obj != nullptr)
         {
             obj->Wake(false);
         }
@@ -665,7 +666,9 @@ public:
     */
     static inline void WakeAll(IWaitObject::ListHeadType &wlist)
     {
-        while (IWaitObject *const obj = util::DListCast::ListEntryToParent<IWaitObject>(wlist.GetFirst()))
+        for (IWaitObject *obj = util::DListCast::ListEntryToParent<IWaitObject>(wlist.GetFirst());
+             obj != nullptr;
+             obj = util::DListCast::ListEntryToParent<IWaitObject>(wlist.GetFirst()))
         {
             obj->Wake(false);
         }

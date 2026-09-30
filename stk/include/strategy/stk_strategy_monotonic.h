@@ -425,32 +425,44 @@ public:
     static inline bool CalculateWCRT(const TaskTiming tasks[], const uint32_t count, TaskInfo info[])
     {
         bool schedulable = true;
-        info[0].wcrt = tasks[0].duration;
 
-        for (uint32_t t = 1U; t < count; )
+        if (count > 0U)
         {
-            uint32_t       w;
-            const uint32_t Cx = tasks[t].duration;
-            const uint32_t Tx = tasks[t].period;
-            uint32_t       w0 = Cx;
+            info[0].wcrt = tasks[0].duration;
 
-        next_itr:
+            for (uint32_t t = 1U; t < count; ++t)
+            {
+                const uint32_t Cx = tasks[t].duration;
+                const uint32_t Tx = tasks[t].period;
 
-            w = Cx;
-            for (uint32_t i = 0U; i < t; ++i)
-            {
-                w += idiv_ceil(w0, tasks[i].period) * tasks[i].duration;
-            }
+                uint32_t w0 = Cx;
+                uint32_t w  = Cx;
+                bool converged = false;
 
-            if ((w != w0) && (w <= Tx))
-            {
-                w0 = w;
-                goto next_itr;
-            }
-            else
-            {
-                schedulable &= (w <= Tx);
-                info[t++].wcrt = w;
+                while (!converged)
+                {
+                    w = Cx;
+                    for (uint32_t i = 0U; i < t; ++i)
+                    {
+                        w += idiv_ceil(w0, tasks[i].period) * tasks[i].duration;
+                    }
+
+                    if ((w != w0) && (w <= Tx))
+                    {
+                        w0 = w;
+                    }
+                    else
+                    {
+                        converged = true;
+                    }
+                }
+
+                if (w > Tx)
+                {
+                    schedulable = false;
+                }
+
+                info[t].wcrt = w;
             }
         }
 
