@@ -9,7 +9,6 @@
 
 #include <cstddef> // for std::size_t
 
-#include "stk_config.h"
 #include "stk.h"
 #include "sync/stk_sync.h"
 #include "memory/stk_memory.h"
@@ -32,17 +31,14 @@ struct stk_mutex_t
     Mutex handle;
 };
 
-stk_mutex_t *stk_mutex_create(stk_mutex_mem_t *const membuf, uint32_t membuf_size)
+stk_mutex_t *stk_mutex_create(stk_mutex_mem_t *const membuf)
 {
     STK_ASSERT(membuf != nullptr);
-    STK_ASSERT(membuf_size >= sizeof(stk_mutex_t));
-    STK_STATIC_ASSERT_N((sizeof(stk_mutex_t) <= sizeof(stk_mutex_mem_t)),
-        "stk_mutex_mem_t is too small to hold stk_mutex_t");
 
     stk_mutex_t *result = nullptr;
-    if (membuf_size >= sizeof(stk_mutex_t))
+    if (membuf != nullptr)
     {
-        result = new (membuf->data) stk_mutex_t();
+        result = ConstructIn<stk_mutex_t>(*membuf);
     }
 
     return result;
@@ -99,17 +95,14 @@ struct stk_spinlock_t
     sync::SpinLock handle;
 };
 
-stk_spinlock_t *stk_spinlock_create(stk_spinlock_mem_t *const membuf, uint32_t membuf_size)
+stk_spinlock_t *stk_spinlock_create(stk_spinlock_mem_t *const membuf)
 {
     STK_ASSERT(membuf != nullptr);
-    STK_ASSERT(membuf_size >= sizeof(stk_spinlock_t));
-    STK_STATIC_ASSERT_N((sizeof(stk_spinlock_t) <= sizeof(stk_spinlock_mem_t)),
-        "stk_spinlock_mem_t is too small to hold stk_spinlock_t");
 
     stk_spinlock_t *result = nullptr;
-    if (membuf_size >= sizeof(stk_spinlock_t))
+    if (membuf != nullptr)
     {
-        result = new (membuf->data) stk_spinlock_t();
+        result = ConstructIn<stk_spinlock_t>(*membuf);
     }
 
     return result;
@@ -156,17 +149,14 @@ struct stk_cv_t
     ConditionVariable handle;
 };
 
-stk_cv_t *stk_cv_create(stk_cv_mem_t *const membuf, uint32_t membuf_size)
+stk_cv_t *stk_cv_create(stk_cv_mem_t *const membuf)
 {
     STK_ASSERT(membuf != nullptr);
-    STK_ASSERT(membuf_size >= sizeof(stk_cv_t));
-    STK_STATIC_ASSERT_N((sizeof(stk_cv_t) <= sizeof(stk_cv_mem_t)),
-        "stk_cv_mem_t is too small to hold stk_cv_t");
 
     stk_cv_t *result = nullptr;
-    if (membuf_size >= sizeof(stk_cv_t))
+    if (membuf != nullptr)
     {
-        result = new (membuf->data) stk_cv_t();
+        result = ConstructIn<stk_cv_t>(*membuf);
     }
 
     return result;
@@ -238,19 +228,15 @@ struct stk_event_t
     Event handle;
 };
 
-stk_event_t *stk_event_create(stk_event_mem_t *const membuf, 
-                              uint32_t         membuf_size, 
-                              bool             manual_reset)
+stk_event_t *stk_event_create(stk_event_mem_t *const membuf,
+                              bool manual_reset)
 {
     STK_ASSERT(membuf != nullptr);
-    STK_ASSERT(membuf_size >= sizeof(stk_event_t));
-    STK_STATIC_ASSERT_N((sizeof(stk_event_t) <= sizeof(stk_event_mem_t)),
-        "stk_event_mem_t is too small to hold stk_event_t");
 
     stk_event_t *result = nullptr;
-    if (membuf_size >= sizeof(stk_event_t))
+    if (membuf != nullptr)
     {
-        result = new (membuf->data) stk_event_t(manual_reset);
+        result = ConstructIn<stk_event_t>(*membuf, manual_reset);
     }
 
     return result;
@@ -319,21 +305,18 @@ struct stk_sem_t
     Semaphore handle;
 };
 
-stk_sem_t *stk_sem_create(stk_sem_mem_t *const membuf, 
-                          uint32_t       membuf_size,
-                          uint32_t       initial_count, 
-                          uint32_t       max_count)
+stk_sem_t *stk_sem_create(stk_sem_mem_t *const membuf,
+                          uint32_t initial_count,
+                          uint32_t max_count)
 {
     STK_ASSERT(membuf != nullptr);
-    STK_ASSERT(membuf_size >= sizeof(stk_sem_t));
-    STK_STATIC_ASSERT_N((sizeof(stk_sem_t) <= sizeof(stk_sem_mem_t)),
-        "stk_sem_mem_t is too small to hold stk_sem_t");
+
+    const uint32_t effective_max = ((max_count == 0U) ? Semaphore::COUNT_MAX : max_count);
 
     stk_sem_t *result = nullptr;
-    if (membuf_size >= sizeof(stk_sem_t))
+    if (membuf != nullptr)
     {
-        const uint32_t effective_max = ((max_count == 0U) ? Semaphore::COUNT_MAX : max_count);
-        result = new (membuf->data) stk_sem_t(initial_count, effective_max);
+        result = ConstructIn<stk_sem_t>(*membuf, initial_count, effective_max);
     }
 
     return result;
@@ -400,19 +383,15 @@ struct stk_ef_t
     EventFlags handle;
 };
 
-stk_ef_t *stk_ef_create(stk_ef_mem_t *const membuf, 
-                        uint32_t      membuf_size, 
-                        uint32_t      initial_flags)
+stk_ef_t *stk_ef_create(stk_ef_mem_t *const membuf,
+                        uint32_t initial_flags)
 {
     STK_ASSERT(membuf != nullptr);
-    STK_ASSERT(membuf_size >= sizeof(stk_ef_t));
-    STK_STATIC_ASSERT_N((sizeof(stk_ef_t) <= sizeof(stk_ef_mem_t)),
-        "stk_ef_mem_t is too small to hold stk_ef_t");
 
     stk_ef_t *result = nullptr;
-    if (membuf_size >= sizeof(stk_ef_t))
+    if (membuf != nullptr)
     {
-        result = new (membuf->data) stk_ef_t(initial_flags);
+        result = ConstructIn<stk_ef_t>(*membuf, initial_flags);
     }
 
     return result;
@@ -481,25 +460,21 @@ struct stk_pipe_t
 };
 
 stk_pipe_t *stk_pipe_create(stk_pipe_mem_t *const membuf,
-                            uint32_t        membuf_size,
-                            uint8_t        *buf,
-                            uint32_t        buf_size,
-                            size_t          capacity,
-                            size_t          element_size)
+                            uint8_t *buf,
+                            uint32_t buf_size,
+                            size_t capacity,
+                            size_t element_size)
 {
     STK_ASSERT(membuf       != nullptr);
     STK_ASSERT(buf          != nullptr);
     STK_ASSERT(capacity     >= 1U);
     STK_ASSERT(element_size >= 1U);
-    STK_ASSERT(membuf_size  >= sizeof(stk_pipe_t));
     STK_ASSERT(buf_size     >= capacity * element_size);
-    STK_STATIC_ASSERT_N((sizeof(stk_pipe_t) <= sizeof(stk_pipe_mem_t)),
-        "stk_pipe_mem_t is too small to hold stk_pipe_t");
 
     stk_pipe_t *result = nullptr;
-    if ((membuf_size >= sizeof(stk_pipe_t)) && (buf_size >= (capacity * element_size)))
+    if ((membuf != nullptr) && (buf_size >= (capacity * element_size)))
     {
-        result = new (membuf->data) stk_pipe_t(buf, capacity, element_size);
+        result = ConstructIn<stk_pipe_t>(*membuf, buf, capacity, element_size);
     }
 
     return result;
@@ -667,25 +642,21 @@ struct stk_msgq_t
 };
 
 stk_msgq_t *stk_msgq_create(stk_msgq_mem_t *const membuf,
-                            uint32_t        membuf_size,
-                            uint8_t        *buf,
-                            uint32_t        buf_size,
-                            size_t          capacity,
-                            size_t          msg_size)
+                            uint8_t *buf,
+                            uint32_t buf_size,
+                            size_t capacity,
+                            size_t msg_size)
 {
     STK_ASSERT(membuf != nullptr);
     STK_ASSERT(buf != nullptr);
     STK_ASSERT(capacity >= 1U);
     STK_ASSERT(msg_size >= 1U);
-    STK_ASSERT(membuf_size >= sizeof(stk_msgq_t));
     STK_ASSERT(buf_size >= capacity * msg_size);
-    STK_STATIC_ASSERT_N((sizeof(stk_msgq_t) <= sizeof(stk_msgq_mem_t)),
-        "stk_msgq_mem_t is too small to hold stk_msgq_t");
 
     stk_msgq_t *result = nullptr;
-    if ((membuf_size >= sizeof(stk_msgq_t)) && (buf_size >= (capacity * msg_size)))
+    if ((membuf != nullptr) && (buf_size >= (capacity * msg_size)))
     {
-        result = new (membuf) stk_msgq_t(buf, capacity, msg_size);
+        result = ConstructIn<stk_msgq_t>(*membuf, buf, capacity, msg_size);
     }
 
     return result;
@@ -857,19 +828,16 @@ struct stk_rwmutex_t
     sync::RWMutex handle;
 };
 
-stk_rwmutex_t *stk_rwmutex_create(stk_rwmutex_mem_t *const membuf, uint32_t membuf_size)
+stk_rwmutex_t *stk_rwmutex_create(stk_rwmutex_mem_t *const membuf)
 {
     STK_ASSERT(membuf != nullptr);
-    STK_ASSERT(membuf_size >= sizeof(stk_rwmutex_t));
-    STK_STATIC_ASSERT_N((sizeof(stk_rwmutex_t) <= sizeof(stk_rwmutex_mem_t)),
-        "stk_rwmutex_mem_t is too small to hold stk_rwmutex_t");
 
     stk_rwmutex_t *result = nullptr;
-    if (membuf_size >= sizeof(stk_rwmutex_t))
+    if (membuf != nullptr)
     {
-        result = new (membuf->data) stk_rwmutex_t();
+        result = ConstructIn<stk_rwmutex_t>(*membuf);
     }
-    
+
     return result;
 }
 
@@ -955,18 +923,16 @@ struct stk_barrier_t
     Barrier handle;
 };
 
-stk_barrier_t *stk_barrier_create(stk_barrier_mem_t *const membuf, uint32_t membuf_size, uint32_t count)
+stk_barrier_t *stk_barrier_create(stk_barrier_mem_t *const membuf,
+                                  uint32_t count)
 {
     STK_ASSERT(membuf != nullptr);
-    STK_ASSERT(membuf_size >= sizeof(stk_barrier_t));
     STK_ASSERT(count != 0U);
-    STK_STATIC_ASSERT_N((sizeof(stk_barrier_t) <= sizeof(stk_barrier_mem_t)),
-        "stk_barrier_mem_t is too small to hold stk_barrier_t");
 
     stk_barrier_t *result = nullptr;
-    if ((membuf_size >= sizeof(stk_barrier_t)) && (count != 0U))
+    if ((membuf != nullptr) && (count != 0U))
     {
-        result = new (membuf->data) stk_barrier_t(count);
+        result = ConstructIn<stk_barrier_t>(*membuf, count);
     }
 
     return result;

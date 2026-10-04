@@ -659,7 +659,7 @@ protected:
 #ifdef _STK_ARCH_X86_WIN32
     volatile long m_lock; //!< Lock state (see EState). \c long required by Win32 Interlocked API (InterlockedCompareExchange).
 #else
-    volatile bool m_lock __stk_aligned(8); //!< Lock state (see EState). 8-byte aligned to occupy its own cache line word and avoid false sharing on SMP targets.
+    volatile bool m_lock __stk_aligned(4U); //!< Lock state (see EState). 4-byte aligned to prevent cache word boundary crossing on 32-bit cores.
 #endif
 };
 

@@ -39,6 +39,11 @@
 extern "C" {
 #endif
 
+/*! \def       STK_C_VERSION
+    \brief     Interface version.
+*/
+#define STK_C_VERSION (0x20261004)
+
 // =============================================================================
 // Configuration macros (can be overridden before including this file)
 // =============================================================================
@@ -873,6 +878,11 @@ void stk_tls_set(void *ptr);
 // ----- Critical Section ------------------------------------------------------
 
 /*! \brief     Session of Critical Section.
+    \details   Opaque token returned by stk_critical_section_enter_ex() that carries the state which
+               must be restored by the matching stk_critical_section_exit_ex() (e.g. the previous
+               interrupt masking level, such as BASEPRI on ARM Cortex-M, and the privilege-level
+               handling path that was selected on entry).
+    \note      Do not modify or interpret the value, pass it unchanged to stk_critical_section_exit_ex().
 */
 typedef uint8_t stk_cs_session_t;
 
@@ -882,26 +892,51 @@ typedef uint8_t stk_cs_session_t;
 #define STK_DEFAULT_CS_SESSION (0U)
 
 /*! \brief     Enter global critical section - disable context switches on current core.
-    \note      Supports nesting (number of enter calls must match number of exit calls).
+    \details   Preferred API for entering a critical section. It works from both Privileged and User
+               thread contexts: the returned session preserves the state of the entry, so that the
+               matching stk_critical_section_exit_ex() can restore it correctly regardless of the
+               privilege level the caller is running at.
+    \note      Supports nesting (number of enter calls must match number of exit calls). Every call
+               must be paired with stk_critical_section_exit_ex() using the session returned by that
+               very call, and nested sections must be left in reverse (LIFO) order.
+    \note      Keep the section as short as possible: context switches on the current core are
+               disabled until the matching exit.
     \param[in] ses: STK_DEFAULT_CS_SESSION to auto-detect the calling context's privilege level,
                or an explicit session value to force a specific handling path.
     \return    Session value that must be supplied to the matching stk_critical_section_exit_ex().
+    \see       stk_critical_section_exit_ex
 */
 stk_cs_session_t stk_critical_section_enter_ex(stk_cs_session_t ses /*= STK_DEFAULT_CS_SESSION*/);
 
 /*! \brief     Leave global critical section - re-enable context switches.
-    \note      Must be called once for each previous stk_critical_section_enter().
+    \details   Restores the state captured by the matching stk_critical_section_enter_ex().
+    \note      Must be called exactly once for each previous stk_critical_section_enter_ex(), with
+               the session value returned by that call.
     \param[in] ses: Session value returned by the matching stk_critical_section_enter_ex() call.
+    \see       stk_critical_section_enter_ex
 */
 void stk_critical_section_exit_ex(stk_cs_session_t ses /*= STK_DEFAULT_CS_SESSION*/);
 
 /*! \brief     Enter global critical section - disable context switches on current core.
+    \warning   Can be used from a Privileged thread ONLY.
+               When called from a User thread the section cannot be left properly: the matching
+               stk_critical_section_exit() has no session to restore, and in User privilege it is not
+               permitted to clear the interrupt masking (e.g. BASEPRI on ARM Cortex-M) that was set on
+               entry. Use stk_critical_section_enter_ex() / stk_critical_section_exit_ex() in code that
+               may run in a User thread (e.g. shared library or middleware code).
+    \note      Misuse is caught by STK_ASSERT(IsPrivilegedContext()) when assertions are enabled; with
+               assertions disabled the call is not checked and the behavior is undefined.
     \note      Supports nesting (number of enter calls must match number of exit calls).
+    \see       stk_critical_section_enter_ex
 */
 void stk_critical_section_enter();
 
 /*! \brief     Leave global critical section - re-enable context switches.
+    \warning   Can be used from a Privileged thread ONLY,
+               see the warning of stk_critical_section_enter(). Use stk_critical_section_exit_ex()
+               in code that may run in a User thread.
     \note      Must be called once for each previous stk_critical_section_enter().
+    \see       stk_critical_section_exit_ex
 */
 void stk_critical_section_exit();
 
@@ -923,10 +958,9 @@ typedef struct stk_mutex_t stk_mutex_t;
 
 /*! \brief     Create a Mutex (using provided memory).
     \param[in] membuf: Pointer to static memory container.
-    \param[in] membuf_size: Size of the container (must be >= sizeof(stk_mutex_mem_t)).
     \return    Mutex handle.
 */
-stk_mutex_t *stk_mutex_create(stk_mutex_mem_t *const membuf, uint32_t membuf_size);
+stk_mutex_t *stk_mutex_create(stk_mutex_mem_t *const membuf);
 
 /*! \brief     Destroy a Mutex.
     \param[in] mtx: Mutex handle.
@@ -974,13 +1008,13 @@ extern "C" stk::sync::Mutex *stk_mutex_get_instance(stk_mutex_t *mtx);
 
 /*! \brief     A memory size (multiples of stk_word_t) required for SpinLock instance.
 */
-#define STK_SPINLOCK_IMPL_SIZE (1)
+#define STK_SPINLOCK_IMPL_SIZE (6)
 
 /*! \struct    stk_spinlock_mem_t
     \brief     Opaque memory container for SpinLock object.
 */
 typedef struct {
-    stk_word_t data[STK_SPINLOCK_IMPL_SIZE];
+    stk_word_t data[STK_SPINLOCK_IMPL_SIZE] __stk_c_aligned;
 } stk_spinlock_mem_t;
 
 /*! \brief     Opaque handle to a SpinLock instance.
@@ -989,10 +1023,9 @@ typedef struct stk_spinlock_t stk_spinlock_t;
 
 /*! \brief     Create a recursive SpinLock.
     \param[in] membuf: Pointer to static memory container.
-    \param[in] membuf_size: Size of the container (must be >= sizeof(stk_spinlock_mem_t)).
     \return    SpinLock handle.
 */
-stk_spinlock_t *stk_spinlock_create(stk_spinlock_mem_t *const membuf, uint32_t membuf_size);
+stk_spinlock_t *stk_spinlock_create(stk_spinlock_mem_t *const membuf);
 
 /*! \brief     Destroy the SpinLock.
 */
@@ -1052,10 +1085,9 @@ typedef struct stk_cv_t stk_cv_t;
 
 /*! \brief     Create a Condition Variable (using provided memory).
     \param[in] membuf:      Pointer to static memory container.
-    \param[in] membuf_size: Size of the container (must be >= sizeof(stk_cv_mem_t)).
     \return    CV handle.
 */
-stk_cv_t *stk_cv_create(stk_cv_mem_t *const membuf, uint32_t membuf_size);
+stk_cv_t *stk_cv_create(stk_cv_mem_t *const membuf);
 
 /*! \brief     Destroy a Condition Variable.
     \param[in] cv: CV handle.
@@ -1133,12 +1165,10 @@ typedef struct stk_event_t stk_event_t;
 
 /*! \brief     Create an Event (using provided memory).
     \param[in] membuf: Pointer to static memory container.
-    \param[in] membuf_size: Size of the container (must be >= sizeof(stk_event_mem_t)).
     \param[in] manual_reset: True for manual-reset, False for auto-reset.
     \return    Event handle.
 */
 stk_event_t *stk_event_create(stk_event_mem_t *const membuf, 
-                              uint32_t         membuf_size, 
                               bool             manual_reset);
 
 /*! \brief     Destroy an Event.
@@ -1210,14 +1240,12 @@ typedef struct stk_sem_t stk_sem_t;
 
 /*! \brief     Create a Semaphore (using provided memory).
     \param[in] membuf: Pointer to static memory container.
-    \param[in] membuf_size: Size of the container (must be >= sizeof(stk_sem_mem_t)).
     \param[in] initial_count: Starting value of the resource counter.
     \param[in] max_count: Maximum value the counter is allowed to reach.
                Pass 0 to use the default maximum (65534). Must be >= initial_count.
     \return    Semaphore handle.
 */
-stk_sem_t *stk_sem_create(stk_sem_mem_t *const membuf, 
-                          uint32_t       membuf_size,
+stk_sem_t *stk_sem_create(stk_sem_mem_t *const membuf,
                           uint32_t       initial_count, 
                           uint32_t       max_count);
 
@@ -1330,13 +1358,11 @@ typedef struct stk_ef_t stk_ef_t;
 
 /*! \brief     Create an EventFlags object (using provided memory).
     \param[in] membuf: Pointer to static memory container.
-    \param[in] membuf_size: Size of the container (must be >= sizeof(stk_ef_mem_t)).
     \param[in] initial_flags: Initial value of the 32-bit flags word (bits 0..30 only;
                bit 31 is reserved and must not be set).
-    \return    EventFlags handle, or NULL if memory is too small.
+    \return    EventFlags handle.
 */
-stk_ef_t *stk_ef_create(stk_ef_mem_t *const membuf, 
-                        uint32_t      membuf_size,
+stk_ef_t *stk_ef_create(stk_ef_mem_t *const membuf,
                         uint32_t      initial_flags);
 
 /*! \brief     Destroy an EventFlags object.
@@ -1452,7 +1478,7 @@ typedef struct stk_pipe_t stk_pipe_t;
 
     static uint8_t        s_pipe_buf[STK_PIPE_BUF_SIZE(MY_PIPE_CAP, MY_ELEM_SIZE)] __stk_c_aligned;
     static stk_pipe_mem_t s_pipe_mem;
-    stk_pipe_t *g_pipe = stk_pipe_create(&s_pipe_mem, sizeof(s_pipe_mem),
+    stk_pipe_t *g_pipe = stk_pipe_create(&s_pipe_mem,
                                           s_pipe_buf, sizeof(s_pipe_buf),
                                           MY_PIPE_CAP, MY_ELEM_SIZE);
     \endcode
@@ -1466,8 +1492,6 @@ typedef struct stk_pipe_t stk_pipe_t;
                The backing ring-buffer storage must be supplied by the caller via
                \a buf / \a buf_size.
     \param[in] membuf: Pointer to static memory container for the Pipe control-block.
-               Must be at least sizeof(stk_pipe_mem_t) bytes.
-    \param[in] membuf_size: Size of \a membuf in bytes.
     \param[in] buf: Pointer to the element data buffer.
                Must be at least \a capacity * \a element_size bytes.
     \param[in] buf_size: Size of \a buf in bytes (used for the safety assertion;
@@ -1480,7 +1504,6 @@ typedef struct stk_pipe_t stk_pipe_t;
     \note      Only available when kernel is compiled with \a KERNEL_SYNC mode enabled.
 */
 stk_pipe_t *stk_pipe_create(stk_pipe_mem_t *const membuf,
-                            uint32_t        membuf_size,
                             uint8_t        *buf,
                             uint32_t        buf_size,
                             size_t          capacity,
@@ -1734,7 +1757,7 @@ typedef struct stk_msgq_t stk_msgq_t;
 
     static uint8_t        s_msgq_buf[STK_MSGQ_BUF_SIZE(MY_QUEUE_CAP, MY_MSG_SIZE)];
     static stk_msgq_mem_t s_msgq_mem;
-    stk_msgq_t *g_queue = stk_msgq_create(&s_msgq_mem, sizeof(s_msgq_mem),
+    stk_msgq_t *g_queue = stk_msgq_create(&s_msgq_mem,
                                            s_msgq_buf,  sizeof(s_msgq_buf),
                                            MY_QUEUE_CAP, MY_MSG_SIZE);
     \endcode
@@ -1748,8 +1771,6 @@ typedef struct stk_msgq_t stk_msgq_t;
                via \a buf / \a buf_size.
 
     \param[in] membuf: Pointer to static memory container for the queue object.
-               Must be at least sizeof(stk_msgq_mem_t) bytes.
-    \param[in] membuf_size: Size of \a membuf in bytes (must be >= sizeof(stk_msgq_mem_t)).
     \param[in] buf: Pointer to the message data buffer.
                Must be at least \a capacity * \a msg_size bytes.
     \param[in] buf_size: Size of \a buf in bytes (used only for the safety assertion; must equal
@@ -1763,7 +1784,6 @@ typedef struct stk_msgq_t stk_msgq_t;
     \note      Only available when kernel is compiled with \a KERNEL_SYNC mode enabled.
 */
 stk_msgq_t *stk_msgq_create(stk_msgq_mem_t *const membuf,
-                            uint32_t        membuf_size,
                             uint8_t        *buf,
                             uint32_t        buf_size,
                             size_t          capacity,
@@ -1998,10 +2018,9 @@ typedef struct stk_rwmutex_t stk_rwmutex_t;
 
 /*! \brief     Create an RWMutex (using provided memory).
     \param[in] membuf: Pointer to static memory container.
-    \param[in] membuf_size: Size of the container (must be >= sizeof(stk_rwmutex_mem_t)).
-    \return    RWMutex handle, or NULL if memory is too small.
+    \return    RWMutex handle.
 */
-stk_rwmutex_t *stk_rwmutex_create(stk_rwmutex_mem_t *const membuf, uint32_t membuf_size);
+stk_rwmutex_t *stk_rwmutex_create(stk_rwmutex_mem_t *const membuf);
 
 /*! \brief     Destroy an RWMutex.
     \param[in] rw: RWMutex handle.
@@ -2101,12 +2120,11 @@ typedef struct stk_barrier_t stk_barrier_t;
 
 /*! \brief     Create a Barrier (using provided memory).
     \param[in] membuf: Pointer to static memory container.
-    \param[in] membuf_size: Size of the container (must be >= sizeof(stk_barrier_mem_t)).
     \param[in] count: Number of tasks that must call \c stk_barrier_wait() before any of
                them is released. Must not be 0.
     \return    Barrier handle.
 */
-stk_barrier_t *stk_barrier_create(stk_barrier_mem_t *const membuf, uint32_t membuf_size, uint32_t count);
+stk_barrier_t *stk_barrier_create(stk_barrier_mem_t *const membuf, uint32_t count);
 
 /*! \brief     Destroy a Barrier.
     \param[in] barrier: Barrier handle.
@@ -2166,6 +2184,30 @@ extern "C" stk::sync::Barrier *stk_barrier_get_instance(stk_barrier_t *barrier);
 #ifdef __cplusplus
 }
 #endif
+
+#ifdef __cplusplus
+namespace stk {
+/*! \brief     Construct object T in-place inside a C memory container.
+    \details   Compile-time checks that the container is large and aligned enough
+               for T, run-time check that the actual storage address is aligned.
+    \param[in] mem: Memory container (stk_*_mem_t), must expose a \c data member.
+    \param[in] args: Constructor arguments of T.
+    \return    Pointer to the constructed object.
+*/
+template <typename T, typename Mem, typename... Args>
+static inline T *ConstructIn(Mem &mem, Args &&... args)
+{
+    STK_STATIC_ASSERT_DESC((sizeof(T) <= sizeof(Mem)),
+        "stk_*_mem_t is too small for the C++ object");
+    STK_STATIC_ASSERT_DESC((alignof(T) <= alignof(Mem)),
+        "stk_*_mem_t is not sufficiently aligned for the C++ object");
+
+    STK_ASSERT((reinterpret_cast<uintptr_t>(mem.data) % alignof(T)) == 0U);
+
+    return new (static_cast<void *>(mem.data)) T(static_cast<Args &&>(args)...);
+}
+} // namespace stk
+#endif // __cplusplus
 
 /** @} */
 

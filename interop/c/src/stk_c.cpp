@@ -84,10 +84,9 @@ public:
     STK_VIRT_DTOR ~TaskWrapper() = default;
   
     // ITask
-    EAccessMode GetAccessMode()              const override { return m_mode; }
-    void OnDeadlineMissed(uint32_t duration)       override { (void)duration; }
-    int32_t GetWeight()                      const override { return m_weight; }
-    const char *GetTraceName()               const override { return m_tname; }
+    EAccessMode GetAccessMode() const override { return m_mode; }
+    int32_t GetWeight()         const override { return m_weight; }
+    const char *GetTraceName()  const override { return m_tname; }
 
     // IStackMemory
     const Word *GetStack() const override { return m_stack; }
@@ -320,8 +319,8 @@ extern "C" {
     case X: \
     { \
         using KernelType_ = STK_KERNEL_TYPE(X); \
-        STK_STATIC_ASSERT_N(((sizeof(KernelType_) % sizeof(Word)) == 0U), \
-                            "Kernel memory size must be multiple of Word"); \
+        STK_STATIC_ASSERT_DESC(((sizeof(KernelType_) % sizeof(Word)) == 0U), \
+                               "Kernel memory size must be multiple of Word"); \
         alignas(alignof(KernelType_)) \
         static Word STK_KERNEL_MEM(X)[sizeof(KernelType_) / sizeof(Word)]; \
         k = new (STK_KERNEL_MEM(X)) KernelType_(); \
@@ -681,6 +680,8 @@ void stk_critical_section_exit_ex(stk_cs_session_t ses)
 
 void stk_critical_section_enter()
 {
+    STK_ASSERT(stk::hw::IsPrivilegedContext());
+
     STK_UNUSED(hw::CriticalSection::Enter(hw::CriticalSection::DEFAULT_SESSION));
 }
 

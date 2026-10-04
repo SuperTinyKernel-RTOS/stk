@@ -148,10 +148,10 @@ static void InitSync()
     static stk_event_mem_t g_EvRdyMem, g_EvOnMem, g_EvOffMem;
 #endif
 
-    g_HwMutex = stk_mutex_create(&g_HwMtxMem, sizeof(g_HwMtxMem));
+    g_HwMutex = stk_mutex_create(&g_HwMtxMem);
 
 #if STK_EXAMPLE_USE_PIPE
-    g_CtrlSignalPipe = stk_pipe_create(&g_PipeMem, sizeof(g_PipeMem),
+    g_CtrlSignalPipe = stk_pipe_create(&g_PipeMem,
                                         s_PipeBuf, sizeof(s_PipeBuf),
                                         16, sizeof(LedState));
 #else

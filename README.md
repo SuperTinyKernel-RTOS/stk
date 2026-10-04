@@ -35,7 +35,7 @@ You get:
 - **Higher CPU availability** - More time for your application logic. Benchmarks show up to **~12% more application CPU time** compared to FreeRTOS under comparable workloads (see [Benchmark](#benchmark)).
 - **Lower power consumption** - Features ultra-low power, tickless scheduling paired with reduced overhead, enabling the use of lower-frequency MCUs to save battery of your portable design.
 - **Native C support** - Includes a fully featured C API wrapper, allowing you to seamlessly use STK in pure C projects.
-- **Simplified migration** - Drop-in compatibility layers for FreeRTOS and CMSIS-RTOS2 to help you migrate legacy codebases with minimal application changes.
+- **Simplified migration** - Drop-in compatibility layers for FreeRTOS, CMSIS-RTOS2 and POSIX Threads (pthread) to help you migrate legacy codebases with minimal application changes.
 - **B2B professional support** - Engineered for seamless integration into commercial projects. Explore our [Services](#services) for enterprise-grade support and custom engineering.
 
 > STK does not attempt to abstract or manage MCU peripherals, similarly to FreeRTOS or CMSIS-RTOS2.
@@ -70,6 +70,7 @@ STK is an open-source project developed at https://github.com/SuperTinyKernel-RT
 | **C++ and C API**                                    | Can be used easily in C++ and C projects                                                                                                                                                                                     |
 | **CMSIS-RTOS2 compatible**                           | Full CMSIS-RTOS2 wrapper (`cmsis_os2_stk.cpp`) maps the standard ARM CMSIS-RTOS2 C API onto STK, enabling drop-in compatibility with STM32CubeMX, MCUXpresso, and other CMSIS-aware middleware                               |
 | **FreeRTOS compatible**                              | Full FreeRTOS wrapper (`freertos_stk.cpp`) maps the standard FreeRTOS C API onto STK, enabling drop-in migration of existing FreeRTOS codebases with minimal or no application changes                                       |
+| **POSIX Threads (pthread) compatible**               | Minimal POSIX-named pthread API (`stk_c_pthread.h`) maps threads, mutexes, condition variables, read-write locks, spinlocks, barriers, `pthread_once()` and thread-specific data onto STK, usable from C and C++             |
 | **Easy porting**                                     | Requires very small to none BSP surface                                                                                                                                                                                      |
 | **Traceable**                                        | Scheduling is fully traceable with a SEGGER SystemView                                                                                                                                                                       |
 | **Development mode (x86)**                           | Run the same threaded application on Windows                                                                                                                                                                                 |
@@ -542,9 +543,9 @@ int main(void)
 
 ---
 
-## Migrating from CMSIS-RTOS2 or FreeRTOS
+## Migrating from CMSIS-RTOS2, FreeRTOS or POSIX Threads
 
-STK ships two ready-made compatibility wrappers that let you swap out your existing RTOS backend and replace it with STK without rewriting application code. Both wrappers live under `interop/` and share the same design principles: thin translation of the source API onto STK primitives, ISR-safe where the original API requires it, and zero heap usage when the caller supplies static memory.
+STK ships ready-made compatibility wrappers that let you swap out your existing RTOS backend and replace it with STK without rewriting application code. The CMSIS-RTOS2 and FreeRTOS wrappers live under `interop/` and share the same design principles: thin translation of the source API onto STK primitives, ISR-safe where the original API requires it, and zero heap usage when the caller supplies static memory.
 
 ### CMSIS-RTOS2 Wrapper (`interop/cmsis/rtos2`)
 
@@ -627,6 +628,69 @@ See [interop/freertos](https://github.com/SuperTinyKernel-RTOS/stk/tree/main/int
 
 
 > **Note:** Wrapper is missing important API your project is using? Contact with inquiry: [contact@supertinykernel.org](mailto:contact@supertinykernel.org)
+
+---
+
+### POSIX Threads (pthread) API (`stk_c_pthread.h`)
+
+STK provides a minimal, POSIX-named **pthreads-style API** (`stk_c_pthread.h` / `stk_c_pthread.cpp`) that maps POSIX Threads onto the STK kernel and its `stk::sync` primitives. Code written against `<pthread.h>` can be ported to STK with few or no changes. The public interface needs only the STK C headers, so it can be used from both C and C++ projects. It is deliberately a subset of full POSIX threads, scoped to what maps cleanly onto STK's task and synchronization model.
+
+**Covered API groups:** Thread Lifecycle and Attributes (`pthread_create/join/detach/exit/self/equal`, stack size, caller-supplied stack, detach state), Mutex (normal, recursive, error-checking), Condition Variable, Read-Write Lock, Spinlock, Barrier, `pthread_once()`, Thread-Specific Data (keys with destructors).
+
+**Not supported:** thread cancellation (`pthread_cancel` and related calls) and thread scheduling policy / priority get-set.
+
+**Notes:**
+
+- The kernel type of the bound core must include `KERNEL_DYNAMIC | KERNEL_SYNC`, and `STK_TLS` must be enabled. Call `stk_pthread_bind_kernel()` once, before the first `pthread_create()`.
+- `STK_C_KERNEL_MAX_TASKS` must have room for your own tasks, one internal reaper task, and all concurrently alive pthreads (`STK_C_PTHREAD_MAX_THREADS`, default: 8).
+- Threads created with the default stack size (`STK_C_PTHREAD_DEFAULT_STACK_WORDS`, default: 1024) take their stack from a static pool with zero heap use. Other sizes fall back to `malloc()`, and a stack supplied via `pthread_attr_setstack()` is used as-is.
+- STK has no wall clock: the `abstime` of the timed calls (`pthread_cond_timedwait()`, `pthread_mutex_timedlock()`, ...) is a point on the `stk_time_now_ms()` timeline, not `CLOCK_REALTIME`.
+- The API is for task context only: blocking calls must not be made from an ISR.
+- `pthread_attr_setprivileged_np()` is a non-portable STK extension that selects a privileged or user-mode (MPU-restricted) thread.
+
+**Quick integration:** add `stk_c_pthread.cpp` to your build. To compile existing code that includes `<pthread.h>` unchanged, add the directory containing the STK `pthread.h` wrapper (`include/posix`) to the compiler include path (`-I`) ahead of the toolchain's system include directories; otherwise include `stk_c_pthread.h` directly.
+
+```c
+#include <stk_c.h>
+#include <pthread.h>
+
+#define MAIN_STACK_WORDS 256
+static stk_word_t g_main_stack[MAIN_STACK_WORDS];
+
+static pthread_mutex_t g_lock    = PTHREAD_MUTEX_INITIALIZER;
+static int             g_counter = 0;
+
+static void *worker(void *arg)
+{
+    pthread_mutex_lock(&g_lock);
+    ++g_counter;
+    pthread_mutex_unlock(&g_lock);
+    return arg;
+}
+
+static void main_entry(void *arg)
+{
+    pthread_t th;
+
+    pthread_create(&th, NULL, worker, NULL);
+    pthread_join(th, NULL);
+}
+
+int main(void)
+{
+    stk_kernel_t *k = stk_kernel_create(0);        /* core 0, kernel type includes KERNEL_DYNAMIC | KERNEL_SYNC */
+    stk_kernel_init(k, STK_PERIODICITY_DEFAULT);   /* 1 ms tick */
+    stk_pthread_bind_kernel(k);                    /* once, before the first pthread_create() */
+
+    stk_task_t *t = stk_task_create_user(main_entry, NULL, g_main_stack, MAIN_STACK_WORDS);
+    stk_kernel_add_task(k, t);
+
+    stk_kernel_start(k);
+    STK_C_ASSERT(false);                           /* should not reach here */
+}
+```
+
+See [interop/pthread](https://github.com/SuperTinyKernel-RTOS/stk/tree/main/interop/pthread) for the source code and the documentation in `stk_c_pthread.h` for the full API reference, return codes and limitations.
 
 ---
 

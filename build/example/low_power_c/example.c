@@ -529,11 +529,11 @@ void RunExample(void)
 
     /* --- Sync objects ------------------------------------------------------- */
     /* EventFlags: start with RED task's flag set so it runs first. */
-    g_TaskFlags = stk_ef_create(&s_TaskFlagsMem, sizeof(s_TaskFlagsMem), FLAG_RED);
+    g_TaskFlags = stk_ef_create(&s_TaskFlagsMem, FLAG_RED);
 
     /* Pipe for AdcSample structs, capacity 8. */
-    g_AdcPipe = stk_pipe_create(&s_AdcPipeMem, sizeof(s_AdcPipeMem),
-                                s_AdcPipeBuf,  sizeof(s_AdcPipeBuf),
+    g_AdcPipe = stk_pipe_create(&s_AdcPipeMem,
+                                s_AdcPipeBuf, sizeof(s_AdcPipeBuf),
                                 8, sizeof(AdcSample));
 
     /* --- LED task contexts -------------------------------------------------- */
