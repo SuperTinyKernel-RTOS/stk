@@ -42,7 +42,7 @@
 
 #include "tusb_config.h"
 
-#define CFG_TUH_OSAL_STK_VERSION (0x20260801)
+#define CFG_TUH_OSAL_STK_VERSION (0x20261004)
 
 #ifndef CFG_TUH_OSAL_STK_USE_CPP
 #define CFG_TUH_OSAL_STK_USE_CPP (0)
@@ -307,7 +307,7 @@ static inline osal_semaphore_t osal_semaphore_create(osal_semaphore_def_t *semde
 {
   /* Always constructed at count 0 (not-yet-signaled), matching every other OSAL backend here.
    * max_count 0 means "use STK's default maximum" (65534) - see stk_sem_create() in stk_c.h. */
-  semdef->hdl = stk_sem_create(&semdef->mem, (uint32_t)sizeof(semdef->mem), 0U, 0U);
+  semdef->hdl = stk_sem_create(&semdef->mem, 0U, 0U);
   return ((semdef->hdl != NULL) ? semdef : NULL);
 }
 
@@ -344,7 +344,7 @@ static inline void osal_semaphore_reset(osal_semaphore_t sem_hdl)
 
 static inline osal_mutex_t osal_mutex_create(osal_mutex_def_t *mdef)
 {
-  mdef->hdl = stk_mutex_create(&mdef->mem, (uint32_t)sizeof(mdef->mem));
+  mdef->hdl = stk_mutex_create(&mdef->mem);
   return ((mdef->hdl != NULL) ? mdef : NULL);
 }
 
@@ -371,7 +371,7 @@ static inline bool osal_mutex_unlock(osal_mutex_t mutex_hdl)
 
 static inline osal_queue_t osal_queue_create(osal_queue_def_t *qdef)
 {
-  qdef->hdl = stk_msgq_create(&qdef->mem, (uint32_t)sizeof(qdef->mem),
+  qdef->hdl = stk_msgq_create(&qdef->mem,
                               (uint8_t *)qdef->buf, (uint32_t)(qdef->depth * qdef->item_sz),
                               (size_t)qdef->depth, (size_t)qdef->item_sz);
 

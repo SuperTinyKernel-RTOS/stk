@@ -54,6 +54,8 @@ namespace sync {
 class Mutex final : private SyncObjectBase, public IMutex, public ITraceable
 {
 public:
+    static const uint16_t RECURSION_MAX = 0xFFFEU; //!< maximum nesting depth
+
     /*! \brief     Constructor.
     */
     explicit Mutex() : m_owner_tid(TID_NONE), m_recursion_count(0U)
@@ -98,10 +100,19 @@ public:
     */
     TId GetOwner() const { return m_owner_tid; }
 
+    /*! \brief     Get current recursion depth.
+        \note      Reads the counter without a critical section. The value is only
+                   stable for the caller if the caller is the owner (nobody else
+                   modifies the counter while the lock is held); for a non-owner it
+                   is a snapshot that may be stale immediately.
+        \warning   ISR-safe.
+        \return    0 if the mutex is free, otherwise the number of nested Lock() calls
+                   made by the owner (1..RECURSION_MAX).
+    */
+    uint16_t GetRecursionCount() const { return m_recursion_count; }
+
 private:
     STK_NONCOPYABLE_CLASS(Mutex);
-
-    static const uint16_t RECURSION_MAX = 0xFFFEU; //!< maximum nesting depth
 
     TId      m_owner_tid;       //!< thread id of the current owner
     uint16_t m_recursion_count; //!< recursion depth

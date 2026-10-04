@@ -70,16 +70,22 @@ struct stk_blockpool_t
 // Static pool of stk_blockpool_t slots
 // -----------------------------------------------------------------------------
 
+// Raw storage for one stk_blockpool_t, sized and aligned for the type.
+struct BlockPoolMem
+{
+    alignas(stk_blockpool_t) Word data[StkGetWordCountForType<stk_blockpool_t>()];
+};
+
 static struct BlockPoolSlot
 {
     BlockPoolSlot() : busy(false)
     {}
 
-    stk_blockpool_t       *pool()       { return reinterpret_cast<stk_blockpool_t *>(reinterpret_cast<void *>(storage)); }
-    const stk_blockpool_t *pool() const { return reinterpret_cast<const stk_blockpool_t *>(reinterpret_cast<const void *>(storage)); }
+    stk_blockpool_t       *pool()       { return reinterpret_cast<stk_blockpool_t *>(reinterpret_cast<void *>(mem.data)); }
+    const stk_blockpool_t *pool() const { return reinterpret_cast<const stk_blockpool_t *>(reinterpret_cast<const void *>(mem.data)); }
 
-    Word storage[StkGetWordCountForType<stk_blockpool_t>()];
-    bool busy;
+    BlockPoolMem mem;
+    bool         busy;
 }
 s_BlockPools[STK_C_BLOCKPOOL_MAX];
 
@@ -149,7 +155,7 @@ stk_blockpool_t *stk_blockpool_create(size_t capacity, size_t raw_block_size, co
     stk_blockpool_t *result = nullptr;
     if (slot != nullptr)
     {
-        result = new (slot->storage) stk_blockpool_t(capacity, raw_block_size, name);
+        result = ConstructIn<stk_blockpool_t>(slot->mem, capacity, raw_block_size, name);
     }
 
     return result;
@@ -176,8 +182,8 @@ stk_blockpool_t *stk_blockpool_create_static(size_t      capacity,
     stk_blockpool_t *result = nullptr;
     if (slot != nullptr)
     {
-        result = new (slot->storage) stk_blockpool_t(capacity, raw_block_size,
-                                                     storage_ptr, storage_size, name);
+        result = ConstructIn<stk_blockpool_t>(slot->mem, capacity, raw_block_size,
+                                              storage_ptr, storage_size, name);
     }
 
     return result;

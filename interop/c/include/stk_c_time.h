@@ -277,7 +277,7 @@ uint32_t stk_timer_get_remaining_ticks(const stk_timer_t *tmr);
     Typical usage:
     \code
     static stk_periodic_trigger_mem_t mem;
-    stk_periodic_trigger_t *trig = stk_periodic_trigger_create(&mem, sizeof(mem), 500, true);
+    stk_periodic_trigger_t *trig = stk_periodic_trigger_create(&mem, 500, true);
 
     // Inside a task loop:
     if (stk_periodic_trigger_poll(trig))
@@ -290,13 +290,14 @@ uint32_t stk_timer_get_remaining_ticks(const stk_timer_t *tmr);
 
 /*! \brief  A memory size (multiples of stk_word_t) required for PeriodicTrigger instance.
 */
-#define STK_PERIODIC_TRIGGER_IMPL_SIZE (16U)
+#define STK_PERIODIC_TRIGGER_IMPL_SIZE (4U)
 
 /*! \brief  Opaque memory container for a \a stk_periodic_trigger_t instance.
     \note   Declare as \c static or on the stack (not on the heap).
+    \note   Aligned to 8 bytes due to PeriodicTrigger using 64-bit Ticks type.
 */
 typedef struct stk_periodic_trigger_mem_t {
-    stk_word_t data[STK_PERIODIC_TRIGGER_IMPL_SIZE];
+    stk_word_t data[STK_PERIODIC_TRIGGER_IMPL_SIZE] __attribute__((aligned(8U)));
 } stk_periodic_trigger_mem_t;
 
 /*! \brief  Opaque handle to a \a stk::time::PeriodicTrigger instance.
@@ -305,16 +306,13 @@ typedef struct stk_periodic_trigger_t stk_periodic_trigger_t;
 
 /*! \brief     Construct PeriodicTrigger instance in the supplied memory buffer.
     \param[in] membuf: Pointer to the caller-supplied memory container.
-    \param[in] membuf_size: Size of the container in bytes (must be >= sizeof(stk_periodic_trigger_mem_t)).
     \param[in] period_ticks: Trigger period in ticks. Must be > 0.
     \param[in] started: \c true to create the instance in a started state (first firing occurs
                no earlier than \a period ticks after construction); \c false to create it in a
                stopped state (call \a stk_periodic_trigger_restart() before polling).
-    \return    Trigger handle on success, or \c NULL if \a membuf is \c NULL
-               or \a memory_size is too small.
+    \return    Trigger handle on success, or \c NULL if \a membuf is \c NULL.
 */
 stk_periodic_trigger_t *stk_periodic_trigger_create(stk_periodic_trigger_mem_t *const membuf,
-                                                    uint32_t                    membuf_size,
                                                     uint32_t                    period_ticks,
                                                     bool                        started);
 

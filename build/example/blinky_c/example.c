@@ -57,7 +57,7 @@ void TaskFunc(void *arg)
         }
 
         // sleep 1s and delegate work to the next task
-        stk_sleep_ms(1000);
+        stk_sleep_ms(250);
 
         // hand off to the next task
         stk_ef_set(g_TaskFlags, a->next_flag);
@@ -77,7 +77,7 @@ void RunExample()
     }
 
     // create EventFlags with the RED task's flag pre-set so it runs first
-    g_TaskFlags = stk_ef_create(&g_TaskFlagsMem, sizeof(g_TaskFlagsMem), FLAGS_ALL[LED_RED]);
+    g_TaskFlags = stk_ef_create(&g_TaskFlagsMem, FLAGS_ALL[LED_RED]);
     STK_C_ASSERT(g_TaskFlags != NULL);
 
     // allocate scheduling kernel (KERNEL_SYNC required for EventFlags)
