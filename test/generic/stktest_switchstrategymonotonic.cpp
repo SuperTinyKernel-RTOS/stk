@@ -254,5 +254,21 @@ TEST(SwitchStrategyMonotonic, SchedulableWCRT)
     CHECK_EQUAL(85, result.info[2].cpu_load.total);
 }
 
+TEST(SwitchStrategyMonotonic, YieldNotSupported)
+{
+    Kernel<KERNEL_DYNAMIC | KERNEL_HRT, 1, SwitchStrategyRM, PlatformTestMock> kernel;
+    TaskMock<ACCESS_USER> task;
+    ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
+
+    kernel.Initialize();
+    kernel.AddTask(&task, 2, 2, 0);
+
+    IKernelTask *k1 = strategy->GetNext();
+    CHECK_EQUAL(&task, k1->GetUserTask());
+
+    // not handled for any of the tasks (not supported by this strategy)
+    CHECK_FALSE(strategy->OnTaskYield(k1));
+}
+
 } // namespace stk
 } // namespace test

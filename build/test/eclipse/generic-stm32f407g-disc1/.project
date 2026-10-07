@@ -126,6 +126,11 @@
 			<locationURI>virtual:/virtual</locationURI>
 		</link>
 		<link>
+			<name>deps/stk/include/memory</name>
+			<type>2</type>
+			<locationURI>virtual:/virtual</locationURI>
+		</link>
+		<link>
 			<name>deps/stk/include/stk.h</name>
 			<type>1</type>
 			<locationURI>PARENT-4-PROJECT_LOC/stk/include/stk.h</locationURI>
@@ -162,6 +167,11 @@
 		</link>
 		<link>
 			<name>deps/stk/include/sync</name>
+			<type>2</type>
+			<locationURI>virtual:/virtual</locationURI>
+		</link>
+		<link>
+			<name>deps/stk/include/time</name>
 			<type>2</type>
 			<locationURI>virtual:/virtual</locationURI>
 		</link>
@@ -266,9 +276,24 @@
 			<locationURI>PARENT-4-PROJECT_LOC/test/generic/stktest_misc.cpp</locationURI>
 		</link>
 		<link>
+			<name>src/test/generic/stktest_switchstrategyedf.cpp</name>
+			<type>1</type>
+			<locationURI>PARENT-4-PROJECT_LOC/test/generic/stktest_switchstrategyedf.cpp</locationURI>
+		</link>
+		<link>
+			<name>src/test/generic/stktest_switchstrategyfpriority.cpp</name>
+			<type>1</type>
+			<locationURI>PARENT-4-PROJECT_LOC/test/generic/stktest_switchstrategyfpriority.cpp</locationURI>
+		</link>
+		<link>
 			<name>src/test/generic/stktest_switchstrategymonotonic.cpp</name>
 			<type>1</type>
 			<locationURI>PARENT-4-PROJECT_LOC/test/generic/stktest_switchstrategymonotonic.cpp</locationURI>
+		</link>
+		<link>
+			<name>src/test/generic/stktest_switchstrategypthreshold.cpp</name>
+			<type>1</type>
+			<locationURI>PARENT-4-PROJECT_LOC/test/generic/stktest_switchstrategypthreshold.cpp</locationURI>
 		</link>
 		<link>
 			<name>src/test/generic/stktest_switchstrategyroundrobin.cpp</name>
@@ -711,9 +736,49 @@
 			<locationURI>virtual:/virtual</locationURI>
 		</link>
 		<link>
+			<name>deps/stk/include/memory/README.md</name>
+			<type>1</type>
+			<locationURI>PARENT-4-PROJECT_LOC/stk/include/memory/README.md</locationURI>
+		</link>
+		<link>
+			<name>deps/stk/include/memory/stk_memory.h</name>
+			<type>1</type>
+			<locationURI>PARENT-4-PROJECT_LOC/stk/include/memory/stk_memory.h</locationURI>
+		</link>
+		<link>
+			<name>deps/stk/include/memory/stk_memory_allocator.h</name>
+			<type>1</type>
+			<locationURI>PARENT-4-PROJECT_LOC/stk/include/memory/stk_memory_allocator.h</locationURI>
+		</link>
+		<link>
+			<name>deps/stk/include/memory/stk_memory_blockpool.h</name>
+			<type>1</type>
+			<locationURI>PARENT-4-PROJECT_LOC/stk/include/memory/stk_memory_blockpool.h</locationURI>
+		</link>
+		<link>
+			<name>deps/stk/include/strategy/README.md</name>
+			<type>1</type>
+			<locationURI>PARENT-4-PROJECT_LOC/stk/include/strategy/README.md</locationURI>
+		</link>
+		<link>
+			<name>deps/stk/include/strategy/stk_strategy_edf.h</name>
+			<type>1</type>
+			<locationURI>PARENT-4-PROJECT_LOC/stk/include/strategy/stk_strategy_edf.h</locationURI>
+		</link>
+		<link>
+			<name>deps/stk/include/strategy/stk_strategy_fpriority.h</name>
+			<type>1</type>
+			<locationURI>PARENT-4-PROJECT_LOC/stk/include/strategy/stk_strategy_fpriority.h</locationURI>
+		</link>
+		<link>
 			<name>deps/stk/include/strategy/stk_strategy_monotonic.h</name>
 			<type>1</type>
 			<locationURI>PARENT-4-PROJECT_LOC/stk/include/strategy/stk_strategy_monotonic.h</locationURI>
+		</link>
+		<link>
+			<name>deps/stk/include/strategy/stk_strategy_pthreshold.h</name>
+			<type>1</type>
+			<locationURI>PARENT-4-PROJECT_LOC/stk/include/strategy/stk_strategy_pthreshold.h</locationURI>
 		</link>
 		<link>
 			<name>deps/stk/include/strategy/stk_strategy_rrobin.h</name>
@@ -726,9 +791,19 @@
 			<locationURI>PARENT-4-PROJECT_LOC/stk/include/strategy/stk_strategy_swrrobin.h</locationURI>
 		</link>
 		<link>
+			<name>deps/stk/include/sync/README.md</name>
+			<type>1</type>
+			<locationURI>PARENT-4-PROJECT_LOC/stk/include/sync/README.md</locationURI>
+		</link>
+		<link>
 			<name>deps/stk/include/sync/stk_sync.h</name>
 			<type>1</type>
 			<locationURI>PARENT-4-PROJECT_LOC/stk/include/sync/stk_sync.h</locationURI>
+		</link>
+		<link>
+			<name>deps/stk/include/sync/stk_sync_barrier.h</name>
+			<type>1</type>
+			<locationURI>PARENT-4-PROJECT_LOC/stk/include/sync/stk_sync_barrier.h</locationURI>
 		</link>
 		<link>
 			<name>deps/stk/include/sync/stk_sync_cs.h</name>
@@ -746,6 +821,21 @@
 			<locationURI>PARENT-4-PROJECT_LOC/stk/include/sync/stk_sync_event.h</locationURI>
 		</link>
 		<link>
+			<name>deps/stk/include/sync/stk_sync_eventflags.h</name>
+			<type>1</type>
+			<locationURI>PARENT-4-PROJECT_LOC/stk/include/sync/stk_sync_eventflags.h</locationURI>
+		</link>
+		<link>
+			<name>deps/stk/include/sync/stk_sync_fastmutex.h</name>
+			<type>1</type>
+			<locationURI>PARENT-4-PROJECT_LOC/stk/include/sync/stk_sync_fastmutex.h</locationURI>
+		</link>
+		<link>
+			<name>deps/stk/include/sync/stk_sync_msgqueue.h</name>
+			<type>1</type>
+			<locationURI>PARENT-4-PROJECT_LOC/stk/include/sync/stk_sync_msgqueue.h</locationURI>
+		</link>
+		<link>
 			<name>deps/stk/include/sync/stk_sync_mutex.h</name>
 			<type>1</type>
 			<locationURI>PARENT-4-PROJECT_LOC/stk/include/sync/stk_sync_mutex.h</locationURI>
@@ -756,9 +846,39 @@
 			<locationURI>PARENT-4-PROJECT_LOC/stk/include/sync/stk_sync_pipe.h</locationURI>
 		</link>
 		<link>
+			<name>deps/stk/include/sync/stk_sync_rwmutex.h</name>
+			<type>1</type>
+			<locationURI>PARENT-4-PROJECT_LOC/stk/include/sync/stk_sync_rwmutex.h</locationURI>
+		</link>
+		<link>
 			<name>deps/stk/include/sync/stk_sync_semaphore.h</name>
 			<type>1</type>
 			<locationURI>PARENT-4-PROJECT_LOC/stk/include/sync/stk_sync_semaphore.h</locationURI>
+		</link>
+		<link>
+			<name>deps/stk/include/sync/stk_sync_spinlock.h</name>
+			<type>1</type>
+			<locationURI>PARENT-4-PROJECT_LOC/stk/include/sync/stk_sync_spinlock.h</locationURI>
+		</link>
+		<link>
+			<name>deps/stk/include/time/README.md</name>
+			<type>1</type>
+			<locationURI>PARENT-4-PROJECT_LOC/stk/include/time/README.md</locationURI>
+		</link>
+		<link>
+			<name>deps/stk/include/time/stk_time.h</name>
+			<type>1</type>
+			<locationURI>PARENT-4-PROJECT_LOC/stk/include/time/stk_time.h</locationURI>
+		</link>
+		<link>
+			<name>deps/stk/include/time/stk_time_timer.h</name>
+			<type>1</type>
+			<locationURI>PARENT-4-PROJECT_LOC/stk/include/time/stk_time_timer.h</locationURI>
+		</link>
+		<link>
+			<name>deps/stk/include/time/stk_time_util.h</name>
+			<type>1</type>
+			<locationURI>PARENT-4-PROJECT_LOC/stk/include/time/stk_time_util.h</locationURI>
 		</link>
 		<link>
 			<name>deps/stk/src/arch/arm</name>

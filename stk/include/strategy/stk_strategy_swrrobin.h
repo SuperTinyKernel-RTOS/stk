@@ -12,14 +12,15 @@
 
 /*! \file  stk_strategy_swrrobin.h
     \brief Smooth Weighted Round-Robin task-switching strategy
-           (stk::SwitchStrategySmoothWeightedRoundRobin / stk::SwitchStrategySWRR).
+           (stk::SwitchStrategySmoothWeightedRoundRobin / stk::SwitchStrategySWRR, and the no-sleep-yield
+           variants stk::SwitchStrategySmoothWeightedRoundRobinNoSleepYield / stk::SwitchStrategySWRR_NSY).
 */
 
 #include "stk_common.h"
 
 namespace stk {
 
-/*! \class SwitchStrategySmoothWeightedRoundRobin
+/*! \class SwitchStrategySmoothWeightedRoundRobinT
     \brief Smooth Weighted Round-Robin (SWRR) task-switching strategy: distributes CPU time
            proportionally to per-task weights while avoiding execution bursts by spreading
            selections evenly over time.
@@ -44,10 +45,21 @@ namespace stk {
 
     Over time this produces fair, proportional CPU distribution without consecutive bursts.
 
+    \par No-sleep yield
+    When \c NoSleepYield is true, Yield() keeps the calling task runnable (it is NOT put to sleep).
+    OnTaskYield() remembers the yielding task and the next GetNext() excludes it from the selection
+    (one-shot). The yielding task still accrues its static weight in that step, so the proportional
+    accounting is preserved, but it cannot win the selection unless it is the only runnable task.
+    If \c NoSleepYield is false the kernel performs the legacy yield: the task sleeps for YIELD_TICKS.
+
     \par Wake-up priority boost
     When a sleeping task is woken (OnTaskWake()), its `current_weight` is set to
     `total_weight_sum` so it is selected on the very next tick. This prevents starvation
     of tasks that had been blocking on I/O or synchronization objects.
+
+    \tparam NoSleepYield: If true, Yield() keeps the task in the runnable set and the strategy skips
+                          the yielding task in the next selection (see OnTaskYield). If false, the kernel
+                          performs the legacy yield: the task sleeps for YIELD_TICKS.
 
     \note  Requires the Weight API (WEIGHT_API = 1): the kernel must provide `GetWeight()`,
            `GetCurrentWeight()`, and `SetCurrentWeight()` on each kernel task.
@@ -57,9 +69,9 @@ namespace stk {
     \note  GetNext() iterates over all runnable tasks — O(n) per tick. For large task counts
            the constant factor is small (integer arithmetic only), but this should be considered
            when sizing TASKS_MAX on severely constrained targets.
-    \see   SwitchStrategySWRR, ITaskSwitchStrategy, ITask::GetWeight, IKernelTask::GetWeight
+    \see   SwitchStrategySWRR, SwitchStrategySWRR_NSY, ITaskSwitchStrategy, ITask::GetWeight, IKernelTask::GetWeight
 */
-class SwitchStrategySmoothWeightedRoundRobin final : public ITaskSwitchStrategy
+template <bool NoSleepYield> class SwitchStrategySmoothWeightedRoundRobinT final : public ITaskSwitchStrategy
 {
 public:
     /*! \enum  EConfig
@@ -70,18 +82,19 @@ public:
         WEIGHT_API               = 1, //!< This strategy uses per-task static and dynamic weights; the kernel must expose the Weight API on each IKernelTask.
         SLEEP_EVENT_API          = 1, //!< This strategy requires OnTaskSleep() / OnTaskWake() events to keep \c m_total_weight accurate as tasks move between the runnable and sleeping sets.
         DEADLINE_MISSED_API      = 0, //!< This strategy does not use OnTaskDeadlineMissed() events.
-        PRIORITY_INHERITANCE_API = 0  //!< This strategy does not require Priority Inheritance and OnTaskPriorityChange() events.
+        PRIORITY_INHERITANCE_API = 0, //!< This strategy does not require Priority Inheritance and OnTaskPriorityChange() events.
+        NOSLEEP_YIELD_API        = NoSleepYield //!< (1) enables OnTaskYield(): yielding task stays runnable instead of sleeping.
     };
 
     /*! \brief Construct an empty strategy with no tasks and a zero total weight.
     */
-    explicit SwitchStrategySmoothWeightedRoundRobin() : m_tasks(), m_sleep(), m_total_weight(0)
+    explicit SwitchStrategySmoothWeightedRoundRobinT() : m_tasks(), m_sleep(), m_yielded(), m_total_weight(0)
     {}
 
     /*! \brief Destructor.
         \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
     */
-    STK_VIRT_DTOR ~SwitchStrategySmoothWeightedRoundRobin() = default;
+    STK_VIRT_DTOR ~SwitchStrategySmoothWeightedRoundRobinT() = default;
 
     /*! \brief     Add task to the runnable set.
         \param[in] task: Task to add. Must not be \c nullptr.
@@ -136,6 +149,9 @@ public:
                       (initial sentinel: `INT32_MIN` - never equals a valid weight).
                    -# Deduct the total runnable weight from the winner:
                       `selected->current_weight -= m_total_weight`.
+        \note      With \c NoSleepYield the task recorded by OnTaskYield() is excluded from step 2
+                   (one-shot, it still receives the step 1 increment). If it is the only runnable
+                   task it is selected anyway.
         \note      The assertion `selected != NULL` guards against a logic error where
                    \c m_tasks is non-empty but no task was picked (should never occur).
     */
@@ -145,24 +161,59 @@ public:
 
         if (!m_tasks.IsEmpty())
         {
-            IKernelTask *itr = (*m_tasks.GetFirst());
+            IKernelTask *skip = nullptr;
+
+            if __stk_constexpr_cpp17 (NoSleepYield)
+            {
+                skip         = m_yielded[0]; // one-shot: excluded from this selection only
+                m_yielded[0] = nullptr;
+            }
+            else
+            {
+                STK_UNUSED(skip);
+            }
+
+            IKernelTask *itr         = (*m_tasks.GetFirst());
             IKernelTask *const start = itr;
-            int32_t max_weight = INT32_MIN;
+            int32_t max_weight       = INT32_MIN;
 
             do
             {
                 const int32_t candidate_weight = itr->GetCurrentWeight() + itr->GetWeight();
-                itr->SetCurrentWeight(candidate_weight);
+                itr->SetCurrentWeight(candidate_weight); // yielding task still accrues weight
 
-                if (candidate_weight > max_weight)
+                if __stk_constexpr_cpp17 (NoSleepYield)
                 {
-                    max_weight = candidate_weight;
-                    next = itr;
+                    if ((itr != skip) && (candidate_weight > max_weight))
+                    {
+                        max_weight = candidate_weight;
+                        next = itr;
+                    }
                 }
-                
+                else
+                {
+                    if (candidate_weight > max_weight)
+                    {
+                        max_weight = candidate_weight;
+                        next = itr;
+                    }
+                }
+
                 itr = (*itr->GetNext());
             }
             while (itr != start);
+
+            if __stk_constexpr_cpp17 (NoSleepYield)
+            {
+                // yielding task is the only runnable task: nobody to hand over to
+                if (next == nullptr)
+                {
+                    STK_ASSERT(skip != nullptr);
+
+                    next       = skip;
+                    max_weight = skip->GetCurrentWeight();
+                }
+            }
 
             STK_ASSERT(next != nullptr);
 
@@ -236,8 +287,40 @@ public:
         AddActive(task);
     }
 
+    /*! \brief     Notification that the running task called Yield() (non-HRT kernel modes only).
+        \param[in] task: Pointer to the yielding task, currently in the runnable set.
+        \return    \c true if the strategy handled the yield itself: the task stays runnable (it is
+                   NOT put to sleep) and the following GetNext() will not select it (unless it is
+                   the only runnable task); \c false if the kernel shall perform the legacy yield,
+                   i.e. sleep the task for YIELD_TICKS.
+        \note      The exclusion is one-shot and is dropped if the task leaves the runnable set
+                   before the next GetNext() (see RemoveActive()).
+    */
+    bool OnTaskYield(IKernelTask *task) override
+    {
+        if __stk_constexpr_cpp17 (NoSleepYield)
+        {
+            STK_ASSERT(task != nullptr);
+
+            bool handled = false;
+
+            if (task->GetHead() == &m_tasks)
+            {
+                m_yielded[0] = task; // excluded from the next selection only
+                handled      = true;
+            }
+
+            return handled;
+        }
+        else
+        {
+            STK_UNUSED(task);
+            return false;
+        }
+    }
+
 private:
-    STK_NONCOPYABLE_CLASS(SwitchStrategySmoothWeightedRoundRobin);
+    STK_NONCOPYABLE_CLASS(SwitchStrategySmoothWeightedRoundRobinT);
 
     /*! \brief     Append task to \c m_tasks and update the total weight.
         \param[in] task: Task to make runnable.
@@ -255,23 +338,52 @@ private:
         \note      Decrements \c m_total_weight by the task's static weight so that the
                    post-selection deduction in GetNext() and the wake-up boost in
                    OnTaskWake() remain proportionally correct for the remaining tasks.
+                   With \c NoSleepYield also drops a pending yield exclusion of this task.
     */
     void RemoveActive(IKernelTask *task)
     {
+        if __stk_constexpr_cpp17 (NoSleepYield)
+        {
+            // do not leave a dangling pointer to a task that is leaving the runnable set
+            if (m_yielded[0] == task)
+            {
+                m_yielded[0] = nullptr;
+            }
+        }
+
         m_tasks.Unlink(task);
         m_total_weight -= task->GetWeight();
     }
 
     IKernelTask::ListHeadType m_tasks;        //!< Runnable tasks eligible for scheduling.
     IKernelTask::ListHeadType m_sleep;        //!< Sleeping (blocked) tasks not eligible for scheduling.
+    IKernelTask              *m_yielded[STK_ALLOCATE_COUNT<NoSleepYield, 1U, 1U, 0U>::Value]; //!< Task that just yielded, skipped by the next GetNext() only. Zero-size without NoSleepYield on GCC/Clang, one entry on MSVC/IAR.
     int32_t                   m_total_weight; //!< Sum of static weights (GetWeight()) of all tasks currently in \c m_tasks. Sleeping tasks are excluded. Updated on every AddActive() / RemoveActive() call. Used as the post-selection deduction amount in GetNext() and as the wake-up boost value in OnTaskWake().
 };
 
+/*! \typedef SwitchStrategySmoothWeightedRoundRobin
+    \brief   Shorthand alias for SwitchStrategySmoothWeightedRoundRobinT<false>.
+    \see     SwitchStrategySmoothWeightedRoundRobinT
+*/
+typedef SwitchStrategySmoothWeightedRoundRobinT<false> SwitchStrategySmoothWeightedRoundRobin;
+
 /*! \typedef SwitchStrategySWRR
     \brief   Shorthand alias for SwitchStrategySmoothWeightedRoundRobin.
-    \see     SwitchStrategySmoothWeightedRoundRobin
+    \see     SwitchStrategySmoothWeightedRoundRobinT
 */
-typedef SwitchStrategySmoothWeightedRoundRobin SwitchStrategySWRR;
+typedef SwitchStrategySmoothWeightedRoundRobinT<false> SwitchStrategySWRR;
+
+/*! \typedef SwitchStrategySmoothWeightedRoundRobinNoSleepYield
+    \brief   Smooth Weighted Round-Robin strategy where Yield() keeps the task runnable (NOSLEEP_YIELD_API = 1).
+    \see     SwitchStrategySmoothWeightedRoundRobinT
+*/
+typedef SwitchStrategySmoothWeightedRoundRobinT<true> SwitchStrategySmoothWeightedRoundRobinNoSleepYield;
+
+/*! \typedef SwitchStrategySWRR_NSY
+    \brief   Shorthand for SwitchStrategySmoothWeightedRoundRobinNoSleepYield.
+    \see     SwitchStrategySmoothWeightedRoundRobinNoSleepYield
+*/
+typedef SwitchStrategySmoothWeightedRoundRobinT<true> SwitchStrategySWRR_NSY;
 
 } // namespace stk
 

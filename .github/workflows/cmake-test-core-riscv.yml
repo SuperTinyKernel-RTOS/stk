@@ -51,6 +51,18 @@ jobs:
             elf: test-sleep.elf
             dir: sleep
 
+          - name: Yield
+            cmake_flag: TEST_YIELD=ON
+            cmake_flags: -DSTK_YIELD_TEST_NATIVE=0
+            elf: test-yield.elf
+            dir: yield
+            
+          - name: Yield-NonSleep
+            cmake_flag: TEST_YIELD=ON
+            cmake_flags: -DSTK_YIELD_TEST_NATIVE=1
+            elf: test-yield.elf
+            dir: yield
+
           - name: Switch
             cmake_flag: TEST_SWITCH=ON
             elf: test-switch.elf
@@ -101,6 +113,7 @@ jobs:
         cmake -G "Unix Makefiles"
         -B ${{github.workspace}}/build
         -DCMAKE_TOOLCHAIN_FILE=build/cmake/toolchain/riscv-none-elf-gcc.cmake
+        ${{matrix.test.cmake_flags}}
         ${{matrix.board.cmake_flags}}
         -DENABLE_LTO=ON
         -DENABLE_SMALL=ON

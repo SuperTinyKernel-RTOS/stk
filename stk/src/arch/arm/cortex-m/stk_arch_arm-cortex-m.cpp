@@ -30,7 +30,7 @@ using namespace stk;
 
 //! Do sanity check for a compiler define, __CORTEX_M must be defined.
 #ifndef __CORTEX_M
-#error Expecting __CORTEX_M with value corresponding to Cortex-M model (0, 3, 4, ...)!
+#error Expecting __CORTEX_M with value corresponding to Cortex-M model (0, 3, 4, 7, 33, ...)!
 #endif
 
 //! Driver expects at least SysTick presence.
