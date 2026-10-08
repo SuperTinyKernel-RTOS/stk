@@ -402,6 +402,14 @@ public:
         (void)sobj;
     }
 
+    Weight SetWeight(TId tid, Weight weight) override
+    {
+        (void)tid;
+        (void)weight;
+
+        return weight;
+    }
+
     bool     m_inc_ticks;
     bool     m_switch_to_next;
     int64_t  m_ticks;

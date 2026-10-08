@@ -32,14 +32,17 @@ namespace stk {
     This strategy is only meaningful when used with \c KERNEL_HRT mode. In HRT mode the
     kernel tracks \c duration (active ticks elapsed) per task, making
     \c GetHrtRelativeDeadline() produce meaningful, monotonically decreasing values.
-    Outside HRT mode \c GetHrtRelativeDeadline() returns 0 for every task, making
-    selection order arbitrary.
+    Outside HRT mode \c GetHrtRelativeDeadline() returns 0 for every task, so every
+    comparison ties and the first runnable task in \c m_tasks always wins: the other
+    tasks do not run until it sleeps.
 
     \par Tie-breaking
     When two or more tasks share the same relative deadline the first such task encountered
-    during the linear scan of \c m_tasks wins. Insertion order therefore determines tie
-    priority. This behaviour is implementation-defined and not guaranteed to remain stable
-    across kernel versions.
+    during the linear scan of \c m_tasks wins, i.e. the one nearest the list head. List order
+    therefore determines tie priority: tasks keep the order in which they were added, except
+    that a task which sleeps and wakes is re-appended at the back (see OnTaskWake()). This
+    behaviour is implementation-defined and not guaranteed to remain stable across kernel
+    versions.
 
     \par Complexity
     GetNext() performs an O(n) linear scan over all runnable tasks on every call (once per
@@ -50,6 +53,8 @@ namespace stk {
     \note  This strategy does not use per-task weights (WEIGHT_API = 0). The EDF deadline
            is tracked internally by the kernel in \c KERNEL_HRT mode, tasks do not need to
            override \c ITask::GetWeight().
+    \note  NOSLEEP_YIELD_API = 0 by design: in HRT mode Yield() signals completion of the job and
+           the task then sleeps until its next period, the strategy does not handle Yield() itself.
     \note  Requires the kernel Sleep API (SLEEP_EVENT_API = 1): the kernel must call
            OnTaskSleep() and OnTaskWake() to maintain the runnable/sleeping list split.
     \note  Unlike SwitchStrategyRoundRobin and SwitchStrategyFixedPriority, EDF maintains
@@ -68,7 +73,8 @@ public:
         WEIGHT_API               = 0, //!< This strategy does not use per-task weights. Deadline tracking is handled by the kernel in KERNEL_HRT mode via GetHrtRelativeDeadline().
         SLEEP_EVENT_API          = 1, //!< This strategy requires OnTaskSleep() / OnTaskWake() events to move tasks between the runnable and sleeping lists.
         DEADLINE_MISSED_API      = 0, //!< This strategy does not use OnTaskDeadlineMissed() events.
-        PRIORITY_INHERITANCE_API = 0  //!< This strategy does not require Priority Inheritance and OnTaskPriorityChange() events.
+        PRIORITY_INHERITANCE_API = 0, //!< This strategy does not require Priority Inheritance and OnTaskPriorityChange() events.
+        NOSLEEP_YIELD_API        = 0  //!< This strategy does not handle Yield() itself (OnTaskYield() is not used); the kernel puts the yielding task to sleep for a tick.
     };
 
     /*! \brief Construct an empty strategy with no tasks.
@@ -86,8 +92,9 @@ public:
         \note      The task is appended to the back of \c m_tasks. Unlike RR and FP strategies,
                    no cursor or bitmap state is updated here — all scheduling decisions are
                    deferred to GetNext(), which scans \c m_tasks at selection time.
-        \note      Insertion order determines tie-breaking: when two tasks share the same relative
-                   deadline, the one added earlier (closer to the list head) wins.
+        \note      List order determines tie-breaking: when two tasks share the same relative
+                   deadline, the one closer to the list head (added earlier, unless it has
+                   since slept and woken, see OnTaskWake()) wins.
     */
     void AddTask(IKernelTask *task) override
     {
@@ -124,14 +131,13 @@ public:
                    \c NULL if \c m_tasks is empty (no runnable tasks — kernel will sleep).
         \note      <b>Algorithm (O(n) linear scan over runnable tasks):</b>
                    -# If \c m_tasks is empty, return \c NULL immediately.
-                   -# Initialize \c earliest to the first task in \c m_tasks (acts as the
-                      initial minimum sentinel — avoids the need for a special INT32_MAX guard).
-                   -# Iterate the remaining tasks; replace \c earliest whenever a task has a
+                   -# Initialize \c next to the first task in \c m_tasks and cache its relative
+                      deadline as the initial minimum (avoids the need for a special INT32_MAX guard).
+                   -# Iterate the remaining tasks; replace \c next whenever a task has a
                       strictly smaller \c GetHrtRelativeDeadline() value.
-                   -# Return \c earliest.
+                   -# Return \c next.
         \note      Tie-breaking: if two tasks share the same relative deadline the one closer
-                   to the head of \c m_tasks (i.e. added earlier) is returned. This is
-                   consistent with AddTask() insertion order.
+                   to the head of \c m_tasks is returned (see the class documentation).
         \note      This method is called once per kernel tick. On an n-task system it
                    performs n−1 comparisons and n \c GetHrtRelativeDeadline() calls per tick.
     */
@@ -141,21 +147,25 @@ public:
 
         if (!m_tasks.IsEmpty())
         {
-            IKernelTask *itr = (*m_tasks.GetFirst());
-            IKernelTask *const start = itr;
-            
-            next = itr; // initialize earliest found task to the first one
+            IKernelTask *const start = (*m_tasks.GetFirst());
 
-            do
+            next = start; // initialize earliest found task to the first one
+
+            Timeout earliest = next->GetHrtRelativeDeadline();
+            IKernelTask *itr = (*start->GetNext());
+
+            while (itr != start)
             {
-                if (itr->GetHrtRelativeDeadline() < next->GetHrtRelativeDeadline())
+                const Timeout deadline = itr->GetHrtRelativeDeadline();
+
+                if (deadline < earliest)
                 {
-                    next = itr;
+                    earliest = deadline;
+                    next     = itr;
                 }
-                  
+
                 itr = (*itr->GetNext());
             }
-            while (itr != start);
         }
 
         return next;

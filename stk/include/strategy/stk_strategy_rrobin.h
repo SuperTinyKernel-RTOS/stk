@@ -11,7 +11,8 @@
 #define STK_STRATEGY_RROBIN_H_
 
 /*! \file  stk_strategy_rrobin.h
-    \brief Round-Robin task-switching strategy (stk::SwitchStrategyRoundRobin / stk::SwitchStrategyRR).
+    \brief Round-Robin task-switching strategy (stk::SwitchStrategyRoundRobin / stk::SwitchStrategyRR, and the
+           no-sleep-yield variants stk::SwitchStrategyRoundRobinNoSleepYield / stk::SwitchStrategyRR_NSY).
 */
 
 #include "stk_common.h"
@@ -31,14 +32,18 @@ namespace stk {
     at the end (closed-loop list). When \c m_tasks is empty, GetNext() returns \c nullptr
     and the kernel transitions to the sleep trap.
 
+    \tparam NoSleepYield: If true, Yield() keeps the task in the runnable set and the strategy
+                          rotates the cursor (see OnTaskYield). If false, the kernel performs the
+                          legacy yield: the task sleeps for YIELD_TICKS.
+
     \note  All runnable tasks receive equal CPU time regardless of creation order or any
            other factor. There is no priority or weight mechanism in this strategy
            (WEIGHT_API = 0).
     \note  Requires the kernel Sleep API (SLEEP_EVENT_API = 1): the kernel must call
            OnTaskSleep() and OnTaskWake() when a task's sleep state changes.
-    \see   SwitchStrategyRR, ITaskSwitchStrategy
+    \see   SwitchStrategyRR, SwitchStrategyRR_NSY, ITaskSwitchStrategy
 */
-class SwitchStrategyRoundRobin final : public ITaskSwitchStrategy
+template <bool NoSleepYield> class SwitchStrategyRoundRobinT final : public ITaskSwitchStrategy
 {
 public:
     /*! \enum  EConfig
@@ -49,18 +54,19 @@ public:
         WEIGHT_API               = 0, //!< This strategy does not use per-task weights; all tasks are treated equally.
         SLEEP_EVENT_API          = 1, //!< This strategy requires OnTaskSleep() / OnTaskWake() events to maintain the active/sleep list split.
         DEADLINE_MISSED_API      = 0, //!< This strategy does not use OnTaskDeadlineMissed() events.
-        PRIORITY_INHERITANCE_API = 0  //!< This strategy does not require Priority Inheritance and OnTaskPriorityChange() events.
+        PRIORITY_INHERITANCE_API = 0, //!< This strategy does not require Priority Inheritance and OnTaskPriorityChange() events.
+        NOSLEEP_YIELD_API        = NoSleepYield //!< (1) enables OnTaskYield(): yielding task stays runnable instead of sleeping.
     };
 
     /*! \brief Construct an empty strategy with no tasks and a null cursor.
     */
-    SwitchStrategyRoundRobin() : m_tasks(), m_sleep(), m_prev(nullptr)
+    SwitchStrategyRoundRobinT() : m_tasks(), m_sleep(), m_prev(nullptr)
     {}
 
     /*! \brief Destructor.
         \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
     */
-    STK_VIRT_DTOR ~SwitchStrategyRoundRobin() = default;
+    STK_VIRT_DTOR ~SwitchStrategyRoundRobinT() = default;
 
     /*! \brief     Add task to the runnable set.
         \param[in] task: Task to add. Must not be \c nullptr and must not already be in any list.
@@ -122,7 +128,7 @@ public:
 
         if (next != nullptr)
         {
-            next    = (*next->GetNext());
+            next   = (*next->GetNext());
             m_prev = next;
         }
 
@@ -138,7 +144,7 @@ public:
     IKernelTask *GetFirst() override
     {
         STK_ASSERT(GetSize() != 0U);
-        
+
         return (*(!m_tasks.IsEmpty() ? m_tasks.GetFirst() : m_sleep.GetFirst()));
     }
 
@@ -181,8 +187,38 @@ public:
         AddActive(task);
     }
 
+    /*! \brief     Notification that the running task called Yield() (non-HRT kernel modes only).
+        \param[in] task: Pointer to the yielding task, currently in the runnable set.
+        \return    \c true if the strategy handled the yield itself: the task stays runnable (it is
+                   NOT put to sleep) and the strategy must arrange for the following GetNext() to
+                   return another task according to its own policy; \c false (default) if the kernel
+                   shall perform the legacy yield, i.e. sleep the task for YIELD_TICKS.
+    */
+    bool OnTaskYield(IKernelTask *task) override
+    {
+        if __stk_constexpr_cpp17 (NoSleepYield)
+        {
+            STK_ASSERT(task != nullptr);
+
+            bool handled = false;
+
+            if (task->GetHead() == &m_tasks)
+            {
+                m_prev  = task; // GetNext() will return task's successor (or task itself if alone)
+                handled = true;
+            }
+
+            return handled;
+        }
+        else
+        {
+            STK_UNUSED(task);
+            return false;
+        }
+    }
+
 protected:
-    STK_NONCOPYABLE_CLASS(SwitchStrategyRoundRobin);
+    STK_NONCOPYABLE_CLASS(SwitchStrategyRoundRobinT);
 
     /*! \brief     Append a task to \c m_tasks and restore the cursor if necessary.
         \param[in] task: Task to make runnable.
@@ -204,13 +240,17 @@ protected:
 
     /*! \brief     Remove a task from \c m_tasks and update the cursor.
         \param[in] task: Runnable task to remove.
-        \note      Cursor update algorithm: the cursor must be repositioned so that the \e next
-                   call to GetNext() returns the task that would have followed the removed one.
+        \note      Cursor update algorithm: the cursor is repositioned only if it pointed at the
+                   removed task, so that the \e next call to GetNext() returns the task that would
+                   have followed the removed one. If the cursor points at another task it is left
+                   untouched, otherwise the rotation would be disturbed (e.g. the running task, or a
+                   task that has just yielded, would be selected again).
                    - Capture \c next = task->GetNext() (the successor in the closed-loop list)
                      \e before unlinking, while the list links are still valid.
-                   - After unlinking, if \c next != \c task (i.e. other tasks remain), set
-                     \c m_prev = next->GetPrev(). GetNext() will then advance from \c m_prev
-                     to \c next, preserving the round-robin sequence without skipping a task.
+                   - After unlinking, if \c next != \c task (i.e. other tasks remain) and the cursor
+                     was on the removed task, set \c m_prev = next->GetPrev(). GetNext() will then
+                     advance from \c m_prev to \c next, preserving the round-robin sequence without
+                     skipping a task.
                    - If \c next == \c task the removed task was the only element; set \c m_prev
                      to \c nullptr so GetNext() returns \c nullptr and the kernel sleeps.
     */
@@ -220,16 +260,20 @@ protected:
 
         m_tasks.Unlink(task);
 
-        // update pointer: set to previous task so that GetNext() could return next,
-        // if there are no tasks left GetNext() will return nullptr causing a sleep
+        // update pointer: if there are no tasks left GetNext() will return nullptr causing a sleep
         // state for the kernel
-        if (next != task)
+        if (next == task)
         {
+            m_prev = nullptr;
+        }
+        else if (m_prev == task)
+        {
+            // cursor was on the removed task: step back so that GetNext() returns its successor
             m_prev = (*next->GetPrev());
         }
         else
         {
-            m_prev = nullptr;
+            // cursor is on another task: leave the rotation untouched
         }
     }
 
@@ -238,11 +282,29 @@ protected:
     IKernelTask              *m_prev;  //!< Iterator cursor: the most recently scheduled task, or \c nullptr when no runnable tasks exist. GetNext() advances from this position.
 };
 
+/*! \typedef SwitchStrategyRoundRobin
+    \brief   Shorthand alias for SwitchStrategyRoundRobinT<>.
+    \see     SwitchStrategyRoundRobinT
+*/
+typedef SwitchStrategyRoundRobinT<false> SwitchStrategyRoundRobin;
+
 /*! \typedef SwitchStrategyRR
     \brief   Shorthand alias for SwitchStrategyRoundRobin.
-    \see     SwitchStrategyRoundRobin
+    \see     SwitchStrategyRoundRobinT
 */
-typedef SwitchStrategyRoundRobin SwitchStrategyRR;
+typedef SwitchStrategyRoundRobinT<false> SwitchStrategyRR;
+
+/*! \typedef SwitchStrategyRoundRobinNoSleepYield
+    \brief   Round-Robin strategy where Yield() keeps the task runnable (NOSLEEP_YIELD_API = 1).
+    \see     SwitchStrategyRoundRobinT
+*/
+typedef SwitchStrategyRoundRobinT<true> SwitchStrategyRoundRobinNoSleepYield;
+
+/*! \typedef SwitchStrategyRR_NSY
+    \brief   Shorthand for SwitchStrategyRoundRobinNoSleepYield.
+    \see     SwitchStrategyRoundRobinNoSleepYield
+*/
+typedef SwitchStrategyRoundRobinT<true> SwitchStrategyRR_NSY;
 
 } // namespace stk
 

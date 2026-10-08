@@ -12,7 +12,8 @@
 
 /*! \file  stk_strategy_fpriority.h
     \brief Fixed-priority preemptive task-switching strategy with round-robin within each
-           priority level (stk::SwitchStrategyFixedPriority / stk::SwitchStrategyFP32).
+           priority level (stk::SwitchStrategyFixedPriority / stk::SwitchStrategyFP32, and the no-sleep-yield
+           variant stk::SwitchStrategyFP32_NSY).
 */
 
 #include "stk_common.h"
@@ -27,6 +28,10 @@ namespace stk {
                             (enforced by a compile-time assertion). Bit \c i of the 32-bit
                             \c m_ready_bitmap represents priority level \c i.
                             The concrete alias SwitchStrategyFP32 uses MAX_PRIORITIES = 32.
+    \tparam NoSleepYield    If true, Yield() keeps the task in the runnable set and hands the CPU
+                            to the next task at the \e same priority level (see OnTaskYield). If false
+                            (default), the kernel performs the legacy yield: the task sleeps for
+                            YIELD_TICKS, which also lets lower-priority tasks run during that tick.
 
     \par Priority assignment
     Each task's priority is read from \c ITask::GetWeight(), cast to \c uint8_t, and must
@@ -41,6 +46,12 @@ namespace stk {
       each), using a per-level cursor (\c m_prev[prio]).
     - Higher numeric value = higher priority. 0 is the lowest, MAX_PRIORITIES - 1 is highest.
 
+    \par No-sleep yield
+    When \c NoSleepYield is true, OnTaskYield() moves the yielding task's per-level cursor onto the
+    task itself, so the following GetNext() returns its successor at the same priority level. If the
+    task is alone at its level, it is selected again (no context switch): a yield never hands the
+    CPU to a lower priority level, unlike the legacy sleep-based yield.
+
     \par Priority detection — O(1) bitmap
     \c m_ready_bitmap is a 32-bit bitmask where bit \c i is set whenever priority level \c i
     has at least one runnable task. GetNext() and GetFirst() locate the highest set bit in
@@ -52,9 +63,9 @@ namespace stk {
            GetCurrentWeight) are \b not used by this strategy.
     \note  Requires the kernel Sleep API (SLEEP_EVENT_API = 1): OnTaskSleep() and OnTaskWake()
            maintain the per-priority runnable lists and keep \c m_ready_bitmap accurate.
-    \see   SwitchStrategyFP32, ITaskSwitchStrategy, ITask::GetWeight
+    \see   SwitchStrategyFP32, SwitchStrategyFP32_NSY, ITaskSwitchStrategy, ITask::GetWeight
 */
-template <uint8_t MAX_PRIORITIES>
+template <uint8_t MAX_PRIORITIES, bool NoSleepYield = false>
 class SwitchStrategyFixedPriority final : public ITaskSwitchStrategy
 {
 public:
@@ -66,7 +77,8 @@ public:
         WEIGHT_API               = 1, //!< This strategy interprets GetWeight() as the task's fixed priority level (0 .. MAX_PRIORITIES - 1). Dynamic weight functions are not used.
         SLEEP_EVENT_API          = 1, //!< This strategy requires OnTaskSleep() / OnTaskWake() events to maintain per-priority runnable lists and keep \c m_ready_bitmap accurate.
         DEADLINE_MISSED_API      = 0, //!< This strategy does not use OnTaskDeadlineMissed() events.
-        PRIORITY_INHERITANCE_API = 1  //!< This strategy expects OnTaskPriorityChange() events to support priority inheritance requests.
+        PRIORITY_INHERITANCE_API = 1, //!< This strategy expects OnTaskPriorityChange() events to support priority inheritance requests.
+        NOSLEEP_YIELD_API        = NoSleepYield //!< (1) enables OnTaskYield(): yielding task stays runnable and hands the CPU to same-priority peers.
     };
 
     /*! \enum  EPriority
@@ -286,6 +298,41 @@ public:
         }
     }
 
+    /*! \brief     Notification that the running task called Yield() (non-HRT kernel modes only).
+        \param[in] task: Pointer to the yielding task, currently in the runnable set.
+        \return    \c true if the strategy handled the yield itself: the task stays runnable (it is
+                   NOT put to sleep) and the following GetNext() returns its successor at the same
+                   priority level, or the task itself if it is alone at its level (a yield never
+                   selects a lower priority level); \c false if the kernel shall perform the legacy
+                   yield, i.e. sleep the task for YIELD_TICKS.
+        \note      If a higher priority level became ready in the meantime it is selected as usual;
+                   the yielding task then only loses its place in its own level's rotation.
+        \note      Called from within a hw::CriticalSection.
+    */
+    bool OnTaskYield(IKernelTask *task) override
+    {
+        if __stk_constexpr_cpp17 (NoSleepYield)
+        {
+            STK_ASSERT(task != nullptr);
+
+            bool handled = false;
+            const Priority prio = GetTaskPriority(task);
+
+            if (task->GetHead() == &m_tasks[prio])
+            {
+                m_prev[prio] = task; // GetNext() will return task's successor at this level (or task itself if alone)
+                handled      = true;
+            }
+
+            return handled;
+        }
+        else
+        {
+            STK_UNUSED(task);
+            return false;
+        }
+    }
+
 protected:
     //! Priority type.
     typedef uint8_t Priority;
@@ -320,9 +367,11 @@ protected:
         \note      Cursor update algorithm (same as SwitchStrategyRoundRobin::RemoveActive, applied
                    per priority level):
                    - Capture \c next = task->GetNext() \e before unlinking.
-                   - If \c next != \c task (other tasks remain at this level): set
+                   - If \c next != \c task (other tasks remain at this level) and the cursor
+                     \c m_prev[prio] pointed at the removed task: set
                      \c m_prev[prio] = next->GetPrev() so GetNext() returns \c next
-                     without skipping it.
+                     without skipping it. If the cursor pointed at another task it is left
+                     untouched so that the rotation is not disturbed.
                    - If \c next == \c task (last task at this level): set \c m_prev[prio] = NULL
                      and clear bit \c prio in \c m_ready_bitmap. GetNext() will then select the
                      next highest set bit, falling through to a lower priority level.
@@ -334,16 +383,21 @@ protected:
         m_tasks[prio].Unlink(task);
 
         // update pointer
-        if (next != task)
-        {
-            m_prev[prio] = (*next->GetPrev());
-        }
-        else
+        if (next == task)
         {
             m_prev[prio] = nullptr;
 
             // this will cause a switch to a lower priority task list
             m_ready_bitmap &= ~(1U << prio);
+        }
+        else if (m_prev[prio] == task)
+        {
+            // cursor was on the removed task: step back so that GetNext() returns its successor
+            m_prev[prio] = (*next->GetPrev());
+        }
+        else
+        {
+            // cursor is on another task: leave the rotation untouched
         }
     }
 
@@ -394,6 +448,13 @@ private:
     \see     SwitchStrategyFixedPriority
 */
 typedef SwitchStrategyFixedPriority<32> SwitchStrategyFP32;
+
+/*! \typedef SwitchStrategyFP32_NSY
+    \brief   Shorthand alias for SwitchStrategyFixedPriority<32, true>: same as SwitchStrategyFP32 but
+             Yield() keeps the task runnable and hands the CPU to same-priority peers only (NOSLEEP_YIELD_API = 1).
+    \see     SwitchStrategyFixedPriority
+*/
+typedef SwitchStrategyFixedPriority<32, true> SwitchStrategyFP32_NSY;
 
 } // namespace stk
 

@@ -51,6 +51,12 @@ namespace stk
         void Resume(Timeout elapsed_ticks) override { (void)elapsed_ticks; }
         void InheritWeight(TId tid, Weight weight) override { (void)tid; (void)weight; }
         void RestoreWeight(TId tid, ISyncObject *sobj) override { (void)tid; (void)sobj; }
+        Weight SetWeight(TId tid, Weight weight) override
+        {
+            (void)tid;
+            (void)weight;
+            return weight;
+        }
     }
     s_KernelServiceMock;
 

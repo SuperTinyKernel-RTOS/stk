@@ -16,6 +16,7 @@
 #include "strategy/stk_strategy_monotonic.h"
 #include "strategy/stk_strategy_edf.h"
 #include "strategy/stk_strategy_fpriority.h"
+#include "strategy/stk_strategy_pthreshold.h"
 
 /*! \file  stk.h
     \brief Top-level STK include. Provides the Kernel class template and all built-in
@@ -30,6 +31,7 @@
      - stk_strategy_monotonic.h - SwitchStrategyMonotonic (SRT rate-monotonic).
      - stk_strategy_edf.h       - SwitchStrategyEdf (Earliest Deadline First).
      - stk_strategy_fpriority.h - SwitchStrategyFixedPriority.
+     - stk_strategy_pthreshold  - SwitchStrategyPreemptionThreshold (Fixed-priority preemptive with Preemption-Threshold).
 */
 
 namespace stk {
@@ -137,6 +139,7 @@ protected:
             STATE_SLEEP_PENDING  = (1U << 1), //!< Task called Sleep/SleepUntil/Yield; strategy's OnTaskSleep() will be invoked on the next tick (sleep-aware strategies only).
             STATE_WAKE_PENDING   = (1U << 2), //!< Task wake is pending (see Wake).
             STATE_SUSPENDED      = (1U << 3), //!< Task is suspended by SuspendTask.
+            STATE_YIELD_PENDING  = (1U << 4), //!< Task called Yield() and the strategy handled it via OnTaskYield() (task stays runnable); cleared by the context switch request or by the next tick, whichever comes first.
         };
 
     public:
@@ -157,7 +160,7 @@ protected:
                    KernelTask at construction so the wait object can wake its owning task.
         */
         explicit KernelTask() : m_user(nullptr), m_stack(), m_state(STATE_NONE), m_time_sleep(NO_WAIT),
-            m_srt(), m_hrt(), m_rt_weight()
+            m_srt(), m_hrt(), m_rt_weight(), m_base_weight(), m_wait_obj()
         {
             // bind to wait object
             if __stk_constexpr_cpp17 (IsSyncMode())
@@ -238,28 +241,52 @@ protected:
                 {
                     static_weight = m_rt_weight[0];
                 }
-                else                   
+                else
                 {
-                    if __stk_constexpr_cpp17 (TStrategy::WEIGHT_API)
-                    {
-                        static_weight = m_user->GetWeight();
-                    }
-                    else
-                    {
-                        static_weight = DEFAULT_WEIGHT;
-                    }
+                    static_weight = GetBaseWeight();
                 }
-            }
-            else if __stk_constexpr_cpp17 (TStrategy::WEIGHT_API)
-            {
-                static_weight = m_user->GetWeight();
             }
             else
             {
-                static_weight = DEFAULT_WEIGHT;
+                static_weight = GetBaseWeight();
             }
 
             return static_weight;
+        }
+
+        /*! \brief  Get base scheduling weight from the user task, ignoring priority inheritance.
+            \return ITask::GetWeight() if WEIGHT_API is true; DEFAULT_WEIGHT otherwise.
+        */
+        Weight GetBaseWeight() const override
+        {
+            Weight base_weight;
+
+            if __stk_constexpr_cpp17 (TStrategy::WEIGHT_API)
+            {
+                // run-time override set via IKernelService::SetWeight() takes precedence
+                base_weight = (m_base_weight[0] != NO_WEIGHT ? m_base_weight[0] : m_user->GetWeight());
+            }
+            else
+            {
+                base_weight = DEFAULT_WEIGHT;
+            }
+
+            return base_weight;
+        }
+
+        /*! \brief     Override the base weight at run-time (see IKernelService::SetWeight).
+            \param[in] weight: New base weight. Ignored unless TStrategy::WEIGHT_API is true.
+        */
+        void SetBaseWeight(Weight weight)
+        {
+            if __stk_constexpr_cpp17 (TStrategy::WEIGHT_API)
+            {
+                m_base_weight[0] = weight;
+            }
+            else
+            {
+                STK_UNUSED(weight);
+            }
         }
 
         /*! \brief  Get current (run-time) scheduling weight.
@@ -652,6 +679,12 @@ protected:
             {
                 SetCurrentWeight(NO_WEIGHT);
             }
+
+            // no run-time override of the base weight: ITask::GetWeight() is used
+            if __stk_constexpr_cpp17 (TStrategy::WEIGHT_API)
+            {
+                m_base_weight[0] = NO_WEIGHT;
+            }
         }
 
         /*! \brief Reset this slot to the free (unbound) state, clearing all scheduling metadata.
@@ -847,6 +880,33 @@ protected:
             __stk_full_memfence();
         }
 
+        /*! \brief  Mark the task as yielding (strategy handled Yield() without sleeping the task).
+        */
+        void ScheduleYield()
+        {
+            if __stk_constexpr_cpp17 (TStrategy::NOSLEEP_YIELD_API)
+            {
+                m_state |= STATE_YIELD_PENDING;
+
+                __stk_full_memfence();
+            }
+        }
+
+        /*! \brief  Request a context switch and wait until the kernel consumes the pending yield.
+        */
+        void BusyWaitWhileYielding(Kernel *kernel) const
+        {
+            if __stk_constexpr_cpp17 (TStrategy::NOSLEEP_YIELD_API)
+            {
+                kernel->m_platform.ForceContextSwitch(GetTid());
+
+                while ((m_state & STATE_YIELD_PENDING) != 0U)
+                {
+                    __stk_relax_cpu();
+                }
+            }
+        }
+
         /*! \brief  Block further execution of the task's context while in sleeping state.
         */
         void BusyWaitWhileSleeping(Kernel *kernel) const
@@ -868,10 +928,11 @@ protected:
         Stack             m_stack;      //!< Stack descriptor (SP register value + access mode + optional tid).
         volatile uint32_t m_state;      //!< Bitmask of EStateFlags. Written by task thread, read/cleared by kernel tick.
         volatile Timeout  m_time_sleep; //!< Sleep countdown: negative while sleeping (absolute value = ticks remaining), zero when awake.
-        SrtInfo           m_srt[STK_ALLOCATE_COUNT<TMode, KERNEL_HRT, 0U, 1U>::Value]; //!< SRT metadata. Zero-size (no memory) in KERNEL_HRT mode.
-        HrtInfo           m_hrt[STK_ALLOCATE_COUNT<TMode, KERNEL_HRT, 1U, 0U>::Value]; //!< HRT metadata. Zero-size (no memory) in non-HRT mode.
-        Weight            m_rt_weight[STK_ALLOCATE_COUNT<TStrategy::WEIGHT_API, 1U, 1U, 0U>::Value]; //!< Run-time weight for weighted-round-robin scheduling. Zero-size for unweighted strategies.
-        WaitObject        m_wait_obj[STK_ALLOCATE_COUNT<TMode, KERNEL_SYNC, 1U, 0U>::Value]; //!< Embedded wait object for synchronization. Zero-size (no memory) if KERNEL_SYNC is not set.
+        SrtInfo           m_srt        [STK_ALLOCATE_COUNT<TMode, KERNEL_HRT, 0U, 1U>::Value];         //!< SRT metadata. Zero-size (no memory) in KERNEL_HRT mode.
+        HrtInfo           m_hrt        [STK_ALLOCATE_COUNT<TMode, KERNEL_HRT, 1U, 0U>::Value];         //!< HRT metadata. Zero-size (no memory) in non-HRT mode.
+        Weight            m_rt_weight  [STK_ALLOCATE_COUNT<TStrategy::WEIGHT_API, 1U, 1U, 0U>::Value]; //!< Run-time weight for weighted-round-robin scheduling. Zero-size for unweighted strategies.
+        Weight            m_base_weight[STK_ALLOCATE_COUNT<TStrategy::WEIGHT_API, 1U, 1U, 0U>::Value]; //!< Run-time override of ITask::GetWeight() (NO_WEIGHT = not overridden). Zero-size for unweighted strategies.
+        WaitObject        m_wait_obj   [STK_ALLOCATE_COUNT<TMode, KERNEL_SYNC, 1U, 0U>::Value];        //!< Embedded wait object for synchronization. Zero-size (no memory) if KERNEL_SYNC is not set.
     };
 
     /*! \class KernelService
@@ -1028,6 +1089,24 @@ protected:
             if __stk_constexpr_cpp17 (TStrategy::WEIGHT_API && TStrategy::PRIORITY_INHERITANCE_API)
             {
                 m_kernel->OnRestoreWeight(tid, sobj);
+            }
+        }
+
+        Weight SetWeight(TId tid, Weight weight) override
+        {
+            if __stk_constexpr_cpp17 (TStrategy::WEIGHT_API && TStrategy::PRIORITY_INHERITANCE_API)
+            {
+                const hw::CriticalSection::ScopedLock cs_;
+
+                return m_kernel->OnSetWeight(tid, weight);
+            }
+            else
+            {
+                // strategy must handle OnTaskWeightChange() events
+                STK_UNUSED(tid);
+                STK_UNUSED(weight);
+                STK_ASSERT(false);
+                return NO_WEIGHT;
             }
         }
 
@@ -1664,6 +1743,15 @@ protected:
             m_service.SwitchToNext();
         }
 
+        // wait until request is consumed
+        if __stk_constexpr_cpp17 (TStrategy::NOSLEEP_YIELD_API)
+        {
+            while (caller->m_srt[0].add_task_req != nullptr)
+            {
+                __stk_relax_cpu();
+            }
+        }
+
         STK_ASSERT(caller->m_srt[0].add_task_req == nullptr);
     }
 
@@ -1902,16 +1990,34 @@ protected:
         bool switch_context = false;
         KernelTask *const task = m_task_now;
 
+        STK_ASSERT(task != nullptr);
+
         // note: called from inside ISR, therefore protection by critical section is not needed
 
-        // current task is busy-waiting to be de-scheduled
-        if ((task->GetTid() == id) && task->IsSleeping())
+        if (task->GetTid() == id)
         {
-            if ((task->m_state & KernelTask::STATE_SLEEP_PENDING) != 0U)
+            // current task is busy-waiting to be de-scheduled
+            if (task->IsSleeping())
             {
-                ProcessTaskPendingSleep(task);
+                if ((task->m_state & KernelTask::STATE_SLEEP_PENDING) != 0U)
+                {
+                    ProcessTaskPendingSleep(task);
 
-                switch_context = UpdateFsmState(idle, active);
+                    switch_context = UpdateFsmState(idle, active);
+                }
+            }
+            else
+            {
+                if __stk_constexpr_cpp17 (TStrategy::NOSLEEP_YIELD_API)
+                {
+                    // current task yielded and stays runnable: let the strategy pick the next task
+                    if ((task->m_state & KernelTask::STATE_YIELD_PENDING) != 0U)
+                    {
+                        ProcessTaskPendingYield(task);
+
+                        switch_context = UpdateFsmState(idle, active);
+                    }
+                }
             }
         }
 
@@ -1920,7 +2026,48 @@ protected:
 
     void OnTaskSwitch(Word caller_SP) override
     {
-        OnTaskSleep(caller_SP, YIELD_TICKS);
+        // let the strategy handle the yield without putting the task to sleep (e.g. to hand
+        // the CPU to same-priority peers only), not applicable in HRT mode where Yield()
+        // means work completion
+        if __stk_constexpr_cpp17 (TStrategy::NOSLEEP_YIELD_API && !IsHrtMode())
+        {
+            KernelTask *const task = FindTaskBySP(caller_SP);
+            STK_ASSERT(task != nullptr);
+
+            if (task != nullptr)
+            {
+                bool handled = false;
+                {
+                    const hw::CriticalSection::ScopedLock cs_;
+
+                    if (!task->IsSleeping())
+                    {
+                        if (m_strategy.OnTaskYield(task))
+                        {
+                            task->ScheduleYield();
+                            handled = true;
+                        }
+                    }
+                }
+
+                if (handled)
+                {
+                    task->BusyWaitWhileYielding(this);
+                }
+                else
+                {
+                    OnTaskSleep(caller_SP, YIELD_TICKS);
+                }
+            }
+            else
+            {
+                // defensive: do nothing on null task
+            }
+        }
+        else
+        {
+            OnTaskSleep(caller_SP, YIELD_TICKS);
+        }
     }
 
     void OnTaskSleep(Word caller_SP, Timeout ticks) override
@@ -2138,6 +2285,33 @@ protected:
         }
     }
 
+    Weight OnSetWeight(TId tid, Weight weight)
+    {
+        STK_ASSERT(tid != TID_NONE);
+        STK_ASSERT(TStrategy::WEIGHT_API && TStrategy::PRIORITY_INHERITANCE_API);
+        STK_ASSERT(weight != NO_WEIGHT);
+
+        KernelTask *const task = FindTaskByUserTask(GetUserTaskFromTid(tid));
+        STK_ASSERT(task != nullptr);
+
+        const Weight prev_weight = task->GetWeight();     // effective weight (base or inherited)
+        const Weight prev_base   = task->GetBaseWeight();
+
+        task->SetBaseWeight(weight);
+
+        // an inherited weight that does not exceed the new base weight is no longer a boost
+        if ((task->GetCurrentWeight() != NO_WEIGHT) && (task->GetCurrentWeight() <= weight))
+        {
+            task->SetCurrentWeight(NO_WEIGHT);
+        }
+
+        // always notify: the strategy may depend on parts of the weight that do not change
+        // the effective weight while a boost is active (e.g. preemption-threshold)
+        m_strategy.OnTaskWeightChange(task, prev_weight);
+
+        return prev_base;
+    }
+
     void OnRestoreWeight(TId tid, ISyncObject *sobj)
     {
         STK_ASSERT(tid != TID_NONE);
@@ -2183,6 +2357,11 @@ protected:
         }
     }
 
+    void ProcessTaskPendingYield(KernelTask *const task)
+    {
+        task->m_state &= ~KernelTask::STATE_YIELD_PENDING;
+    }
+
         
     /*! \brief     Update task state: process removals, deliver sleep/wake notifications, advance
                    sleep timers, and track HRT durations.
@@ -2221,6 +2400,15 @@ protected:
         for (size_t i = 0U; i < TASKS_MAX; ++i)
         {
             KernelTask *const task = &m_task_storage[i];
+
+            if __stk_constexpr_cpp17 (TStrategy::NOSLEEP_YIELD_API)
+            {
+                // a pending yield is consumed by this tick (the strategy already moved its cursor)
+                if ((task->m_state & KernelTask::STATE_YIELD_PENDING) != 0U)
+                {
+                    task->m_state &= ~KernelTask::STATE_YIELD_PENDING;
+                }
+            }
 
             if (task->IsSleeping())
             {

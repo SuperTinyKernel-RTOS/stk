@@ -62,19 +62,19 @@
  *  Remove osMutexPrioInherit to observe priority inversion (HighPrio blocks
  *  forever while MidPrio spins).
  * -------------------------------------------------------------------------*/
-osMutexId_t mutex_id;
+static osMutexId_t mutex_id;
 
 static const osMutexAttr_t mutex_attr = {
   "PrioInheritMutex",   /* human-readable name                    */
-  osMutexPrioInherit,   /* attr_bits – enables priority inherit.  */
+  osMutexPrioInherit,   /* attr_bits – enables priority inherit.  Note: STK supports priority inheritance unconditionally and ignores osMutexPrioInherit. */
   NULL,                 /* memory for control block (auto)        */
   0U                    /* size  for control block (auto)         */
 };
 
 /* Thread handles */
-osThreadId_t tid_high;
-osThreadId_t tid_mid;
-osThreadId_t tid_low;
+static osThreadId_t tid_high;
+static osThreadId_t tid_mid;
+static osThreadId_t tid_low;
 
 /*----------------------------------------------------------------------------
  *      LED helpers

@@ -517,12 +517,53 @@ static __stk_forceinline void SleepCancel(TId task_id)
 }
 
 /*! \brief     Notify scheduler to switch to the next runnable task.
-    \note      A cooperative scheduling mechanism. In HRT mode acts as a cooperation point (see stk::KERNEL_HRT).
+    \details   A cooperative scheduling mechanism: the calling task voluntarily gives up the remainder
+               of its time slice. Behavior depends on the kernel mode and the active strategy:
+               - Non-HRT modes, strategy with NOSLEEP_YIELD_API = 1 (e.g. stk::SwitchStrategyRR_NSY):
+                 the task stays in the runnable set (it is NOT put to sleep) and the strategy hands the CPU
+                 to the next task according to its own policy. If no other task is eligible, the call
+                 returns almost immediately.
+               - Non-HRT modes, strategy with NOSLEEP_YIELD_API = 0, or when the strategy declines
+                 the yield (e.g. the task is not in its runnable set): legacy yield, the task is put to sleep
+                 for one tick and is not scheduled during that tick, even if no other task is runnable.
+               - HRT mode (see stk::KERNEL_HRT): signals completion of the current job and acts as a
+                 cooperation point. The task sleeps until its next period; NOSLEEP_YIELD_API is ignored.
+    \note      Not the same as Sleep(0), which does not cause a yield.
+    \note      Task context only. The call blocks (busy-waits) until the kernel has switched the task out.
     \warning   ISR-unsafe. Calling from an ISR context is not permitted and will trigger an assertion.
+    \see       stk::ITaskSwitchStrategy::OnTaskYield, IKernelService::SwitchToNext
 */
 static __stk_forceinline void Yield()
 {
     IKernelService::GetInstance()->SwitchToNext();
+}
+
+/*! \brief     Change the base scheduling weight of a task at run-time.
+    \param[in] tid: Id of the task.
+    \param[in] weight: New base weight (must not be NO_WEIGHT, must be valid for the active strategy,
+               e.g. built with SwitchStrategyPreemptionThreshold::MakeWeight).
+    \return    Previous base weight (pass it back to restore).
+    \note      Requires a strategy with WEIGHT_API = 1 and PRIORITY_INHERITANCE_API = 1, asserts otherwise.
+    \note      Takes the kernel critical section internally. Intended for task context.
+    \see       IKernelService::SetWeight, SwitchStrategyPreemptionThreshold::ChangeThreshold
+*/
+static __stk_forceinline Weight SetWeight(TId tid, Weight weight)
+{
+    return IKernelService::GetInstance()->SetWeight(tid, weight);
+}
+
+/*! \brief     Change the base scheduling weight of the calling task at run-time.
+    \param[in] weight: New base weight, see SetWeight(TId, Weight).
+    \return    Previous base weight.
+    \note      Example (preemption-threshold, equivalent of ThreadX's tx_thread_preemption_change):
+               \code
+               const Weight old = stk::SetWeight(SwitchStrategyPT32::MakeWeight(prio, new_threshold));
+               \endcode
+    \warning   ISR-unsafe (resolves the calling task via GetTid()).
+*/
+static __stk_forceinline Weight SetWeight(Weight weight)
+{
+    return SetWeight(GetTid(), weight);
 }
 
 /*! \brief     Delay calling process by busy-waiting until the deadline expires.

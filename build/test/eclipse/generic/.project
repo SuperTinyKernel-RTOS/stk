@@ -196,6 +196,11 @@
 			<locationURI>PARENT-4-PROJECT_LOC/test/generic/stktest_switchstrategymonotonic.cpp</locationURI>
 		</link>
 		<link>
+			<name>src/test/generic/stktest_switchstrategypthreshold.cpp</name>
+			<type>1</type>
+			<locationURI>PARENT-4-PROJECT_LOC/test/generic/stktest_switchstrategypthreshold.cpp</locationURI>
+		</link>
+		<link>
 			<name>src/test/generic/stktest_switchstrategyroundrobin.cpp</name>
 			<type>1</type>
 			<locationURI>PARENT-4-PROJECT_LOC/test/generic/stktest_switchstrategyroundrobin.cpp</locationURI>
@@ -684,6 +689,11 @@
 			<name>deps/stk/include/strategy/stk_strategy_monotonic.h</name>
 			<type>1</type>
 			<locationURI>PARENT-4-PROJECT_LOC/stk/include/strategy/stk_strategy_monotonic.h</locationURI>
+		</link>
+		<link>
+			<name>deps/stk/include/strategy/stk_strategy_pthreshold.h</name>
+			<type>1</type>
+			<locationURI>PARENT-4-PROJECT_LOC/stk/include/strategy/stk_strategy_pthreshold.h</locationURI>
 		</link>
 		<link>
 			<name>deps/stk/include/strategy/stk_strategy_rrobin.h</name>

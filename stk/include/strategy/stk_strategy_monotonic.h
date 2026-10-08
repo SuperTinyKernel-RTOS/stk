@@ -7,8 +7,8 @@
  * License: MIT License, see LICENSE for a full text.
  */
 
-#ifndef STK_STRATEGY_RM_H_
-#define STK_STRATEGY_RM_H_
+#ifndef STK_STRATEGY_MONOTONIC_H_
+#define STK_STRATEGY_MONOTONIC_H_
 
 /*! \file  stk_strategy_monotonic.h
     \brief Rate-Monotonic (RM) and Deadline-Monotonic (DM) task-switching strategies
@@ -17,7 +17,6 @@
 */
 
 #include "stk_common.h"
-#include "stk_strategy_rrobin.h"
 
 namespace stk {
 
@@ -56,8 +55,10 @@ enum EMonotonicSwitchStrategyType
 
     \par HRT mode requirement
     This strategy reads GetHrtPeriodicity() and GetHrtDeadline() from each task during AddTask()
-    to determine its priority. These values are only populated in \c KERNEL_HRT mode; using this
-    strategy without \c KERNEL_HRT produces undefined priority ordering.
+    to determine its priority. These values are only populated in \c KERNEL_HRT mode; outside
+    \c KERNEL_HRT the accessors assert (debug builds) and return 0, so every sort key ties: the
+    list stays in registration order and the first non-sleeping task always wins, the other
+    tasks do not run.
 
     \note  Does not use per-task weights (WEIGHT_API = 0). Priority is derived entirely from HRT
            timing parameters set via \c IKernel::AddTask(periodicity_tc, deadline_tc, ...).
@@ -77,7 +78,8 @@ public:
         WEIGHT_API               = 0, //!< This strategy does not use per-task weights. Priority is derived from HRT timing parameters (GetHrtPeriodicity() for RM, GetHrtDeadline() for DM) at AddTask() time.
         SLEEP_EVENT_API          = 0, //!< This strategy does not use OnTaskSleep() / OnTaskWake() events. Sleeping tasks remain in \c m_tasks and are skipped by GetNext() via IKernelTask::IsSleeping(). Delivering these events will trigger an assertion.
         DEADLINE_MISSED_API      = 0, //!< This strategy does not use OnTaskDeadlineMissed() events.
-        PRIORITY_INHERITANCE_API = 0  //!< This strategy does not require Priority Inheritance and OnTaskPriorityChange() events.
+        PRIORITY_INHERITANCE_API = 0, //!< This strategy does not require Priority Inheritance and OnTaskPriorityChange() events.
+        NOSLEEP_YIELD_API        = 0  //!< This strategy does not handle Yield() itself (OnTaskYield() is not used); the kernel puts the yielding task to sleep for a tick.
     };
 
     /*! \brief Construct an empty strategy with no tasks.
@@ -100,7 +102,7 @@ public:
                    -# Empty list: insert at front (LinkFront).
                    -# New task has a strictly smaller key than the current head: insert at front
                       (LinkFront), becoming the new highest-priority task.
-                   -# Otherwise: scan forward until a task with a larger-or-equal key is found,
+                   -# Otherwise: scan forward until a task with a strictly larger key is found,
                       then insert immediately before it (Link), or append at back (LinkBack) if
                       the scan reaches the end of the list.
         \note      Tasks with equal keys are ordered by registration time: later-added tasks go
@@ -349,6 +351,9 @@ public:
                              order (index 0 = highest priority). For each task, \c period is
                              populated from GetHrtPeriodicity() and \c duration from GetHrtDeadline()
                              before invoking GetTaskCpuLoad() and CalculateWCRT().
+        \note                If the number of registered tasks differs from \a TTaskCount an assertion
+                             fires; with assertions disabled at most \a TTaskCount tasks are analysed
+                             and entries of the result beyond the analysed tasks are zero-initialised.
      */
     template <uint32_t TTaskCount>
     static inline SchedulabilityCheckResult<TTaskCount> IsSchedulableWCRT(const ITaskSwitchStrategy *strategy)
@@ -361,31 +366,34 @@ public:
         STK_ASSERT(ktasks != nullptr);
         STK_ASSERT(ktasks->GetSize() <= TTaskCount);
 
-        SchedulabilityCheckResult<TTaskCount> ret;
-        TaskTiming tasks[TTaskCount];
+        SchedulabilityCheckResult<TTaskCount> ret = {};
+        TaskTiming tasks[TTaskCount] = {};
 
-        // fill tasks timing
+        // fill tasks timing (bounded: never write past the array even if asserts are disabled)
         const IKernelTask *itr = (*ktasks->GetFirst()), * const start = itr;
         uint32_t idx = 0U;
         do
         {
             STK_ASSERT(idx < TTaskCount);
-            
-            tasks[idx].period   = static_cast<uint32_t>(itr->GetHrtPeriodicity());
-            tasks[idx].duration = static_cast<uint32_t>(itr->GetHrtDeadline());
-            ++idx;
-            
+
+            if (idx < TTaskCount)
+            {
+                tasks[idx].period   = static_cast<uint32_t>(itr->GetHrtPeriodicity());
+                tasks[idx].duration = static_cast<uint32_t>(itr->GetHrtDeadline());
+                ++idx;
+            }
+
             itr = (*itr->GetNext());
         }
         while (itr != start);
-        
+
         STK_ASSERT(idx == TTaskCount);
 
-        // calculate CPU load
-        GetTaskCpuLoad(tasks, TTaskCount, ret.info);
+        // calculate CPU load, only for the tasks actually read
+        GetTaskCpuLoad(tasks, idx, ret.info);
 
         // run the WCRT schedulability analysis
-        ret.schedulable = CalculateWCRT(tasks, TTaskCount, ret.info);
+        ret.schedulable = CalculateWCRT(tasks, idx, ret.info);
 
         return ret;
     }
@@ -474,8 +482,9 @@ public:
         \param[in]  count: Number of tasks in \a tasks.
         \param[out] info:  Array of TaskInfo of size \a count. \c info[i].cpu_load is populated on return.
         \note       Per-task load = floor(C / T * 100) = floor(duration * 100 / period),
-                    computed with integer arithmetic (truncating division). Cumulative load
-                    is the running sum from index 0 to \a count - 1.
+                    computed with integer arithmetic (truncating division). A task with a zero
+                    period is reported as 0 %. Cumulative load is the running sum from index 0
+                    to \a count - 1.
     */
     static inline void GetTaskCpuLoad(const TaskTiming tasks[], const uint32_t count, TaskInfo info[])
     {
@@ -483,7 +492,14 @@ public:
 
         for (uint32_t i = 0U; i < count; ++i)
         {
-            const uint16_t task_load = static_cast<uint16_t>(tasks[i].duration * 100U / tasks[i].period);
+            uint16_t task_load = 0U;
+
+            // guard against a zero period (e.g. HRT parameters not populated)
+            if (tasks[i].period != 0U)
+            {
+                task_load = static_cast<uint16_t>(tasks[i].duration * 100U / tasks[i].period);
+            }
+
             total += task_load;
 
             info[i].cpu_load.task  = task_load;
@@ -531,4 +547,4 @@ typedef SwitchStrategyMonotonic<MSS_TYPE_DEADLINE> SwitchStrategyDM;
 
 } // namespace stk
 
-#endif /* STK_STRATEGY_RM_H_ */
+#endif /* STK_STRATEGY_MONOTONIC_H_ */

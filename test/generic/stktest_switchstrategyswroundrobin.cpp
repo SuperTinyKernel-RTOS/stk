@@ -216,5 +216,298 @@ TEST(SwitchStrategySWRoundRobin, Algorithm)
     CHECK_TEXT(count2 > 0, "Task2 must run after removal");
 }
 
+// ============================================================================ //
+// =========================== OnTaskYield (SWRR) ============================= //
+// ============================================================================ //
+
+// SwitchStrategySWRR (NoSleepYield = false): OnTaskYield() must report "not handled" (false) so the
+// kernel falls back to the legacy sleep-based yield, and must not influence the selection.
+TEST(SwitchStrategySWRoundRobin, YieldLegacyReturnsFalse)
+{
+    Kernel<KERNEL_DYNAMIC, 3, SwitchStrategySWRR, PlatformTestMock> kernel;
+    TaskMockW<1, ACCESS_USER> task1, task2, task3;
+    ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
+
+    kernel.Initialize();
+    kernel.AddTask(&task1);
+    kernel.AddTask(&task2);
+    kernel.AddTask(&task3);
+
+    // equal weights: strict rotation task1 -> task2 -> task3
+    IKernelTask *k1 = strategy->GetNext();
+    IKernelTask *k2 = strategy->GetNext();
+    IKernelTask *k3 = strategy->GetNext();
+    CHECK_EQUAL(&task1, k1->GetUserTask());
+    CHECK_EQUAL(&task2, k2->GetUserTask());
+    CHECK_EQUAL(&task3, k3->GetUserTask());
+
+    CHECK_FALSE(strategy->OnTaskYield(k1));
+    CHECK_FALSE(strategy->OnTaskYield(k2));
+    CHECK_FALSE(strategy->OnTaskYield(k3));
+
+    // all tasks are still runnable and no task is excluded from the selection
+    CHECK_EQUAL(3, strategy->GetSize());
+    CHECK_EQUAL_TEXT(&task1, strategy->GetNext()->GetUserTask(), "legacy yield must not affect selection (task1)");
+    CHECK_EQUAL_TEXT(&task2, strategy->GetNext()->GetUserTask(), "legacy yield must not affect selection (task2)");
+    CHECK_EQUAL_TEXT(&task3, strategy->GetNext()->GetUserTask(), "legacy yield must not affect selection (task3)");
+}
+
+TEST(SwitchStrategySWRoundRobin, YieldLegacySingleTaskReturnsFalse)
+{
+    Kernel<KERNEL_DYNAMIC, 1, SwitchStrategySWRR, PlatformTestMock> kernel;
+    TaskMockW<1, ACCESS_USER> task1;
+    ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
+
+    kernel.Initialize();
+    kernel.AddTask(&task1);
+
+    IKernelTask *k1 = strategy->GetNext();
+
+    CHECK_FALSE(strategy->OnTaskYield(k1));
+    CHECK_EQUAL(&task1, strategy->GetNext()->GetUserTask());
+}
+
+// ============================================================================ //
+// ========================== OnTaskYield (SWRR_NSY) ========================== //
+// ============================================================================ //
+
+TEST(SwitchStrategySWRoundRobin, YieldNoSleepConfig)
+{
+    CHECK_EQUAL(0, SwitchStrategySWRR::NOSLEEP_YIELD_API);
+    CHECK_EQUAL(1, SwitchStrategySWRR_NSY::NOSLEEP_YIELD_API);
+}
+
+// Without yields SWRR_NSY behaves exactly like SWRR: equal weights give strict rotation.
+TEST(SwitchStrategySWRoundRobin, YieldNoSleepNoYieldBaseline)
+{
+    Kernel<KERNEL_DYNAMIC, 3, SwitchStrategySWRR_NSY, PlatformTestMock> kernel;
+    TaskMockW<1, ACCESS_USER> task1, task2, task3;
+    ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
+
+    kernel.Initialize();
+    kernel.AddTask(&task1);
+    kernel.AddTask(&task2);
+    kernel.AddTask(&task3);
+
+    for (int32_t i = 0; i < 3; i++)
+    {
+        CHECK_EQUAL_TEXT(&task1, strategy->GetNext()->GetUserTask(), "expecting task1");
+        CHECK_EQUAL_TEXT(&task2, strategy->GetNext()->GetUserTask(), "expecting task2");
+        CHECK_EQUAL_TEXT(&task3, strategy->GetNext()->GetUserTask(), "expecting task3");
+    }
+}
+
+// Yielding task, which would have been selected next, is skipped (one-shot) and stays runnable.
+TEST(SwitchStrategySWRoundRobin, YieldNoSleepSkipsYieldingTaskOnce)
+{
+    Kernel<KERNEL_DYNAMIC, 3, SwitchStrategySWRR_NSY, PlatformTestMock> kernel;
+    TaskMockW<1, ACCESS_USER> task1, task2, task3;
+    ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
+
+    kernel.Initialize();
+    kernel.AddTask(&task1);
+    kernel.AddTask(&task2);
+    kernel.AddTask(&task3);
+
+    IKernelTask *k1 = strategy->GetNext(); // task1 (current weights: -2, 1, 1)
+    CHECK_EQUAL(&task1, k1->GetUserTask());
+
+    // without a yield task2 would be next, but it is the one yielding
+    IKernelTask *k2 = strategy->GetFirst();
+    k2 = (*k2->GetNext()); // second task in the runnable list
+    CHECK_EQUAL(&task2, k2->GetUserTask());
+
+    CHECK_TRUE(strategy->OnTaskYield(k2));
+    CHECK_EQUAL_TEXT(&task3, strategy->GetNext()->GetUserTask(), "expecting task3 (task2 yielded)");
+
+    // exclusion is one-shot and task2 kept accruing weight: it is selected right away
+    CHECK_EQUAL_TEXT(&task2, strategy->GetNext()->GetUserTask(), "expecting task2 (yield exclusion is one-shot)");
+    CHECK_EQUAL_TEXT(&task1, strategy->GetNext()->GetUserTask(), "expecting task1");
+
+    // yielding task stays runnable
+    CHECK_EQUAL(3, strategy->GetSize());
+}
+
+// Weighted case: the heavy task that yields is skipped once even though it has the highest weight.
+TEST(SwitchStrategySWRoundRobin, YieldNoSleepHeavyTaskYields)
+{
+    Kernel<KERNEL_DYNAMIC, 2, SwitchStrategySWRR_NSY, PlatformTestMock> kernel;
+    TaskMockW<3, ACCESS_USER> task1; // heavy
+    TaskMockW<1, ACCESS_USER> task2; // light
+    ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
+
+    kernel.Initialize();
+    kernel.AddTask(&task1);
+    kernel.AddTask(&task2);
+
+    // reference SWRR sequence for weights 3:1 is task1, task1, task2, task1
+    IKernelTask *k1 = strategy->GetNext();
+    CHECK_EQUAL(&task1, k1->GetUserTask()); // current weights: -1, 1
+
+    // task1 would win again (current weight 2 vs 2 -> first), but it yields
+    CHECK_TRUE(strategy->OnTaskYield(k1));
+    CHECK_EQUAL_TEXT(&task2, strategy->GetNext()->GetUserTask(), "expecting task2 (heavy task1 yielded)");
+
+    // task1 retained the weight it accrued while yielding: it is selected next
+    CHECK_EQUAL_TEXT(&task1, strategy->GetNext()->GetUserTask(), "expecting task1 after the one-shot exclusion");
+}
+
+// Alone in the runnable list: yield is handled and the same task is selected anyway.
+TEST(SwitchStrategySWRoundRobin, YieldNoSleepSingleTask)
+{
+    Kernel<KERNEL_DYNAMIC, 1, SwitchStrategySWRR_NSY, PlatformTestMock> kernel;
+    TaskMockW<1, ACCESS_USER> task1;
+    ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
+
+    kernel.Initialize();
+    kernel.AddTask(&task1);
+
+    IKernelTask *k1 = strategy->GetNext();
+    CHECK_EQUAL(&task1, k1->GetUserTask());
+
+    for (int32_t i = 0; i < 5; i++)
+    {
+        CHECK_TRUE(strategy->OnTaskYield(k1));
+        CHECK_EQUAL_TEXT(&task1, strategy->GetNext()->GetUserTask(), "single task must be selected despite the yield");
+    }
+
+    CHECK_EQUAL(1, strategy->GetSize());
+}
+
+// Two equal tasks ping-pong via yield.
+TEST(SwitchStrategySWRoundRobin, YieldNoSleepPingPong)
+{
+    Kernel<KERNEL_DYNAMIC, 2, SwitchStrategySWRR_NSY, PlatformTestMock> kernel;
+    TaskMockW<1, ACCESS_USER> task1, task2;
+    ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
+
+    kernel.Initialize();
+    kernel.AddTask(&task1);
+    kernel.AddTask(&task2);
+
+    IKernelTask *k1 = strategy->GetNext(); // task1
+    CHECK_EQUAL(&task1, k1->GetUserTask());
+    IKernelTask *k2 = (*k1->GetNext());
+    CHECK_EQUAL(&task2, k2->GetUserTask());
+
+    for (int32_t i = 0; i < 4; i++)
+    {
+        CHECK_TRUE(strategy->OnTaskYield(k1));
+        CHECK_EQUAL_TEXT(&task2, strategy->GetNext()->GetUserTask(), "expecting task2 after task1 yielded");
+
+        CHECK_TRUE(strategy->OnTaskYield(k2));
+        CHECK_EQUAL_TEXT(&task1, strategy->GetNext()->GetUserTask(), "expecting task1 after task2 yielded");
+    }
+
+    CHECK_EQUAL(2, strategy->GetSize());
+}
+
+// A yielding task removed before the next GetNext() must not leave a stale exclusion behind.
+TEST(SwitchStrategySWRoundRobin, YieldNoSleepRemovedTaskDropsExclusion)
+{
+    Kernel<KERNEL_DYNAMIC, 3, SwitchStrategySWRR_NSY, PlatformTestMock> kernel;
+    TaskMockW<1, ACCESS_USER> task1, task2, task3;
+    ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
+
+    kernel.Initialize();
+    kernel.AddTask(&task1);
+    kernel.AddTask(&task2);
+    kernel.AddTask(&task3);
+
+    IKernelTask *k1 = strategy->GetNext(); // task1 (current weights: -2, 1, 1)
+    CHECK_EQUAL(&task1, k1->GetUserTask());
+
+    IKernelTask *k2 = (*k1->GetNext());
+    CHECK_EQUAL(&task2, k2->GetUserTask());
+
+    CHECK_TRUE(strategy->OnTaskYield(k2));
+    kernel.RemoveTask(&task2);
+    CHECK_EQUAL(2, strategy->GetSize());
+
+    // remaining tasks are scheduled normally and the removed task is never returned
+    for (int32_t i = 0; i < 6; i++)
+    {
+        IKernelTask *next = strategy->GetNext();
+        CHECK_TEXT(next != NULL, "expecting a runnable task");
+        CHECK_TEXT(next->GetUserTask() != &task2, "removed task must not be selected");
+    }
+}
+
+// Task that is not in the runnable list (sleeping) is not handled: kernel falls back to legacy yield.
+static struct SWRRYieldSleepingContext
+{
+    SWRRYieldSleepingContext()
+    {
+        Clear();
+    }
+
+    void Clear()
+    {
+        counter  = 0;
+        called   = false;
+        result   = true;
+        size     = 0;
+        platform = NULL;
+        strategy = NULL;
+    }
+
+    uint32_t             counter;
+    bool                 called;
+    bool                 result;
+    size_t               size;
+    PlatformTestMock    *platform;
+    ITaskSwitchStrategy *strategy;
+
+    void Process()
+    {
+        // Sleep() only marks the task as sleep-pending: the strategy receives OnTaskSleep() (task moves
+        // to its sleep list) on the entry tick. The 1st call happens before that tick, so the check
+        // is done on the 2nd call, when the task is already in the strategy's sleep list.
+        if (counter == 1)
+        {
+            // the only task is sleeping: runnable list is empty and GetFirst() returns it from the sleep list
+            IKernelTask *sleeping = strategy->GetFirst();
+
+            size   = strategy->GetSize();
+            result = strategy->OnTaskYield(sleeping);
+            called = true;
+        }
+
+        platform->ProcessTick();
+
+        ++counter;
+    }
+}
+g_SWRRYieldSleepingContext;
+
+static void SWRRYieldSleepingRelaxCpu()
+{
+    g_SWRRYieldSleepingContext.Process();
+}
+
+TEST(SwitchStrategySWRoundRobin, YieldNoSleepSleepingTaskNotHandled)
+{
+    Kernel<KERNEL_STATIC, 1, SwitchStrategySWRR_NSY, PlatformTestMock> kernel;
+    TaskMockW<1, ACCESS_USER> task1;
+    PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
+
+    kernel.Initialize();
+    kernel.AddTask(&task1);
+    kernel.Start();
+
+    g_RelaxCpuHandler = SWRRYieldSleepingRelaxCpu;
+    g_SWRRYieldSleepingContext.Clear();
+    g_SWRRYieldSleepingContext.platform = platform;
+    g_SWRRYieldSleepingContext.strategy = kernel.GetSwitchStrategy();
+
+    Sleep(2);
+
+    g_RelaxCpuHandler = NULL;
+
+    CHECK_TEXT(g_SWRRYieldSleepingContext.called, "expecting relax-cpu handler to be called while task sleeps");
+    CHECK_EQUAL(1, g_SWRRYieldSleepingContext.size);
+    CHECK_FALSE_TEXT(g_SWRRYieldSleepingContext.result, "sleeping task is not in runnable list: yield not handled");
+}
+
 } // namespace stk
 } // namespace test
