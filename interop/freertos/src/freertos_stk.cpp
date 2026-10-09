@@ -22,7 +22,7 @@
 // Wrapper version info
 // -----------------------------------------------------------------------------
 
-#define FREERTOS_STK_WRAPPER_VERSION   "FreeRTOS-STK Wrapper v1.0"
+#define FREERTOS_STK_WRAPPER_VERSION   "FreeRTOS-STK Wrapper v1.1"
 
 // -----------------------------------------------------------------------------
 // Kernel configuration
@@ -561,7 +561,11 @@ struct FrtosQueue
 // A single struct covers:
 //   - Binary semaphore     (max_count=1, initial_count=0)  SemKind::Counting (0x80)
 //   - Counting semaphore   (max_count=N, initial_count=K)  SemKind::Counting (0x80)
-//   - Mutex / Recursive    (uses stk::sync::Mutex)         SemKind::Mutex    (0x81)
+//   - Mutex                (uses stk::sync::FastMutex)     SemKind::Mutex    (0x81)
+//   - Recursive mutex      (uses stk::sync::Mutex)         SemKind::Mutex    (0x81)
+//
+// Both mutex flavours share SemKind::Mutex; the concrete STK primitive is hidden behind FrtosMutexBase
+// (see below), so that the vptr lives in the mutex object and byte[0] of FrtosSemaphore stays the SemKind.
 //
 // The first byte of every FrtosSemaphore is its SemKind discriminant.
 // Call GetSemKindFromHandle() to safely classify an opaque handle.
@@ -588,7 +592,7 @@ enum class SemKind : uint8_t
 {
     None     = 0x00U, //!< Sentinel: not a FrtosSemaphore (e.g. plain FrtosQueue).
     Counting = 0x80U, //!< Binary or counting semaphore (backed by stk::sync::Semaphore).
-    Mutex    = 0x81U, //!< Mutex or recursive mutex    (backed by stk::sync::Mutex).
+    Mutex    = 0x81U, //!< Mutex or recursive mutex    (backed by stk::sync::FastMutex or stk::sync::Mutex).
 };
 
 // Return the SemKind discriminant for the object at \a obj, or SemKind::None
@@ -610,9 +614,65 @@ static SemKind GetSemKindFromHandle(const void *obj)
     }
 }
 
+#if configUSE_MUTEXES
+
+// Common interface of FreeRTOS mutex flavours. FrtosSemaphore::m_mtx always points to it and virtual calls
+// dispatch to the concrete type. NOTE: polymorphism is intentionally kept out of FrtosSemaphore itself, its
+// byte[0] must remain the SemKind discriminant (see GetSemKindFromHandle()).
+struct FrtosMutexBase
+{
+    explicit FrtosMutexBase() {}
+    virtual ~FrtosMutexBase() {}
+
+    virtual bool     Take(stk::Timeout timeout) = 0;
+    virtual void     Give() = 0;
+    virtual stk::TId GetOwner() const = 0;
+    virtual bool     IsRecursive() const = 0;
+};
+
+// Recursive mutex: xSemaphoreCreateRecursiveMutex[Static]()
+struct FrtosRecursiveMutex final : FrtosMutexBase
+{
+    explicit FrtosRecursiveMutex() : FrtosMutexBase(), m_mutex() {}
+
+    bool     Take(stk::Timeout timeout) override { return m_mutex.TimedLock(timeout); }
+    void     Give() override                     { m_mutex.Unlock(); }
+    stk::TId GetOwner() const override           { return m_mutex.GetOwner(); }
+    bool     IsRecursive() const override        { return true; }
+
+    stk::sync::Mutex m_mutex;
+};
+
+// Non-recursive mutex: xSemaphoreCreateMutex[Static]()
+struct FrtosFastMutex final : FrtosMutexBase
+{
+    explicit FrtosFastMutex() : FrtosMutexBase(), m_mutex() {}
+
+    bool Take(stk::Timeout timeout) override
+    {
+        // FreeRTOS: a non-recursive mutex taken again by its holder can never succeed (the call blocks until
+        // the timeout expires). sync::FastMutex would panic with KERNEL_PANIC_SYNC_DEADLOCK instead, so
+        // the self-take is rejected here without waiting. Only the holder itself can observe itself as the
+        // owner, so the check does not need a critical section.
+        const stk::TId owner = m_mutex.GetOwner();
+        if ((owner != stk::TID_NONE) && (owner == stk::GetTid()))
+            return false;
+
+        return m_mutex.TimedLock(timeout);
+    }
+
+    void     Give() override                     { m_mutex.Unlock(); }
+    stk::TId GetOwner() const override           { return m_mutex.GetOwner(); }
+    bool     IsRecursive() const override        { return false; }
+
+    stk::sync::FastMutex m_mutex;
+};
+
+#endif // configUSE_MUTEXES
+
 struct FrtosSemaphore
 {
-    explicit FrtosSemaphore(SemKind kind, uint16_t initial, uint16_t max_count)
+    explicit FrtosSemaphore(SemKind kind, uint16_t initial, uint16_t max_count, bool recursive = false)
         : m_kind(kind), m_cb_owned(true),
           m_sem(nullptr)
 #if configUSE_MUTEXES
@@ -625,8 +685,10 @@ struct FrtosSemaphore
         if (kind == SemKind::Counting)
             m_sem = ObjAlloc<stk::sync::Semaphore>(initial, max_count);
 #if configUSE_MUTEXES
+        else if (recursive)
+            m_mtx = ObjAlloc<FrtosRecursiveMutex>();
         else
-            m_mtx = ObjAlloc<stk::sync::Mutex>();
+            m_mtx = ObjAlloc<FrtosFastMutex>();
 #endif
     }
 
@@ -634,7 +696,7 @@ struct FrtosSemaphore
     {
         ObjFreeRaw(m_sem);
 #if configUSE_MUTEXES
-        ObjFreeRaw(m_mtx);
+        ObjFreeRaw(m_mtx); // virtual destructor of FrtosMutexBase destroys the concrete mutex
 #endif
     }
 
@@ -643,7 +705,7 @@ struct FrtosSemaphore
     bool                  m_cb_owned;
     stk::sync::Semaphore *m_sem; // non-null for Counting kind
 #if configUSE_MUTEXES
-    stk::sync::Mutex     *m_mtx; // non-null for Mutex kind
+    FrtosMutexBase       *m_mtx; // non-null for Mutex kind
 #endif
 #if configUSE_QUEUE_SETS
     FrtosQueueSet        *m_set; //!< non-owning ptr to the queue set this member belongs to (nullptr if none)
@@ -1981,7 +2043,7 @@ BaseType_t xQueueIsQueueFullFromISR(const QueueHandle_t xQueue)
 //
 //   FrtosQueue      — wraps stk::sync::MessageQueue; no mutex, no owner.
 //   FrtosSemaphore  — wraps stk::sync::Semaphore (Counting) or
-//                     stk::sync::Mutex (Mutex kind).
+//                     stk::sync::FastMutex / stk::sync::Mutex (Mutex kind).
 //
 // Type discrimination:
 //   The first byte at the handle address is read via GetSemKindFromHandle(),
@@ -1995,11 +2057,11 @@ BaseType_t xQueueIsQueueFullFromISR(const QueueHandle_t xQueue)
 //   GetSemKindFromHandle() != SemKind::Mutex  -> FrtosQueue or other (no owner)
 //
 // If the handle is a FrtosSemaphore with SemKind::Mutex the call is forwarded
-// to xSemaphoreGetMutexHolder[FromISR]() which reads Mutex::GetOwner().
+// to xSemaphoreGetMutexHolder[FromISR]() which reads GetOwner() of the mutex.
 // For a plain FrtosQueue, or for a counting/binary semaphore, NULL is returned
 // because the owner concept does not apply to those object types.
 //
-// STK Mutex always supports priority inheritance; no additional bookkeeping is
+// STK mutexes (FastMutex and Mutex) always support priority inheritance; no additional bookkeeping is
 // required here — GetOwner() already reflects the current holder.
 // -----------------------------------------------------------------------------
 
@@ -2341,12 +2403,14 @@ SemaphoreHandle_t xSemaphoreCreateCountingStatic(UBaseType_t        uxMaxCount,
 
 #if configUSE_MUTEXES
 
-SemaphoreHandle_t xSemaphoreCreateMutex(void)
+// Create a heap-allocated mutex semaphore; recursive selects stk::sync::Mutex, otherwise stk::sync::FastMutex.
+static SemaphoreHandle_t CreateMutexInternal(bool recursive)
 {
     FrtosSemaphore *s = ObjAlloc<FrtosSemaphore>(
         SemKind::Mutex,
         static_cast<uint16_t>(0U),
-        static_cast<uint16_t>(1U));
+        static_cast<uint16_t>(1U),
+        recursive);
 
     if ((s == nullptr) || (s->m_mtx == nullptr))
     {
@@ -2357,7 +2421,8 @@ SemaphoreHandle_t xSemaphoreCreateMutex(void)
     return static_cast<SemaphoreHandle_t>(s);
 }
 
-SemaphoreHandle_t xSemaphoreCreateMutexStatic(StaticSemaphore_t *pxMutexBuffer)
+// Create a mutex semaphore with the control block placed in the caller-supplied buffer.
+static SemaphoreHandle_t CreateMutexStaticInternal(StaticSemaphore_t *pxMutexBuffer, bool recursive)
 {
     if (pxMutexBuffer == nullptr)
         return nullptr;
@@ -2369,7 +2434,8 @@ SemaphoreHandle_t xSemaphoreCreateMutexStatic(StaticSemaphore_t *pxMutexBuffer)
     FrtosSemaphore *s = new (pxMutexBuffer) FrtosSemaphore(
         SemKind::Mutex,
         static_cast<uint16_t>(0U),
-        static_cast<uint16_t>(1U));
+        static_cast<uint16_t>(1U),
+        recursive);
 
     if (s->m_mtx == nullptr)
     {
@@ -2381,16 +2447,28 @@ SemaphoreHandle_t xSemaphoreCreateMutexStatic(StaticSemaphore_t *pxMutexBuffer)
     return static_cast<SemaphoreHandle_t>(s);
 }
 
+SemaphoreHandle_t xSemaphoreCreateMutex(void)
+{
+    // Non-recursive: backed by stk::sync::FastMutex.
+    return CreateMutexInternal(false);
+}
+
+SemaphoreHandle_t xSemaphoreCreateMutexStatic(StaticSemaphore_t *pxMutexBuffer)
+{
+    // Non-recursive: backed by stk::sync::FastMutex.
+    return CreateMutexStaticInternal(pxMutexBuffer, false);
+}
+
 SemaphoreHandle_t xSemaphoreCreateRecursiveMutex(void)
 {
-    // STK Mutex is always recursive.
-    return xSemaphoreCreateMutex();
+    // Recursive: backed by stk::sync::Mutex.
+    return CreateMutexInternal(true);
 }
 
 SemaphoreHandle_t xSemaphoreCreateRecursiveMutexStatic(StaticSemaphore_t *pxMutexBuffer)
 {
-    // STK Mutex is always recursive; identical to xSemaphoreCreateMutexStatic.
-    return xSemaphoreCreateMutexStatic(pxMutexBuffer);
+    // Recursive: backed by stk::sync::Mutex.
+    return CreateMutexStaticInternal(pxMutexBuffer, true);
 }
 
 #endif // configUSE_MUTEXES
@@ -2417,7 +2495,7 @@ BaseType_t xSemaphoreTake(SemaphoreHandle_t xSemaphore, TickType_t xTicksToWait)
     if (s->m_kind == SemKind::Mutex)
     {
 #if configUSE_MUTEXES
-        return s->m_mtx->TimedLock(tmo) ? pdPASS : pdFAIL;
+        return s->m_mtx->Take(tmo) ? pdPASS : pdFAIL;
 #else
         return pdFAIL;
 #endif
@@ -2453,8 +2531,20 @@ BaseType_t xSemaphoreTakeFromISR(SemaphoreHandle_t xSemaphore,
 
 BaseType_t xSemaphoreTakeRecursive(SemaphoreHandle_t xMutex, TickType_t xTicksToWait)
 {
-    // STK Mutex is always recursive; identical to xSemaphoreTake.
+    if (xMutex == nullptr)
+        return pdFAIL;
+
+#if configUSE_MUTEXES
+    const FrtosSemaphore *s = static_cast<const FrtosSemaphore *>(xMutex);
+
+    // FreeRTOS API contract: only handles created by xSemaphoreCreateRecursiveMutex[Static]() are allowed.
+    if ((s->m_kind != SemKind::Mutex) || !s->m_mtx->IsRecursive())
+        return pdFAIL;
+
     return xSemaphoreTake(xMutex, xTicksToWait);
+#else
+    return pdFAIL;
+#endif
 }
 
 BaseType_t xSemaphoreGive(SemaphoreHandle_t xSemaphore)
@@ -2467,7 +2557,13 @@ BaseType_t xSemaphoreGive(SemaphoreHandle_t xSemaphore)
     if (s->m_kind == SemKind::Mutex)
     {
 #if configUSE_MUTEXES
-        s->m_mtx->Unlock();
+        // FreeRTOS: only the holder can give a mutex back (otherwise pdFAIL). The check is enforced in all
+        // build configurations, the kernel itself only asserts the ownership in debug builds.
+        const stk::TId owner = s->m_mtx->GetOwner();
+        if ((owner == stk::TID_NONE) || (owner != stk::GetTid()))
+            return pdFAIL;
+
+        s->m_mtx->Give();
         // Mutexes are not eligible for queue sets (FreeRTOS API contract),
         // so no QueueSetNotify call is needed here.
         return pdPASS;
@@ -2489,7 +2585,20 @@ BaseType_t xSemaphoreGive(SemaphoreHandle_t xSemaphore)
 
 BaseType_t xSemaphoreGiveRecursive(SemaphoreHandle_t xMutex)
 {
+    if (xMutex == nullptr)
+        return pdFAIL;
+
+#if configUSE_MUTEXES
+    const FrtosSemaphore *s = static_cast<const FrtosSemaphore *>(xMutex);
+
+    // FreeRTOS API contract: only handles created by xSemaphoreCreateRecursiveMutex[Static]() are allowed.
+    if ((s->m_kind != SemKind::Mutex) || !s->m_mtx->IsRecursive())
+        return pdFAIL;
+
     return xSemaphoreGive(xMutex);
+#else
+    return pdFAIL;
+#endif
 }
 
 BaseType_t xSemaphoreGiveFromISR(SemaphoreHandle_t xSemaphore,

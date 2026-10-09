@@ -66,13 +66,15 @@ stk/
 │   │   ├── stk_sync_cs.h         ← ScopedCriticalSection
 │   │   ├── stk_sync_cv.h         ← ConditionVariable
 │   │   ├── stk_sync_mutex.h      ← Mutex (recursive)
+│   │   ├── stk_sync_fastmutex.h  ← FastMutex (non-recursive)
 │   │   ├── stk_sync_spinlock.h   ← SpinLock (recursive)
 │   │   ├── stk_sync_rwmutex.h    ← RWMutex (reader-writer)
 │   │   ├── stk_sync_semaphore.h  ← Semaphore (counting)
 │   │   ├── stk_sync_event.h      ← Event (binary, auto/manual reset)
 │   │   ├── stk_sync_eventflags.h ← EventFlags (32-bit multi-flag)
 │   │   ├── stk_sync_pipe.h       ← Pipe<T, N> (typed FIFO)
-│   │   └── stk_sync_msgqueue.h   ← MessageQueue / MessageQueueT<N,MSG>
+│   │   ├── stk_sync_msgqueue.h   ← MessageQueue / MessageQueueT<N,MSG>
+│   │   └── stk_sync_barrier.h    ← Barrier (cyclic rendezvous)
 │   └── time/
 │       ├── stk_time.h            ← Umbrella: includes all time headers
 │       ├── stk_time_util.h       ← PeriodicTrigger
@@ -222,7 +224,7 @@ class MyTask : public stk::Task<256, Mode>
 
 **`StackMemoryWrapper<StackSize>`** — Adapter that wraps an externally-owned stack array (e.g. placed in a specific linker section) as an `IStackMemory` for passing to the kernel.
 
-**`SyncObjectBase`** — Default, storage-owning base implementation of `ISyncObject` used by all built-in `stk::sync` primitives (`Mutex`, `Event`, `Semaphore`, `ConditionVariable`, ...). Owns the intrusive wait list and provides the standard add/remove/wake bookkeeping; a synchronization object with a different storage strategy (e.g. a cross-domain TrustZone wrapper) may implement `ISyncObject` directly instead.
+**`SyncObjectBase`** — Default, storage-owning base implementation of `ISyncObject` used by all built-in `stk::sync` primitives (`Mutex`, `FastMutex`, `Event`, `Semaphore`, `ConditionVariable`, ...). Owns the intrusive wait list and provides the standard add/remove/wake bookkeeping; a synchronization object with a different storage strategy (e.g. a cross-domain TrustZone wrapper) may implement `ISyncObject` directly instead.
 
 **Free functions** (all delegate to `IKernelService::GetInstance()`):
 
@@ -471,6 +473,7 @@ Requires `KERNEL_SYNC` in the kernel mode bitmask for most primitives. `ScopedCr
 | `sync::ScopedCriticalSection` | `stk_sync_cs.h`         | RAII interrupt-disable critical section. Always available, ISR-safe                        |
 | `sync::ConditionVariable`     | `stk_sync_cv.h`         | Monitor-style wait/notify. Foundation for Pipe, MessageQueue, EventFlags, BlockMemoryPool  |
 | `sync::Mutex`                 | `stk_sync_mutex.h`      | Recursive mutex. `Lock`, `TryLock`, `TimedLock`, `Unlock`. FIFO direct handover on unlock  |
+| `sync::FastMutex`             | `stk_sync_fastmutex.h`  | Non-recursive (binary) mutex, smaller and faster than `Mutex`. Self-lock fails/asserts. FIFO handover |
 | `sync::SpinLock`              | `stk_sync_spinlock.h`   | Recursive spinlock for ultra-short sections. ISR-unsafe                                    |
 | `sync::RWMutex`               | `stk_sync_rwmutex.h`    | Non-recursive reader-writer lock with writer-preference policy. RAII guards included       |
 | `sync::Semaphore`             | `stk_sync_semaphore.h`  | Counting semaphore with direct handover on `Signal()`                                      |
@@ -478,20 +481,21 @@ Requires `KERNEL_SYNC` in the kernel mode bitmask for most primitives. `ScopedCr
 | `sync::EventFlags`            | `stk_sync_eventflags.h` | 32-bit multi-flag group. `OPT_WAIT_ANY` / `OPT_WAIT_ALL` / `OPT_NO_CLEAR`. Error sentinels |
 | `sync::Pipe<T, N>`            | `stk_sync_pipe.h`       | Typed FIFO ring-buffer. Single-element and bulk read/write. `memcpy` fast-path for scalars |
 | `sync::MessageQueue`          | `stk_sync_msgqueue.h`   | Opaque-message FIFO over external buffer. `Put/Get`, `TryPut/TryGet`, `Reset`              |
+| `sync::Barrier`               | `stk_sync_barrier.h`    | Cyclic rendezvous point for a fixed-size group of tasks. `Wait` returns `true` for the last arriver; `WaitEx` reports cancellation |
 | `sync::MessageQueueT<N, MSG>` | `stk_sync_msgqueue.h`   | `MessageQueue` with compile-time capacity and internal storage                             |
 
 **ISR safety at a glance:**
 
-| Primitive                        | ISR-safe operations                                               |
-|----------------------------------|-------------------------------------------------------------------|
-| `ScopedCriticalSection`          | All                                                               |
-| `Event`                          | `Set()`, `Pulse()`, `Reset()`, `TryWait()`                        |
-| `EventFlags`                     | `Set()`, `Clear()`, `Get()`, `TryWait()`, `Wait(NO_WAIT)`         |
-| `Semaphore`                      | `Signal()`, `TryWait()`                                           |
-| `ConditionVariable`              | `NotifyOne()`, `NotifyAll()`, `Wait(NO_WAIT)`                     |
-| `Pipe`                           | All `Try*` and `NO_WAIT` variants                                 |
-| `MessageQueue`                   | `Put(NO_WAIT)`, `TryPut()`, `Get(NO_WAIT)`, `TryGet()`, `Reset()` |
-| `SpinLock` / `Mutex` / `RWMutex` | None                                                              |
+| Primitive                                                  | ISR-safe operations                                               |
+|------------------------------------------------------------|-------------------------------------------------------------------|
+| `ScopedCriticalSection`                                    | All                                                               |
+| `Event`                                                    | `Set()`, `Pulse()`, `Reset()`, `TryWait()`                        |
+| `EventFlags`                                               | `Set()`, `Clear()`, `Get()`, `TryWait()`, `Wait(NO_WAIT)`         |
+| `Semaphore`                                                | `Signal()`, `TryWait()`                                           |
+| `ConditionVariable`                                        | `NotifyOne()`, `NotifyAll()`, `Wait(NO_WAIT)`                     |
+| `Pipe`                                                     | All `Try*` and `NO_WAIT` variants                                 |
+| `MessageQueue`                                             | `Put(NO_WAIT)`, `TryPut()`, `Get(NO_WAIT)`, `TryGet()`, `Reset()` |
+| `SpinLock` / `Mutex` / `FastMutex` / `RWMutex` / `Barrier` | None                                                              |
 
 > Calling a blocking method from an ISR is undefined behaviour. In debug builds `STK_ASSERT` halts execution if an ISR-unsafe method is called from interrupt context.
 
@@ -619,7 +623,7 @@ User application code
                         └── src/arch/**/*.cpp  (compiled once per build)
 
 Optional modules (included independently by user code):
-    sync/stk_sync.h      → 10 synchronization primitives
+    sync/stk_sync.h      → 12 synchronization primitives
     memory/stk_memory.h  → BlockMemoryPool
     time/stk_time.h      → PeriodicTrigger, TimerHost
 ```

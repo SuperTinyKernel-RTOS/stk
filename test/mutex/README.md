@@ -22,6 +22,8 @@ woken, so the waiter owns the lock before it even resumes execution.
 
 Requires kernel mode: `KERNEL_DYNAMIC | KERNEL_SYNC`.
 
+The maximum nesting depth is `sync::Mutex::RECURSION_MAX` (`0xFFFE`); exceeding it is a contract violation.
+
 ```cpp
 // Construction
 stk::sync::Mutex g_Mtx;    // unlocked, no owner
@@ -33,6 +35,8 @@ stk::sync::Mutex g_Mtx;    // unlocked, no owner
 | `TryLock` | `bool TryLock()` | Acquires the lock without blocking (`timeout == NO_WAIT`). Returns `true` if acquired, `false` if held by another task. Recursive re-entry by the owner always returns `true`. ISR-unsafe. |
 | `TimedLock` | `bool TimedLock(Timeout timeout)` | Acquires the lock, blocking up to `timeout` ticks. Returns `true` if acquired, `false` on timeout. `timeout == 0` is equivalent to `TryLock()`. ISR-unsafe. |
 | `Unlock` | `void Unlock()` | Decrements recursion count. When count reaches zero, transfers ownership to the first waiter (FIFO) or marks the mutex free. Asserts the caller is the current owner. ISR-unsafe. |
+| `GetOwner` | `TId GetOwner() const` | Returns the owner's task ID, or `TID_NONE` if free. ISR-safe. |
+| `GetRecursionCount` | `uint16_t GetRecursionCount() const` | Returns the current recursion depth: `0` if free, otherwise the number of nested `Lock()` calls made by the owner (`1..RECURSION_MAX`). Stable only for the owner; a snapshot for any other caller. ISR-safe. |
 | `~Mutex` | (destructor) | Asserts `m_wait_list.IsEmpty()` in debug builds. Destroying a mutex with active waiters is a logic error. |
 
 **Lock paths in `TimedLock()`:**
@@ -72,35 +76,47 @@ otherwise      (contended)   →  block until Unlock() transfers ownership or ti
 | `_STK_MUTEX_TEST_TIMEOUT` | `1000` ticks | Blocking timeout for `TimedLock()` calls that must succeed |
 | `_STK_MUTEX_TEST_SHORT_SLEEP` | `10` ticks | Sleep used to pace task sequencing |
 | `_STK_MUTEX_TEST_LONG_SLEEP` | `100` ticks | Sleep used by verifier tasks to wait for workers |
+| `_STK_MUTEX_TIMED_LOCK_TIMEOUT` | `50` ticks | Timeout used by `TimedLockTask` (test 4) |
 | `_STK_MUTEX_STACK_SIZE` | `128` (M0) / `256` (others) | Per-task stack size in `size_t` words |
 
 `g_TestMutex` is a plain static — unlike other test suites, `ResetTestState()` does
 **not** reconstruct it via placement-new. The mutex is shared across all test runs in
 its naturally unlocked state after each test completes. `ResetTestState()` resets only
-the counters and flags.
+the counters and flags (`g_TestResult`, `g_SharedCounter`, `g_ExpectedCounter`, `g_OrderIndex`,
+`g_InstancesDone`, `g_Task1Tid`, `g_Task1Acquired`, `g_WaiterTask`, `g_AcquisitionOrder[]`).
 
-All eight tests add all five tasks (0–4) unconditionally — there is no
-`NeedsExtendedTasks` gating in this suite.
+Because the mutex cannot be reset from outside, `RunTest()` guards against a failing test
+poisoning the next ones: it fails a test immediately (without running it) if the mutex was left
+locked by the previous test (`IsMutexFree()`: no owner and recursion depth 0), and fails a test
+that finishes with the mutex still locked.
+
+Task completion is counted with `MarkDone()`, which increments `g_InstancesDone` inside a
+`sync::ScopedCriticalSection`, so that a preempted read-modify-write cannot lose an update and
+leave a verifier task waiting forever.
+
+The number of tasks added per test is selected by test name in `RunTest()`: tasks 0–1 are always
+added; task 2 is added unless `IsTwoTaskTest()` is true; tasks 3–4 are added unless
+`IsTwoTaskTest()` is true or the test is `TimedLock` (tasks 0–2 only). Two-task tests are
+`TryLock`, `OwnerState`, `OwnershipHandoff`, `CancelledWait`, `RecursiveContended` and
+`RecursionMax`; all other tests except `TimedLock` use all five tasks.
 
 ---
 
 ## Platform Notes
 
-On **Cortex-M0** (`__ARM_ARCH_6M__`) the device has insufficient RAM to link eight
-distinct task class templates simultaneously. Tests 1–7 are skipped on M0 and only
-`StressTest` (test 8) runs, under `#ifndef __ARM_ARCH_6M__`.
+On **Cortex-M0** (`__ARM_ARCH_6M__`) the device has insufficient RAM to link all the
+distinct task class templates simultaneously. Tests 1–13 are skipped on M0 and only
+`StressTest` (test 14) runs, under `#ifndef __ARM_ARCH_6M__`.
 
 `StressTest` runs on M0 because it uses a single task class template (`StressTestTask`)
 instantiated for all five task slots, fitting within the available memory.
 
-`RecursiveDepthTask` (test 6) uses a hardcoded stack of `1024` words regardless of
-platform, because the `DEPTH = 8` recursive call chain requires more stack than
-`_STK_MUTEX_STACK_SIZE` provides.
+| Platform | `_STK_MUTEX_STACK_SIZE` |
+|----------|-------------------------|
+| Cortex-M0 (`__ARM_ARCH_6M__`) | `128` words |
+| All others | `256` words |
 
-| Platform | `_STK_MUTEX_STACK_SIZE` | `RecursiveDepthTask` stack |
-|----------|-------------------------|----------------------------|
-| Cortex-M0 (`__ARM_ARCH_6M__`) | `128` words | `1024` words |
-| All others | `256` words | `1024` words |
+All task classes, including `RecursiveDepthTask` (`DEPTH = 3`), use `_STK_MUTEX_STACK_SIZE`.
 
 ---
 
@@ -135,16 +151,20 @@ after the matching number of `Unlock()` calls. Task 0 uses a completion barrier.
 ---
 
 ### Test 3 — `TryLock`
-**Tasks:** 0–1 active (tasks 2–4 present but idle)
+**Tasks:** 0–1 (2 tasks)
 
 Task 0 acquires the mutex with `Lock()`, sets `g_SharedCounter = 1`, then sleeps
 `_STK_MUTEX_TEST_LONG_SLEEP` ticks while holding it. Task 1 sleeps briefly to let
 task 0 establish ownership, then calls `TryLock()` and measures elapsed time. Since
 the mutex is held by another task, `TryLock()` must return `false` immediately
-(elapsed < `_STK_MUTEX_TEST_SHORT_SLEEP`). `g_TestResult` is set directly inside
-task 1's branch.
+(elapsed < `_STK_MUTEX_TEST_SHORT_SLEEP`). Task 1 then sleeps `2 × _STK_MUTEX_TEST_LONG_SLEEP`
+ticks, by which time task 0 has released the lock, and calls `TryLock()` again: it must now
+succeed with `GetOwner() == CurrentTid()` and depth 1. Finally, while owning the lock, task 1
+calls `TryLock()` once more: the recursive re-entry by the owner must succeed and raise the depth to 2.
 
-**Pass condition:** `TryLock()` returned `false` and elapsed < `_STK_MUTEX_TEST_SHORT_SLEEP`
+**Pass condition:** first `TryLock()` returned `false` with elapsed < `SHORT_SLEEP`, second
+succeeded with owner/depth correct, recursive `TryLock()` succeeded with depth 2, and the mutex
+is free at the end
 
 ---
 
@@ -153,12 +173,14 @@ task 1's branch.
 
 Task 0 holds the mutex for 200 ticks. Task 1 sleeps `_STK_MUTEX_TEST_SHORT_SLEEP`
 then calls `TimedLock(50)`; with the mutex still held by task 0, it must time out and
-return `false` with elapsed in `[45, 60]` ms. Task 2 sleeps until tick 250 (after task
+return `false` with elapsed in `[_STK_MUTEX_TIMED_LOCK_TIMEOUT - 1, _STK_MUTEX_TIMED_LOCK_TIMEOUT + 25]` =
+`[49, 75]` ms (the lower bound tolerates truncation of the two millisecond timestamps but rejects an
+early wakeup; the upper bound tolerates tick alignment and scheduling jitter). Task 2 sleeps until tick 250 (after task
 0 releases) then calls `TimedLock(100)`; the mutex is now free so it must succeed and
 increment the counter. Task 2 is the verifier and sleeps `_STK_MUTEX_TEST_LONG_SLEEP`
 before checking.
 
-**Pass condition:** `counter == 2`
+**Pass condition:** `counter == 2` and the mutex is free
 (1 = `TimedLock(50)` timed out correctly; 2 = `TimedLock(100)` succeeded after release)
 
 ---
@@ -178,16 +200,16 @@ barrier then verifies the array is exactly `[1, 2, 3, 4]`.
 ---
 
 ### Test 6 — `RecursiveDepth`
-**Tasks:** 0–4 (all 5) &nbsp;|&nbsp; **Stack:** `1024` words &nbsp;|&nbsp; **Depth:** `DEPTH = 8`
+**Tasks:** 0–4 (all 5) &nbsp;|&nbsp; **Depth:** `DEPTH = 3`
 
-Each task calls `RecursiveLock(8)` — a recursive function that calls `Lock()`,
+Each task calls `RecursiveLock(3)` — a recursive function that calls `Lock()`,
 recurses one level deeper, increments `g_SharedCounter` on the way back up, then
-calls `Unlock()`. This produces 8 nested acquisitions and 8 releases per task.
-Verifies that the recursive path handles arbitrary call depth correctly and that
+calls `Unlock()`. This produces 3 nested acquisitions and 3 releases per task.
+Verifies that the recursive path handles call depth correctly and that
 `m_count` tracks each level precisely. Task 0 sleeps `_STK_MUTEX_TEST_LONG_SLEEP`
 before verifying.
 
-**Pass condition:** `counter == 40` (`5 tasks × 8 depth levels`)
+**Pass condition:** `counter == 15` (`5 tasks × 3 depth levels`)
 
 ---
 
@@ -205,7 +227,98 @@ completion barrier then verifies.
 
 ---
 
-### Test 8 — `StressTest`
+### Test 8 — `OwnerState`
+**Tasks:** 0–1 (2 tasks)
+
+Verifies `GetOwner()` and `GetRecursionCount()` through the full state cycle: free → owned by task 0
+at depth 1 → depth 2 (visible to task 1) → depth 1 → free. Task 0 checks the initial state
+(`GetOwner() == TID_NONE`, depth 0), locks twice checking owner and depth after each call, sleeps
+50 ticks so task 1 can observe it, then unlocks once (owner unchanged, depth 1) and once more (free,
+depth 0). Task 1 sleeps `SHORT_SLEEP`, then observes from a non-owner that the owner is set, is not
+itself, and the depth is 2; after `LONG_SLEEP` more ticks it checks the mutex is free. Each task
+increments `g_SharedCounter` only if all of its checks passed.
+
+**Pass condition:** `counter == 2` (both the owner's and the observer's views were correct)
+
+---
+
+### Test 9 — `OwnershipHandoff`
+**Tasks:** 0–1 (2 tasks)
+
+Verifies that `Unlock()` hands ownership directly to the first waiter, with a fresh recursion depth,
+so the releasing task cannot barge back in. Task 0 locks the mutex and sleeps 50 ticks. Task 1 sleeps
+`SHORT_SLEEP`, records its ID in `g_Task1Tid`, and blocks in `Lock()`. When task 0 calls `Unlock()`, it
+immediately checks that `GetOwner()` equals task 1's ID and the depth is 1. It then calls `TryLock()`:
+this must fail; if it succeeds (barging) the test unlocks it again so the mutex is not left locked for
+later tests, and fails. Task 1 holds the lock for 50 more ticks so task 0's checks can run, confirms it
+is the owner with depth 1, and unlocks.
+
+**Pass condition:** task 1 was owner with depth 1 after waking, task 0's handoff checks passed
+(`counter == 1`), and the mutex is free at the end
+
+---
+
+### Test 10 — `CancelledWait`
+**Tasks:** 0–1 (2 tasks)
+
+Verifies that a wait cancelled with `IKernel::CancelTaskWait()` fails cleanly, including while the
+owner holds the lock recursively. Task 0 locks the mutex twice (depth 2) and sleeps 50 ticks. Task 1
+sleeps `SHORT_SLEEP`, publishes its `ITask` pointer in `g_WaiterTask` and blocks in
+`TimedLock(WAIT_INFINITE)`. Task 0 then calls `g_Kernel.CancelTaskWait()` for task 1 and sleeps 20
+more ticks. Task 1 must get `false` and must not own the mutex; task 0 must still be the owner at
+depth 2, then depth 1 after one `Unlock()`. After the final `Unlock()` the mutex must be free (the
+cancelled task was removed from the wait list, so ownership was not handed to it). Task 1 finally
+sleeps `LONG_SLEEP` and checks the mutex is usable again: `TryLock()` succeeds with depth 1.
+
+**Pass condition:** `counter == 2` (task 0's owner/depth/free checks passed, task 1's cancelled-wait
+and re-lock checks passed)
+
+---
+
+### Test 11 — `MiddleTimeout`
+**Tasks:** 0–4 (all 5)
+
+Verifies that a waiter timing out in the middle of the wait list does not disturb the others. Task 0
+holds the mutex for 100 ticks. Task 1 (at tick 10) and task 3 (at tick 30) block in `Lock()`; task 2
+(at tick 20) calls `TimedLock(30)` between them and times out while the lock is still held. When task 0
+unlocks, the lock must go to task 1, then to task 3, skipping task 2. Each acquirer records its id in
+`g_AcquisitionOrder[]`; task 2 increments `g_SharedCounter` when it times out. Task 4 uses a
+`g_InstancesDone` completion barrier then verifies.
+
+**Pass condition:** exactly 2 acquisitions in order `[1, 3]`, `counter == 1` (task 2 timed out),
+and the mutex is free
+
+---
+
+### Test 12 — `RecursiveContended`
+**Tasks:** 0–1 (2 tasks)
+
+Verifies that a nested `Unlock()` does not release the mutex to a waiter. Task 0 locks twice (depth 2)
+and sleeps 50 ticks; task 1 records its ID in `g_Task1Tid` and blocks in `Lock()`. Task 0 unlocks once
+and sleeps 20 ticks (task 1 would run now if the mutex was released prematurely), then checks that
+task 1 has not acquired the lock (`g_Task1Acquired == false`) and that it still owns the mutex at
+depth 1. It then unlocks the second time and checks that ownership passed to task 1 with a fresh depth
+of 1. Task 1 holds the lock for 30 ticks so these checks can run, confirms it is the owner at depth 1,
+and unlocks.
+
+**Pass condition:** premature-release check and handoff check passed in task 0 (`counter == 1`),
+task 1 was owner with depth 1, and the mutex is free at the end
+
+---
+
+### Test 13 — `RecursionMax`
+**Tasks:** 0–1 (2 tasks)
+
+Task 0 locks the mutex exactly `sync::Mutex::RECURSION_MAX` (`0xFFFE`) times (one more would be a
+contract violation), checks that `GetOwner()` is itself and `GetRecursionCount() == RECURSION_MAX`,
+then unlocks the same number of times.
+
+**Pass condition:** owner and depth correct at the maximum, and the mutex is free after the matching
+number of `Unlock()` calls
+
+---
+
+### Test 14 — `StressTest`
 **Tasks:** 0–4 (all 5) — **runs on all platforms including Cortex-M0** &nbsp;|&nbsp; **Param:** `iterations = 400`
 
 All five tasks run 400 iterations each, cycling through three lock strategies by
@@ -213,12 +326,13 @@ iteration index: `i % 3 == 0` uses `Lock()` / `Unlock()` (always succeeds),
 `i % 3 == 1` uses `TryLock()` (may fail under contention),
 `i % 3 == 2` uses `TimedLock(10)` (may time out under contention).
 A `Delay(1)` is inserted every 10 iterations to allow other tasks to run.
-Each successful acquisition increments `g_SharedCounter` before releasing.
-Task 4 uses a `g_InstancesDone` completion barrier. The pass condition is deliberately
-permissive — only `TryLock` and short-timeout `TimedLock` paths can fail, so the
-total is bounded below by the guaranteed `Lock()` contributions.
+Each successful acquisition increments `g_SharedCounter` and a task-local `successes`
+count before releasing. When its loop ends, each task adds its `successes` to
+`g_ExpectedCounter` under the mutex. Task 4 uses a `g_InstancesDone` completion barrier
+and compares the two totals. The check is exact: every successful acquisition must be
+accounted for, so a lost update is detected.
 
-**Pass condition:** `counter > 0`
+**Pass condition:** `counter > 0`, `counter == g_ExpectedCounter` (no lost updates), and the mutex is free
 
 ---
 
@@ -228,9 +342,15 @@ total is bounded below by the guaranteed `Lock()` contributions.
 |---|------|-------|-------|----------------|------------------|
 | 1 | `BasicLockUnlockTask` | 0–4 | `_STK_MUTEX_STACK_SIZE` | `counter == 500` | `Lock()` / `Unlock()` provides mutual exclusion; no increment lost under deliberate race |
 | 2 | `RecursiveLockTask` | 0–4 | `_STK_MUTEX_STACK_SIZE` | `counter == 5` | Recursive re-entry (depth 3) returns immediately without blocking; full release after matching `Unlock()` count |
-| 3 | `TryLockTask` | 0–1 | `_STK_MUTEX_STACK_SIZE` | `TryLock() == false`, elapsed < `SHORT_SLEEP` | `TryLock()` returns `false` immediately when mutex is held by another task |
-| 4 | `TimedLockTask` | 0–2 | `_STK_MUTEX_STACK_SIZE` | `counter == 2` | `TimedLock()` times out in `[45, 60]` ms when contended; succeeds when mutex is free |
+| 3 | `TryLockTask` | 0–1 | `_STK_MUTEX_STACK_SIZE` | fails while held (elapsed < `SHORT_SLEEP`), succeeds when free, recursive re-entry succeeds | `TryLock()` returns `false` immediately when held by another task, succeeds once released, and always succeeds for the owner |
+| 4 | `TimedLockTask` | 0–2 | `_STK_MUTEX_STACK_SIZE` | `counter == 2`, mutex free | `TimedLock()` times out in `[49, 75]` ms when contended; succeeds when mutex is free |
 | 5 | `FIFOOrderTask` | 0–4 | `_STK_MUTEX_STACK_SIZE` | order `[1,2,3,4]` | Blocked tasks are granted ownership in FIFO arrival order |
-| 6 | `RecursiveDepthTask` | 0–4 | `1024` words | `counter == 40` | Recursive locking to depth 8 tracks `m_count` correctly across all levels and all tasks |
+| 6 | `RecursiveDepthTask` | 0–4 | `_STK_MUTEX_STACK_SIZE` | `counter == 15` | Recursive locking to depth 3 tracks `m_count` correctly across all levels and all tasks |
 | 7 | `InterTaskCoordinationTask` | 0–4 | `_STK_MUTEX_STACK_SIZE` | `counter == 50` | Mutex correctly gates strict round-robin turn-taking across 10 rounds without a condition variable |
-| 8 | `StressTestTask` | 0–4 | `_STK_MUTEX_STACK_SIZE` | `counter > 0` | No corruption or deadlock under full five-task contention mixing `Lock()`, `TryLock()`, and `TimedLock(10)`; runs on all platforms |
+| 8 | `OwnerStateTask` | 0–1 | `_STK_MUTEX_STACK_SIZE` | `counter == 2` | `GetOwner()` / `GetRecursionCount()` report correctly for owner and non-owner across free → depth 2 → depth 1 → free |
+| 9 | `OwnershipHandoffTask` | 0–1 | `_STK_MUTEX_STACK_SIZE` | handoff checks pass, `counter == 1`, mutex free | `Unlock()` passes ownership directly to the first waiter with depth 1; the releasing task cannot barge back in |
+| 10 | `CancelledWaitTask` | 0–1 | `_STK_MUTEX_STACK_SIZE` | `counter == 2` | A wait cancelled via `CancelTaskWait()` returns `false`, does not acquire the lock, does not disturb the owner's depth and leaves no dangling waiter |
+| 11 | `MiddleTimeoutTask` | 0–4 | `_STK_MUTEX_STACK_SIZE` | order `[1,3]`, `counter == 1`, mutex free | A waiter timing out mid-queue is skipped; the remaining waiters keep FIFO order |
+| 12 | `RecursiveContendedTask` | 0–1 | `_STK_MUTEX_STACK_SIZE` | checks in tasks 0 and 1 pass, mutex free | A nested `Unlock()` does not release to a waiter; the final `Unlock()` hands over with depth 1 |
+| 13 | `RecursionMaxTask` | 0–1 | `_STK_MUTEX_STACK_SIZE` | depth == `RECURSION_MAX`, mutex free after unlocks | Locking to the maximum depth and unwinding back to free |
+| 14 | `StressTestTask` | 0–4 | `_STK_MUTEX_STACK_SIZE` | `counter > 0`, `counter == expected`, mutex free | No corruption, lost update or deadlock under full five-task contention mixing `Lock()`, `TryLock()`, and `TimedLock(10)`; runs on all platforms |

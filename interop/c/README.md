@@ -38,6 +38,7 @@ pure C API with no C++ headers required in your source files.
 - [Synchronization Primitives](#synchronization-primitives)
   - [Critical Section](#critical-section)
   - [Mutex](#mutex)
+  - [FastMutex](#fastmutex)
   - [SpinLock](#spinlock)
   - [Condition Variable](#condition-variable)
   - [Semaphore](#semaphore)
@@ -487,6 +488,25 @@ stk_mutex_unlock(mtx);
 stk_mutex_destroy(mtx);
 ```
 
+### FastMutex
+
+Non-recursive (binary) mutex: smaller and faster than `stk_mutex_t`, but the owner must not
+lock it again. Re-locking is an unrecoverable contract violation: the kernel panics with
+`KERNEL_PANIC_SYNC_DEADLOCK` in all build configurations. Ownership
+is handed directly to the first waiter (FIFO) on unlock.
+
+```c
+static stk_fastmutex_mem_t fmtx_mem;
+stk_fastmutex_t *fmtx = stk_fastmutex_create(&fmtx_mem);
+
+stk_fastmutex_lock(fmtx);                        /* blocks until available */
+bool ok = stk_fastmutex_trylock(fmtx);           /* non-blocking */
+bool ok = stk_fastmutex_timed_lock(fmtx, 100);   /* ticks timeout */
+stk_fastmutex_unlock(fmtx);
+
+stk_fastmutex_destroy(fmtx);
+```
+
 ### SpinLock
 
 Suitable for very short critical regions and ISR-to-task handoff.
@@ -537,6 +557,20 @@ case STK_WAIT_RESULT_FAIL:     /* kernel error, did not wait */ break;
 
 `stk_wait_result_t` is shared by other cancellable timed waits in the API
 (e.g. `stk_barrier_wait_ex()`).
+
+A condition variable can also be paired with a `stk_fastmutex_t` instead of a
+`stk_mutex_t`, using the `_fastmutex` variants (same semantics; the calling task
+must own the FastMutex exactly once):
+
+```c
+stk_fastmutex_lock(fmtx);
+while (!condition_met) {
+    bool ok = stk_cv_wait_fastmutex(cv, fmtx, STK_WAIT_INFINITE);
+}
+stk_fastmutex_unlock(fmtx);
+
+stk_wait_result_t r = stk_cv_wait_ex_fastmutex(cv, fmtx, 100 /* ticks */);
+```
 
 > ISR-safe only with `timeout = STK_NO_WAIT`; ISR-unsafe otherwise.
 

@@ -16,6 +16,7 @@ option(TEST_SLEEP      "build test: Sleep (platform-dependent)"                 
 option(TEST_YIELD      "build test: Yield (platform-dependent)"                   OFF)
 option(TEST_HRT        "build test: HRT (platform-dependent)"                     OFF)
 option(TEST_MUTEX      "build test: sync::Mutex (platform-dependent)"             OFF)
+option(TEST_FASTMUTEX  "build test: sync::FastMutex (platform-dependent)"         OFF)
 option(TEST_SEMAPHORE  "build test: sync::Semaphore (platform-dependent)"         OFF)
 option(TEST_EVENT      "build test: sync::Event (platform-dependent)"             OFF)
 option(TEST_EVENTFLAGS "build test: sync::EventFlags (platform-dependent)"        OFF)
@@ -54,6 +55,10 @@ endif()
 
 if (TEST_MUTEX)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/mutex)
+endif()
+
+if (TEST_FASTMUTEX)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/fastmutex)
 endif()
 
 if (TEST_SEMAPHORE)

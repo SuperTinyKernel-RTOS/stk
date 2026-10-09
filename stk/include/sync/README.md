@@ -9,7 +9,7 @@
 - **Low-Power Optimization**: Blocking `Wait` operations remove tasks from the ready list, allowing the CPU to enter low-power sleep (e.g., `WFI`).
 - **Strict FIFO Ordering**: Wait operations are processed chronologically. The kernel wakes the longest-waiting task first, ensuring absolute fairness.
 - **Non-blocking Polling**: Supports `TryWait` and `TryLock` for checking status without yielding the CPU, ideal for zero-latency performance loops.
-- **Nesting Support**: Both `sync::Mutex` and `sync::SpinLock` support recursive acquisition from the same thread.
+- **Nesting Support**: Both `sync::Mutex` and `sync::SpinLock` support recursive acquisition from the same thread (`sync::FastMutex` is deliberately non-recursive).
 - **C compatible**: While implemented in C++, a comprehensive C API is provided to allow these primitives to be used in pure C projects.
 
 ---
@@ -29,13 +29,22 @@ A recursive mutual exclusion primitive used to protect shared resources.
 - **Priority Inheritance**: Temporarily boosts the priority of the lock owner when a higher-priority task blocks on `Lock()`/`TimedLock()`, mitigating priority inversion; the boost is restored automatically on `Unlock()` (no-op on switch strategies that don't support priority inheritance).
 - **Low-Power Aware**: Waiting tasks are suspended by the kernel.
 
-### 3. Spinlock (`sync::SpinLock`)
+### 3. Fast Mutex (`sync::FastMutex`)
+A lightweight non-recursive (binary) mutex with ownership tracking.
+- **Features**: Supports `Lock`, `TryLock`, `Unlock`, and `TimedLock`.
+- **Smaller and faster**: Keeps no recursion counter — the only state is the owner thread id — which shortens the lock/unlock paths and reduces the object size compared to `sync::Mutex`.
+- **Non-Recursive**: A thread that already owns the mutex must not lock it again. This is a contract violation: it asserts in debug builds, and in release builds `TimedLock()`/`TryLock()` fail immediately (return `false`) instead of dead-locking.
+- **Direct Handover**: On `Unlock()` ownership is transferred directly to the first waiter (FIFO ordering).
+- **Priority Inheritance**: Supported in the same way as `sync::Mutex` (no-op on switch strategies that don't support priority inheritance).
+- **Low-Power Aware**: Waiting tasks are suspended by the kernel.
+
+### 4. Spinlock (`sync::SpinLock`)
 A high-performance recursive spinlock for very short critical sections.
 - **Features**: Supports `Lock`, `TryLock`, and `Unlock`.
 - **Low Latency**: Bypasses the kernel wait-list logic for the "fast path" acquisition; suitable for sections where a context switch would be more expensive than spinning.
 - **Recursive**: Allows the owning thread to acquire the lock multiple times without deadlocking. Max recursion depth is `0xFFFE`.
 
-### 4. Condition Variable (`sync::ConditionVariable`)
+### 5. Condition Variable (`sync::ConditionVariable`)
 Used in conjunction with a Mutex to wait for specific application states.
 - **Features**: `Wait`, `NotifyOne`, and `NotifyAll`.
 - **Cancellable Waits**: `WaitEx()` returns the full `EWaitResult` (`WAIT_RESULT_SIGNAL`, `WAIT_RESULT_TIMEOUT`, `WAIT_RESULT_CANCELED`), letting callers distinguish a timeout from a wait cancelled via `IKernel::CancelTaskWait()`.
@@ -43,20 +52,20 @@ Used in conjunction with a Mutex to wait for specific application states.
 - **Real-time**: Releases mutex and suspends task atomically, ensuring no "lost wake-up" signals.
 - **Low-Power Aware**: Waiting tasks are suspended by the kernel.
 
-### 5. Event (`sync::Event`)
+### 6. Event (`sync::Event`)
 A binary signaling primitive supporting Auto-reset and Manual-reset modes.
 - **Manual Reset**: Remains signaled until explicitly reset.
 - **Auto Reset**: Resets automatically after waking a single waiting task.
 - **Pulse**: Wakes waiting tasks and immediately resets the event (similar to Win32 API).
 - **Low-Power Aware**: Waiting tasks are suspended by the kernel.
 
-### 6. Semaphore (`sync::Semaphore`)
+### 7. Semaphore (`sync::Semaphore`)
 A counting signaling primitive used for resource tracking or producer-consumer patterns.
 - **Direct Handover**: When semaphore is signaled, kernel immediately transfers the resource to the first waiting task (FIFO ordering).
 - **Bounded Signal**: `TrySignal()` posts without exceeding `max_count`, returning `false` instead of asserting — safe for multiple concurrent signalers where a redundant post should be tolerated rather than treated as a caller error.
 - **Low-Power Aware**: Waiting tasks are suspended by the kernel.
 
-### 7. Pipe (`sync::Pipe` / `sync::PipeT<T, Capacity>`)
+### 8. Pipe (`sync::Pipe` / `sync::PipeT<T, Capacity>`)
 A thread-safe FIFO communication channel for inter-task data passing, internally synchronized via a critical section and condition variables. Comes in two variants:
 - **`sync::Pipe`**: Runtime-sized, operates over a caller-supplied external byte buffer. Parameterized at construction time by element size; all transfers use `memcpy`, so element types do not need to be C++ assignable — ideal for heterogeneous or C-ABI structs.
 - **`sync::PipeT<T, Capacity>`**: Compile-time-sized, type-safe, owns its storage internally. Parameterized on a concrete type `T` with a fully typed `T&`-based API; uses direct typed assignment for scalar types and a per-element fallback for non-scalar types.
@@ -65,7 +74,7 @@ A thread-safe FIFO communication channel for inter-task data passing, internally
 - **Blocking semantics**: `Write()` blocks if the pipe is full; `Read()` blocks if the pipe is empty, until the timeout expires.
 - **Low-Power Aware**: Waiting tasks are suspended by the kernel.
 
-### 8. Message Queue (`sync::MessageQueue` / `sync::MessageQueueT<N, MSG>`)
+### 9. Message Queue (`sync::MessageQueue` / `sync::MessageQueueT<N, MSG>`)
 A fixed-capacity, fixed-message-size FIFO queue for inter-task communication over opaque byte messages.
 - **Buffer flexibility**: `MessageQueue` operates over an externally supplied buffer; `MessageQueueT<N, MSG>` owns its storage internally with compile-time capacity and message size.
 - **C-ABI friendly**: Message payload is always transferred via `memcpy`, so the message type does not need to be a C++ assignable type.
@@ -75,7 +84,7 @@ A fixed-capacity, fixed-message-size FIFO queue for inter-task communication ove
 - **Reset support**: `Reset()` discards all messages and wakes blocked producers.
 - **Low-Power Aware**: Waiting tasks are suspended by the kernel.
 
-### 9. Event Flags (`sync::EventFlags`)
+### 10. Event Flags (`sync::EventFlags`)
 A 32-bit multi-flag synchronization primitive for coordinating multiple independent events within a single object.
 - **OR semantics** (`OPT_WAIT_ANY`): Unblocks when any one of the requested flag bits is set (default).
 - **AND semantics** (`OPT_WAIT_ALL`): Unblocks only when all requested flag bits are simultaneously set.
@@ -84,17 +93,17 @@ A 32-bit multi-flag synchronization primitive for coordinating multiple independ
 - **Cancellable Waits**: `Wait()` returns `ERROR_CANCELED` (distinct from `ERROR_TIMEOUT`) if the wait was interrupted via `IKernel::CancelTaskWait()` before the requested flag condition was met.
 - **Low-Power Aware**: Waiting tasks are suspended by the kernel.
 
-### 10. Reader-Writer Mutex (`sync::RWMutex`)
+### 11. Reader-Writer Mutex (`sync::RWMutex`)
 A synchronization primitive that allows multiple concurrent readers or one exclusive writer.
 - **Writer Preference Policy**: Prevents writer starvation by blocking new readers when writers are waiting.
 - **Shared Access**: Multiple tasks can acquire `ReadLock()` simultaneously for read-only operations.
 - **Exclusive Access**: `Lock()` provides exclusive write access; blocks all other readers and writers.
 - **Timeout Support**: `TimedReadLock()` and `TimedLock()` with configurable timeouts.
 - **RAII Guards**: `ScopedTimedReadMutex` and `ScopedTimedLock` acquire on construction and release automatically on scope exit.
-- **Non-Recursive**: Unlike `sync::Mutex` and `sync::SpinLock`, a task must not call `ReadLock()` or `Lock()` again before releasing it — doing so will deadlock.
+- **Non-Recursive**: Unlike `sync::Mutex` and `sync::SpinLock` (but like `sync::FastMutex`), a task must not call `ReadLock()` or `Lock()` again before releasing it — doing so will deadlock.
 - **Low-Power Aware**: Waiting tasks are suspended by the kernel.
 
-### 11. Barrier (`sync::Barrier`)
+### 12. Barrier (`sync::Barrier`)
 A cyclic rendezvous point that blocks a fixed-size group of tasks until all of them have arrived.
 - **Cyclic**: Automatically resets after releasing the group, ready for the next round without re-creation.
 - **Generation Tracking**: An internal generation counter distinguishes successive rounds and guards against spurious wakeups.

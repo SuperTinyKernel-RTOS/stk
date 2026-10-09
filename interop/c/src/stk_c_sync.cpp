@@ -88,6 +88,70 @@ Mutex *stk_mutex_get_instance(stk_mutex_t *mtx)
 }
 
 // -----------------------------------------------------------------------------
+// FastMutex
+// -----------------------------------------------------------------------------
+struct stk_fastmutex_t
+{
+    FastMutex handle;
+};
+
+stk_fastmutex_t *stk_fastmutex_create(stk_fastmutex_mem_t *const membuf)
+{
+    STK_ASSERT(membuf != nullptr);
+
+    stk_fastmutex_t *result = nullptr;
+    if (membuf != nullptr)
+    {
+        result = ConstructIn<stk_fastmutex_t>(*membuf);
+    }
+
+    return result;
+}
+
+void stk_fastmutex_destroy(stk_fastmutex_t *mtx)
+{
+    if (mtx != nullptr)
+    {
+        mtx->~stk_fastmutex_t();
+    }
+}
+
+void stk_fastmutex_lock(stk_fastmutex_t *mtx)
+{
+    STK_ASSERT(mtx != nullptr);
+
+    mtx->handle.Lock();
+}
+
+bool stk_fastmutex_trylock(stk_fastmutex_t *mtx)
+{
+    STK_ASSERT(mtx != nullptr);
+
+    return mtx->handle.TryLock();
+}
+
+void stk_fastmutex_unlock(stk_fastmutex_t *mtx)
+{
+    STK_ASSERT(mtx != nullptr);
+
+    mtx->handle.Unlock();
+}
+
+bool stk_fastmutex_timed_lock(stk_fastmutex_t *mtx, stk_timeout_t timeout)
+{
+    STK_ASSERT(mtx != nullptr);
+
+    return mtx->handle.TimedLock(timeout);
+}
+
+FastMutex *stk_fastmutex_get_instance(stk_fastmutex_t *mtx)
+{
+    STK_ASSERT(mtx != nullptr);
+
+    return &mtx->handle;
+}
+
+// -----------------------------------------------------------------------------
 // SpinLock
 // -----------------------------------------------------------------------------
 struct stk_spinlock_t
@@ -178,14 +242,12 @@ bool stk_cv_wait(stk_cv_t *cv, stk_mutex_t *mtx, stk_timeout_t timeout)
     return cv->handle.Wait(mtx->handle, timeout);
 }
 
-stk_wait_result_t stk_cv_wait_ex(stk_cv_t *cv, stk_mutex_t *mtx, stk_timeout_t timeout)
+// maps kernel wait result to the C API wait result
+static stk_wait_result_t ToCWaitResult(EWaitResult wr)
 {
-    STK_ASSERT(cv != nullptr);
-    STK_ASSERT(mtx != nullptr);
-
     stk_wait_result_t result;
 
-    switch (cv->handle.WaitEx(mtx->handle, timeout))
+    switch (wr)
     {
     case WAIT_RESULT_SIGNAL:   result = STK_WAIT_RESULT_SIGNAL;   break;
     case WAIT_RESULT_TIMEOUT:  result = STK_WAIT_RESULT_TIMEOUT;  break;
@@ -194,6 +256,30 @@ stk_wait_result_t stk_cv_wait_ex(stk_cv_t *cv, stk_mutex_t *mtx, stk_timeout_t t
     }
 
     return result;
+}
+
+stk_wait_result_t stk_cv_wait_ex(stk_cv_t *cv, stk_mutex_t *mtx, stk_timeout_t timeout)
+{
+    STK_ASSERT(cv != nullptr);
+    STK_ASSERT(mtx != nullptr);
+
+    return ToCWaitResult(cv->handle.WaitEx(mtx->handle, timeout));
+}
+
+bool stk_cv_wait_fastmutex(stk_cv_t *cv, stk_fastmutex_t *mtx, stk_timeout_t timeout)
+{
+    STK_ASSERT(cv != nullptr);
+    STK_ASSERT(mtx != nullptr);
+
+    return cv->handle.Wait(mtx->handle, timeout);
+}
+
+stk_wait_result_t stk_cv_wait_ex_fastmutex(stk_cv_t *cv, stk_fastmutex_t *mtx, stk_timeout_t timeout)
+{
+    STK_ASSERT(cv != nullptr);
+    STK_ASSERT(mtx != nullptr);
+
+    return ToCWaitResult(cv->handle.WaitEx(mtx->handle, timeout));
 }
 
 void stk_cv_notify_one(stk_cv_t *cv)

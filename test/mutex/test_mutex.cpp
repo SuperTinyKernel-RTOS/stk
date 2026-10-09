@@ -24,6 +24,7 @@ STK_TEST_DECL_ASSERT;
 #define _STK_MUTEX_TEST_TIMEOUT     1000
 #define _STK_MUTEX_TEST_SHORT_SLEEP 10
 #define _STK_MUTEX_TEST_LONG_SLEEP  100
+#define _STK_MUTEX_TIMED_LOCK_TIMEOUT 50 // ms, timeout used by TimedLockTask
 #ifdef __ARM_ARCH_6M__
 #define _STK_MUTEX_STACK_SIZE       128 // ARM Cortex-M0
 #define STK_TASK
@@ -47,6 +48,10 @@ static volatile int32_t g_AcquisitionOrder[_STK_MUTEX_TEST_TASKS_MAX] = {0};
 static volatile int32_t g_OrderIndex = 0;
 static volatile bool    g_TestComplete = false;
 static volatile int32_t g_InstancesDone = 0;
+static volatile int32_t g_ExpectedCounter = 0;
+static volatile TId     g_Task1Tid = TID_NONE;
+static volatile bool    g_Task1Acquired = false;
+static ITask *volatile  g_WaiterTask = nullptr;
 
 // Kernel
 static Kernel<KERNEL_DYNAMIC | KERNEL_SYNC | (STK_TICKLESS_IDLE ? KERNEL_TICKLESS : 0),
@@ -54,6 +59,25 @@ static Kernel<KERNEL_DYNAMIC | KERNEL_SYNC | (STK_TICKLESS_IDLE ? KERNEL_TICKLES
 
 // Test mutex
 static sync::Mutex g_TestMutex;
+
+static inline TId CurrentTid()
+{
+    return IKernelService::GetInstance()->GetTid();
+}
+
+// Task completion counter: increment is a read-modify-write on a volatile, guard it against preemption
+// so that no update is lost (a lost update would make the verifier task wait forever)
+static inline void MarkDone()
+{
+    const sync::ScopedCriticalSection cs_;
+    g_InstancesDone = g_InstancesDone + 1;
+}
+
+// Mutex is free: no owner and zero recursion depth
+static inline bool IsMutexFree()
+{
+    return (g_TestMutex.GetOwner() == TID_NONE) && (g_TestMutex.GetRecursionCount() == 0U);
+}
 
 /*! \class BasicLockUnlockTask
     \brief Tests basic lock/unlock functionality.
@@ -89,7 +113,7 @@ private:
             stk::Yield(); // Yield to other tasks
         }
 
-        ++g_InstancesDone;
+        MarkDone();
 
         // Task 0 acts as verifier: waits for all other tasks to finish then checks
         // that the counter equals exactly tasks_count * iterations, confirming that
@@ -139,7 +163,7 @@ private:
         }
         g_TestMutex.Unlock();
 
-        ++g_InstancesDone;
+        MarkDone();
 
         // Verify counter was incremented exactly once per task
         if (m_task_id == 0)
@@ -191,17 +215,35 @@ private:
             bool acquired = g_TestMutex.TryLock();
             int64_t elapsed = GetTimeNowMs() - start;
 
-            if (!acquired && (elapsed < _STK_MUTEX_TEST_SHORT_SLEEP))
-                g_TestResult = 1;
-            else
-                g_TestResult = 0;
+            bool failed_while_held = (!acquired && (elapsed < _STK_MUTEX_TEST_SHORT_SLEEP));
 
             if (acquired)
                 g_TestMutex.Unlock();
+
+            // After task 0 releases the lock, TryLock() must succeed and make the caller the owner
+            stk::Sleep(_STK_MUTEX_TEST_LONG_SLEEP * 2);
+
+            bool ok_when_free = g_TestMutex.TryLock();
+
+            // Recursive re-entry by the owner must always succeed and increase the depth
+            bool ok_recursive = false;
+
+            if (ok_when_free)
+            {
+                ok_when_free = (g_TestMutex.GetOwner() == CurrentTid()) && (g_TestMutex.GetRecursionCount() == 1U);
+
+                ok_recursive = g_TestMutex.TryLock() && (g_TestMutex.GetRecursionCount() == 2U);
+                if (ok_recursive)
+                    g_TestMutex.Unlock();
+
+                g_TestMutex.Unlock();
+            }
+
+            g_TestResult = (failed_while_held && ok_when_free && ok_recursive && IsMutexFree()) ? 1 : 0;
         }
         // Tasks 2+ are not used by this test
 
-        ++g_InstancesDone;
+        MarkDone();
     }
 };
 
@@ -235,11 +277,14 @@ private:
             stk::Sleep(_STK_MUTEX_TEST_SHORT_SLEEP); // Let task 0 acquire first
 
             int64_t start = GetTimeNowMs();
-            bool acquired = g_TestMutex.TimedLock(50); // 50ms timeout
+            bool acquired = g_TestMutex.TimedLock(_STK_MUTEX_TIMED_LOCK_TIMEOUT);
             int64_t elapsed = GetTimeNowMs() - start;
 
-            // Should timeout after ~50ms
-            if (!acquired && elapsed >= 45 && elapsed <= 60)
+            // Must not return before the timeout expires (-1 ms tolerates truncation of the two millisecond
+            // timestamps) and must return reasonably soon after it (upper bound is generous to tolerate
+            // tick alignment and scheduling jitter)
+            if (!acquired && (elapsed >= (_STK_MUTEX_TIMED_LOCK_TIMEOUT - 1)) &&
+                (elapsed <= (_STK_MUTEX_TIMED_LOCK_TIMEOUT + 25)))
             {
                 g_SharedCounter++;
             }
@@ -260,14 +305,14 @@ private:
             }
         }
 
-        ++g_InstancesDone;
+        MarkDone();
 
         // Final check
         if (m_task_id == 2)
         {
             stk::Sleep(_STK_MUTEX_TEST_LONG_SLEEP);
 
-            if (g_SharedCounter == 2)
+            if ((g_SharedCounter == 2) && IsMutexFree())
                 g_TestResult = 1;
         }
     }
@@ -310,7 +355,7 @@ private:
             g_TestMutex.Unlock();
         }
 
-        ++g_InstancesDone;
+        MarkDone();
 
         // Task 4 verifies order
         if (m_task_id == (_STK_MUTEX_TEST_TASKS_MAX - 1))
@@ -354,6 +399,8 @@ public:
 private:
     void Run()
     {
+        int32_t successes = 0;
+
         for (int32_t i = 0; i < m_iterations; ++i)
         {
             // Mix of operations
@@ -362,6 +409,7 @@ private:
                 // Regular lock
                 g_TestMutex.Lock();
                 g_SharedCounter++;
+                ++successes;
                 g_TestMutex.Unlock();
             }
             else
@@ -371,6 +419,7 @@ private:
                 if (g_TestMutex.TryLock())
                 {
                     g_SharedCounter++;
+                ++successes;
                     g_TestMutex.Unlock();
                 }
             }
@@ -380,6 +429,7 @@ private:
                 if (g_TestMutex.TimedLock(10))
                 {
                     g_SharedCounter++;
+                ++successes;
                     g_TestMutex.Unlock();
                 }
             }
@@ -388,7 +438,12 @@ private:
                 stk::Delay(1);
         }
 
-        ++g_InstancesDone;
+        // publish local success count
+        g_TestMutex.Lock();
+        g_ExpectedCounter += successes;
+        g_TestMutex.Unlock();
+
+        MarkDone();
 
         // Last task verifies total
         if (m_task_id == (_STK_MUTEX_TEST_TASKS_MAX - 1))
@@ -396,11 +451,11 @@ private:
             while (g_InstancesDone < _STK_MUTEX_TEST_TASKS_MAX)
                 stk::Sleep(_STK_MUTEX_TEST_SHORT_SLEEP);
 
-            // All increments should be accounted for (may be less if TryLock failed)
-            if (g_SharedCounter > 0)
-                g_TestResult = 1;
+            printf("Stress test: counter=%d (expected %d)\n", (int)g_SharedCounter, (int)g_ExpectedCounter);
 
-            printf("Stress test: counter=%d\n", (int)g_SharedCounter);
+            // Every successful acquisition must be accounted for exactly (no lost updates)
+            if ((g_SharedCounter > 0) && (g_SharedCounter == g_ExpectedCounter) && IsMutexFree())
+                g_TestResult = 1;
         }
     }
 };
@@ -436,7 +491,7 @@ private:
         // Recursive lock to depth DEPTH
         RecursiveLock(DEPTH);
 
-        ++g_InstancesDone;
+        MarkDone();
 
         if (m_task_id == 0)
         {
@@ -485,7 +540,7 @@ private:
             g_TestMutex.Unlock();
         }
 
-        ++g_InstancesDone;
+        MarkDone();
 
         // Last task verifies
         if (m_task_id == (_STK_MUTEX_TEST_TASKS_MAX - 1))
@@ -503,6 +558,399 @@ private:
     }
 };
 
+/*! \class OwnerStateTask
+    \brief Tests GetOwner() and GetRecursionCount() state reporting.
+    \note  Free -> owned by task 0 at depth 2 (visible to task 1) -> depth 1 -> free again.
+*/
+template <EAccessMode _AccessMode>
+class OwnerStateTask : public Task<_STK_MUTEX_STACK_SIZE, _AccessMode>
+{
+    uint8_t m_task_id;
+
+public:
+    OwnerStateTask(uint8_t task_id, int32_t) : m_task_id(task_id)
+    {}
+
+private:
+    void Run()
+    {
+        if (m_task_id == 0)
+        {
+            // initially free
+            bool ok = IsMutexFree();
+
+            g_TestMutex.Lock();
+            ok = ok && (g_TestMutex.GetOwner() == CurrentTid()) && (g_TestMutex.GetRecursionCount() == 1U);
+
+            g_TestMutex.Lock();
+            ok = ok && (g_TestMutex.GetOwner() == CurrentTid()) && (g_TestMutex.GetRecursionCount() == 2U);
+
+            stk::Sleep(50); // let task 1 observe the locked state
+
+            // nested unlock: still owned
+            g_TestMutex.Unlock();
+            ok = ok && (g_TestMutex.GetOwner() == CurrentTid()) && (g_TestMutex.GetRecursionCount() == 1U);
+
+            g_TestMutex.Unlock();
+            ok = ok && IsMutexFree();
+
+            if (ok)
+                g_SharedCounter++;
+        }
+        else
+        if (m_task_id == 1)
+        {
+            stk::Sleep(_STK_MUTEX_TEST_SHORT_SLEEP);
+
+            // observed from a non-owner
+            bool ok = (g_TestMutex.GetOwner() != TID_NONE) &&
+                      (g_TestMutex.GetOwner() != CurrentTid()) &&
+                      (g_TestMutex.GetRecursionCount() == 2U);
+
+            stk::Sleep(_STK_MUTEX_TEST_LONG_SLEEP);
+
+            ok = ok && IsMutexFree();
+
+            if (ok)
+                g_SharedCounter++;
+
+            // both observers agree
+            if (g_SharedCounter == 2)
+                g_TestResult = 1;
+        }
+
+        MarkDone();
+    }
+};
+
+/*! \class OwnershipHandoffTask
+    \brief Tests direct ownership transfer to the first waiter on Unlock().
+    \note  After task 0 unlocks, the mutex must already belong to the blocked task 1 with a recursion depth of 1,
+           so that task 0 cannot re-acquire it (no barging).
+*/
+template <EAccessMode _AccessMode>
+class OwnershipHandoffTask : public Task<_STK_MUTEX_STACK_SIZE, _AccessMode>
+{
+    uint8_t m_task_id;
+
+public:
+    OwnershipHandoffTask(uint8_t task_id, int32_t) : m_task_id(task_id)
+    {}
+
+private:
+    void Run()
+    {
+        if (m_task_id == 0)
+        {
+            g_TestMutex.Lock();
+            stk::Sleep(50); // task 1 blocks in the meantime
+            g_TestMutex.Unlock();
+
+            // ownership must have been passed to task 1 already, with a fresh depth of 1
+            bool handed_off = (g_TestMutex.GetOwner() == g_Task1Tid) &&
+                              (g_TestMutex.GetRecursionCount() == 1U);
+
+            // if ownership was not handed off (barging), TryLock() succeeds: release it so that
+            // a failure of this test does not leave the mutex locked for the following tests
+            if (g_TestMutex.TryLock())
+            {
+                g_TestMutex.Unlock();
+                handed_off = false;
+            }
+
+            if (handed_off)
+                g_SharedCounter = 1;
+        }
+        else
+        if (m_task_id == 1)
+        {
+            stk::Sleep(_STK_MUTEX_TEST_SHORT_SLEEP);
+
+            g_Task1Tid = CurrentTid();
+            g_TestMutex.Lock(); // blocks until task 0 releases
+
+            // keep the lock long enough for task 0 to run its checks
+            stk::Sleep(50);
+
+            bool owner_ok = (g_TestMutex.GetOwner() == CurrentTid()) && (g_TestMutex.GetRecursionCount() == 1U);
+
+            g_TestMutex.Unlock();
+
+            if (owner_ok && (g_SharedCounter == 1) && IsMutexFree())
+                g_TestResult = 1;
+        }
+
+        MarkDone();
+    }
+};
+
+/*! \class CancelledWaitTask
+    \brief Tests that a wait cancelled via IKernel::CancelTaskWait() fails cleanly.
+    \note  The owner holds the lock recursively (depth 2). The cancelled waiter must get false, must not own the
+           mutex, must not disturb the owner's recursion depth and must not be left in the wait list (otherwise
+           the final Unlock() would hand the ownership to a task that is not waiting).
+*/
+template <EAccessMode _AccessMode>
+class CancelledWaitTask : public Task<_STK_MUTEX_STACK_SIZE, _AccessMode>
+{
+    uint8_t m_task_id;
+
+public:
+    CancelledWaitTask(uint8_t task_id, int32_t) : m_task_id(task_id)
+    {}
+
+private:
+    void Run()
+    {
+        if (m_task_id == 0)
+        {
+            g_TestMutex.Lock();
+            g_TestMutex.Lock();
+            stk::Sleep(50); // task 1 blocks in the meantime
+
+            // interrupt the wait of task 1
+            ITask *const waiter = g_WaiterTask;
+            if (waiter != nullptr)
+                g_Kernel.CancelTaskWait(waiter);
+
+            stk::Sleep(20); // let task 1 resume
+
+            // cancelled waiter must not have received the ownership, depth unchanged
+            bool ok = (waiter != nullptr) &&
+                      (g_TestMutex.GetOwner() == CurrentTid()) && (g_TestMutex.GetRecursionCount() == 2U);
+
+            g_TestMutex.Unlock();
+            ok = ok && (g_TestMutex.GetOwner() == CurrentTid()) && (g_TestMutex.GetRecursionCount() == 1U);
+
+            g_TestMutex.Unlock();
+
+            // and must not be left in the wait list: nothing to hand over to, the mutex is free now
+            ok = ok && IsMutexFree();
+
+            if (ok)
+                g_SharedCounter++;
+        }
+        else
+        if (m_task_id == 1)
+        {
+            stk::Sleep(_STK_MUTEX_TEST_SHORT_SLEEP);
+
+            g_WaiterTask = static_cast<ITask *>(this);
+
+            // blocks until cancelled by task 0 (the lock is released only 20 ms later)
+            bool acquired = g_TestMutex.TimedLock(WAIT_INFINITE);
+
+            bool ok = !acquired && (g_TestMutex.GetOwner() != CurrentTid());
+
+            // wait for task 0 to release the lock
+            stk::Sleep(_STK_MUTEX_TEST_LONG_SLEEP);
+
+            // mutex must be fully usable again
+            bool free_again = g_TestMutex.TryLock();
+            if (free_again)
+            {
+                free_again = (g_TestMutex.GetOwner() == CurrentTid()) && (g_TestMutex.GetRecursionCount() == 1U);
+                g_TestMutex.Unlock();
+            }
+
+            if (ok && free_again)
+                g_SharedCounter++;
+
+            if (g_SharedCounter == 2)
+                g_TestResult = 1;
+        }
+
+        MarkDone();
+    }
+};
+
+/*! \class MiddleTimeoutTask
+    \brief Tests a waiter timing out in the middle of the wait list.
+    \note  Task 1 and task 3 wait without timeout, task 2 waits between them with a short timeout and gives up.
+           The remaining waiters must still receive the lock in FIFO order (1, then 3), skipping task 2.
+*/
+template <EAccessMode _AccessMode>
+class MiddleTimeoutTask : public Task<_STK_MUTEX_STACK_SIZE, _AccessMode>
+{
+    uint8_t m_task_id;
+
+public:
+    MiddleTimeoutTask(uint8_t task_id, int32_t) : m_task_id(task_id)
+    {}
+
+private:
+    static void Record(uint8_t task_id)
+    {
+        // called with g_TestMutex held
+        int32_t idx = g_OrderIndex++;
+        g_AcquisitionOrder[idx] = task_id;
+    }
+
+    void Run()
+    {
+        if (m_task_id == 0)
+        {
+            g_TestMutex.Lock();
+            stk::Sleep(100); // all waiters queue up (and task 2 times out) in the meantime
+            g_TestMutex.Unlock();
+        }
+        else
+        if (m_task_id == 1)
+        {
+            stk::Sleep(_STK_MUTEX_TEST_SHORT_SLEEP);        // 1st in the wait list
+            g_TestMutex.Lock();
+            Record(m_task_id);
+            stk::Sleep(_STK_MUTEX_TEST_SHORT_SLEEP);
+            g_TestMutex.Unlock();
+        }
+        else
+        if (m_task_id == 2)
+        {
+            stk::Sleep(_STK_MUTEX_TEST_SHORT_SLEEP * 2);    // 2nd in the wait list
+
+            if (g_TestMutex.TimedLock(30))
+            {
+                Record(m_task_id); // not expected: lock is held by task 0 for much longer
+                g_TestMutex.Unlock();
+            }
+            else
+            {
+                g_SharedCounter++; // timed out as expected
+            }
+        }
+        else
+        if (m_task_id == 3)
+        {
+            stk::Sleep(_STK_MUTEX_TEST_SHORT_SLEEP * 3);    // 3rd in the wait list
+            g_TestMutex.Lock();
+            Record(m_task_id);
+            g_TestMutex.Unlock();
+        }
+
+        MarkDone();
+
+        // Task 4 only verifies
+        if (m_task_id == 4)
+        {
+            while (g_InstancesDone < _STK_MUTEX_TEST_TASKS_MAX)
+                stk::Sleep(_STK_MUTEX_TEST_SHORT_SLEEP);
+
+            printf("Middle timeout: acquired %d tasks, order %d,%d, timed out %d\n",
+                (int)g_OrderIndex, (int)g_AcquisitionOrder[0], (int)g_AcquisitionOrder[1], (int)g_SharedCounter);
+
+            if ((g_OrderIndex == 2) &&
+                (g_AcquisitionOrder[0] == 1) &&
+                (g_AcquisitionOrder[1] == 3) &&
+                (g_SharedCounter == 1) &&
+                IsMutexFree())
+            {
+                g_TestResult = 1;
+            }
+        }
+    }
+};
+
+/*! \class RecursiveContendedTask
+    \brief Tests that a nested Unlock() does not release the mutex to a waiter.
+    \note  Task 0 holds the lock at depth 2 while task 1 is blocked. After the first Unlock() the mutex must still
+           belong to task 0 (task 1 must not run); only after the second Unlock() it is handed over to task 1,
+           with a fresh depth of 1.
+*/
+template <EAccessMode _AccessMode>
+class RecursiveContendedTask : public Task<_STK_MUTEX_STACK_SIZE, _AccessMode>
+{
+    uint8_t m_task_id;
+
+public:
+    RecursiveContendedTask(uint8_t task_id, int32_t) : m_task_id(task_id)
+    {}
+
+private:
+    void Run()
+    {
+        if (m_task_id == 0)
+        {
+            g_TestMutex.Lock();
+            g_TestMutex.Lock();
+            stk::Sleep(50); // task 1 blocks in the meantime
+
+            // nested unlock: depth drops to 1, the mutex must stay with task 0
+            g_TestMutex.Unlock();
+
+            stk::Sleep(20); // task 1 would run now if the mutex was released prematurely
+
+            bool partial_ok = !g_Task1Acquired &&
+                              (g_TestMutex.GetOwner() == CurrentTid()) && (g_TestMutex.GetRecursionCount() == 1U);
+
+            // final unlock: ownership passes to task 1 with depth 1
+            g_TestMutex.Unlock();
+
+            bool handoff_ok = (g_TestMutex.GetOwner() == g_Task1Tid) && (g_TestMutex.GetRecursionCount() == 1U);
+
+            if (partial_ok && handoff_ok)
+                g_SharedCounter = 1;
+        }
+        else
+        if (m_task_id == 1)
+        {
+            stk::Sleep(_STK_MUTEX_TEST_SHORT_SLEEP);
+
+            g_Task1Tid = CurrentTid();
+            g_TestMutex.Lock(); // blocks until task 0 fully releases
+            g_Task1Acquired = true;
+
+            // keep the lock long enough for task 0 to run its checks
+            stk::Sleep(30);
+
+            bool owner_ok = (g_TestMutex.GetOwner() == CurrentTid()) && (g_TestMutex.GetRecursionCount() == 1U);
+
+            g_TestMutex.Unlock();
+
+            if (owner_ok && (g_SharedCounter == 1) && IsMutexFree())
+                g_TestResult = 1;
+        }
+
+        MarkDone();
+    }
+};
+
+/*! \class RecursionMaxTask
+    \brief Tests the maximum recursion depth (sync::Mutex::RECURSION_MAX).
+    \note  Locks exactly RECURSION_MAX times (one more would be a contract violation) and unlocks back to free.
+*/
+template <EAccessMode _AccessMode>
+class RecursionMaxTask : public Task<_STK_MUTEX_STACK_SIZE, _AccessMode>
+{
+    uint8_t m_task_id;
+
+public:
+    RecursionMaxTask(uint8_t task_id, int32_t) : m_task_id(task_id)
+    {}
+
+private:
+    void Run()
+    {
+        if (m_task_id == 0)
+        {
+            for (uint32_t i = 0; i < sync::Mutex::RECURSION_MAX; ++i)
+                g_TestMutex.Lock();
+
+            bool ok = (g_TestMutex.GetOwner() == CurrentTid()) &&
+                      (g_TestMutex.GetRecursionCount() == sync::Mutex::RECURSION_MAX);
+
+            for (uint32_t i = 0; i < sync::Mutex::RECURSION_MAX; ++i)
+                g_TestMutex.Unlock();
+
+            ok = ok && IsMutexFree();
+
+            if (ok)
+                g_TestResult = 1;
+        }
+
+        MarkDone();
+    }
+};
+
 // Helper function to reset test state
 static void ResetTestState()
 {
@@ -511,6 +959,10 @@ static void ResetTestState()
     g_OrderIndex = 0;
     g_TestComplete = false;
     g_InstancesDone = 0;
+    g_ExpectedCounter = 0;
+    g_Task1Tid = TID_NONE;
+    g_Task1Acquired = false;
+    g_WaiterTask = nullptr;
 
     for (int32_t i = 0; i < _STK_MUTEX_TEST_TASKS_MAX; ++i)
         g_AcquisitionOrder[i] = 0;
@@ -520,23 +972,36 @@ static void ResetTestState()
 } // namespace test
 } // namespace stk
 
+/*! \fn    IsTwoTaskTest
+    \brief Returns true if the test uses only tasks 0-1.
+*/
+static bool IsTwoTaskTest(const char *test_name)
+{
+    return  (strcmp(test_name, "TryLock")            == 0) ||
+            (strcmp(test_name, "OwnerState")         == 0) ||
+            (strcmp(test_name, "OwnershipHandoff")   == 0) ||
+            (strcmp(test_name, "CancelledWait")      == 0) ||
+            (strcmp(test_name, "RecursiveContended") == 0) ||
+            (strcmp(test_name, "RecursionMax")       == 0);
+}
+
 /*! \fn    NeedsExtendedTasks
     \brief Returns true if the test requires tasks 3 and 4.
-    \note  TryLock uses only tasks 0-1; TimedLock uses only tasks 0-2.
+    \note  Two-task tests use only tasks 0-1; TimedLock uses only tasks 0-2.
 */
 static bool NeedsExtendedTasks(const char *test_name)
 {
-    return  (strcmp(test_name, "TryLock")   != 0) &&
+    return  !IsTwoTaskTest(test_name) &&
             (strcmp(test_name, "TimedLock") != 0);
 }
 
 /*! \fn    NeedsThreeTasks
     \brief Returns true if the test requires at least 3 tasks (0-2).
-    \note  TryLock uses only tasks 0-1, so task 2 is also unnecessary.
+    \note  Two-task tests use only tasks 0-1, so task 2 is also unnecessary.
 */
 static bool NeedsThreeTasks(const char *test_name)
 {
-    return  (strcmp(test_name, "TryLock") != 0);
+    return !IsTwoTaskTest(test_name);
 }
 
 /*! \fn    RunTest
@@ -550,6 +1015,15 @@ static int32_t RunTest(const char *test_name, int32_t param = 0)
     using namespace stk::test::mutex;
 
     printf("Test: %s\n", test_name);
+
+    // a previous test must not leave the mutex locked: it can not be reset from outside, so report
+    // this clearly instead of producing misleading failures in this test
+    if (!IsMutexFree())
+    {
+        printf("Result: FAIL (mutex was left locked by a previous test)\n");
+        printf("--------------\n");
+        return TestContext::DEFAULT_FAILURE_EXIT_CODE;
+    }
 
     ResetTestState();
 
@@ -575,6 +1049,12 @@ static int32_t RunTest(const char *test_name, int32_t param = 0)
     g_Kernel.Start();
 
     int32_t result = (g_TestResult ? TestContext::SUCCESS_EXIT_CODE : TestContext::DEFAULT_FAILURE_EXIT_CODE);
+
+    if (!IsMutexFree())
+    {
+        printf("Mutex left locked at test end\n");
+        result = TestContext::DEFAULT_FAILURE_EXIT_CODE;
+    }
 
     printf("Result: %s\n", result == TestContext::SUCCESS_EXIT_CODE ? "PASS" : "FAIL");
     printf("--------------\n");
@@ -644,9 +1124,45 @@ int main(int argc, char **argv)
     else
         total_success++;
 
+    // Test 8: Owner / recursion depth state reporting
+    if (RunTest<OwnerStateTask<ACCESS_PRIVILEGED>>("OwnerState") != TestContext::SUCCESS_EXIT_CODE)
+        total_failures++;
+    else
+        total_success++;
+
+    // Test 9: Direct ownership handoff to the first waiter
+    if (RunTest<OwnershipHandoffTask<ACCESS_PRIVILEGED>>("OwnershipHandoff") != TestContext::SUCCESS_EXIT_CODE)
+        total_failures++;
+    else
+        total_success++;
+
+    // Test 10: Cancelled wait (IKernel::CancelTaskWait)
+    if (RunTest<CancelledWaitTask<ACCESS_PRIVILEGED>>("CancelledWait") != TestContext::SUCCESS_EXIT_CODE)
+        total_failures++;
+    else
+        total_success++;
+
+    // Test 11: Waiter timing out in the middle of the wait list
+    if (RunTest<MiddleTimeoutTask<ACCESS_PRIVILEGED>>("MiddleTimeout") != TestContext::SUCCESS_EXIT_CODE)
+        total_failures++;
+    else
+        total_success++;
+
+    // Test 12: Nested Unlock does not release to a waiter
+    if (RunTest<RecursiveContendedTask<ACCESS_PRIVILEGED>>("RecursiveContended") != TestContext::SUCCESS_EXIT_CODE)
+        total_failures++;
+    else
+        total_success++;
+
+    // Test 13: Maximum recursion depth
+    if (RunTest<RecursionMaxTask<ACCESS_PRIVILEGED>>("RecursionMax") != TestContext::SUCCESS_EXIT_CODE)
+        total_failures++;
+    else
+        total_success++;
+
 #endif // __ARM_ARCH_6M__
 
-    // Test 8: Stress test
+    // Test 14: Stress test
     if (RunTest<StressTestTask<ACCESS_PRIVILEGED>>("StressTest", 400) != TestContext::SUCCESS_EXIT_CODE)
         total_failures++;
     else
