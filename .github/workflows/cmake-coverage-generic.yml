@@ -49,6 +49,7 @@ jobs:
         '*/stk_sync_cv.h' \
         '*/stk_sync_event.h' \
         '*/stk_sync_mutex.h' \
+        '*/stk_sync_fastmutex.h' \
         '*/stk_sync_pipe.h' \
         '*/stk_sync_rwmutex.h' \
         '*/stk_sync_semaphore.h' \
