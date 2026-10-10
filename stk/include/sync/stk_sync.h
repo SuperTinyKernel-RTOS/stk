@@ -30,6 +30,7 @@
     | **Semaphore**         | \c Signal(), \c TryWait()                                                                                                                          |
     | **SpinLock**          | \c None                                                                                                                                            |
     | **Mutex**             | \c None                                                                                                                                            |
+    | **FastMutex**         | \c None                                                                                                                                            |
     | **RWMutex**           | \c None                                                                                                                                            |
     | **ConditionVariable** | \c NotifyOne(), \c NotifyAll(), \c Wait(NO_WAIT)                                                                                                   |
     | **Barrier**           | \c None                                                                                                                                            |
@@ -37,7 +38,7 @@
     | **MessageQueue**      | \c Put(NO_WAIT), \c TryPut(), \c Get(NO_WAIT), \c TryGet(), \c Reset()                                                                             |
 
     NOTE:
-    - **SpinLock**, **Mutex**, **RWMutex**: Ownership is tied to a Task ID (\a TId).
+    - **SpinLock**, **Mutex**, **FastMutex**, **RWMutex**: Ownership is tied to a Task ID (\a TId).
       Since ISRs lack a valid Task ID context, and these primitives use internal Mutex 
       logic for state protection, their operations are never safe in ISRs.
 
@@ -54,6 +55,7 @@ namespace sync {
 #include "stk_sync_cv.h"
 #include "stk_sync_spinlock.h"
 #include "stk_sync_mutex.h"
+#include "stk_sync_fastmutex.h"
 #include "stk_sync_rwmutex.h"
 #include "stk_sync_semaphore.h"
 #include "stk_sync_event.h"

@@ -60,6 +60,11 @@ jobs:
             cmake_flag: TEST_MUTEX=ON
             elf: test-mutex.elf
             dir: mutex
+            
+          - name: sync::FastMutex
+            cmake_flag: TEST_FASTMUTEX=ON
+            elf: test-fastmutex.elf
+            dir: fastmutex
 
           - name: sync::Pipe
             cmake_flag: TEST_PIPE=ON

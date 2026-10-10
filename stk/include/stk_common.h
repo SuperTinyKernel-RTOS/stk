@@ -68,7 +68,8 @@ enum EKernelPanicId : uint8_t
     KERNEL_PANIC_BAD_MODE            = 9U,  //!< Kernel is in bad/unsupported mode for the current operation.
     KERNEL_PANIC_BAD_STACK_TYPE      = 10U, //!< Stack type is unknown.
     KERNEL_PANIC_NS_ACCESS           = 11U, //!< Non-secure access to protected resource.
-    KERNEL_PANIC_BAD_MEMORY_REGION   = 12U  //!< Bad memory region (ARM TrustZone: provided memory region overlaps with another one).
+    KERNEL_PANIC_BAD_MEMORY_REGION   = 12U, //!< Bad memory region (ARM TrustZone: provided memory region overlaps with another one).
+    KERNEL_PANIC_SYNC_DEADLOCK       = 13U  //!< Deadlock caused by a synchronization primitive: a task tried to acquire a non-recursive primitive (e.g. sync::FastMutex) that it already owns and would block forever. Not used for spin-lock timeouts, see KERNEL_PANIC_SPINLOCK_DEADLOCK.
 };
 
 /*! \enum  EStackType

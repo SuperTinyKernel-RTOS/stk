@@ -22,7 +22,7 @@
 
 #define STK_WRAPPER_API_VERSION     20030000UL // 2.3.0
 #define STK_WRAPPER_KERNEL_VERSION  20030000UL
-#define STK_WRAPPER_KERNEL_ID       "STK RTOS2 Wrapper v1.0"
+#define STK_WRAPPER_KERNEL_ID       "STK RTOS2 Wrapper v1.1"
 
 // -----------------------------------------------------------------------------
 // Kernel configuration
@@ -139,6 +139,15 @@ static __stk_forceinline stk::Timeout CmsisTimeoutToStk(uint32_t ticks)
 }
 
 // -----------------------------------------------------------------------------
+// Map a failed timed wait to a CMSIS status: NO_WAIT -> osErrorResource (resource
+// not available), any other timeout -> osErrorTimeout.
+// -----------------------------------------------------------------------------
+static __stk_forceinline osStatus_t StkWaitFailToCmsis(stk::Timeout timeout)
+{
+    return ((timeout == stk::NO_WAIT) ? osErrorResource : osErrorTimeout);
+}
+
+// -----------------------------------------------------------------------------
 // ISR context check
 // -----------------------------------------------------------------------------
 static __stk_forceinline bool IsIrqContext()
@@ -171,6 +180,18 @@ static uint32_t  g_StkKernelLocked = 0U;
 //
 //   Priority is stored as STK weight (0..31) and returned via GetWeight().
 // -----------------------------------------------------------------------------
+
+// Detached threads which the kernel has already removed (OnExit() fired) and which are waiting to be freed
+// from task context by StkReapZombieThreads(). Chained via StkThread::m_argument. Pushed only from the
+// kernel tick (OnExit()), detached only inside a critical section, which masks the tick.
+//
+// Limitation: for a detached thread created with osThreadAttr_t::cb_mem, that memory is NOT safe to reuse until
+// the zombie has been reaped, because the list link (m_argument) lives inside the control block. osThreadNew()
+// reaps before it placement-news, so reusing the same cb_mem for another thread is fine; reusing it for anything
+// else before the reap corrupts the list. Reaping is also done in osThreadTerminate(), osThreadGetCount() and
+// osThreadEnumerate(), which narrows the window but does not close it.
+class StkThread;
+static StkThread *g_ZombieThreads = nullptr;
 
 class StkThread final : public stk::ITask
 {
@@ -211,10 +232,22 @@ public:
 
     void OnExit() override
     {
-        m_join_state = JoinState::Exited;
+        // Called by the kernel from the tick ISR when the task is removed.
+        if (m_join_state == JoinState::Detached)
+        {
+            // Nobody will join: do not free here (heap is not ISR-safe), queue for StkReapZombieThreads().
+            // The thread will never run again (its function returned, or it was terminated/exited via
+            // osThreadTerminate()/osThreadExit()), so m_argument is safe to reuse as the list link.
+            m_argument      = g_ZombieThreads;
+            g_ZombieThreads = this;
+        }
+        else
+        {
+            m_join_state = JoinState::Exited;
 
-        // wake any osThreadJoin() caller
-        m_join_cv.NotifyAll();
+            // wake any osThreadJoin() caller
+            m_join_cv.NotifyAll();
+        }
     }
 
     // ---- IStackMemory ----
@@ -253,16 +286,88 @@ public:
 // Mutex control block
 // -----------------------------------------------------------------------------
 
-struct StkMutex
+// Select the STK primitive behind osMutexNew():
+//   1 -> mutexes created without osMutexRecursive use sync::FastMutex (non-recursive, smaller and faster, as
+//        required by the CMSIS-RTOS2 specification: re-acquiring by the owner returns osErrorResource),
+//        mutexes created with osMutexRecursive use sync::Mutex.
+//   0 -> all mutexes use sync::Mutex and are always recursive (osMutexRecursive is ignored).
+#ifndef STK_CMSIS_USE_FAST_MUTEX
+#define STK_CMSIS_USE_FAST_MUTEX 1
+#endif
+
+// Common part of both mutex control blocks: osMutexId_t always points to it, virtual calls dispatch to the derived type.
+struct StkMutexBase
 {
-    explicit StkMutex(const char *n = nullptr) : m_mutex(), m_cb_owned(true)
+    explicit StkMutexBase() : m_cb_owned(true)
+    {}
+
+    virtual ~StkMutexBase()
+    {}
+
+    virtual const char *GetTraceName() const = 0;
+    virtual stk::TId GetOwner() const = 0;
+    virtual osStatus_t Acquire(stk::Timeout timeout) = 0;
+    virtual void Unlock() = 0;
+
+    bool m_cb_owned;  // true -> heap-allocated, false -> placement-new in caller memory
+};
+
+// Recursive mutex (osMutexRecursive)
+struct StkMutex : StkMutexBase
+{
+    explicit StkMutex(const char *n = nullptr) : StkMutexBase(), m_mutex()
     {
         m_mutex.SetTraceName(n);
     }
 
+    const char *GetTraceName() const override { return m_mutex.GetTraceName(); }
+    stk::TId GetOwner() const override { return m_mutex.GetOwner(); }
+
+    osStatus_t Acquire(stk::Timeout timeout) override
+    {
+        return (m_mutex.TimedLock(timeout) ? osOK : StkWaitFailToCmsis(timeout));
+    }
+
+    void Unlock() override { return m_mutex.Unlock(); }
+
     // ---- Members ----
     stk::sync::Mutex m_mutex;
-    bool             m_cb_owned; // true -> heap-allocated, false -> placement-new in caller memory
+};
+
+// Non-recursive mutex
+struct StkFastMutex : StkMutexBase
+{
+    explicit StkFastMutex(const char *n = nullptr) : StkMutexBase(), m_mutex()
+    {
+        m_mutex.SetTraceName(n);
+    }
+
+    const char *GetTraceName() const override { return m_mutex.GetTraceName(); }
+    stk::TId GetOwner() const override { return m_mutex.GetOwner(); }
+
+    osStatus_t Acquire(stk::Timeout timeout) override
+    {
+        osStatus_t result;
+
+        // CMSIS-RTOS2: acquiring a non-recursive mutex already owned by the caller fails with osErrorResource
+        // (sync::FastMutex would panic with KERNEL_PANIC_SYNC_DEADLOCK). Only the owner itself can observe
+        // itself as the owner, so the check does not need a critical section.
+        if (m_mutex.GetOwner() == stk::GetTid())
+        {
+            result = osErrorResource;
+        }
+        else
+        {
+            result = (m_mutex.TimedLock(timeout) ? osOK : StkWaitFailToCmsis(timeout));
+        }
+
+        return result;
+    }
+
+    void Unlock() override { return m_mutex.Unlock(); }
+
+    // ---- Members ----
+    stk::sync::FastMutex m_mutex;
 };
 
 // -----------------------------------------------------------------------------
@@ -485,6 +590,26 @@ static void ObjDestroy(T *obj)
     else
     {
         obj->~T();
+    }
+}
+
+// Free detached threads that the kernel has finished removing (see StkThread::OnExit()). Task context only.
+static void StkReapZombieThreads()
+{
+    StkThread *list;
+
+    {
+        const stk::sync::ScopedCriticalSection cs_;
+
+        list            = g_ZombieThreads;
+        g_ZombieThreads = nullptr;
+    }
+
+    while (list != nullptr)
+    {
+        StkThread *const next = static_cast<StkThread *>(list->m_argument);
+        ObjDestroy(list);
+        list = next;
     }
 }
 
@@ -829,8 +954,44 @@ osThreadId_t osThreadNew(osThreadFunc_t func, void *argument, const osThreadAttr
         }
     }
 
+    // validate stack configuration:
+    //   - caller-supplied stack (stack_mem != nullptr): used as-is, never silently enlarged beyond the buffer
+    //     the caller gave us, so a zero/too small size or a misaligned address fails the call;
+    //   - otherwise heap-allocated: stack_size is honored (never below the minimum), 0 -> default size.
+    stk::Word *stack_mem   = nullptr;
+    size_t     stack_words = CMSIS_STK_DEFAULT_STACK_WORDS;
+    if (is_valid && (attr != nullptr))
+    {
+        const size_t req_words = (attr->stack_size / sizeof(stk::Word)); // rounds down: never exceeds the buffer
+
+        if (attr->stack_mem != nullptr)
+        {
+            if ((req_words < static_cast<size_t>(CMSIS_STK_MIN_STACK_WORDS)) ||
+                ((reinterpret_cast<uintptr_t>(attr->stack_mem) % alignof(stk::Word)) != 0U))
+            {
+                is_valid = false; // invalidate object creation
+            }
+            else
+            {
+                stack_mem   = static_cast<stk::Word *>(attr->stack_mem);
+                stack_words = req_words;
+            }
+        }
+        else if (attr->stack_size != 0U)
+        {
+            stack_words = stk::Max<size_t>(req_words, CMSIS_STK_MIN_STACK_WORDS);
+        }
+        else
+        {
+            // noop: default heap-allocated stack size
+        }
+    }
+
     if (is_valid)
     {
+        // release resources of detached threads that have exited since the last call
+        StkReapZombieThreads();
+
         const bool    is_joinable = (attr != nullptr) && ((attr->attr_bits & osThreadJoinable) != 0U);
         void *const   cb_mem      = ((attr != nullptr) ? attr->cb_mem  : nullptr);
         const uint32_t cb_size    = ((attr != nullptr) ? attr->cb_size : 0U);
@@ -843,22 +1004,16 @@ osThreadId_t osThreadNew(osThreadFunc_t func, void *argument, const osThreadAttr
             th->m_name       = (attr != nullptr) ? attr->name : nullptr;
             th->m_join_state = (is_joinable ? StkThread::JoinState::Joinable : StkThread::JoinState::Detached);
 
-            // stack configuration
-            if (attr != nullptr)
+            // stack configuration (validated above)
+            if (stack_mem != nullptr)
             {
-                if ((attr->stack_mem != nullptr) && (attr->stack_size != 0U))
-                {
-                    th->m_stack       = static_cast<stk::Word *>(attr->stack_mem);
-                    th->m_stack_size  = stk::Max<size_t>(attr->stack_size / sizeof(stk::Word), CMSIS_STK_MIN_STACK_WORDS);
-                    th->m_stack_owned = false;
-                }
+                th->m_stack       = stack_mem;
+                th->m_stack_size  = stack_words;
+                th->m_stack_owned = false;
             }
-
             // allocate stack memory if not caller-provided
-            if (th->m_stack == nullptr)
+            else
             {
-                const size_t stack_words = CMSIS_STK_DEFAULT_STACK_WORDS;
-
                 th->m_stack = new (std::nothrow) stk::Word[stack_words];
                 STK_ASSERT(th->m_stack != nullptr);
                 
@@ -1178,43 +1333,67 @@ osStatus_t osThreadJoin(osThreadId_t thread_id)
     else
     {
         StkThread *th = static_cast<StkThread *>(thread_id);
+        bool destroy = false;
 
-        stk::sync::ScopedCriticalSection cs_;
+        {
+            stk::sync::ScopedCriticalSection cs_;
 
-        // Only joinable threads can be joined.
-        if (th->m_join_state == StkThread::JoinState::Detached)
-        {
-            result = osError;
-        }
-        // Double-join: second caller always gets an error.
-        else if (th->m_join_state == StkThread::JoinState::Joined)
-        {
-            result = osError;
-        }
-        else
-        {
-            th->m_join_state = StkThread::JoinState::Joined;
-
-            // Block until OnExit() fires (transitions state to Exited).
-            // m_join_cv.Wait() atomically releases m_join_mutex and suspends.
-            while (th->m_join_state == StkThread::JoinState::Joined)
+            // Only joinable threads can be joined.
+            if (th->m_join_state == StkThread::JoinState::Detached)
             {
-                // WAIT_INFINITE - CMSIS osThreadJoin has no timeout parameter.
-                STK_UNUSED(th->m_join_cv.Wait(cs_, stk::WAIT_INFINITE));
+                result = osError;
             }
-
-            // At this point m_join_state == Exited (or Detached if someone
-            // raced osThreadDetach - treat that as an error).
-            if (th->m_join_state != StkThread::JoinState::Exited)
+            // Double-join: second caller always gets an error.
+            else if (th->m_join_state == StkThread::JoinState::Joined)
             {
                 result = osError;
             }
             else
             {
-                // Free the control block - the kernel has already freed the slot.
-                ObjDestroy(th);
-                result = osOK;
+                // Only wait if the thread has not exited yet: if OnExit() already set Exited, its notification
+                // has already happened and waiting for it would block forever.
+                if (th->m_join_state == StkThread::JoinState::Joinable)
+                {
+                    th->m_join_state = StkThread::JoinState::Joined;
+
+                    // Block until OnExit() fires (transitions state to Exited).
+                    // m_join_cv.Wait() atomically releases the critical section and suspends.
+                    while (th->m_join_state == StkThread::JoinState::Joined)
+                    {
+                        // WAIT_INFINITE - CMSIS osThreadJoin has no timeout parameter.
+                        STK_UNUSED(th->m_join_cv.Wait(cs_, stk::WAIT_INFINITE));
+                    }
+                }
+                // else Exited: OnExit() already fired, nothing to wait for
+
+                // At this point m_join_state == Exited (or Detached if someone
+                // raced osThreadDetach - treat that as an error).
+                if (th->m_join_state != StkThread::JoinState::Exited)
+                {
+                    result = osError;
+                }
+                else
+                {
+                    // Claim the control block: any further join/detach on it now fails with an error
+                    // instead of racing with the destruction below.
+                    th->m_join_state = StkThread::JoinState::Joined;
+                    destroy          = true;
+                    result           = osOK;
+                }
             }
+        }
+
+        if (destroy)
+        {
+            // OnExit() notifies m_join_cv from the kernel tick, which empties its wait list, but the kernel unlinks
+            // the (now idle) condition variable from its active sync list only on the NEXT tick. If the joiner is
+            // woken within the same tick it must not destroy the control block yet, otherwise that sync list would
+            // reference freed memory. Sleeping one tick guarantees the kernel has processed it. Done outside of the
+            // critical section, as sleeping inside of it would block the tick.
+            stk::Sleep(1);
+
+            // Free the control block - the kernel has already freed the slot.
+            ObjDestroy(th);
         }
     }
 
@@ -1239,8 +1418,21 @@ osStatus_t osThreadTerminate(osThreadId_t thread_id)
     osStatus_t status = osErrorParameter;
     const bool is_active = (osKernelGetState() != osKernelInactive);
 
-    if ((thread_id != nullptr) && !is_active)
+    if ((thread_id != nullptr) && is_active)
     {
+        // Terminating the calling thread: ScheduleTaskRemoval() only marks it, and the thread would keep
+        // running until the next tick, so route it through the exit path instead.
+        if (thread_id == osThreadGetId())
+        {
+            osThreadExit(); // does not return
+        }
+
+        // release resources of detached threads that have already been removed by the kernel
+        if (!IsIrqContext())
+        {
+            StkReapZombieThreads();
+        }
+
         StkThread *const th = static_cast<StkThread *>(thread_id);
 
         // avoid race conditions during termination
@@ -1250,15 +1442,10 @@ osStatus_t osThreadTerminate(osThreadId_t thread_id)
         // which will call OnExit() before freeing the slot.
         g_StkKernel.ScheduleTaskRemoval(th);
 
-        // For detached threads, free immediately (no joiner expected).
-        // For joinable threads, OnExit() will wake the joiner; the joiner
-        // calls ObjDestroy(). Do NOT free here.
-        if (th->m_join_state == StkThread::JoinState::Detached)
-        {
-            ObjDestroy(th);
-        }
-        // else: joiner owns the lifetime
-
+        // Do NOT free here: the kernel still references the control block (and the stack, which may be
+        // in use until the task is switched out) and calls OnExit() on it from the tick.
+        // Detached threads are queued by OnExit() and freed by StkReapZombieThreads(),
+        // for joinable threads OnExit() wakes the joiner, which calls ObjDestroy().
         status = osOK;
     }
 
@@ -1271,6 +1458,13 @@ uint32_t osThreadGetCount(void)
 
     if (osKernelGetState() != osKernelInactive)
     {
+        // release resources of detached threads that have already been removed by the kernel
+        // (task context only: osThreadGetCount() may not be called from ISR per CMSIS, and the reap is skipped there)
+        if (!IsIrqContext())
+        {
+            StkReapZombieThreads();
+        }
+
         // avoid race with OnTick
         const stk::sync::ScopedCriticalSection cs_;
 
@@ -1288,6 +1482,12 @@ uint32_t osThreadEnumerate(osThreadId_t *thread_array, uint32_t array_items)
     // kernel must be active and buffer must be valid
     if ((kstate != osKernelInactive) && (thread_array != nullptr) && (array_items != 0U))
     {
+        // release resources of detached threads that have already been removed by the kernel
+        if (!IsIrqContext())
+        {
+            StkReapZombieThreads();
+        }
+
         // cast the raw pointer array to the expected ITask* destination type
         stk::ITask **const tasks_destination = reinterpret_cast<stk::ITask **>(
             reinterpret_cast<void *>(thread_array));
@@ -1719,6 +1919,7 @@ osStatus_t osEventFlagsDelete(osEventFlagsId_t ef_id)
 // ==== Mutex Management Functions ====
 // ===========================================================================
 
+
 osMutexId_t osMutexNew(const osMutexAttr_t *attr)
 {
     osMutexId_t result;
@@ -1730,12 +1931,15 @@ osMutexId_t osMutexNew(const osMutexAttr_t *attr)
     else
     {
         // osMutexPrioInherit: ignored, supported by default.
-        // osMutexRecursive: ignored, sync::Mutex is always recursive.
+        // osMutexRecursive: sync::Mutex if set, otherwise sync::FastMutex (non-recursive) unless
+        //                   STK_CMSIS_USE_FAST_MUTEX is 0, in which case sync::Mutex is always used.
         // osMutexRobust: will assert as unsafe code.
-        const char *const name   = ((attr != nullptr) ? attr->name    : nullptr);
-        void       *const cb_mem = ((attr != nullptr) ? attr->cb_mem  : nullptr);
-        const uint32_t    cb_sz  = ((attr != nullptr) ? attr->cb_size : 0U);
-        const bool        robust = ((attr != nullptr) && ((attr->attr_bits & osMutexRobust) != 0U));
+        const char *const name      = ((attr != nullptr) ? attr->name    : nullptr);
+        void       *const cb_mem    = ((attr != nullptr) ? attr->cb_mem  : nullptr);
+        const uint32_t    cb_sz     = ((attr != nullptr) ? attr->cb_size : 0U);
+        const bool        robust    = ((attr != nullptr) && ((attr->attr_bits & osMutexRobust) != 0U));
+        const bool        recursive = ((STK_CMSIS_USE_FAST_MUTEX == 0) ||
+                                       ((attr != nullptr) && ((attr->attr_bits & osMutexRecursive) != 0U)));
 
         // disallow osMutexRobust
         STK_ASSERT(!robust);
@@ -1745,8 +1949,15 @@ osMutexId_t osMutexNew(const osMutexAttr_t *attr)
         }
         else
         {
-            StkMutex *const m = PlacementNewOrHeap<StkMutex>(cb_mem, cb_sz, name);
-            result = static_cast<osMutexId_t>(m);
+            // convert to the common base pointer first: osMutexId_t always holds a StkMutexBase pointer
+            StkMutexBase *mb;
+
+            if (recursive)
+                mb = PlacementNewOrHeap<StkMutex>(cb_mem, cb_sz, name);
+            else
+                mb = PlacementNewOrHeap<StkFastMutex>(cb_mem, cb_sz, name);
+
+            result = static_cast<osMutexId_t>(mb);
         }
     }
 
@@ -1763,7 +1974,7 @@ const char *osMutexGetName(osMutexId_t mutex_id)
     }
     else
     {
-        result = static_cast<StkMutex *>(mutex_id)->m_mutex.GetTraceName();
+        result = static_cast<const StkMutexBase *>(mutex_id)->GetTraceName();
     }
 
     return result;
@@ -1783,18 +1994,7 @@ osStatus_t osMutexAcquire(osMutexId_t mutex_id, uint32_t timeout)
     }
     else
     {
-        StkMutex *m = static_cast<StkMutex *>(mutex_id);
-        const stk::Timeout stk_timeout = CmsisTimeoutToStk(timeout);
-
-        const bool acquired = m->m_mutex.TimedLock(stk_timeout);
-        if (!acquired)
-        {
-            result = ((stk_timeout == stk::NO_WAIT) ? osErrorResource : osErrorTimeout);
-        }
-        else
-        {
-            result = osOK;
-        }
+        result = static_cast<StkMutexBase *>(mutex_id)->Acquire(CmsisTimeoutToStk(timeout));
     }
 
     return result;
@@ -1814,8 +2014,18 @@ osStatus_t osMutexRelease(osMutexId_t mutex_id)
     }
     else
     {
-        static_cast<StkMutex *>(mutex_id)->m_mutex.Unlock();
-        result = osOK;
+        StkMutexBase *const mb = static_cast<StkMutexBase *>(mutex_id);
+
+        // CMSIS-RTOS2: releasing a mutex which is not owned by the caller fails with osErrorResource
+        if (mb->GetOwner() != stk::GetTid())
+        {
+            result = osErrorResource;
+        }
+        else
+        {
+            mb->Unlock();
+            result = osOK;
+        }
     }
 
     return result;
@@ -1830,9 +2040,8 @@ osThreadId_t osMutexGetOwner(osMutexId_t mutex_id)
         result = nullptr;
     }
     else
-    {        
-        result = StkThread::ConvertTIdToThreadId(
-            static_cast<StkMutex *>(mutex_id)->m_mutex.GetOwner());
+    {
+        result = StkThread::ConvertTIdToThreadId(static_cast<const StkMutexBase *>(mutex_id)->GetOwner());
     }
 
     return result;
@@ -1852,13 +2061,12 @@ osStatus_t osMutexDelete(osMutexId_t mutex_id)
     }
     else
     {
-        ObjDestroy(static_cast<StkMutex *>(mutex_id));
+        ObjDestroy(static_cast<StkMutexBase *>(mutex_id));
         result = osOK;
     }
 
     return result;
 }
-
 
 // ===========================================================================
 // ==== Semaphore Management Functions ====
@@ -1923,15 +2131,7 @@ osStatus_t osSemaphoreAcquire(osSemaphoreId_t semaphore_id, uint32_t timeout)
         StkSemaphore *sem = static_cast<StkSemaphore *>(semaphore_id);
         const stk::Timeout stk_timeout = CmsisTimeoutToStk(timeout);
 
-        const bool acquired = sem->m_semaphore.Wait(stk_timeout);
-        if (!acquired)
-        {
-            result = ((stk_timeout == stk::NO_WAIT) ? osErrorResource : osErrorTimeout);
-        }
-        else
-        {
-            result = osOK;
-        }
+        result = (sem->m_semaphore.Wait(stk_timeout) ? osOK : StkWaitFailToCmsis(stk_timeout));
     }
 
     return result;
@@ -2232,7 +2432,7 @@ osMessageQueueId_t osMessageQueueNew(uint32_t msg_count, uint32_t msg_size,
             // Validate
             if (mq != nullptr)
             {
-                if (mq->m_mq.GetBuffer() == nullptr)
+                if (!mq->m_mq.IsStorageValid())
                 {
                     ObjDestroy(mq);
                     mq = nullptr;
@@ -2281,7 +2481,7 @@ osStatus_t osMessageQueuePut(osMessageQueueId_t mq_id, const void *msg_ptr,
 
         if (!static_cast<StkMessageQueue *>(mq_id)->m_mq.Put(msg_ptr, stk_timeout))
         {
-            result = ((stk_timeout == stk::NO_WAIT) ? osErrorResource : osErrorTimeout);
+            result = StkWaitFailToCmsis(stk_timeout);
         }
         else
         {
@@ -2311,7 +2511,7 @@ osStatus_t osMessageQueueGet(osMessageQueueId_t mq_id, void *msg_ptr,
 
         if (!static_cast<StkMessageQueue *>(mq_id)->m_mq.Get(msg_ptr, stk_timeout))
         {
-            result = ((stk_timeout == stk::NO_WAIT) ? osErrorResource : osErrorTimeout);
+            result = StkWaitFailToCmsis(stk_timeout);
         }
         else
         {

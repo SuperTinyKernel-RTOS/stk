@@ -1004,6 +1004,79 @@ namespace stk { namespace sync { class Mutex; } }
 extern "C" stk::sync::Mutex *stk_mutex_get_instance(stk_mutex_t *mtx);
 #endif // __cplusplus
 
+// ----- FastMutex -------------------------------------------------------------
+
+/*! \brief     A memory size (multiples of stk_word_t) required for FastMutex instance.
+*/
+#define STK_FASTMUTEX_IMPL_SIZE (9U + (STK_SYNC_DEBUG_NAMES ? 1U : 0U))
+
+/*! \brief     Opaque memory container for a FastMutex instance.
+*/
+typedef struct stk_fastmutex_mem_t {
+    stk_word_t data[STK_FASTMUTEX_IMPL_SIZE] __stk_c_aligned;
+} stk_fastmutex_mem_t;
+
+/*! \brief     Opaque handle to a FastMutex instance.
+    \note      Non-recursive (binary) mutex: a task that already owns it must not lock it again.
+               Doing so is an unrecoverable contract violation: the kernel panics with
+               KERNEL_PANIC_SYNC_DEADLOCK in all build configurations. Use stk_mutex_t if
+               recursive locking is needed.
+*/
+typedef struct stk_fastmutex_t stk_fastmutex_t;
+
+/*! \brief     Create a FastMutex (using provided memory).
+    \param[in] membuf: Pointer to static memory container.
+    \return    FastMutex handle.
+*/
+stk_fastmutex_t *stk_fastmutex_create(stk_fastmutex_mem_t *const membuf);
+
+/*! \brief     Destroy a FastMutex.
+    \param[in] mtx: FastMutex handle.
+    \note      Must not be destroyed while tasks are waiting on it.
+*/
+void stk_fastmutex_destroy(stk_fastmutex_t *mtx);
+
+/*! \brief     Lock the mutex. Blocks until available.
+    \param[in] mtx: FastMutex handle.
+    \warning   Must not be called by the task that already owns the mutex (kernel panic KERNEL_PANIC_SYNC_DEADLOCK).
+*/
+void stk_fastmutex_lock(stk_fastmutex_t *mtx);
+
+/*! \brief     Try locking the mutex. Does not block if already locked.
+    \param[in] mtx: FastMutex handle.
+    \return    True if locked successfully, False if locked by another task.
+    \warning   Panics (KERNEL_PANIC_SYNC_DEADLOCK) if the caller already owns the mutex.
+*/
+bool stk_fastmutex_trylock(stk_fastmutex_t *mtx);
+
+/*! \brief     Unlock the mutex.
+    \param[in] mtx: FastMutex handle.
+    \note      Must be called by the owner. Ownership is passed directly to the first waiter (FIFO).
+*/
+void stk_fastmutex_unlock(stk_fastmutex_t *mtx);
+
+/*! \brief     Try to lock the mutex with a timeout.
+    \param[in] mtx: FastMutex handle.
+    \param[in] timeout: Maximum time to wait in OS ticks or \a STK_WAIT_INFINITE.
+    \return    True if locked successfully, False on timeout.
+    \warning   Panics (KERNEL_PANIC_SYNC_DEADLOCK) if the caller already owns the mutex.
+    \note      If OS tick rate is 1 kHz then 1 tick = 1 ms. Use \c stk_ticks_from_ms()
+               to convert a millisecond value to ticks for best portability across
+               different tick rates.
+*/
+bool stk_fastmutex_timed_lock(stk_fastmutex_t *mtx, stk_timeout_t timeout);
+
+#ifdef __cplusplus
+namespace stk { namespace sync { class FastMutex; } }
+
+/*! \brief     Get the underlying C++ \c stk::sync::FastMutex object wrapped by a \c stk_fastmutex_t handle.
+    \param[in] mtx: FastMutex handle obtained via \c stk_fastmutex_create().
+    \return    Pointer to the wrapped \c stk::sync::FastMutex instance. Never \c NULL for a valid handle.
+    \note      C++ callers only (guarded by \c __cplusplus); not part of the C ABI.
+*/
+extern "C" stk::sync::FastMutex *stk_fastmutex_get_instance(stk_fastmutex_t *mtx);
+#endif // __cplusplus
+
 // ----- SpinLock --------------------------------------------------------------
 
 /*! \brief     A memory size (multiples of stk_word_t) required for SpinLock instance.
@@ -1125,6 +1198,37 @@ bool stk_cv_wait(stk_cv_t *cv, stk_mutex_t *mtx, stk_timeout_t timeout);
     \warning   ISR-safe only with timeout = \c STK_NO_WAIT, ISR-unsafe otherwise.
 */
 stk_wait_result_t stk_cv_wait_ex(stk_cv_t *cv, stk_mutex_t *mtx, stk_timeout_t timeout);
+
+/*! \brief     Wait for a signal on the condition variable, protected by a FastMutex.
+    \details   Same as \c stk_cv_wait(), but the lock protecting the state is a \c stk_fastmutex_t.
+               Atomically releases the mutex and suspends the task. The mutex is re-acquired
+               before returning.
+    \param[in] cv: CV handle.
+    \param[in] mtx: Locked FastMutex handle protecting the state.
+    \param[in] timeout: Maximum time to wait in OS ticks or \a STK_WAIT_INFINITE.
+    \return    True if signaled, False if the wait did not end in a signal (timeout or
+               an externally cancelled wait).
+    \note      The calling task must own \a mtx exactly once (FastMutex is not recursive).
+    \note      Collapses the distinction between timeout and cancellation. Use
+               \c stk_cv_wait_ex_fastmutex() if the caller needs to tell them apart.
+    \note      If OS tick rate is 1 kHz then 1 tick = 1 ms. Use \c stk_ticks_from_ms()
+               to convert a millisecond value to ticks for best portability across
+               different tick rates.
+*/
+bool stk_cv_wait_fastmutex(stk_cv_t *cv, stk_fastmutex_t *mtx, stk_timeout_t timeout);
+
+/*! \brief     Wait for a signal on the condition variable protected by a FastMutex, preserving the full outcome.
+    \details   Identical to \c stk_cv_wait_fastmutex(), except the caller gets the raw
+               \c stk_wait_result_t instead of a collapsed bool, so a cancellation can
+               be distinguished from a timeout.
+    \param[in] cv: CV handle.
+    \param[in] mtx: Locked FastMutex handle protecting the state.
+    \param[in] timeout: Maximum time to wait in OS ticks or \a STK_WAIT_INFINITE.
+    \return    \c STK_WAIT_RESULT_SIGNAL, \c STK_WAIT_RESULT_TIMEOUT, or
+               \c STK_WAIT_RESULT_CANCELED.
+    \warning   ISR-safe only with timeout = \c STK_NO_WAIT, ISR-unsafe otherwise.
+*/
+stk_wait_result_t stk_cv_wait_ex_fastmutex(stk_cv_t *cv, stk_fastmutex_t *mtx, stk_timeout_t timeout);
 
 /*! \brief     Wake one task waiting on the condition variable.
     \param[in] cv: CV handle.
