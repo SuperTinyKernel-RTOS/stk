@@ -81,8 +81,8 @@ stk/
 │   │   └── stk_sync_barrier.h    ← Barrier (cyclic rendezvous)
 │   └── time/
 │       ├── stk_time.h            ← Umbrella: includes all time headers
-│       ├── stk_time_util.h       ← PeriodicTrigger
-│       └── stk_time_timer.h      ← TimerHost + Timer
+│       ├── stk_time_util.h       ← PeriodicTrigger + Stopwatch
+│       └── stk_time_timer.h      ← TimerHost + Timer (task mode and polled mode)
 └── src/
     └── arch/
         ├── arm/cortex-m/         ← ARM Cortex-M implementation (.cpp)
@@ -329,7 +329,7 @@ int main()
 
 - **Error handling depends on the mode.** `KERNEL_DYNAMIC` only *returns* a failure and never asserts: the caller must check the result, otherwise the task is silently not added. All other modes assert on a failure (a design error), in a release build the task is not added. The kernel is not changed by a failed call, and the task and stack collision check always runs, also in a release build.
 - **ISR callers:** the whole add (stack initialization, MPU setup and the `ITask` getters) runs with interrupts masked, so use a modest stack and a low-priority ISR. On Cortex-M the ISR priority must be numerically above `STK_CORTEX_M_SVCALL_ISR_PRIORITY`. With `KERNEL_TICKLESS`, a task added from an ISR while every task sleeps starts when the already armed timer fires, not on the next tick. Kernels are assumed to be per-core.
-- **HRT:** `AddTask(task, periodicity, deadline, start_delay)` must be called before `Start()`; adding an HRT task at runtime is not supported.
+- **HRT:** `AddTask(task, periodicity, deadline, start_delay)` must be called before `Start()`; adding an HRT task at runtime is not supported. The plain `AddTask(ITask *)` is rejected in `KERNEL_HRT` (`ADD_FAIL_INVALID`), so a component which registers its own tasks, such as `time::TimerHost` in task mode, must be used in its task-less polled mode there (see [`include/time`](#includetime--time-utilities)).
 
 ```cpp
 const stk::EAddResult res = kernel.AddTask(&worker);
@@ -662,7 +662,7 @@ Include the umbrella header:
 #include <time/stk_time.h>
 ```
 
-Two classes cover the full range of timing needs:
+Three building blocks cover the range of timing needs:
 
 **`time::PeriodicTrigger`** (`stk_time_util.h`) — Lightweight polling trigger requiring no kernel involvement. Stores an absolute next-fire tick and advances it by the configured period on each `true` return, keeping the long-term rate stable regardless of call jitter. Not thread-safe; intended for a single task or ISR.
 
@@ -672,19 +672,55 @@ stk::time::PeriodicTrigger trigger(stk::GetTicksFromMs(500), /*start=*/true);
 if (trigger.Poll()) { ReadSensor(); }
 ```
 
-**`time::TimerHost` + `time::TimerHost::Timer`** (`stk_time_timer.h`) — Kernel-backed software timer multiplexer. Fixed overhead of one tick task plus N handler tasks (`STK_TIMER_THREADS_COUNT`, default 1) regardless of how many timers are active. Subclass `Timer` and override `OnExpired()`. Key commands: `Start`, `Stop`, `Reset`, `Restart` (atomic stop+start), `StartOrReset` (TOCTOU-safe), `SetPeriod`, `Shutdown`.
+**`time::Stopwatch`** (`stk_time_util.h`) — Elapsed-cycle measurement with a caller-supplied time source (function pointer, lambda or functor), independent of any hardware counter. `Start(now_func)` captures the reference point, `Update(now_func)` returns the cycles elapsed since the previous call. Wrap-around safe. Not thread-safe.
+
+**`time::TimerHost` + `time::TimerHost::Timer`** (`stk_time_timer.h`) — Software timer multiplexer with two operating modes. Subclass `Timer` and override `OnExpired()`. Key commands: `Start`, `Stop`, `Reset`, `Restart` (atomic stop+start), `StartOrReset` (TOCTOU-safe), `SetPeriod`, `Shutdown`; all are asynchronous (queued, applied by the tick task or by the next `Process()`).
+
+- **Task mode** — `Initialize(kernel, mode, cfg)`: fixed overhead of one tick task plus N handler tasks (`STK_TIMER_THREADS_COUNT`, default 1) regardless of how many timers are active; callbacks run in a handler task. The optional `TimerHost::Config` sets the weights of the tick and handler tasks and external stack buffers; the returned `EAddResult` reports a failed registration. A weight is strategy-specific and forwarded unchanged: set it explicitly, in particular with `SwitchStrategyPreemptionThreshold`, where `DEFAULT_WEIGHT` decodes as priority 0 / threshold 1 and would hold every timer task while it runs.
+- **Polled mode** — `InitializePolled()` + `Process()`: no kernel tasks. The application calls `Process()` periodically from one context of its own (a task loop or an HRT job); each call applies pending commands and runs the callbacks of expired timers **inline**, never blocks, and returns the ticks until the earliest deadline (`NO_WAIT` if overdue, `WAIT_INFINITE` if no timer is active). The call period is the timer resolution and the callbacks count against the caller's time budget.
+
+`TimerHost` requires `KERNEL_SYNC` (its queues are `sync::Pipe` based). Task mode also needs `KERNEL_DYNAMIC` and cannot be used with `KERNEL_HRT`; polled mode works with `KERNEL_HRT`.
+
+```cpp
+// Task mode: weights of the host tasks (strategy-specific), result of the registration
+stk::time::TimerHost::Config cfg;
+cfg.tick_weight    = stk::SwitchStrategyPT32::MakeWeight(5, 5);   // threshold == priority: no hold
+cfg.handler_weight = stk::SwitchStrategyPT32::MakeWeight(4, 4);
+
+if (g_TimerHost.Initialize(&kernel, stk::ACCESS_USER, cfg) != stk::ADD_OK) { /* e.g. no free task slots */ }
+```
+
+```cpp
+// Polled mode in an HRT kernel: a periodic HRT job drives the timers
+g_TimerHost.InitializePolled();
+
+class TimerJob : public stk::Task<256, stk::ACCESS_USER>
+{
+public:
+    void Run()
+    {
+        for (;;)
+        {
+            g_TimerHost.Process(); // expired callbacks run inline
+            stk::Yield();          // job completed, sleep until the next period
+        }
+    }
+};
+// kernel.AddTask(&job, period_ticks, deadline_ticks, start_delay_ticks);
+```
 
 **When to use which:**
 
-| Criterion           |   `PeriodicTrigger`    |       `TimerHost::Timer`       |
-|---------------------|:----------------------:|:------------------------------:|
-| Kernel required     |           No           |              Yes               |
-| Task overhead       |     None (polling)     |        1+ shared tasks         |
-| Timers per instance |           1            |              Many              |
-| Callback model      | Inline in calling task |     Separate handler task      |
-| ISR-safe            |  Yes (single context)  | Command API: task context only |
+| Criterion           |   `PeriodicTrigger`    |                       `TimerHost::Timer`                        |
+|---------------------|:----------------------:|:---------------------------------------------------------------:|
+| Kernel required     |           No           |                      Yes (`KERNEL_SYNC`)                        |
+| `KERNEL_HRT` kernel | Yes (no kernel needed) |                 Polled mode only (`Process()`)                  |
+| Task overhead       |     None (polling)     |           1+ shared tasks; none in polled mode                  |
+| Timers per instance |           1            |                              Many                               |
+| Callback model      | Inline in calling task | Handler task (task mode), inline from `Process()` (polled mode) |
+| ISR-safe            |  Yes (single context)  |                 Command API: task context only                  |
 
-For full API tables, watchdog/debounce/runtime-period-change examples, and configuration macros (`STK_TIMER_THREADS_COUNT`, `STK_TIMER_HANDLER_STACK_SIZE`, `STK_TIMER_COUNT_MAX`), see [`include/time/README.md`](include/time/README.md).
+For full API tables, `Config` and weight semantics per strategy, polled-mode and HRT examples, watchdog/debounce/runtime-period-change examples, and configuration macros (`STK_TIMER_THREADS_COUNT`, `STK_TIMER_HANDLER_STACK_SIZE`, `STK_TIMER_COUNT_MAX`), see [`include/time/README.md`](include/time/README.md).
 
 ---
 
@@ -739,7 +775,7 @@ User application code
 Optional modules (included independently by user code):
     sync/stk_sync.h      → 12 synchronization primitives
     memory/stk_memory.h  → BlockMemoryPool, BytePool
-    time/stk_time.h      → PeriodicTrigger, TimerHost
+    time/stk_time.h      → PeriodicTrigger, Stopwatch, TimerHost
 ```
 
 The kernel itself allocates no heap. All storage — `KernelTask` slots, the sleep trap stack, the optional exit trap stack, the sync object list, and the strategy and platform objects — lives inside the `Kernel` template instance, which is typically declared as a global static.

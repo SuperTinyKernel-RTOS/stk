@@ -421,7 +421,7 @@ static __stk_forceinline Ticks GetTicksFromMs(Time ms, uint32_t resolution)
     \param[in] ms: Time in milliseconds to convert.
     \return    Equivalent tick count.
     \note      Convenience overload that queries GetTickResolution() automatically.
-               Use the two-argument form GetTicksFromMsec(ms, resolution) in ISR context.
+               Use the two-argument form GetTicksFromMs(ms, resolution) in ISR context.
     \warning   ISR-unsafe (internally calls GetTickResolution() which accesses the kernel service).
 */
 static __stk_forceinline Ticks GetTicksFromMs(Time ms)
@@ -438,7 +438,6 @@ static __stk_forceinline Timeout GetTicksFromMsClampedToTimeout(Timeout ms)
 {
     const Time time_ms = static_cast<Time>(ms);
     const Ticks tick_count = GetTicksFromMs(time_ms);    
-    
     const Ticks final_ticks = (tick_count < static_cast<Ticks>(WAIT_INFINITE)) ? 
         tick_count : static_cast<Ticks>(WAIT_INFINITE);
         
