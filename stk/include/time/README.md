@@ -1,15 +1,17 @@
 # STK Time Module (`stk::time`)
 
-**STK Time Module** provides lightweight, zero-allocation time utilities for embedded systems. It includes a single-task periodic polling trigger, a full-featured kernel-backed software timer framework capable of managing many independent timers at constant task overhead, and a lightweight stopwatch for measuring elapsed cycles between events.
+**STK Time Module** provides lightweight, zero-allocation time utilities for embedded systems. It includes a single-task periodic polling trigger, a full-featured kernel-backed software timer framework capable of managing many independent timers at constant task overhead (running on its own kernel tasks or, in polled mode, driven by the application, including from `KERNEL_HRT` jobs), and a lightweight stopwatch for measuring elapsed cycles between events.
 
 ## Features
 
 - **Zero Dynamic Allocation**: All objects are allocated statically or on the stack — no heap usage.
-- **Constant Task Overhead**: `TimerHost` uses a fixed set of kernel tasks regardless of how many timers are active.
+- **Constant Task Overhead**: `TimerHost` uses a fixed set of kernel tasks regardless of how many timers are active (none at all in polled mode).
 - **Drift-Compensated Firing**: Both `PeriodicTrigger` and `TimerHost` advance deadlines by the configured period rather than resetting to the current time, preserving long-term firing accuracy even when individual callbacks are delayed.
 - **One-shot and Periodic Modes**: Timers fire once or reload automatically, selectable per timer instance.
 - **Atomic Operations**: `Restart()` and `StartOrReset()` perform compound state changes atomically with respect to the tick task, eliminating TOCTOU races.
-- **Low-Power Aware**: The tick task sleeps until the nearest deadline; handler tasks block until a timer expires.
+- **Low-Power Aware**: The tick task sleeps until the nearest deadline; handler tasks block until a timer expires. In polled mode `Process()` returns the ticks until the nearest deadline, so the caller can sleep exactly that long.
+- **Two Operating Modes**: `TimerHost` runs either on its own kernel tasks (task mode) or without any kernel tasks (polled mode), where the application calls `Process()` periodically. Polled mode is the way to use timers with a `KERNEL_HRT` kernel.
+- **Configurable Tasks**: In task mode `Initialize()` accepts a `Config` with the weights of the tick and handler tasks and optional external stack buffers, and reports a failed registration through its `EAddResult` result.
 - **ISR Context**: `PeriodicTrigger` is suitable for use inside a single task or ISR. `TimerHost` commands must be issued from task context.
 - **Source-Agnostic Measurement**: `Stopwatch` measures elapsed counter units (e.g. CPU cycles) between calls using a caller-supplied time source, independent of any particular hardware counter.
 
@@ -50,6 +52,23 @@ A software timer multiplexer that manages many independent `Timer` instances on 
 
 All control operations (`Start`, `Stop`, `Reset`, etc.) are issued as commands through a lock-free pipe to the tick task, keeping the caller non-blocking.
 
+**Operating modes:**
+
+| Mode | Initialization | Kernel tasks | Callbacks run in |
+|---|---|---|---|
+| Task mode | `Initialize()` | 1 tick task + `STK_TIMER_THREADS_COUNT` handler task(s) | A handler task |
+| Polled mode | `InitializePolled()` | None | The context which calls `Process()` |
+
+**Requirements:** the kernel must be built with `KERNEL_SYNC` (the command and ready queues are `stk::sync::Pipe` based). Task mode registers tasks which block on those queues: it needs `KERNEL_DYNAMIC` (the tasks exit on `Shutdown()`) and cannot be used with `KERNEL_HRT` — the kernel rejects the soft real-time `AddTask()` with `ADD_FAIL_INVALID`. Polled mode creates no tasks and has no such restriction. In task mode the kernel needs `1 + STK_TIMER_THREADS_COUNT` free task slots.
+
+**Polled mode:** `InitializePolled()` creates no kernel tasks. The application calls `Process()` periodically from one context of its own (a task loop or an HRT job). Each call applies pending commands, evaluates the deadlines and runs the `OnExpired()` callbacks of expired timers **inline**, then returns the ticks until the earliest deadline (`NO_WAIT` if a timer is overdue, `WAIT_INFINITE` if none is active). `Process()` never blocks.
+
+- The call period is the timer resolution: a timer fires on the first call at or after its deadline, i.e. late by at most one call period.
+- Callbacks run in the caller's context and count against its time budget (e.g. the deadline of an HRT job). The worst-case time of all callbacks which can expire in one call is part of the caller's WCET. A callback must not call `Process()`.
+- `Start()`, `Stop()` and the other commands may be issued from any task, callbacks included; they take effect at the next `Process()`.
+- A periodic timer which is overdue by more than its period fires once per call until its schedule has caught up (no drift is accumulated).
+- `Shutdown()` stops and releases all timers; there are no tasks to exit and the host stays usable.
+
 **Configuration macros:**
 
 | Macro | Default | Description |
@@ -58,18 +77,40 @@ All control operations (`Start`, `Stop`, `Reset`, etc.) are issued as commands t
 | `STK_TIMER_HANDLER_STACK_SIZE` | `256` | Stack size (words) for each handler task. Increase if callbacks use more. |
 | `STK_TIMER_COUNT_MAX` | `32` | Maximum number of concurrently active timers. |
 
+**`TimerHost::Config`** (optional argument of `Initialize()`, task mode only; a default-constructed `Config` keeps the fixed behavior of earlier versions):
+
+| Field | Default | Description |
+|---|---|---|
+| `tick_weight` | `DEFAULT_WEIGHT` | Weight of the tick task. |
+| `handler_weight` | `DEFAULT_WEIGHT` | Weight of every handler task. |
+| `tick_stack`, `tick_stack_size` | `nullptr`, `0` | External stack of the tick task (size in `Word` elements, at least `STK_STACK_SIZE_MIN`). `nullptr` selects the internal buffer. |
+| `handler_stack[]`, `handler_stack_size` | all `nullptr`, `0` | External stack of each handler task (a `nullptr` entry selects the internal buffer) and the size of every non-null entry. |
+
+A weight is **strategy-specific** and forwarded to the kernel unchanged (only `NO_WEIGHT` is rejected by `TimerHost`):
+
+| Task-switching strategy | Meaning of the weight |
+|---|---|
+| Round-robin, EDF, Monotonic | Ignored. |
+| Fixed priority | The priority level. |
+| Smooth weighted round-robin | A CPU share; a larger value gives more slices but does not preempt. |
+| Preemption threshold | `MakeWeight(priority, threshold)`. `DEFAULT_WEIGHT` decodes as priority 0 / threshold 1, i.e. every timer task would be *held* while it runs, so the weights **must** be set explicitly; use threshold == priority unless holding is intended. |
+
+Recommended: the tick task at least as urgent as the handler tasks, otherwise a long callback delays the evaluation of all other deadlines. External stack buffers must outlive the host and be distinct from each other and from every other task's stack (the kernel rejects a duplicate with `ADD_FAIL_DUPLICATE`).
+
 **`TimerHost` methods:**
 
 | Method | Description |
 |---|---|
-| `Initialize(kernel, mode)` | Registers tick and handler tasks with the kernel. Must be called before any timers are started. |
+| `Initialize(kernel, mode, cfg=Config())` | Task mode: registers tick and handler tasks with the kernel, using the weights and stacks of `cfg`. Must be called before any timers are started. Returns `ADD_OK` or the first failure of `IKernel::AddTask()` (e.g. `ADD_FAIL_POOL_FULL`, `ADD_FAIL_DUPLICATE`, `ADD_FAIL_INVALID`); after a failure the host is unusable. `mode` applies to the handler tasks, the tick task is always `ACCESS_USER`. |
+| `InitializePolled()` | Polled mode: no kernel tasks are created and `Config` does not apply. Mutually exclusive with `Initialize()`; after `Shutdown()` the host can be initialized again in either mode. |
+| `Process()` | Polled mode only. Applies pending commands, evaluates deadlines and runs the callbacks of expired timers inline. Never blocks. Returns ticks until the earliest deadline (`NO_WAIT` if a timer is overdue, `WAIT_INFINITE` if none is active). Call from one context only. |
 | `Start(timer, delay, period=0)` | Starts a timer. `period=0` means one-shot; non-zero means periodic. Fails if timer is already active. |
 | `Stop(timer)` | Stops a running timer. Fails if already inactive. |
 | `Reset(timer)` | Resets a periodic timer's deadline to `now + period`. Fails if inactive or one-shot. |
 | `Restart(timer, delay, period=0)` | Atomically stops and re-starts a timer. Safe regardless of current state. Consumes a single command queue slot. |
 | `StartOrReset(timer, delay, period=0)` | Starts if inactive; resets deadline if active and periodic; no-ops if active one-shot. Eliminates TOCTOU race of manual `IsActive()` + `Start()`/`Reset()`. |
 | `SetPeriod(timer, period)` | Changes the reload period of an active periodic timer. Takes effect on the next reload; call `Reset()` afterward to apply immediately. |
-| `Shutdown()` | Stops all timers and terminates tick and handler tasks. |
+| `Shutdown()` | Stops all timers. Task mode: terminates the tick and handler tasks. Polled mode: the host stays usable. |
 | `IsEmpty()` | Returns `true` if no timers are currently active (advisory). |
 | `GetSize()` | Returns the count of currently active timers (advisory). |
 | `GetTimeNow()` | Returns the last tick value written by the tick task. |
@@ -86,7 +127,7 @@ Each `Timer` instance may be registered with at most one `TimerHost` at a time.
 
 | Method | Description |
 |---|---|
-| `OnExpired(host)` | Pure virtual. Called by a handler task when the timer fires. |
+| `OnExpired(host)` | Pure virtual. Called when the timer fires: by a handler task (task mode) or inline from `Process()` (polled mode). |
 | `IsActive()` | Returns `true` if the timer is currently active. |
 | `GetDeadline()` | Returns the absolute expiration time in ticks. |
 | `GetTimestamp()` | Returns the tick value at which the timer last expired. |
@@ -188,14 +229,17 @@ NotifyTimer          g_Notify;
 
 void SetupTimers(stk::IKernel *kernel)
 {
-    g_TimerHost.Initialize(kernel, stk::ACCESS_USER);
+    if (g_TimerHost.Initialize(kernel, stk::ACCESS_USER) != stk::ADD_OK)
+    {
+        return; // e.g. no free task slots in the kernel
+    }
 
     // start 500 ms periodic heartbeat
-    uint32_t period = stk::GetTicksFromMsec(500);
+    uint32_t period = static_cast<uint32_t>(stk::GetTicksFromMs(500));
     g_TimerHost.Start(g_Heartbeat, period, period);
 
     // start a one-shot notification after 1 s
-    uint32_t delay = stk::GetTicksFromMsec(1000);
+    uint32_t delay = static_cast<uint32_t>(stk::GetTicksFromMs(1000));
     g_TimerHost.Start(g_Notify, delay);
 }
 ```
@@ -205,7 +249,7 @@ void SetupTimers(stk::IKernel *kernel)
 ```cpp
 // Safe to call from any task context: atomically re-arms the timer
 // whether it is currently active or not, consuming a single queue slot.
-g_TimerHost.Restart(g_WatchdogTimer, stk::GetTicksFromMsec(5000));
+g_TimerHost.Restart(g_WatchdogTimer, static_cast<uint32_t>(stk::GetTicksFromMs(5000)));
 ```
 
 ### Debounce with `StartOrReset()`
@@ -215,7 +259,7 @@ g_TimerHost.Restart(g_WatchdogTimer, stk::GetTicksFromMsec(5000));
 // or push the deadline out if it is — without a TOCTOU race.
 void OnButtonEvent()
 {
-    uint32_t debounce = stk::GetTicksFromMsec(50);
+    uint32_t debounce = static_cast<uint32_t>(stk::GetTicksFromMs(50));
     g_TimerHost.StartOrReset(g_DebounceTimer, debounce);
 }
 ```
@@ -226,9 +270,89 @@ void OnButtonEvent()
 // Switch heartbeat from 500 ms to 250 ms.
 // SetPeriod() takes effect on the next reload.
 // Follow with Reset() to apply the new interval immediately.
-uint32_t newPeriod = stk::GetTicksFromMsec(250);
+uint32_t newPeriod = static_cast<uint32_t>(stk::GetTicksFromMs(250));
 g_TimerHost.SetPeriod(g_Heartbeat, newPeriod);
 g_TimerHost.Reset(g_Heartbeat);
+```
+
+### Task weights and external stacks
+
+```cpp
+// Weights are strategy-specific: set the ones of the strategy the kernel uses.
+stk::time::TimerHost::Config cfg;
+
+// SwitchStrategyFP32: real preemption priority
+cfg.tick_weight    = stk::SwitchStrategyFP32::PRIORITY_HIGH;
+cfg.handler_weight = stk::SwitchStrategyFP32::PRIORITY_ABOVE_NORMAL;
+
+// SwitchStrategyPT32: keep threshold == priority (no hold)
+cfg.tick_weight    = stk::SwitchStrategyPT32::MakeWeight(5, 5);
+cfg.handler_weight = stk::SwitchStrategyPT32::MakeWeight(4, 4);
+
+// SwitchStrategySWRR: no preemption, only a larger share
+cfg.tick_weight    = 4;
+cfg.handler_weight = 1;
+
+// Optional: external stack buffer for the tick task
+static stk::StackMemoryDef<256>::Type g_TickStack;
+cfg.tick_stack      = reinterpret_cast<stk::Word *>(&g_TickStack);
+cfg.tick_stack_size = 256;
+
+if (g_TimerHost.Initialize(kernel, stk::ACCESS_USER, cfg) != stk::ADD_OK)
+{
+    // registration failed, e.g. ADD_FAIL_POOL_FULL or ADD_FAIL_DUPLICATE
+}
+```
+
+### Polled mode in an HRT kernel
+
+```cpp
+#include <time/stk_time_timer.h>
+
+// A periodic HRT job drives the timers: its period is the timer resolution.
+class TimerJob : public stk::Task<256, stk::ACCESS_USER>
+{
+public:
+    void Run()
+    {
+        for (;;)
+        {
+            g_TimerHost.Process(); // runs expired callbacks inline
+            stk::Yield();          // job completed, sleep until the next period
+        }
+    }
+};
+
+TimerJob g_TimerJob;
+
+void SetupTimers(stk::IKernel *kernel) // kernel: KERNEL_HRT | KERNEL_SYNC
+{
+    g_TimerHost.InitializePolled();
+
+    // 5 ms timer resolution, 2 ms budget (callbacks included) per job
+    kernel->AddTask(&g_TimerJob, stk::GetTicksFromMsClampedToTimeout(5), stk::GetTicksFromMsClampedToTimeout(2), 0);
+}
+```
+
+Timer commands (`Start()`, `Stop()`, ...) may be issued from any other task; they take effect at the next job.
+
+### Polled mode in a plain task loop
+
+```cpp
+// Sleep only as long as needed. The cap bounds the delay with which commands
+// issued meanwhile are picked up.
+void TimerLoop()
+{
+    for (;;)
+    {
+        const stk::Timeout next = g_TimerHost.Process();
+
+        if (next != stk::NO_WAIT)
+        {
+            stk::Sleep((next < 100) ? next : 100);
+        }
+    }
+}
 ```
 
 ---
@@ -237,10 +361,11 @@ g_TimerHost.Reset(g_Heartbeat);
 
 | Criterion | `PeriodicTrigger` | `TimerHost::Timer` |
 |---|---|---|
-| Kernel required | No | Yes |
-| Task overhead | None (polling) | 2+ kernel tasks (shared) |
+| Kernel required | No | Yes (`KERNEL_SYNC`) |
+| `KERNEL_HRT` kernel | Yes (no kernel involvement) | Polled mode only (`InitializePolled()` + `Process()`) |
+| Task overhead | None (polling) | 2+ kernel tasks (shared); none in polled mode |
 | Number of timers | One per instance | Many, sharing fixed tasks |
-| Callback model | Inline in calling task | Separate handler task |
+| Callback model | Inline in calling task | Separate handler task (task mode) or inline from `Process()` (polled mode) |
 | ISR safe | Yes (single task/ISR only) | Command API from task context only |
 | Timeout support | No | No (fire-and-forget deadlines) |
 | Typical use | Simple periodic work inside one task | Multiple independent timers across the system |

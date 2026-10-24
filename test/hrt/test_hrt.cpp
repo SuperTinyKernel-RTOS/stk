@@ -32,6 +32,14 @@
                           through ITask::OnDeadlineMissed() + IEventOverrider::OnHardFault();
      - MissIsolated:      a missing task does not disturb the schedule of a healthy one.
 
+    TimerHost in HRT mode (polled mode: no kernel tasks, an HRT job calls TimerHost::Process(), the queues of
+    TimerHost need KERNEL_SYNC, therefore the kernel of this suite has it):
+     - TimerBasic:        one-shot and periodic timers expire inline from the job, late by up to one job period;
+     - TimerCrossTask:    commands (Start/Stop/Restart) issued from another HRT task take effect at the next job;
+     - TimerBudget:       callbacks of several timers expiring in one job fit the job deadline (no deadline miss);
+     - TimerOverrun:      a callback which exceeds the job deadline is reported as a deadline miss and the
+                          schedule of the following jobs is not disturbed.
+
     Timing notes (tick = 1 ms, the default): Delay() is wall-clock based, therefore the work of tasks
     which are active at the same time overlaps instead of being serialized. A job lasts at least
     its workload (minus one tick of measurement jitter) and typically a few ticks more.
@@ -44,6 +52,9 @@
 
 #include <stk_config.h>
 #include <stk.h>
+#ifndef __ARM_ARCH_6M__
+#include <time/stk_time_timer.h>
+#endif
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -57,9 +68,14 @@ STK_TEST_DECL_ASSERT;
 
 #define _STK_HRT_TEST_TASKS_MAX      4
 #define _STK_HRT_TEST_ITRS_MAX       20   // max jobs recorded per task
+
+// Checked timeouts.
 #define _STK_HRT_TEST_START_TOL_MS   10   // allowed deviation of a job start from its expected time (ms)
 #define _STK_HRT_TEST_WORK_LO_MS     1    // allowed "early" slack of a measured workload (ms)
 #define _STK_HRT_TEST_WORK_HI_MS     10   // allowed "late" slack of a measured workload (ms)
+#define _STK_HRT_TEST_DEADLINE_SLACK_MS 0 // extra slack of the measured job duration vs deadline (ms)
+#define _STK_HRT_TEST_EARLY_TOL_MS   2    // allowed "early" firing of a timer (ms)
+#define _STK_HRT_TEST_IDLE_JOB_MS    4    // max duration of a job which runs no timer callback (ms)
 
 #if defined(_STK_ARCH_RISC_V)
 #define _STK_HRT_STACK_SIZE          384
@@ -97,8 +113,8 @@ static volatile int32_t g_Count[_STK_HRT_TEST_TASKS_MAX] = {};      // completed
 static volatile int32_t g_MissCount[_STK_HRT_TEST_TASKS_MAX] = {};  // OnDeadlineMissed() calls
 static volatile int32_t g_MissFirst[_STK_HRT_TEST_TASKS_MAX] = {};  // duration reported by the first call
 
-// Kernel
-static Kernel<KERNEL_DYNAMIC | KERNEL_HRT, _STK_HRT_TEST_TASKS_MAX, SwitchStrategyRoundRobin, PlatformDefault> g_Kernel;
+// Kernel (KERNEL_SYNC: required by the queues of TimerHost used in polled mode, see the TimerHost tests)
+static Kernel<KERNEL_DYNAMIC | KERNEL_HRT | KERNEL_SYNC, _STK_HRT_TEST_TASKS_MAX, SwitchStrategyRoundRobin, PlatformDefault> g_Kernel;
 
 /*! \class HrtOverrider
     \brief Makes a hard fault (HRT deadline miss) survivable and countable.
@@ -401,7 +417,7 @@ static bool VerifyScenario(int32_t tasks)
             }
 
             // a healthy job completes within its deadline
-            if (!c.expect_miss && (diff > c.deadline))
+            if (!c.expect_miss && (diff > (c.deadline + _STK_HRT_TEST_DEADLINE_SLACK_MS)))
             {
                 printf("failed deadline (%d): id=%d diff=%d deadline=%d\n", (int)i, (int)t, (int)diff,
                     (int)c.deadline);
@@ -439,6 +455,453 @@ static bool VerifyScenario(int32_t tasks)
 
     return ok;
 }
+
+#ifndef __ARM_ARCH_6M__
+
+// TimerHost tests (polled mode driven by an HRT job)
+
+#define _STK_HRT_TH_JOBS_MAX    24  // max driver jobs recorded
+#define _STK_HRT_TH_FIRES_MAX   8   // max expirations recorded per timer
+
+/*! \enum  EThScenario
+    \brief TimerHost scenarios, see ThSetup().
+*/
+enum EThScenario : int32_t
+{
+    TH_BASIC = 0,
+    TH_CROSS_TASK,
+    TH_CALLBACK_BUDGET,
+    TH_CALLBACK_OVERRUN
+};
+
+/*! \struct ThCfg
+    \brief  Configuration of a TimerHost scenario (all times in milliseconds).
+    \note   The driver is the HRT job which calls TimerHost::Process(), its periodicity is the timer resolution.
+            The controller (ctrl_jobs > 0) is a second HRT task which issues timer commands from its own job.
+*/
+struct ThCfg
+{
+    int32_t period;        //!< Driver periodicity.
+    int32_t deadline;      //!< Driver deadline (covers Process() together with all callbacks it runs).
+    int32_t jobs;          //!< Number of driver jobs before it exits.
+    int32_t work0;         //!< Workload of the callback of timer 0 (busy delay).
+    int32_t work1;         //!< Workload of the callback of timer 1 (busy delay).
+    int32_t ctrl_period;   //!< Controller periodicity.
+    int32_t ctrl_deadline; //!< Controller deadline.
+    int32_t ctrl_delay;    //!< Controller start delay.
+    int32_t ctrl_jobs;     //!< Number of controller jobs (0: no controller task).
+    bool    expect_miss;   //!< A callback exceeds the driver deadline: a deadline miss is expected.
+};
+
+static time::TimerHost g_TimerHost;
+
+static ThCfg               g_ThCfg      = {};
+static volatile int32_t    g_ThScenario = 0;
+static volatile bool       g_ThInJob    = false; // true while the driver is inside TimerHost::Process()
+static volatile int32_t    g_ThJobs     = 0;     // completed driver jobs
+static volatile int32_t    g_ThJobStart[_STK_HRT_TH_JOBS_MAX] = {};
+static volatile int32_t    g_ThJobDur[_STK_HRT_TH_JOBS_MAX]   = {};
+static volatile int32_t    g_ThFireCount[2] = {};                              // expirations per timer
+static volatile int32_t    g_ThInline[2]    = {};                              // expirations which ran inside Process()
+static volatile int32_t    g_ThFireTime[2][_STK_HRT_TH_FIRES_MAX] = {};        // callback start time
+static volatile int32_t    g_ThIssued[2][2] = {};                              // [timer][0: Start(), 1: Restart()] call time
+
+/*! \class ThTimer
+    \brief Timer which records every expiration (time, inline or not) and then does \a work ms of busy work.
+*/
+class ThTimer : public time::TimerHost::Timer
+{
+    uint8_t m_id;
+
+public:
+    ThTimer(uint8_t timer_id) : m_id(timer_id)
+    {}
+
+    void OnExpired(time::TimerHost *) override
+    {
+        const int32_t n = g_ThFireCount[m_id];
+
+        if (n < _STK_HRT_TH_FIRES_MAX)
+            g_ThFireTime[m_id][n] = static_cast<int32_t>(GetTimeNowMs());
+
+        g_ThFireCount[m_id] = n + 1;
+
+        if (g_ThInJob)
+            g_ThInline[m_id] = g_ThInline[m_id] + 1;
+
+        const int32_t work = (m_id == 0 ? g_ThCfg.work0 : g_ThCfg.work1);
+
+        if (work > 0)
+            stk::Delay(MsToTicks(work));
+    }
+};
+
+static ThTimer g_ThTimer0(0);
+static ThTimer g_ThTimer1(1);
+
+static void ThStart(int32_t id, uint32_t delay, uint32_t period = 0)
+{
+    g_ThIssued[id][0] = static_cast<int32_t>(GetTimeNowMs());
+    g_TimerHost.Start((id == 0 ? g_ThTimer0 : g_ThTimer1), delay, period);
+}
+
+/*! \class ThDriverTask
+    \brief HRT job which drives the polled TimerHost: every job calls Process() (expired callbacks run inline)
+           and yields. Job 0 starts the timers of the scenario, the last job releases all timers.
+    \note  The job duration (commands + deadline scan + callbacks) must stay within the job deadline.
+*/
+template <EAccessMode _AccessMode>
+class ThDriverTask : public Task<_STK_HRT_STACK_SIZE, _AccessMode>
+{
+    uint8_t m_task_id;
+
+public:
+    ThDriverTask(uint8_t task_id) : m_task_id(task_id)
+    {}
+
+    // called from the tick handler: record only
+    void OnDeadlineMissed(uint32_t duration) override
+    {
+        if (g_MissCount[m_task_id] == 0)
+            g_MissFirst[m_task_id] = static_cast<int32_t>(duration);
+
+        g_MissCount[m_task_id] = g_MissCount[m_task_id] + 1;
+    }
+
+private:
+    void Run()
+    {
+        const ThCfg &c = g_ThCfg;
+
+        for (int32_t j = 0; j < c.jobs; ++j)
+        {
+            const int64_t start = GetTimeNowMs();
+
+            if (j == 0)
+            {
+                switch (g_ThScenario)
+                {
+                case TH_BASIC:
+                    ThStart(0, 35);     // one-shot
+                    ThStart(1, 25, 50); // periodic
+                    break;
+                case TH_CALLBACK_BUDGET:
+                    ThStart(0, 45, 40); // both timers expire in the same job
+                    ThStart(1, 45, 40);
+                    break;
+                case TH_CALLBACK_OVERRUN:
+                    ThStart(0, 25);     // its callback runs far longer than the job deadline
+                    break;
+                default:
+                    break; // TH_CROSS_TASK: the commands come from the controller task
+                }
+            }
+
+            g_ThInJob = true;
+            g_TimerHost.Process();
+            g_ThInJob = false;
+
+            const int32_t dur = static_cast<int32_t>(GetTimeNowMs() - start);
+
+            g_ThJobStart[j] = static_cast<int32_t>(start);
+            g_ThJobDur[j]   = dur;
+            g_ThJobs        = j + 1;
+
+            if ((j + 1) < c.jobs)
+                stk::Yield();
+        }
+
+        // release all timers, the host is shared by the following tests
+        g_TimerHost.Shutdown();
+        g_TimerHost.Process();
+    }
+};
+
+/*! \class ThControllerTask
+    \brief HRT task which issues timer commands from its own job (cross-task commands): job 0 starts a 40 ms
+           one-shot (timer 0) and a 20 ms periodic timer (timer 1), job 1 stops timer 1, job 2 restarts timer 0
+           as a 33 ms one-shot.
+*/
+template <EAccessMode _AccessMode>
+class ThControllerTask : public Task<_STK_HRT_STACK_SIZE, _AccessMode>
+{
+    uint8_t m_task_id;
+
+public:
+    ThControllerTask(uint8_t task_id) : m_task_id(task_id)
+    {}
+
+    // called from the tick handler: record only
+    void OnDeadlineMissed(uint32_t duration) override
+    {
+        if (g_MissCount[m_task_id] == 0)
+            g_MissFirst[m_task_id] = static_cast<int32_t>(duration);
+
+        g_MissCount[m_task_id] = g_MissCount[m_task_id] + 1;
+    }
+
+private:
+    void Run()
+    {
+        const ThCfg &c = g_ThCfg;
+
+        for (int32_t j = 0; j < c.ctrl_jobs; ++j)
+        {
+            switch (j)
+            {
+            case 0:
+                ThStart(0, 40);
+                ThStart(1, 20, 20);
+                break;
+            case 1:
+                g_TimerHost.Stop(g_ThTimer1);
+                break;
+            case 2:
+                g_ThIssued[0][1] = static_cast<int32_t>(GetTimeNowMs());
+                g_TimerHost.Restart(g_ThTimer0, 33);
+                break;
+            default:
+                break;
+            }
+
+            if ((j + 1) < c.ctrl_jobs)
+                stk::Yield();
+        }
+    }
+};
+
+//! Fill g_ThCfg for a TimerHost scenario.
+static void ThSetup(int32_t scenario)
+{
+    memset(&g_ThCfg, 0, sizeof(g_ThCfg));
+
+    ThCfg &c = g_ThCfg;
+
+    switch (scenario)
+    {
+    case TH_BASIC:
+        // job every 10 ms: a one-shot (35 ms) and a periodic timer (25 ms, then every 50 ms)
+        c.period = 10; c.deadline = 8; c.jobs = 20;
+        break;
+    case TH_CROSS_TASK:
+        // the controller (every 50 ms, first job at 5 ms) starts, stops and restarts timers, the driver runs every 10 ms
+        c.period = 10; c.deadline = 8; c.jobs = 20;
+        c.ctrl_period = 50; c.ctrl_deadline = 20; c.ctrl_delay = 5; c.ctrl_jobs = 4;
+        break;
+    case TH_CALLBACK_BUDGET:
+        // two callbacks of 5 ms each expire in the same job (~10 ms of work), the job deadline is 18 ms
+        c.period = 20; c.deadline = 18; c.jobs = 10; c.work0 = 5; c.work1 = 5;
+        break;
+    case TH_CALLBACK_OVERRUN:
+        // a 30 ms callback vs 12 ms job deadline: it still ends before the next job (period 40 ms)
+        c.period = 40; c.deadline = 12; c.jobs = 6; c.work0 = 30; c.expect_miss = true;
+        break;
+    default:
+        break;
+    }
+
+    g_ThScenario = scenario;
+}
+
+static void ResetThState()
+{
+    g_ThInJob = false;
+    g_ThJobs  = 0;
+
+    for (int32_t j = 0; j < _STK_HRT_TH_JOBS_MAX; ++j)
+    {
+        g_ThJobStart[j] = 0;
+        g_ThJobDur[j]   = 0;
+    }
+
+    for (int32_t id = 0; id < 2; ++id)
+    {
+        g_ThFireCount[id] = 0;
+        g_ThInline[id]    = 0;
+        g_ThIssued[id][0] = 0;
+        g_ThIssued[id][1] = 0;
+
+        for (int32_t k = 0; k < _STK_HRT_TH_FIRES_MAX; ++k)
+            g_ThFireTime[id][k] = 0;
+    }
+}
+
+static bool CheckCount(int32_t id, int32_t expected)
+{
+    printf("th: timer %d expirations=%d (expected %d)\n", (int)id, (int)g_ThFireCount[id], (int)expected);
+
+    return (g_ThFireCount[id] == expected);
+}
+
+/*! \brief Check the k-th expiration of a timer: not earlier than its deadline (2 ms jitter) and late by at most
+           \a hi ms, i.e. one job period plus tolerance (the resolution of the polled mode is the job period).
+*/
+static bool CheckFire(int32_t id, int32_t k, int32_t deadline_ms, int32_t hi)
+{
+    if ((k >= g_ThFireCount[id]) || (k >= _STK_HRT_TH_FIRES_MAX))
+    {
+        printf("th: timer %d expiration %d is missing\n", (int)id, (int)k);
+        return false;
+    }
+
+    const int32_t late = g_ThFireTime[id][k] - deadline_ms;
+
+    printf("th: timer %d expiration %d late=%d (expected -%d..%d)\n", (int)id, (int)k, (int)late,
+        (int)_STK_HRT_TEST_EARLY_TOL_MS, (int)hi);
+
+    return InRange(late, -_STK_HRT_TEST_EARLY_TOL_MS, hi);
+}
+
+static bool VerifyTh(int32_t scenario)
+{
+    const ThCfg &c = g_ThCfg;
+    bool ok = true;
+
+    if (g_ThJobs != c.jobs)
+    {
+        printf("th: driver jobs done=%d (expected %d)\n", (int)g_ThJobs, (int)c.jobs);
+        return false;
+    }
+
+    // every callback must have run inline from Process()
+    for (int32_t id = 0; id < 2; ++id)
+    {
+        if (g_ThInline[id] != g_ThFireCount[id])
+        {
+            printf("th: timer %d: %d of %d callbacks ran outside of Process()\n", (int)id,
+                (int)(g_ThFireCount[id] - g_ThInline[id]), (int)g_ThFireCount[id]);
+            ok = false;
+        }
+    }
+
+    // driver schedule (job j starts on the grid base + j * period) and job durations
+    const int32_t base = g_ThJobStart[0];
+    const int32_t long_threshold = (scenario == TH_CALLBACK_BUDGET ? 9 : (scenario == TH_CALLBACK_OVERRUN ? 28 : 1000));
+    int32_t long_jobs = 0;
+
+    for (int32_t j = 0; j < c.jobs; ++j)
+    {
+        const int32_t expect = base + (j * c.period);
+        const int32_t dstart = Abs(g_ThJobStart[j] - expect);
+        const int32_t dur    = g_ThJobDur[j];
+
+        printf("th: job=%d start=%d (expect %d) duration=%d\n", (int)j, (int)(g_ThJobStart[j] - base),
+            (int)(expect - base), (int)dur);
+
+        if (dstart > _STK_HRT_TEST_START_TOL_MS)
+        {
+            printf("th: failed job start (%d): diff=%d (>%d)\n", (int)j, (int)dstart, (int)_STK_HRT_TEST_START_TOL_MS);
+            ok = false;
+        }
+
+        if (dur >= long_threshold)
+        {
+            ++long_jobs;
+        }
+        else if (dur > _STK_HRT_TEST_IDLE_JOB_MS)
+        {
+            printf("th: failed job (%d): duration=%d, no callback expected to run\n", (int)j, (int)dur);
+            ok = false;
+        }
+        else
+        {
+            // short job: Process() without callbacks
+        }
+
+        if (!c.expect_miss && (dur > (c.deadline + _STK_HRT_TEST_DEADLINE_SLACK_MS)))
+        {
+            printf("th: failed deadline (%d): duration=%d deadline=%d\n", (int)j, (int)dur, (int)c.deadline);
+            ok = false;
+        }
+    }
+
+    // tolerance of an expiration: one job period + start tolerance + callbacks which ran before it in the same job
+    const int32_t hi = c.period + _STK_HRT_TEST_START_TOL_MS + c.work0;
+
+    switch (scenario)
+    {
+    case TH_BASIC:
+        ok = CheckCount(0, 1) && ok;
+        ok = CheckFire(0, 0, g_ThIssued[0][0] + 35, hi) && ok;
+
+        ok = CheckCount(1, 4) && ok;
+        for (int32_t k = 0; k < 4; ++k)
+            ok = CheckFire(1, k, g_ThIssued[1][0] + 25 + (50 * k), hi) && ok;
+        break;
+
+    case TH_CROSS_TASK:
+        // timer 0: one-shot at issue + 40, then restarted as a 33 ms one-shot; timer 1: 20 ms periodic, stopped
+        // before its third expiration (the Stop() is applied by the next Process(), before the deadline scan)
+        ok = CheckCount(0, 2) && ok;
+        ok = CheckFire(0, 0, g_ThIssued[0][0] + 40, hi) && ok;
+        ok = CheckFire(0, 1, g_ThIssued[0][1] + 33, hi) && ok;
+
+        ok = CheckCount(1, 2) && ok;
+        for (int32_t k = 0; k < 2; ++k)
+            ok = CheckFire(1, k, g_ThIssued[1][0] + 20 + (20 * k), hi) && ok;
+        break;
+
+    case TH_CALLBACK_BUDGET:
+        // both timers expire in the same job (4 times): that job runs both callbacks, the others none
+        for (int32_t id = 0; id < 2; ++id)
+        {
+            ok = CheckCount(id, 4) && ok;
+            for (int32_t k = 0; k < 4; ++k)
+                ok = CheckFire(id, k, g_ThIssued[id][0] + 45 + (40 * k), hi) && ok;
+        }
+
+        printf("th: jobs with callbacks=%d (expected 4)\n", (int)long_jobs);
+        if (long_jobs != 4)
+            ok = false;
+        break;
+
+    case TH_CALLBACK_OVERRUN:
+        ok = CheckCount(0, 1) && ok;
+        ok = CheckFire(0, 0, g_ThIssued[0][0] + 25, hi) && ok;
+
+        // exactly one job ran the long callback, the schedule of the others is verified above
+        printf("th: overrunning jobs=%d (expected 1)\n", (int)long_jobs);
+        if (long_jobs != 1)
+            ok = false;
+        break;
+
+    default:
+        ok = false;
+        break;
+    }
+
+    // deadline misses: only of the driver and only in the overrun scenario (first report is deadline + 1)
+    for (int32_t t = 0; t < 2; ++t)
+    {
+        if (c.expect_miss && (t == 0))
+        {
+            printf("th: driver misses=%d first_duration=%d (expected %d)\n", (int)g_MissCount[t],
+                (int)g_MissFirst[t], (int)(c.deadline + 1));
+
+            if ((g_MissCount[t] == 0) || (g_MissFirst[t] != (c.deadline + 1)))
+                ok = false;
+        }
+        else if (g_MissCount[t] != 0)
+        {
+            printf("th: id=%d unexpected deadline miss (%d), first duration=%d\n", (int)t,
+                (int)g_MissCount[t], (int)g_MissFirst[t]);
+            ok = false;
+        }
+        else
+        {
+            // no miss expected and none reported
+        }
+    }
+
+    printf("th: hard faults=%d (%s)\n", (int)g_Overrider.m_faults, c.expect_miss ? "expected" : "none expected");
+
+    if (c.expect_miss ? (g_Overrider.m_faults == 0) : (g_Overrider.m_faults != 0))
+        ok = false;
+
+    return ok;
+}
+
+#endif // __ARM_ARCH_6M__
 
 } // namespace hrt
 } // namespace test
@@ -486,6 +949,51 @@ static int32_t RunTest(const char *test_name, int32_t scenario)
 
     return result;
 }
+
+#ifndef __ARM_ARCH_6M__
+/*! \fn    RunTimerTest
+    \brief Helper function to run a single TimerHost test case (polled mode driven by an HRT job).
+    \param[in] test_name: Name of the test.
+    \param[in] scenario:  Scenario id (see EThScenario).
+*/
+template <EAccessMode _AccessMode>
+static int32_t RunTimerTest(const char *test_name, int32_t scenario)
+{
+    using namespace stk;
+    using namespace stk::test;
+    using namespace stk::test::hrt;
+
+    printf("Test: %s\n", test_name);
+
+    ResetTestState();
+    ResetThState();
+    ThSetup(scenario);
+
+    // no host tasks: the driver job calls Process()
+    g_TimerHost.InitializePolled();
+
+    // static: a removed task (and its stack) is reused by the next test
+    static ThDriverTask<_AccessMode>     driver(0);
+    static ThControllerTask<_AccessMode> controller(1);
+
+    g_Kernel.AddTask(&driver, MsToTicks(g_ThCfg.period), MsToTicks(g_ThCfg.deadline), 0);
+
+    if (g_ThCfg.ctrl_jobs > 0)
+    {
+        g_Kernel.AddTask(&controller, MsToTicks(g_ThCfg.ctrl_period), MsToTicks(g_ThCfg.ctrl_deadline),
+            MsToTicks(g_ThCfg.ctrl_delay));
+    }
+
+    g_Kernel.Start();
+
+    int32_t result = (VerifyTh(scenario) ? TestContext::SUCCESS_EXIT_CODE : TestContext::DEFAULT_FAILURE_EXIT_CODE);
+
+    printf("Result: %s\n", result == TestContext::SUCCESS_EXIT_CODE ? "PASS" : "FAIL");
+    printf("--------------\n");
+
+    return result;
+}
+#endif // __ARM_ARCH_6M__
 
 /*! \fn    main
     \brief Entry to the test suite.
@@ -560,6 +1068,40 @@ int main(int argc, char **argv)
     RUN(HrtTask, "MissIsolated",      SC_MISS_ISOLATED);
 
 #undef RUN
+
+#ifndef __ARM_ARCH_6M__
+    // Tests 15-18: TimerHost in HRT mode (polled mode: an HRT job calls TimerHost::Process())
+    {
+        struct ThCase { const char *name; int32_t scenario; };
+
+        static const ThCase cases[] =
+        {
+            // one-shot and periodic timers expire inline from the job, late by up to one job period
+            { "TimerBasic",     TH_BASIC            },
+            // Start/Stop/Restart issued from another HRT task take effect at the next job
+            { "TimerCrossTask", TH_CROSS_TASK       },
+            // callbacks of two timers expiring in one job fit the job deadline
+            { "TimerBudget",    TH_CALLBACK_BUDGET  },
+            // a callback exceeding the job deadline is a deadline miss, the schedule goes on
+            { "TimerOverrun",   TH_CALLBACK_OVERRUN }
+        };
+
+#if defined(_STK_ARCH_RISC_V)
+        // QEMU translates code on its first execution: the first run of the TimerHost code paths is much slower
+        // than the following ones and its job 0 can exceed the job deadline. Run a warm-up pass, result is ignored.
+        printf("Warm-up (result ignored)\n");
+        (void)RunTimerTest<ACCESS_PRIVILEGED>("TimerWarmUp", TH_BASIC);
+#endif
+
+        for (size_t i = 0; i < (sizeof(cases) / sizeof(cases[0])); ++i)
+        {
+            if (RunTimerTest<ACCESS_PRIVILEGED>(cases[i].name, cases[i].scenario) != TestContext::SUCCESS_EXIT_CODE)
+                total_failures++;
+            else
+                total_success++;
+        }
+    }
+#endif // __ARM_ARCH_6M__
 
     int32_t final_result = (total_failures == 0
         ? TestContext::SUCCESS_EXIT_CODE

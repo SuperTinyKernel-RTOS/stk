@@ -24,7 +24,7 @@
 
     Include this single header in user application code. It transitively pulls in:
      - stk_helper.h             - Task, TaskW, StackMemoryWrapper; and free-function helpers:
-                                  GetTid, GetTicks, GetTickResolution, GetTicksFromMsec,
+                                  GetTid, GetTicks, GetTickResolution, GetTicksFromMs,
                                   GetMsecFromTicks, GetTimeNowMsec, Delay, Sleep, SleepUntil, Yield.
      - stk_strategy_rrobin.h    - SwitchStrategyRoundRobin.
      - stk_strategy_swrrobin.h  - SwitchStrategySmoothWeightedRoundRobin.

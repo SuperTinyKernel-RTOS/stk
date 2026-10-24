@@ -1,12 +1,19 @@
 FROM ubuntu:20.04
 USER root
 
+# Prevent interactive prompts during package installation
+ENV DEBIAN_FRONTEND=noninteractive
+
 # Expecting /root
 RUN echo ~
 
 # Use minimal possible dependencies (https://ubuntu.com/blog/we-reduced-our-docker-images-by-60-with-no-install-recommends)
 RUN apt-get update && apt-get install --no-install-recommends --yes \
-    wget xorg
+    wget \
+    ca-certificates \
+    libx11-6 \
+    libpixman-1-0 \
+    libglib2.0-0
 
 # Download QEMU and unpack to a home directory
 RUN wget https://github.com/xpack-dev-tools/qemu-arm-xpack/releases/download/v8.2.6-1/xpack-qemu-arm-8.2.6-1-linux-x64.tar.gz -P ~ && \

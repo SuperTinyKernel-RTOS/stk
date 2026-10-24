@@ -46,7 +46,12 @@ namespace time {
     \brief Software timer multiplexer that manages multiple Timer instances on top of a small
            fixed set of kernel tasks.
 
-    TimerHost internally runs two categories of tasks:
+    TimerHost has two operating modes:
+    - <b>Task mode</b> (Initialize()): TimerHost registers its own kernel tasks and runs on its own.
+    - <b>Polled mode</b> (InitializePolled()): TimerHost registers no kernel tasks, the application calls
+      Process() periodically and expired timers are handled inline (see "Polled mode and HRT kernels").
+
+    In task mode TimerHost internally runs two categories of tasks:
     - One \e tick task that maintains the active timer list, evaluates deadlines every wake
       cycle, and queues expired timers for dispatch.
     - One or more \e handler tasks (see \a STK_TIMER_THREADS_COUNT) that dequeue expired
@@ -59,9 +64,107 @@ namespace time {
     - <b>One-shot</b>: fires once after \a delay ticks and becomes inactive automatically.
     - <b>Periodic</b>: fires every \a period ticks until explicitly stopped.
 
-    \note  TimerHost must be initialized before use by calling Initialize().
+    \note  TimerHost must be initialized before use by calling Initialize() (task mode) or InitializePolled() (polled mode).
            The maximum number of concurrently active timers is STK_TIMER_COUNT_MAX (default: 32).
            The maximum timer period is bounded by \c uint32_t (~49 days at 1 ms resolution).
+    \note  Requires a kernel built with stk::KERNEL_SYNC: the command and ready queues are stk::sync::Pipe based.
+    \note  In task mode TimerHost occupies TASK_COUNT (1 + \a STK_TIMER_THREADS_COUNT) kernel task slots, make sure the
+           kernel's task budget (e.g. Kernel::TASKS_MAX) accounts for them. Initialize() reports a failure
+           to add a task (e.g. \a ADD_FAIL_POOL_FULL), in KERNEL_DYNAMIC mode such a failure is never asserted.
+           Polled mode occupies no task slots.
+    \note  Task mode is a soft real-time component: its tasks block on internal queues and are registered with
+           IKernel::AddTask(ITask *). It cannot be used with a kernel running in stk::KERNEL_HRT mode
+           (the kernel rejects the task with \a ADD_FAIL_INVALID and asserts), use polled mode there.
+
+    \par Scheduling weights
+    The tick task and the handler tasks are registered with the weights supplied via Config
+    (see Initialize()), by default DEFAULT_WEIGHT is used for all of them. A weight is
+    \e strategy-specific and is passed to the kernel unchanged, TimerHost does not interpret it:
+    - SwitchStrategyRoundRobin, SwitchStrategyEDF, SwitchStrategyMonotonic: weights are ignored.
+    - SwitchStrategyFixedPriority: the weight is the priority level, [0, MAX_PRIORITIES - 1].
+    - SwitchStrategySmoothWeightedRoundRobin: the weight is a CPU share, (0, 0x7FFFFF], a larger value
+      gives more slices but does not preempt.
+    - SwitchStrategyPreemptionThreshold: the weight is encoded with MakeWeight(priority, threshold).
+      DEFAULT_WEIGHT (1) decodes as priority 0 / threshold 1, i.e. every timer task would be \e held while
+      it runs, therefore the weights \b must be set explicitly. Use threshold == priority
+      (MakeWeight(p, p)) unless holding is intended.
+
+    It is recommended that the tick task is at least as urgent as the handler tasks, otherwise a long
+    OnExpired() callback delays evaluation of all other deadlines.
+
+    Configuration examples (pick the one matching the strategy the kernel is built with, a kernel
+    using SwitchStrategyRoundRobin, SwitchStrategyEDF or SwitchStrategyMonotonic needs no Config):
+    \code
+    stk::time::TimerHost::Config cfg;
+
+    // SwitchStrategyFP32: real preemption priority
+    cfg.tick_weight    = stk::SwitchStrategyFP32::PRIORITY_HIGH;
+    cfg.handler_weight = stk::SwitchStrategyFP32::PRIORITY_ABOVE_NORMAL;
+
+    // SwitchStrategyPT32: keep threshold == priority (no hold)
+    cfg.tick_weight    = stk::SwitchStrategyPT32::MakeWeight(5, 5);
+    cfg.handler_weight = stk::SwitchStrategyPT32::MakeWeight(4, 4);
+
+    // SwitchStrategySWRR: no preemption, only a larger share. Tick latency is bounded by rotation, not priority.
+    cfg.tick_weight    = 4;
+    cfg.handler_weight = 1;
+
+    g_TimerHost.Initialize(kernel, stk::ACCESS_USER, cfg);
+    \endcode
+
+    \par Polled mode and HRT kernels
+    In polled mode TimerHost creates no kernel tasks, therefore the weights and stack buffers of Config do
+    not apply. The application calls Process() periodically from a single context of its own and the
+    OnExpired() callbacks of expired timers run inline from Process(). This is the way to use TimerHost
+    with stk::KERNEL_HRT, where tasks are periodic jobs (IKernel::AddTask() with periodicity and deadline)
+    and blocking on queues is not a job. Things to keep in mind:
+    - the period of the driving job is the timer resolution: a timer fires on the first Process() call at or
+      after its deadline, i.e. it may be late by up to one period;
+    - callbacks run in the driving job, so the worst-case execution time of all callbacks which can expire
+      in the same call is part of that job's WCET and of the schedulability analysis;
+    - Start(), Stop() and the other commands may be issued from any task (callbacks included), they
+      take effect at the next Process() call;
+    - Process() never blocks, it uses non-blocking queue operations only.
+
+    \code
+    // HRT kernel: a periodic job drives the timers
+    class TimerJob : public stk::Task<256, stk::ACCESS_USER>
+    {
+    public:
+        void Run()
+        {
+            for (;;)
+            {
+                g_TimerHost.Process(); // runs expired callbacks inline
+                stk::Yield();          // job completed, sleep until the next period
+            }
+        }
+    };
+
+    TimerJob g_TimerJob;
+
+    void SetupTimers(stk::IKernel *kernel)
+    {
+        g_TimerHost.InitializePolled();
+
+        // 5 ms timer resolution, 2 ms budget (callbacks included) per job
+        kernel->AddTask(&g_TimerJob, stk::GetTicksFromMsClampedToTimeout(5), stk::GetTicksFromMsClampedToTimeout(2), 0);
+    }
+    \endcode
+
+    Process() returns the number of ticks until the earliest deadline, a non-HRT application can use it to
+    sleep only as long as needed (commands issued meanwhile are picked up when the sleep ends, hence the cap):
+    \code
+    for (;;)
+    {
+        const stk::Timeout next = g_TimerHost.Process();
+
+        if (next != stk::NO_WAIT)
+        {
+            stk::Sleep((next < 100) ? next : 100);
+        }
+    }
+    \endcode
 
     \code
     // define a concrete timer by overriding OnExpired
@@ -93,20 +196,24 @@ namespace time {
 
     void SetupTimers(stk::IKernel *kernel)
     {
-        // initialize the host, must be called before Start()
-        g_TimerHost.Initialize(kernel, stk::ACCESS_USER);
+        // initialize the host, must be called before Start() (default weights and internal stacks)
+        if (g_TimerHost.Initialize(kernel, stk::ACCESS_USER) != stk::ADD_OK)
+        {
+            // e.g. no free task slots in the kernel
+            return;
+        }
 
         // start 500 ms periodic heartbeat
-        uint32_t period = stk::GetTicksFromMsec(500);
+        uint32_t period = static_cast<uint32_t>(stk::GetTicksFromMs(500));
         g_TimerHost.Start(g_Heartbeat, period, period);
 
         // start a one-shot notification after 1 second
-        uint32_t delay = stk::GetTicksFromMsec(1000);
+        uint32_t delay = static_cast<uint32_t>(stk::GetTicksFromMs(1000));
         g_TimerHost.Start(g_Notify, delay);
     }
     \endcode
 
-    \see TimerHost::Timer, STK_TIMER_THREADS_COUNT, STK_TIMER_HANDLER_STACK_SIZE, STK_TIMER_COUNT_MAX
+    \see TimerHost::Timer, TimerHost::Config, TimerHost::Process, TimerHost::InitializePolled, STK_TIMER_THREADS_COUNT, STK_TIMER_HANDLER_STACK_SIZE, STK_TIMER_COUNT_MAX
 */
 class TimerHost
 {
@@ -157,12 +264,16 @@ public:
         */
         enum { DLEntryTag = 1 };
 
-        /*! \brief     Callback invoked by the handler task when this timer expires.
+        /*! \brief     Callback invoked when this timer expires.
             \param[in] host: Pointer to the TimerHost that fired this timer.
-            \note      Executes in the context of a TimerHost handler task.
-                       Implementations must be safe to call from that task's context and
+            \note      Task mode: executes in the context of a TimerHost handler task.
+                       Polled mode: executes inline in the context which calls TimerHost::Process().
+            \note      Implementations must be safe to call from that context and
                        should complete quickly, long-running work should be delegated
                        (e.g. via an event or queue) to avoid blocking other expired timers.
+                       In polled mode (e.g. an HRT job) the execution time counts against the
+                       deadline of the job which calls Process(), and the callback must not
+                       call Process() itself.
         */
         virtual void OnExpired(TimerHost *host) = 0;
 
@@ -209,12 +320,43 @@ public:
         volatile bool m_rearming;  //!< true while a CMD_RESTART / CMD_START_OR_RESET is already in the command queue
     };
 
+    /*! \struct Config
+        \brief  Optional configuration of the timer tasks, see Initialize().
+
+        A default-constructed Config reproduces the fixed behavior of TimerHost: DEFAULT_WEIGHT for all
+        tasks and the internal stack buffers.
+
+        \note  Weights are strategy-specific and forwarded to the kernel as is (see "Scheduling weights"
+               in TimerHost). Only NO_WEIGHT is rejected here, all other validation is performed by the
+               kernel and its task-switching strategy when the task is added.
+        \note  Externally supplied stack buffers must outlive the host, be distinct from each other (the
+               kernel rejects a duplicate stack with \a ADD_FAIL_DUPLICATE), and satisfy the stack alignment
+               and memory protection requirements of the platform (the internal buffers, see
+               StackMemoryDef, already do).
+    */
+    struct Config
+    {
+        Weight tick_weight;                            //!< Weight of the tick task (default: DEFAULT_WEIGHT).
+        Weight handler_weight;                         //!< Weight of every handler task (default: DEFAULT_WEIGHT).
+        Word  *tick_stack;                             //!< Stack of the tick task, or \c nullptr to use the internal buffer (default).
+        size_t tick_stack_size;                        //!< Size of \a tick_stack in elements of Word (>= STK_STACK_SIZE_MIN), ignored if \a tick_stack is \c nullptr.
+        Word  *handler_stack[STK_TIMER_THREADS_COUNT]; //!< Stack of each handler task, a \c nullptr entry selects the internal buffer (default).
+        size_t handler_stack_size;                     //!< Size of every non-null \a handler_stack entry in elements of Word (>= STK_STACK_SIZE_MIN).
+
+        /*! \brief Default constructor: default weights and internal stack buffers.
+        */
+        explicit Config()
+            : tick_weight(DEFAULT_WEIGHT), handler_weight(DEFAULT_WEIGHT), tick_stack(nullptr),
+              tick_stack_size(0U), handler_stack(), handler_stack_size(0U)
+        {}
+    };
+
     /*! \brief Default constructor. Zero-initializes all internal state.
         \note  Call Initialize() before using any other member function.
     */
     explicit TimerHost() 
       : m_task_tick_memory(), m_task_handler_memory(), m_task_tick(), m_task_process(), 
-        m_active(), m_now(0)
+        m_active(), m_now(0), m_polled(false)
     {}
 
     /*! \brief Destructor.
@@ -224,9 +366,48 @@ public:
 
     /*! \brief     Initialize timer host instance.
         \param[in] kernel: Kernel to which instance will be bound.
-        \param[in] mode: Access mode for the timer handling tasks which call expired timers.
+        \param[in] mode: Access mode for the timer handling tasks which call expired timers. The tick task
+                   always runs with ACCESS_USER.
+        \param[in] cfg: Weights and (optionally) stack buffers of the tick and handler tasks, by default
+                   DEFAULT_WEIGHT and the internal stacks are used (see Config).
+        \return    ADD_OK on success, otherwise the first failure reported by IKernel::AddTask(ITask *), e.g.
+                   \a ADD_FAIL_POOL_FULL if the kernel has no free task slots, \a ADD_FAIL_DUPLICATE if a stack
+                   is shared, or \a ADD_FAIL_INVALID (e.g. KERNEL_HRT kernel or kernel not initialized).
+        \note      Must be called before Start() of a KERNEL_STATIC kernel and after the kernel was initialized.
+        \note      On failure the host is unusable. Tasks added before the failure remain registered with the
+                   kernel (blocked on the empty queue), in KERNEL_DYNAMIC mode they can be released with
+                   IKernel::ScheduleTaskRemoval().
+        \warning   With SwitchStrategyPreemptionThreshold the weights in \a cfg must be set explicitly,
+                   the default weight is not neutral for this strategy (see "Scheduling weights" in TimerHost).
     */
-    void Initialize(IKernel *kernel, EAccessMode mode);
+    EAddResult Initialize(IKernel *kernel, EAccessMode mode, const Config &cfg = Config());
+
+    /*! \brief     Initialize timer host instance in polled mode (no kernel tasks are created).
+        \details   The application drives the host by calling Process() periodically. Expired timers are
+                   handled inline, from the context which calls Process(), see "Polled mode and HRT kernels"
+                   in TimerHost. This is the mode to use with a stk::KERNEL_HRT kernel.
+        \note      Mutually exclusive with Initialize(), call one of them before any other member function.
+                   After Shutdown() the host can be initialized again in either mode.
+                   No kernel is involved, therefore it can not fail and does not depend on kernel mode,
+                   task slots, weights or stack buffers (see Config).
+    */
+    void InitializePolled();
+
+    /*! \brief     Run the host once (polled mode only): execute pending commands, evaluate deadlines and
+                   invoke OnExpired() of every expired timer inline.
+        \return    Ticks until the earliest active deadline: NO_WAIT if a timer is already overdue (call again
+                   without delay), WAIT_INFINITE if no timer is active.
+        \note      Never blocks. Call it periodically from one context only, not concurrently and not
+                   from OnExpired(). Start(), Stop() and the other commands remain callable from any task.
+        \note      Resolution: a timer fires on the first call at or after its deadline. A periodic timer which
+                   is overdue by more than its period fires once per call until its schedule has caught up
+                   (no drift is accumulated).
+        \note      Callbacks run one after another with the time sampled at the start of the call, a slow callback
+                   delays the following ones. Commands issued by a callback take effect at the next call.
+        \note      Shutdown() stops and removes all timers, the host stays usable afterwards (there are no tasks to exit).
+        \warning   Only valid after InitializePolled().
+    */
+    Timeout Process();
 
     /*! \brief     Start timer.
         \param[in] tmr: Timer instance. Must not already be active.
@@ -301,6 +482,7 @@ public:
 
     /*! \brief    Shutdown host instance. All timers are stopped and removed from the host.
         \return   True on success, false if command queue is full.
+        \note     Task mode: the tick and handler tasks exit. Polled mode: the host stays usable.
     */
     bool Shutdown();
 
@@ -322,7 +504,7 @@ private:
 
         Wraps a free function pointer (\a TimerFuncType) so that the same ITask-derived
         class can serve either role (tick or handler) with different stack buffers, access
-        modes, and entry points supplied at Initialize() time.
+        modes, weights, and entry points supplied at Initialize() time.
 
         \note  This class is an implementation detail of TimerHost and is not part of the
                public API. Do not instantiate or inherit from it directly.
@@ -340,7 +522,7 @@ private:
         EAccessMode GetAccessMode() const override { return m_mode; }
         void OnDeadlineMissed(uint32_t)   override {}
         void OnExit()                     override {}
-        int32_t GetWeight()         const override { return m_weight; }
+        Weight GetWeight()          const override { return m_weight; }
         const char *GetTraceName()  const override { return nullptr; }
 
         // IStackMemory
@@ -352,24 +534,22 @@ private:
             \param[in] stack: Pointer to the pre-allocated stack memory.
             \param[in] stack_size: Stack size in words.
             \param[in] mode: Kernel access mode (user or privileged).
+            \param[in] weight: Scheduling weight, strategy-specific and forwarded to the kernel unchanged.
             \param[in] func: Entry function called in the task's context.
-            \note  Must be called before the task is added to the kernel.
+            \note  Must be called before the task is added to the kernel. The weight must not be changed
+                   afterwards (the kernel's strategy indexes the task by the weight seen at IKernel::AddTask()),
+                   use IKernelService::SetWeight() to change it at run-time.
         */
-        void Initialize(TimerHost *host, Word *stack, size_t stack_size, EAccessMode mode, 
-                        TimerFuncType const func)
+        void Initialize(TimerHost *host, Word *stack, size_t stack_size, EAccessMode mode,
+                        Weight weight, TimerFuncType const func)
         {
             m_host       = host;
             m_func       = func;
             m_stack      = stack;
             m_stack_size = stack_size;
             m_mode       = mode;
-            m_weight     = DEFAULT_WEIGHT;
+            m_weight     = weight;
         }
-
-        /*! \brief     Override the scheduling weight assigned by Initialize().
-            \param[in] weight: New scheduling weight value.
-        */
-        void SetWeight(int32_t weight) { m_weight = weight; }
 
     private:
         /*! \brief Timer task entry point. */
@@ -380,7 +560,7 @@ private:
         Word         *m_stack;      //!< pointer to stack buffer
         size_t        m_stack_size; //!< stack size in words
         EAccessMode   m_mode;       //!< kernel access mode
-        int32_t       m_weight;     //!< scheduling weight
+        Weight        m_weight;     //!< scheduling weight (strategy-specific, see TimerHost)
     };
 
     /*! \struct TimerCommand
@@ -419,6 +599,14 @@ private:
     */
     void UpdateTime();
 
+    /*! \brief     Evaluate all active timers against the given time.
+        \param[in] now: Current time (ticks).
+        \return    Ticks until the earliest active deadline (NO_WAIT if a timer is overdue, WAIT_INFINITE if none).
+        \note      Task mode: queues expired timers for the handler tasks. Polled mode: invokes OnExpired()
+                   of expired timers inline. Runs exclusively in the tick task (task mode) or in Process() (polled mode).
+    */
+    Timeout ScanTimers(Ticks now);
+
     /*! \brief  Handler task body: dequeues expired timers and invokes their OnExpired() callbacks.
         \note   Runs in each handler task context. Loops until a nullptr sentinel is dequeued.
     */
@@ -426,7 +614,8 @@ private:
 
     /*! \brief     Drain the command queue and execute each pending command.
         \param[in] next_sleep: Maximum ticks to block waiting for the first command when the
-                   active list is non-empty. Overridden to WAIT_INFINITE when empty.
+                   active list is non-empty. Overridden to WAIT_INFINITE when empty (task mode only,
+                   polled mode never blocks).
         \return    True to continue the tick loop; false when CMD_SHUTDOWN is processed.
         \note      Called exclusively from the tick task (UpdateTime()).
     */
@@ -468,6 +657,7 @@ private:
     ReadyQueue                    m_queue;                                        //!< queue of timers ready for handling
     CommandQueue                  m_commands;                                     //!< command queue
     Ticks                         m_now;                                          //!< last known current time (ticks)
+    bool                          m_polled;                                       //!< true in polled mode (InitializePolled()), no tasks, callbacks run inline from Process()
 };
 
 // ---------------------------------------------------------------------------
@@ -498,22 +688,58 @@ inline uint32_t TimerHost::Timer::GetRemainingTicks() const
 // Initialize
 // ---------------------------------------------------------------------------
 
-inline void TimerHost::Initialize(IKernel *kernel, EAccessMode mode)
+inline EAddResult TimerHost::Initialize(IKernel *kernel, EAccessMode mode, const Config &cfg)
 {
-    for (size_t i = 0U; i < STK_TIMER_THREADS_COUNT; ++i)
+    STK_ASSERT(kernel != nullptr);
+    STK_ASSERT(cfg.tick_weight    != NO_WEIGHT);
+    STK_ASSERT(cfg.handler_weight != NO_WEIGHT);
+
+    m_polled = false; // task mode (selects the mode again if the host was used in polled mode before)
+
+    EAddResult result = ADD_OK;
+
+    // handler tasks first: they only wait on the (empty) ready queue until the tick task is added
+    for (size_t i = 0U; (i < STK_TIMER_THREADS_COUNT) && (result == ADD_OK); ++i)
     {
-        m_task_process[i].Initialize(this, m_task_handler_memory[i], TASK_HANDLER_STACK_SIZE, mode, [](TimerHost *host)
+        Word  *stack = m_task_handler_memory[i];
+        size_t size  = TASK_HANDLER_STACK_SIZE;
+
+        if (cfg.handler_stack[i] != nullptr)
+        {
+            stack = cfg.handler_stack[i];
+            size  = cfg.handler_stack_size;
+        }
+
+        STK_ASSERT(size >= STK_STACK_SIZE_MIN);
+
+        m_task_process[i].Initialize(this, stack, size, mode, cfg.handler_weight, [](TimerHost *host)
         {
             host->ProcessTimers();
         });
-        kernel->AddTask(&m_task_process[i]);
+        result = kernel->AddTask(&m_task_process[i]);
     }
 
-    m_task_tick.Initialize(this, m_task_tick_memory, TASK_TICK_MEMORY_SIZE, ACCESS_USER, [](TimerHost *host)
+    if (result == ADD_OK)
     {
-        host->UpdateTime();
-    });
-    kernel->AddTask(&m_task_tick);
+        Word  *stack = m_task_tick_memory;
+        size_t size  = TASK_TICK_MEMORY_SIZE;
+
+        if (cfg.tick_stack != nullptr)
+        {
+            stack = cfg.tick_stack;
+            size  = cfg.tick_stack_size;
+        }
+
+        STK_ASSERT(size >= STK_STACK_SIZE_MIN);
+
+        m_task_tick.Initialize(this, stack, size, ACCESS_USER, cfg.tick_weight, [](TimerHost *host)
+        {
+            host->UpdateTime();
+        });
+        result = kernel->AddTask(&m_task_tick);
+    }
+
+    return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -692,78 +918,7 @@ inline void TimerHost::UpdateTime()
 
     while (ProcessCommands(next_sleep))
     {
-        next_sleep = WAIT_INFINITE;
-        const Ticks now = GetTicks();
-
-        // using WriteVolatile64() to guarantee correct lockless reading order by ReadVolatile64
-        hw::WriteVolatile64(&m_now, now);
-
-        Timer *tmr = util::DListCast::ListEntryToParent<Timer>(m_active.GetFirst());
-        while (tmr != nullptr)
-        {
-          Timer *const next = util::DListCast::ListEntryToParent<Timer>(tmr->GetNext());
-
-            if (tmr->m_active)
-            {
-                // check if still pending to be handled
-                if (!tmr->m_pending)
-                {
-                    bool one_shot = false;
-                    const Ticks diff = now - tmr->m_deadline;
-
-                    if (diff >= 0)
-                    {
-                        // set timestamp at which timer expired
-                        tmr->m_timestamp = now;
-
-                        // avoid updating timer again before it was handled
-                        tmr->m_pending = true;
-
-                        // periodic
-                        if (tmr->m_period != 0U)
-                        {
-                            // reload (use now to avoid drift accumulation)
-                            tmr->m_deadline = now + static_cast<Ticks>(tmr->m_period) - diff;
-                        }
-                        // one-shot
-                        else
-                        {
-                            one_shot = true;
-
-                            // remove from active timers
-                            m_active.Unlink(tmr);
-
-                            // mark as inactive (must follow Unlink)
-                            tmr->m_active = false;
-                        }
-
-                        __stk_full_memfence();
-
-                        // push to the handling queue
-                        STK_UNUSED(m_queue.Write(tmr));
-                    }
-
-                    // one-shot timer does not affect next_sleep
-                    if (!one_shot)
-                    {
-                        const Timeout next_deadline = static_cast<Timeout>(tmr->m_deadline - now);
-                        STK_ASSERT(next_deadline > 0);
-
-                        if ((next_deadline > 0) && (next_deadline < next_sleep))
-                        {
-                            next_sleep = next_deadline;
-                        }
-                    }
-                }
-            }
-            else
-            {
-                // could be stopped externally, remove from active timers
-                m_active.Unlink(tmr);
-            }
-
-            tmr = next;
-        }
+        next_sleep = ScanTimers(GetTicks());
     }
 
     // unlink all timers on shutdown
@@ -771,6 +926,128 @@ inline void TimerHost::UpdateTime()
     {
         m_active.Unlink(tmr);
     }
+}
+
+// ---------------------------------------------------------------------------
+// ScanTimers  (tick task body / Process())
+// ---------------------------------------------------------------------------
+
+inline Timeout TimerHost::ScanTimers(Ticks now)
+{
+    Timeout next_sleep = WAIT_INFINITE;
+
+    // using WriteVolatile64() to guarantee correct lockless reading order by ReadVolatile64
+    hw::WriteVolatile64(&m_now, now);
+
+    Timer *tmr = util::DListCast::ListEntryToParent<Timer>(m_active.GetFirst());
+    while (tmr != nullptr)
+    {
+        Timer *const next = util::DListCast::ListEntryToParent<Timer>(tmr->GetNext());
+
+        if (tmr->m_active)
+        {
+            // check if still pending to be handled
+            if (!tmr->m_pending)
+            {
+                bool one_shot = false;
+                const Ticks diff = now - tmr->m_deadline;
+
+                if (diff >= 0)
+                {
+                    // set timestamp at which timer expired
+                    tmr->m_timestamp = now;
+
+                    // avoid updating timer again before it was handled
+                    tmr->m_pending = true;
+
+                    // periodic
+                    if (tmr->m_period != 0U)
+                    {
+                        // reload (use now to avoid drift accumulation)
+                        tmr->m_deadline = now + static_cast<Ticks>(tmr->m_period) - diff;
+                    }
+                    // one-shot
+                    else
+                    {
+                        one_shot = true;
+
+                        // remove from active timers
+                        m_active.Unlink(tmr);
+
+                        // mark as inactive (must follow Unlink)
+                        tmr->m_active = false;
+                    }
+
+                    __stk_full_memfence();
+
+                    if (m_polled)
+                    {
+                        // polled mode: no handler tasks, handle inline (the timer is already
+                        // re-armed or unlinked, commands issued by the callback are deferred)
+                        tmr->m_pending = false;
+                        tmr->OnExpired(this);
+                    }
+                    else
+                    {
+                        // push to the handling queue
+                        STK_UNUSED(m_queue.Write(tmr));
+                    }
+                }
+
+                // one-shot timer does not affect next_sleep
+                if (!one_shot)
+                {
+                    Timeout next_deadline = static_cast<Timeout>(tmr->m_deadline - now);
+
+                    // task mode: a (re)loaded deadline always lies in the future, polled mode: the caller
+                    // may poll slower than the period, an overdue timer is served by the next call
+                    STK_ASSERT(m_polled || (next_deadline > 0));
+
+                    if (next_deadline <= 0)
+                    {
+                        next_deadline = NO_WAIT;
+                    }
+
+                    if (next_deadline < next_sleep)
+                    {
+                        next_sleep = next_deadline;
+                    }
+                }
+            }
+        }
+        else
+        {
+            // could be stopped externally, remove from active timers
+            m_active.Unlink(tmr);
+        }
+
+        tmr = next;
+    }
+
+    return next_sleep;
+}
+
+// ---------------------------------------------------------------------------
+// InitializePolled
+// ---------------------------------------------------------------------------
+
+inline void TimerHost::InitializePolled()
+{
+    m_polled = true;
+}
+
+// ---------------------------------------------------------------------------
+// Process  (polled mode)
+// ---------------------------------------------------------------------------
+
+inline Timeout TimerHost::Process()
+{
+    STK_ASSERT(m_polled);
+
+    // execute pending commands, never blocks in polled mode
+    STK_UNUSED(ProcessCommands(NO_WAIT));
+
+    return ScanTimers(GetTicks());
 }
 
 // ---------------------------------------------------------------------------
@@ -815,8 +1092,9 @@ inline bool TimerHost::ProcessCommands(Timeout next_sleep)
     TimerCommand cmd = {};
     bool working = true;
 
-    // if nothing is active, sleep indefinitely until a command arrives
-    if (m_active.IsEmpty())
+    // if nothing is active, sleep indefinitely until a command arrives (task mode only,
+    // polled mode never blocks)
+    if (m_active.IsEmpty() && !m_polled)
     {
         next_sleep = WAIT_INFINITE;
     }
@@ -970,14 +1248,32 @@ inline bool TimerHost::ProcessCommands(Timeout next_sleep)
 
         case TimerCommand::CMD_SHUTDOWN:
         {
-            // wake all handler tasks with shutdown sentinels
-            for (size_t i = 0U; i < STK_TIMER_THREADS_COUNT; ++i)
+            if (m_polled)
             {
-                STK_UNUSED(m_queue.Write(nullptr, NO_WAIT));
-            }
+                // no tasks to stop: stop and release all timers, the host stays usable
+                Timer *tmr = util::DListCast::ListEntryToParent<Timer>(m_active.GetFirst());
+                while (tmr != nullptr)
+                {
+                    m_active.Unlink(tmr);
 
-            // signal UpdateTime() to exit its loop
-            working = false;
+                    tmr->m_active   = false;
+                    tmr->m_pending  = false;
+                    tmr->m_rearming = false;
+
+                    tmr = util::DListCast::ListEntryToParent<Timer>(m_active.GetFirst());
+                }
+            }
+            else
+            {
+                // wake all handler tasks with shutdown sentinels
+                for (size_t i = 0U; i < STK_TIMER_THREADS_COUNT; ++i)
+                {
+                    STK_UNUSED(m_queue.Write(nullptr, NO_WAIT));
+                }
+
+                // signal UpdateTime() to exit its loop
+                working = false;
+            }
             
         break; }
 

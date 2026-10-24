@@ -26,11 +26,6 @@
 	</natures>
 	<linkedResources>
 		<link>
-			<name>test</name>
-			<type>2</type>
-			<locationURI>virtual:/virtual</locationURI>
-		</link>
-		<link>
 			<name>deps/stk</name>
 			<type>2</type>
 			<locationURI>virtual:/virtual</locationURI>
@@ -41,14 +36,14 @@
 			<locationURI>virtual:/virtual</locationURI>
 		</link>
 		<link>
-			<name>test/stktest_context.h</name>
-			<type>1</type>
-			<locationURI>PARENT-4-PROJECT_LOC/test/stktest_context.h</locationURI>
+			<name>deps/test</name>
+			<type>2</type>
+			<locationURI>virtual:/virtual</locationURI>
 		</link>
 		<link>
-			<name>test/stktest_hrt.cpp</name>
+			<name>src/test_hrt.cpp</name>
 			<type>1</type>
-			<locationURI>PARENT-4-PROJECT_LOC/test/hrt/stktest_hrt.cpp</locationURI>
+			<locationURI>PARENT-4-PROJECT_LOC/test/hrt/test_hrt.cpp</locationURI>
 		</link>
 		<link>
 			<name>deps/stk/include</name>
@@ -69,6 +64,11 @@
 			<name>deps/stm32fx/src</name>
 			<type>2</type>
 			<locationURI>virtual:/virtual</locationURI>
+		</link>
+		<link>
+			<name>deps/test/stktest_context.h</name>
+			<type>1</type>
+			<locationURI>PARENT-4-PROJECT_LOC/test/stktest_context.h</locationURI>
 		</link>
 		<link>
 			<name>deps/stk/include/arch</name>
