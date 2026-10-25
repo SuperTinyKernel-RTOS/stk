@@ -87,6 +87,8 @@ namespace stk {
 namespace interop_c_helper {
 
 extern void InitializeTimerHost(stk_kernel_t *kernel, stk::time::TimerHost *th, EAccessMode amode);
+extern EAddResult InitializeTimerHostEx(stk_kernel_t *kernel, stk::time::TimerHost *th, EAccessMode amode,
+    const stk::time::TimerHost::Config &cfg);
 
 } // interop_c_helper
 } // stk
@@ -161,6 +163,70 @@ void stk_timerhost_init(stk_timerhost_t *host,
         (privileged ? ACCESS_PRIVILEGED : ACCESS_USER));
 }
     
+void stk_timerhost_config_init(stk_timerhost_config_t *cfg)
+{
+    STK_ASSERT(cfg != nullptr);
+
+    cfg->tick_weight        = static_cast<stk_weight_t>(DEFAULT_WEIGHT);
+    cfg->handler_weight     = static_cast<stk_weight_t>(DEFAULT_WEIGHT);
+    cfg->tick_stack         = nullptr;
+    cfg->tick_stack_size    = 0U;
+    cfg->handler_stack_size = 0U;
+
+    for (size_t i = 0U; i < STK_C_TIMER_THREADS_COUNT; ++i)
+    {
+        cfg->handler_stack[i] = nullptr;
+    }
+}
+
+stk_add_result_t stk_timerhost_init_ex(stk_timerhost_t              *host,
+                                       stk_kernel_t                 *kernel,
+                                       bool                          privileged,
+                                       const stk_timerhost_config_t *cfg)
+{
+    // C result enum must stay in sync with its C++ counterpart (values are cast directly)
+    STK_STATIC_ASSERT_DESC(static_cast<int>(STK_ADD_FAIL_INVALID)   == static_cast<int>(stk::ADD_FAIL_INVALID),   "stk_add_result_t mismatch");
+    STK_STATIC_ASSERT_DESC(static_cast<int>(STK_ADD_FAIL_DUPLICATE) == static_cast<int>(stk::ADD_FAIL_DUPLICATE), "stk_add_result_t mismatch");
+    STK_STATIC_ASSERT_DESC(static_cast<int>(STK_ADD_FAIL_POOL_FULL) == static_cast<int>(stk::ADD_FAIL_POOL_FULL), "stk_add_result_t mismatch");
+    STK_STATIC_ASSERT_DESC(static_cast<int>(STK_ADD_OK)             == static_cast<int>(stk::ADD_OK),             "stk_add_result_t mismatch");
+
+    STK_ASSERT(host   != nullptr);
+    STK_ASSERT(kernel != nullptr);
+
+    TimerHost::Config tcfg; // defaults
+
+    if (cfg != nullptr)
+    {
+        tcfg.tick_weight        = static_cast<Weight>(cfg->tick_weight);
+        tcfg.handler_weight     = static_cast<Weight>(cfg->handler_weight);
+        tcfg.tick_stack         = cfg->tick_stack;
+        tcfg.tick_stack_size    = cfg->tick_stack_size;
+        tcfg.handler_stack_size = cfg->handler_stack_size;
+
+        for (size_t i = 0U; i < STK_C_TIMER_THREADS_COUNT; ++i)
+        {
+            tcfg.handler_stack[i] = cfg->handler_stack[i];
+        }
+    }
+
+    return static_cast<stk_add_result_t>(interop_c_helper::InitializeTimerHostEx(kernel, &host->handle,
+        (privileged ? ACCESS_PRIVILEGED : ACCESS_USER), tcfg));
+}
+
+void stk_timerhost_init_polled(stk_timerhost_t *host)
+{
+    STK_ASSERT(host != nullptr);
+
+    host->handle.InitializePolled();
+}
+
+stk_timeout_t stk_timerhost_process(stk_timerhost_t *host)
+{
+    STK_ASSERT(host != nullptr);
+
+    return static_cast<stk_timeout_t>(host->handle.Process());
+}
+
 bool stk_timerhost_shutdown(stk_timerhost_t *host)
 {
     STK_ASSERT(host != nullptr);

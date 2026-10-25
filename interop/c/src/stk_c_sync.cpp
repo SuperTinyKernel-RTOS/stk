@@ -404,21 +404,20 @@ Event *stk_event_get_instance(stk_event_t *ev)
 // -----------------------------------------------------------------------------
 struct stk_sem_t
 {
-    stk_sem_t(uint32_t initial_count, uint32_t max_count)
-        : handle(static_cast<uint16_t>(initial_count),
-                 static_cast<uint16_t>(max_count))
+    stk_sem_t(stk_sem_val_t initial_count, stk_sem_val_t max_count)
+        : handle(initial_count, max_count)
     {}
 
-    Semaphore handle;
+    SemaphoreT<stk_sem_val_t> handle;
 };
 
 stk_sem_t *stk_sem_create(stk_sem_mem_t *const membuf,
-                          uint32_t initial_count,
-                          uint32_t max_count)
+                          stk_sem_val_t initial_count,
+                          stk_sem_val_t max_count)
 {
     STK_ASSERT(membuf != nullptr);
 
-    const uint32_t effective_max = ((max_count == 0U) ? Semaphore::COUNT_MAX : max_count);
+    const stk_sem_val_t effective_max = ((max_count == 0U) ? SemaphoreT<stk_sem_val_t>::COUNT_MAX : max_count);
 
     stk_sem_t *result = nullptr;
     if (membuf != nullptr)
@@ -472,14 +471,21 @@ bool stk_sem_trysignal(stk_sem_t *sem)
     return sem->handle.TrySignal();
 }
 
-uint16_t stk_sem_get_count(const stk_sem_t *sem)
+bool stk_sem_trysignal_ceiling(stk_sem_t *sem, stk_sem_val_t ceiling)
+{
+    STK_ASSERT(sem != nullptr);
+
+    return sem->handle.TrySignal(ceiling);
+}
+
+stk_sem_val_t stk_sem_get_count(const stk_sem_t *sem)
 {
     STK_ASSERT(sem != nullptr);
 
     return sem->handle.GetCount();
 }
 
-Semaphore *stk_sem_get_instance(stk_sem_t *sem)
+SemaphoreT<stk_sem_val_t> *stk_sem_get_instance(stk_sem_t *sem)
 {
     STK_ASSERT(sem != nullptr);
 

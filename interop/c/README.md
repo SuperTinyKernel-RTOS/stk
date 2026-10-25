@@ -15,6 +15,7 @@ pure C API with no C++ headers required in your source files.
   - [1. Configure the Kernel Type](#1-configure-the-kernel-type)
   - [2. Create and Start the Kernel](#2-create-and-start-the-kernel)
   - [3. Create Tasks](#3-create-tasks)
+  - [Alignment and Sizing Helpers](#alignment-and-sizing-helpers)
 - [Kernel Modes](#kernel-modes)
   - [Choosing a Scheduling Strategy](#choosing-a-scheduling-strategy)
   - [Hard Real-Time (HRT)](#hard-real-time-hrt)
@@ -93,6 +94,8 @@ or more typically in your project's `stk_config.h`.
 | `STK_C_BYTEPOOL_MAX` | `8` | Max concurrent byte pools |
 | `STK_C_TIMER_MAX` | `32` | Max concurrent software timers per core |
 | `STK_C_TIMER_HANDLER_STACK_SIZE` | `256` | Stack words for the timer handler task |
+| `STK_C_TIMER_THREADS_COUNT` | `1` | Number of handler tasks serving expired timers in task mode (must be identical in every translation unit) |
+| `STK_C_SEM_VALUE_TYPE` | `uint16_t` | Semaphore counter type: `uint8_t`, `uint16_t`, `uint32_t` or `uint64_t` (see [Semaphore](#semaphore)) |
 
 The most important configuration step is declaring the kernel type. See
 [Step 1](#1-configure-the-kernel-type) below.
@@ -202,6 +205,27 @@ correct alignment:
 ```c
 static __stk_c_stack stk_word_t g_stack[256];
 ```
+
+### Alignment and Sizing Helpers
+
+`__stk_c_align(x)` aligns a variable to `x` bytes (a no-op on compilers without
+`__attribute__((aligned))` support). `__stk_c_stack` and `__stk_c_aligned` are built on it,
+and you can use it directly for your own buffers:
+
+```c
+static uint8_t g_buf[128] __stk_c_align(8);
+```
+
+Small compile-time-friendly helpers are also available in `stk_c.h`:
+
+| Macro | Result |
+|---|---|
+| `STK_MIN(a, b)` / `STK_MAX(a, b)` | Smaller / larger of two values |
+| `STK_C_CEIL_DIV(size, unit)` | Integer division rounded up (e.g. bytes → words) |
+| `STK_ROUND_UP(x, a)` | `x` rounded up to a multiple of `a` |
+| `STK_CALC_ALIGNED_BLOCKS(base, val_size, count)` | Size in `stk_word_t` blocks of a `base`-byte header followed by `count` values of `val_size` bytes, with alignment padding (used to size the semaphore container) |
+
+The arguments are evaluated more than once, so do not pass expressions with side effects.
 
 ---
 
@@ -550,7 +574,8 @@ objects (declared only under `__cplusplus`, not part of the C ABI):
 |---|---|
 | `stk_kernel_get_instance(core)` | `stk::IKernel *` |
 | `stk_task_get_instance(tsk)` | `stk::ITask *` |
-| `stk_mutex_get_instance`, `stk_fastmutex_get_instance`, `stk_spinlock_get_instance`, `stk_cv_get_instance`, `stk_sem_get_instance`, `stk_event_get_instance`, `stk_ef_get_instance`, `stk_pipe_get_instance`, `stk_msgq_get_instance`, `stk_rwmutex_get_instance`, `stk_barrier_get_instance` | the matching `stk::sync::*` object |
+| `stk_mutex_get_instance`, `stk_fastmutex_get_instance`, `stk_spinlock_get_instance`, `stk_cv_get_instance`, `stk_event_get_instance`, `stk_ef_get_instance`, `stk_pipe_get_instance`, `stk_msgq_get_instance`, `stk_rwmutex_get_instance`, `stk_barrier_get_instance` | the matching `stk::sync::*` object |
+| `stk_sem_get_instance` | `stk::sync::SemaphoreT<stk_sem_val_t> *` |
 | `stk_blockpool_get_instance`, `stk_bytepool_get_instance` | `stk::memory::BlockMemoryPool` / `BytePool` |
 | `stk_timerhost_get_instance`, `stk_timer_get_instance`, `stk_periodic_trigger_get_instance` | `stk::time::*` objects |
 
@@ -696,6 +721,14 @@ stk_wait_result_t r = stk_cv_wait_ex_fastmutex(cv, fmtx, 100 /* ticks */);
 
 ### Semaphore
 
+The counter type is `stk_sem_val_t`, selected at build time by `STK_C_SEM_VALUE_TYPE`
+(default `uint16_t`; `uint8_t`, `uint32_t` or `uint64_t` are also supported. Define it before
+including `stk_c.h`, and use the same value in every translation unit). `stk_sem_create()`,
+`stk_sem_trysignal_ceiling()` and `stk_sem_get_count()` all use this type. Passing `max_count = 0`
+to `stk_sem_create()` selects the maximum value of `stk_sem_val_t` (65535 for the default). The size and alignment of `stk_sem_mem_t` adapt automatically, so a
+counter wider than a pointer (e.g. `uint64_t` on a 32-bit MCU) works; on such targets
+`stk_sem_get_count()` reads under a critical section to avoid a torn value.
+
 ```c
 static stk_sem_mem_t sem_mem;
 /* initial value = 0, max value = 1 → binary semaphore */
@@ -710,7 +743,11 @@ stk_wait_result_t r = stk_sem_wait_ex(sem, 50);   /* distinguishes timeout / can
 /* Signal without exceeding max_count (returns false instead of overflowing): */
 bool signaled = stk_sem_trysignal(sem);  /* ISR-safe */
 
-uint16_t n = stk_sem_get_count(sem);    /* current resource counter */
+/* Same, but with a per-call ceiling (effective limit = min(ceiling, max_count),
+   e.g. ThreadX tx_semaphore_ceiling_put). Check and increment are atomic: */
+bool signaled2 = stk_sem_trysignal_ceiling(sem, 5);  /* ISR-safe */
+
+stk_sem_val_t n = stk_sem_get_count(sem);   /* current resource counter, ISR-safe */
 
 stk_sem_destroy(sem);
 ```
@@ -1138,8 +1175,19 @@ Do not destroy a pool while a task is blocked in `stk_bytepool_alloc()` /
 
 ## Software Timers
 
-Software timers run their callback inside a dedicated kernel task managed by
-`stk_timerhost_t`. One host is pre-allocated per CPU core.
+Software timers are managed by `stk_timerhost_t`. One host is pre-allocated per CPU core
+and can run in one of two modes:
+
+- **Task mode** (`stk_timerhost_init()` / `stk_timerhost_init_ex()`): the host adds a tick task
+  plus `STK_C_TIMER_THREADS_COUNT` handler task(s) to the kernel, and callbacks run inside a
+  handler task. It occupies `1 + STK_C_TIMER_THREADS_COUNT` kernel task slots, so size
+  `STK_C_KERNEL_MAX_TASKS` accordingly.
+- **Polled mode** (`stk_timerhost_init_polled()`): no kernel tasks are created and you drive the
+  host by calling `stk_timerhost_process()`; callbacks run inline from that call. This is the
+  mode to use with an HRT kernel, where task-mode initialization is rejected. See
+  [Polled mode](#polled-mode).
+
+The two modes are mutually exclusive: call exactly one init function, before any other timer API.
 
 ```c
 #include <stk_c_time.h>
@@ -1187,6 +1235,62 @@ stk_timer_stop(host, tmr);
 stk_timer_destroy(tmr);
 ```
 
+### Custom Weights and Stacks
+
+`stk_timerhost_init_ex()` is like `stk_timerhost_init()` but accepts a configuration and reports
+failures. Always fill the configuration with `stk_timerhost_config_init()` first, then override
+the fields you need:
+
+```c
+static __stk_c_stack stk_word_t tick_stack[128];
+static __stk_c_stack stk_word_t handler_stack[STK_C_TIMER_THREADS_COUNT][256];
+
+stk_timerhost_config_t cfg;
+stk_timerhost_config_init(&cfg);               /* default weights, internal stacks */
+
+cfg.handler_weight = 2;                        /* strategy-specific, passed to the kernel unchanged */
+cfg.tick_stack = tick_stack;
+cfg.tick_stack_size = 128;                     /* in stk_word_t elements */
+cfg.handler_stack[0] = handler_stack[0];       /* a NULL entry selects the internal buffer */
+cfg.handler_stack_size = 256;                  /* applies to every non-NULL handler_stack entry */
+
+stk_add_result_t r = stk_timerhost_init_ex(host, k, true, &cfg);   /* cfg may be NULL for defaults */
+if (r != STK_ADD_OK) { /* STK_ADD_FAIL_POOL_FULL, _DUPLICATE (shared stack), _INVALID (e.g. HRT kernel) */ }
+```
+
+Notes:
+
+- Weights are strategy-specific. With the preemption-threshold strategy they must be set
+  explicitly; the default weight is not neutral for it.
+- Externally supplied stacks must outlive the host, be distinct from each other, and meet the
+  platform's alignment and memory-protection requirements.
+- On failure the host is unusable, and tasks added before the failure stay registered with the kernel.
+- The tick task always runs in user mode; `privileged` applies to the handler tasks.
+
+### Polled mode
+
+```c
+stk_timerhost_init_polled(host);   /* cannot fail; needs no kernel, task slots, weights or stacks */
+
+stk_timer_t *tmr = stk_timer_create(on_timer, NULL);
+stk_timer_start(host, tmr, 10, 50);
+
+/* In one periodic context (e.g. an HRT job): */
+stk_timeout_t next = stk_timerhost_process(host);
+/* next == STK_NO_WAIT       : a timer is already overdue, call again without delay
+   next == STK_WAIT_INFINITE : no timer is active
+   otherwise                 : ticks until the earliest deadline */
+```
+
+`stk_timerhost_process()` executes pending commands, evaluates deadlines and invokes the callback
+of every expired timer inline. It never blocks. Call it from a single context only: not
+concurrently and not from a timer callback. `stk_timer_start()` and the other control functions
+remain callable from any task and take effect at the next `stk_timerhost_process()` call.
+
+A timer fires on the first call at or after its deadline, so the calling period is the timer
+resolution, and callback execution time counts against the caller (for example, against the WCET of
+an HRT job).
+
 ### TimerHost Management
 
 ```c
@@ -1194,9 +1298,11 @@ stk_timerhost_is_empty(host);        /* true if no timers are currently active *
 stk_timerhost_get_size(host);        /* number of currently active timers */
 stk_timerhost_get_time_now(host);    /* host's last tick-count snapshot */
 
-bool ok = stk_timerhost_shutdown(host);  /* stops all active timers; host must
-                                             not be used afterward */
+bool ok = stk_timerhost_shutdown(host);  /* stops all active timers */
 ```
+
+After `stk_timerhost_shutdown()` in task mode, the host must not be used until it is initialized
+again. In polled mode the host stays usable.
 
 ### Periodic Trigger (polling alternative)
 
@@ -1281,10 +1387,19 @@ add at least 20–30% margin.
 signal end-of-period. Calling `stk_sleep_ms()` in an HRT task is not supported
 and will cause misbehaviour.
 
-**Blocking call from a timer callback** — The timer callback executes inside the
+**Blocking call from a timer callback** — In task mode the timer callback executes inside the
 timer handler task. Calling a blocking API (e.g. `stk_mutex_lock()` with a
 non-zero timeout) requires a stack large enough to support it. Increase
-`STK_C_TIMER_HANDLER_STACK_SIZE` if needed.
+`STK_C_TIMER_HANDLER_STACK_SIZE` if needed. In polled mode the callback runs inline in the
+caller of `stk_timerhost_process()`, so it uses that task's stack and time budget.
+
+**Mixing timer host modes** — `stk_timerhost_init_polled()` and
+`stk_timerhost_init()` / `stk_timerhost_init_ex()` are mutually exclusive. A host in task
+mode on an HRT kernel is rejected (`STK_ADD_FAIL_INVALID`): use polled mode there.
+
+**Mismatched `STK_C_SEM_VALUE_TYPE` / `STK_C_TIMER_THREADS_COUNT`** — Both change the layout of
+types in the public headers. Define them identically in every translation unit (and in the
+`.cpp` files of the binding), otherwise structure sizes will disagree.
 
 **Forgetting `KERNEL_SYNC`** — Mutex, semaphore, event, and message queue are
 compiled in only when `KERNEL_SYNC` is part of the kernel flags. Without it,
@@ -1336,6 +1451,12 @@ Place these in `stk_config.h` before including any STK header.
 
 /* Stack size (words) for the timer handler task */
 #define STK_C_TIMER_HANDLER_STACK_SIZE  512
+
+/* Number of timer handler tasks in task mode (host uses 1 + this many task slots) */
+#define STK_C_TIMER_THREADS_COUNT       1
+
+/* Semaphore counter type: uint8_t, uint16_t, uint32_t or uint64_t */
+#define STK_C_SEM_VALUE_TYPE            uint32_t
 
 /* Kernel type for core 0 — required */
 #define STK_C_KERNEL_TYPE_CPU_0 \

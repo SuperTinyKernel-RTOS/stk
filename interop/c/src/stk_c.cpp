@@ -66,6 +66,12 @@ extern void InitializeTimerHost(stk_kernel_t *kernel, stk::time::TimerHost *th, 
     th->Initialize(CastCToKernelInterface(kernel), amode);
 }
 
+extern EAddResult InitializeTimerHostEx(stk_kernel_t *kernel, stk::time::TimerHost *th, EAccessMode amode,
+    const stk::time::TimerHost::Config &cfg)
+{
+    return th->Initialize(CastCToKernelInterface(kernel), amode, cfg);
+}
+
 } // interop_c_helper
 } // stk
 

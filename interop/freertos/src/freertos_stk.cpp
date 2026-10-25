@@ -612,7 +612,7 @@ struct FrtosQueue
 enum class SemKind : uint8_t
 {
     None     = 0x00U, //!< Sentinel: not a FrtosSemaphore (e.g. plain FrtosQueue).
-    Counting = 0x80U, //!< Binary or counting semaphore (backed by stk::sync::Semaphore).
+    Counting = 0x80U, //!< Binary or counting semaphore (backed by FrtosSemCounter, i.e. stk::sync::SemaphoreT<UBaseType_t>).
     Mutex    = 0x81U, //!< Mutex or recursive mutex    (backed by stk::sync::FastMutex or stk::sync::Mutex).
 };
 
@@ -691,9 +691,15 @@ struct FrtosFastMutex final : FrtosMutexBase
 
 #endif // configUSE_MUTEXES
 
+// Counter of binary / counting semaphores. It has the width of UBaseType_t (as the counts of the FreeRTOS API),
+// so initial / maximum counts are neither truncated nor limited to 16 bits (stk::sync::Semaphore), whatever the
+// width of UBaseType_t on the port (16, 32 or 64 bits). The maximum representable count is
+// FrtosSemCounter::COUNT_MAX, i.e. the maximum value of UBaseType_t minus one.
+typedef stk::sync::SemaphoreT<UBaseType_t> FrtosSemCounter;
+
 struct FrtosSemaphore
 {
-    explicit FrtosSemaphore(SemKind kind, uint16_t initial, uint16_t max_count, bool recursive = false)
+    explicit FrtosSemaphore(SemKind kind, UBaseType_t initial, UBaseType_t max_count, bool recursive = false)
         : m_kind(kind), m_cb_owned(true),
           m_sem(nullptr)
 #if configUSE_MUTEXES
@@ -704,7 +710,7 @@ struct FrtosSemaphore
         #endif
     {
         if (kind == SemKind::Counting)
-            m_sem = ObjAlloc<stk::sync::Semaphore>(initial, max_count);
+            m_sem = ObjAlloc<FrtosSemCounter>(initial, max_count);
 #if configUSE_MUTEXES
         else if (recursive)
             m_mtx = ObjAlloc<FrtosRecursiveMutex>();
@@ -724,7 +730,7 @@ struct FrtosSemaphore
     // ---- Members ----
     SemKind               m_kind;
     bool                  m_cb_owned;
-    stk::sync::Semaphore *m_sem; // non-null for Counting kind
+    FrtosSemCounter      *m_sem; // non-null for Counting kind
 #if configUSE_MUTEXES
     FrtosMutexBase       *m_mtx; // non-null for Mutex kind
 #endif
@@ -2118,7 +2124,7 @@ BaseType_t xQueueIsQueueFullFromISR(const QueueHandle_t xQueue)
 // counterparts.  In this STK wrapper the object types are distinct:
 //
 //   FrtosQueue      — wraps stk::sync::MessageQueue; no mutex, no owner.
-//   FrtosSemaphore  — wraps stk::sync::Semaphore (Counting) or
+//   FrtosSemaphore  — wraps stk::sync::SemaphoreT<UBaseType_t> (Counting) or
 //                     stk::sync::FastMutex / stk::sync::Mutex (Mutex kind).
 //
 // Type discrimination:
@@ -2378,8 +2384,8 @@ SemaphoreHandle_t xSemaphoreCreateBinary(void)
     // Binary semaphore: max count = 1, initial count = 0.
     FrtosSemaphore *s = ObjAlloc<FrtosSemaphore>(
         SemKind::Counting,
-        static_cast<uint16_t>(0U),
-        static_cast<uint16_t>(1U));
+        static_cast<UBaseType_t>(0U),
+        static_cast<UBaseType_t>(1U));
 
     if ((s == nullptr) || (s->m_sem == nullptr))
     {
@@ -2401,12 +2407,12 @@ SemaphoreHandle_t xSemaphoreCreateBinaryStatic(StaticSemaphore_t *pxSemaphoreBuf
 
     // Placement-new the FrtosSemaphore control block into the caller-supplied
     // buffer.  Binary semaphore: max count = 1, initial count = 0.
-    // The inner stk::sync::Semaphore is a value type embedded inside
+    // The inner FrtosSemCounter is a value type embedded inside
     // FrtosSemaphore, so no additional heap allocation is needed.
     FrtosSemaphore *s = new (pxSemaphoreBuffer) FrtosSemaphore(
         SemKind::Counting,
-        static_cast<uint16_t>(0U),
-        static_cast<uint16_t>(1U));
+        static_cast<UBaseType_t>(0U),
+        static_cast<UBaseType_t>(1U));
 
     if (s->m_sem == nullptr)
     {
@@ -2427,13 +2433,18 @@ SemaphoreHandle_t xSemaphoreCreateCounting(UBaseType_t uxMaxCount,
     if (uxMaxCount == 0U || uxInitialCount > uxMaxCount)
         return nullptr;
 
-    if (uxMaxCount > stk::sync::Semaphore::COUNT_MAX)
-        uxMaxCount = stk::sync::Semaphore::COUNT_MAX;
+    // the counter can hold up to COUNT_MAX (maximum value of UBaseType_t minus one): clamp the maximum and
+    // reject an initial count which does not fit instead of silently altering it
+    if (uxMaxCount > FrtosSemCounter::COUNT_MAX)
+        uxMaxCount = FrtosSemCounter::COUNT_MAX;
+
+    if (uxInitialCount > uxMaxCount)
+        return nullptr;
 
     FrtosSemaphore *s = ObjAlloc<FrtosSemaphore>(
         SemKind::Counting,
-        static_cast<uint16_t>(uxInitialCount),
-        static_cast<uint16_t>(uxMaxCount));
+        uxInitialCount,
+        uxMaxCount);
 
     if ((s == nullptr) || (s->m_sem == nullptr))
     {
@@ -2453,8 +2464,13 @@ SemaphoreHandle_t xSemaphoreCreateCountingStatic(UBaseType_t        uxMaxCount,
     if (uxMaxCount == 0U || uxInitialCount > uxMaxCount)
         return nullptr;
 
-    if (uxMaxCount > stk::sync::Semaphore::COUNT_MAX)
-        uxMaxCount = stk::sync::Semaphore::COUNT_MAX;
+    // the counter can hold up to COUNT_MAX (maximum value of UBaseType_t minus one): clamp the maximum and
+    // reject an initial count which does not fit instead of silently altering it
+    if (uxMaxCount > FrtosSemCounter::COUNT_MAX)
+        uxMaxCount = FrtosSemCounter::COUNT_MAX;
+
+    if (uxInitialCount > uxMaxCount)
+        return nullptr;
 
     static_assert(sizeof(StaticSemaphore_t) >= sizeof(FrtosSemaphore),
         "StaticSemaphore_t is too small to hold FrtosSemaphore. "
@@ -2462,8 +2478,8 @@ SemaphoreHandle_t xSemaphoreCreateCountingStatic(UBaseType_t        uxMaxCount,
 
     FrtosSemaphore *s = new (pxSemaphoreBuffer) FrtosSemaphore(
         SemKind::Counting,
-        static_cast<uint16_t>(uxInitialCount),
-        static_cast<uint16_t>(uxMaxCount));
+        uxInitialCount,
+        uxMaxCount);
 
     if (s->m_sem == nullptr)
     {
@@ -2484,8 +2500,8 @@ static SemaphoreHandle_t CreateMutexInternal(bool recursive)
 {
     FrtosSemaphore *s = ObjAlloc<FrtosSemaphore>(
         SemKind::Mutex,
-        static_cast<uint16_t>(0U),
-        static_cast<uint16_t>(1U),
+        static_cast<UBaseType_t>(0U),
+        static_cast<UBaseType_t>(1U),
         recursive);
 
     if ((s == nullptr) || (s->m_mtx == nullptr))
@@ -2509,8 +2525,8 @@ static SemaphoreHandle_t CreateMutexStaticInternal(StaticSemaphore_t *pxMutexBuf
 
     FrtosSemaphore *s = new (pxMutexBuffer) FrtosSemaphore(
         SemKind::Mutex,
-        static_cast<uint16_t>(0U),
-        static_cast<uint16_t>(1U),
+        static_cast<UBaseType_t>(0U),
+        static_cast<UBaseType_t>(1U),
         recursive);
 
     if (s->m_mtx == nullptr)
@@ -2649,11 +2665,13 @@ BaseType_t xSemaphoreGive(SemaphoreHandle_t xSemaphore)
     }
     else
     {
-        // Guard against overflow: TryWait + Signal pattern.
-        if (s->m_sem->GetCount() >= stk::sync::Semaphore::COUNT_MAX)
+        // FreeRTOS: giving a semaphore which is already full (count == max) fails with errQUEUE_FULL (pdFAIL),
+        // it is not an error of the caller. TrySignal() checks the per-object maximum and increments the count
+        // atomically (a waiting task always gets the token directly), so a binary semaphore given twice is
+        // rejected here instead of tripping the assertion of Signal() in a debug build.
+        if (!s->m_sem->TrySignal())
             return pdFAIL;
 
-        s->m_sem->Signal();
         QueueSetNotify(xSemaphore, s);
         return pdPASS;
     }
@@ -2688,10 +2706,10 @@ BaseType_t xSemaphoreGiveFromISR(SemaphoreHandle_t xSemaphore,
     if (s->m_kind == SemKind::Mutex)
         return pdFAIL; // Mutex give from ISR is not permitted.
 
-    if (s->m_sem->GetCount() >= stk::sync::Semaphore::COUNT_MAX)
+    // semaphore already full (count == max): pdFAIL as in FreeRTOS, see xSemaphoreGive(); TrySignal() is ISR-safe
+    if (!s->m_sem->TrySignal())
         return pdFAIL;
 
-    s->m_sem->Signal();
     QueueSetNotify(xSemaphore, s);
 
     if (pxHigherPriorityTaskWoken != nullptr)

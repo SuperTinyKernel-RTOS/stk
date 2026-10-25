@@ -163,13 +163,17 @@ extern "C" void osal_spin_unlock(osal_spinlock_t *ctx, bool in_isr)
 // Semaphore API
 //----------------------------------------------------------------------------+
 
+/* stk::sync::Semaphore is a typedef of stk::sync::SemaphoreT<uint16_t>: a destructor call needs a name that
+ * is found from this scope, so go through this alias (an unqualified ~Semaphore() would not be found here). */
+typedef stk::sync::Semaphore StkSemaphore;
+
 extern "C" osal_semaphore_t osal_semaphore_create(osal_semaphore_def_t *semdef)
 {
   if (semdef != nullptr) {
       /* Binary semaphore, as in every other OSAL backend here: constructed at count 0
        * (not-yet-signaled) with max_count 1, so a second post before a wait cannot leave a stale
        * extra token. */
-      STK_UNUSED(StkConstructIn<stk::sync::Semaphore>(*semdef, 0U, 1U));
+      STK_UNUSED(StkConstructIn<StkSemaphore>(*semdef, 0U, 1U));
   }
 
   return semdef;
@@ -177,7 +181,7 @@ extern "C" osal_semaphore_t osal_semaphore_create(osal_semaphore_def_t *semdef)
 
 extern "C" bool osal_semaphore_delete(osal_semaphore_t sem_hdl)
 {
-  StkCastTo<stk::sync::Semaphore>(sem_hdl)->~Semaphore();
+  StkCastTo<StkSemaphore>(sem_hdl)->~StkSemaphore();
   return true;
 }
 
@@ -186,19 +190,19 @@ extern "C" bool osal_semaphore_post(osal_semaphore_t sem_hdl, bool in_isr)
 {
   STK_UNUSED(in_isr); /* see file-level note: no separate ISR path needed */
 
-  return StkCastTo<stk::sync::Semaphore>(sem_hdl)->TrySignal();
+  return StkCastTo<StkSemaphore>(sem_hdl)->TrySignal();
 }
 
 extern "C" bool osal_semaphore_wait(osal_semaphore_t sem_hdl, uint32_t msec)
 {
-  return StkCastTo<stk::sync::Semaphore>(sem_hdl)->Wait(StkTimeoutFromMs(msec));
+  return StkCastTo<StkSemaphore>(sem_hdl)->Wait(StkTimeoutFromMs(msec));
 }
 
 extern "C" void osal_semaphore_reset(osal_semaphore_t sem_hdl)
 {
   /* stk::sync::Semaphore has no dedicated reset op; drain any pending count/tokens back to 0
    * instead, mirroring what FreeRTOS's xQueueReset() does for a binary semaphore. */
-  stk::sync::Semaphore *s = StkCastTo<stk::sync::Semaphore>(sem_hdl);
+  StkSemaphore *s = StkCastTo<StkSemaphore>(sem_hdl);
   while (s->TryWait()) {
     /* keep draining */
   }

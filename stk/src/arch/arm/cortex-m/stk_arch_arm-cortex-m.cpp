@@ -3884,6 +3884,9 @@ public:
     void Resume(stk::Timeout elapsed_ticks) override;
     void InheritWeight(stk::TId tid, stk::Weight weight) override;
     void RestoreWeight(stk::TId tid, stk::ISyncObject *sobj) override;
+    stk::Weight SetWeight(stk::TId tid, stk::Weight weight) override;
+    stk::Timeout SetTimeSlice(stk::TId tid, stk::Timeout ticks) override;
+    void ExitTask() override;
 }
 /*! \var s_KernelServiceSvcProxy
     \brief Shared static proxy instance exposed to unprivileged context calls.
@@ -3961,6 +3964,13 @@ void KernelServiceSvcProxy::SwitchToNext()
 }
 
 STK_MPU_SHARED_CODE_SECTION
+void KernelServiceSvcProxy::ExitTask()
+{
+    const ScopedPrivilegeBoost pb;
+    GetContext().m_service->ExitTask();
+}
+
+STK_MPU_SHARED_CODE_SECTION
 stk::EWaitResult KernelServiceSvcProxy::Wait(stk::ISyncObject *sobj, stk::IMutex *mutex, stk::Timeout timeout)
 {
     const ScopedPrivilegeBoost pb;
@@ -4000,6 +4010,21 @@ void KernelServiceSvcProxy::RestoreWeight(stk::TId tid, stk::ISyncObject *sobj)
     const ScopedPrivilegeBoost pb;
     GetContext().m_service->RestoreWeight(tid, sobj);
 }
+
+STK_MPU_SHARED_CODE_SECTION
+stk::Weight KernelServiceSvcProxy::SetWeight(stk::TId tid, stk::Weight weight)
+{
+    const ScopedPrivilegeBoost pb;
+    return GetContext().m_service->SetWeight(tid, weight);
+}
+
+STK_MPU_SHARED_CODE_SECTION
+stk::Timeout KernelServiceSvcProxy::SetTimeSlice(stk::TId tid, stk::Timeout ticks)
+{
+    const ScopedPrivilegeBoost pb;
+    return GetContext().m_service->SetTimeSlice(tid, ticks);
+}
+
 #endif // STK_MPU
 
 IKernelService *IKernelService::GetInstance()

@@ -408,15 +408,15 @@ struct StkFastMutex : StkMutexBase
 
 struct StkSemaphore
 {
-    explicit StkSemaphore(uint16_t initial, uint16_t max_count, const char *n = nullptr)
+    explicit StkSemaphore(uint32_t initial, uint32_t max_count, const char *n = nullptr)
         : m_semaphore(initial, max_count), m_cb_owned(true)
     {
         m_semaphore.SetTraceName(n);
     }
 
     // ---- Members ----
-    stk::sync::Semaphore m_semaphore;
-    bool                 m_cb_owned; // true -> heap-allocated, false -> placement-new in caller memory
+    stk::sync::SemaphoreT<uint32_t> m_semaphore;
+    bool                            m_cb_owned; // true -> heap-allocated, false -> placement-new in caller memory
 };
 
 // -----------------------------------------------------------------------------
@@ -2178,15 +2178,11 @@ osSemaphoreId_t osSemaphoreNew(uint32_t max_count, uint32_t initial_count,
     }
     else
     {
-        // STK Semaphore uses uint16_t counters, clamp to stk::sync::Semaphore::COUNT_MAX.
-        const uint16_t mc = static_cast<uint16_t>(stk::Min(max_count,     static_cast<uint32_t>(stk::sync::Semaphore::COUNT_MAX)));
-        const uint16_t ic = static_cast<uint16_t>(stk::Min(initial_count, static_cast<uint32_t>(stk::sync::Semaphore::COUNT_MAX)));
-
         const char *const name   = ((attr != nullptr) ? attr->name    : nullptr);
         void       *const cb_mem = ((attr != nullptr) ? attr->cb_mem  : nullptr);
         const uint32_t    cb_sz  = ((attr != nullptr) ? attr->cb_size : 0U);
 
-        StkSemaphore *const sem = PlacementNewOrHeap<StkSemaphore>(cb_mem, cb_sz, ic, mc, name);
+        StkSemaphore *const sem = PlacementNewOrHeap<StkSemaphore>(cb_mem, cb_sz, initial_count, max_count, name);
         result = static_cast<osSemaphoreId_t>(sem);
     }
 
@@ -2259,8 +2255,7 @@ uint32_t osSemaphoreGetCount(osSemaphoreId_t semaphore_id)
     }
     else
     {
-        result = static_cast<uint32_t>(
-            static_cast<StkSemaphore *>(semaphore_id)->m_semaphore.GetCount());
+        result = static_cast<StkSemaphore *>(semaphore_id)->m_semaphore.GetCount();
     }
 
     return result;

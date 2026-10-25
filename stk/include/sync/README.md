@@ -59,10 +59,14 @@ A binary signaling primitive supporting Auto-reset and Manual-reset modes.
 - **Pulse**: Wakes waiting tasks and immediately resets the event (similar to Win32 API).
 - **Low-Power Aware**: Waiting tasks are suspended by the kernel.
 
-### 7. Semaphore (`sync::Semaphore`)
+### 7. Semaphore (`sync::Semaphore` / `sync::SemaphoreT<T>`)
 A counting signaling primitive used for resource tracking or producer-consumer patterns.
+- **Selectable Counter Type**: `sync::SemaphoreT<T>` is a template over an unsigned counter type `T` (`uint8_t`, `uint16_t`, `uint32_t`, `uint64_t`); signed types are rejected at compile time. `sync::Semaphore` is a `typedef` for `SemaphoreT<uint16_t>` (max count `0xFFFF`), so existing code keeps working unchanged. `SemaphoreT<T>::COUNT_MAX` is the maximum value of `T`, and `ValueType` exposes the counter type. Note that `uint8_t` does not necessarily reduce the object size because of alignment padding, verify with `sizeof()` on your target.
+- **Wide Counters**: A counter wider than a pointer (e.g. `uint64_t` on a 32-bit MCU) is supported: all updates are done under a critical section, and `GetCount()` takes it too, so the value can never be read torn. Counters up to the native word size are read with a single aligned load.
 - **Direct Handover**: When semaphore is signaled, kernel immediately transfers the resource to the first waiting task (FIFO ordering).
 - **Bounded Signal**: `TrySignal()` posts without exceeding `max_count`, returning `false` instead of asserting — safe for multiple concurrent signalers where a redundant post should be tolerated rather than treated as a caller error.
+- **Per-call Ceiling**: `TrySignal(ceiling)` additionally limits the counter by a caller-supplied ceiling (the effective limit is the smaller of `ceiling` and the `max_count` given at construction). The check and the increment (or hand-off to a waiter) are atomic — equivalent of ThreadX `tx_semaphore_ceiling_put()`.
+- **Cancellable Waits**: `WaitEx()` returns the full `EWaitResult` (`WAIT_RESULT_SIGNAL`, `WAIT_RESULT_TIMEOUT`, `WAIT_RESULT_CANCELED`, `WAIT_RESULT_FAIL`), letting callers distinguish a timeout from a wait cancelled via `IKernel::CancelTaskWait()`; a non-signal result never consumes a token.
 - **Low-Power Aware**: Waiting tasks are suspended by the kernel.
 
 ### 8. Pipe (`sync::Pipe` / `sync::PipeT<T, Capacity>`)
@@ -125,7 +129,7 @@ STK primitives follow strict rules for **Interrupt Service Routine (ISR)** conte
 The following operations are ISR-safe:
 * **sync::Event**: `Set()`, `Pulse()`, `Reset()`, `TryWait()`
 * **sync::EventFlags**: `Set()`, `Clear()`, `And()`, `Get()`, `TryWait()`, `Wait(NO_WAIT)`, `TryWaitEx()`, `WaitEx(NO_WAIT)`, `Sync(NO_WAIT)`
-* **sync::Semaphore**: `TrySignal()`, `Signal()`, `TryWait()`
+* **sync::Semaphore** / **sync::SemaphoreT\<T\>**: `TrySignal()`, `TrySignal(ceiling)`, `Signal()`, `TryWait()`, `Wait(NO_WAIT)`, `WaitEx(NO_WAIT)`, `GetCount()`
 * **sync::ConditionVariable**: `NotifyOne()`, `NotifyOne_CS()`, `NotifyAll()`, `NotifyAll_CS()`, `Wait(NO_WAIT)` (the `_CS` variants require the caller to already hold a critical section)
 * **sync::Pipe**: `Write(NO_WAIT)`, `WriteBulk(NO_WAIT)`, `TryWrite()`, `TryWriteBulk()`, `Read(NO_WAIT)`, `ReadBulk(NO_WAIT)`, `TryRead()`, `TryReadBulk()`, `ReadBulkTriggered(NO_WAIT)`, `TryReadBulkTriggered()`, `Reset()`
 * **sync::MessageQueue**: `Put(NO_WAIT)`, `TryPut()`, `PutFront(NO_WAIT)`, `TryPutFront()`, `Get(NO_WAIT)`, `TryGet()`, `Peek(NO_WAIT)`, `TryPeek()`, `PeekFront(NO_WAIT)`, `TryPeekFront()`, `Reset()`

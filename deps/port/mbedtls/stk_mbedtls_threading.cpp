@@ -49,10 +49,12 @@ namespace stk {
 namespace port {
 // ----------------------------------------------------------------------------
 
-static __stk_forceinline stk::sync::Mutex *AsMutex(mbedtls_platform_mutex_t *mutex)
+/* mbedTLS never re-locks a mutex already held by the calling thread, so the non-recursive (smaller and
+ * faster) stk::sync::FastMutex is used instead of the recursive stk::sync::Mutex. */
+static __stk_forceinline stk::sync::FastMutex *AsMutex(mbedtls_platform_mutex_t *mutex)
 {
     STK_ASSERT(mutex != nullptr);
-    return reinterpret_cast<stk::sync::Mutex *>(mutex->storage.raw);
+    return reinterpret_cast<stk::sync::FastMutex *>(mutex->storage.raw);
 }
 
 static __stk_forceinline stk::sync::ConditionVariable *AsCond(mbedtls_platform_condition_variable_t *cond)
@@ -68,12 +70,12 @@ static __stk_forceinline stk::sync::ConditionVariable *AsCond(mbedtls_platform_c
  * target, fail here with a clear message rather than corrupting memory at
  * runtime.
  */
-static_assert(sizeof(stk::sync::Mutex) <= sizeof(mbedtls_platform_mutex_t::storage.raw),
+static_assert(sizeof(stk::sync::FastMutex) <= sizeof(mbedtls_platform_mutex_t::storage.raw),
       "STK_MBEDTLS_MUTEX_STORAGE_SIZE (threading_alt.h) is too small for "
-      "stk::sync::Mutex on this target - increase it and rebuild.");
-static_assert(alignof(mbedtls_platform_mutex_t) % alignof(stk::sync::Mutex) == 0,
+      "stk::sync::FastMutex on this target - increase it and rebuild.");
+static_assert(alignof(mbedtls_platform_mutex_t) % alignof(stk::sync::FastMutex) == 0,
       "mbedtls_platform_mutex_t's storage union is not aligned strictly "
-      "enough for stk::sync::Mutex - widen the union in threading_alt.h.");
+      "enough for stk::sync::FastMutex - widen the union in threading_alt.h.");
 
 static_assert(sizeof(stk::sync::ConditionVariable) <= sizeof(mbedtls_platform_condition_variable_t::storage.raw),
       "STK_MBEDTLS_COND_STORAGE_SIZE (threading_alt.h) is too small for "
@@ -98,22 +100,22 @@ extern "C" {
 
 static int stk_mutex_init(mbedtls_platform_mutex_t *mutex)
 {
-    /* stk::sync::Mutex's constructor is non-allocating and cannot fail. */
-    ::new (mutex->storage.raw) stk::sync::Mutex();
+    /* stk::sync::FastMutex's constructor is non-allocating and cannot fail. */
+    ::new (mutex->storage.raw) stk::sync::FastMutex();
     return 0;
 }
 
 static void stk_mutex_destroy(mbedtls_platform_mutex_t *mutex)
 {
     /* Contract (mbedtls/threading.h): must not be locked and must have no
-     * waiters; ~Mutex() enforces this with an assertion in debug builds. */
-    stk::port::AsMutex(mutex)->~Mutex();
+     * waiters; ~FastMutex() enforces this with an assertion in debug builds. */
+    stk::port::AsMutex(mutex)->~FastMutex();
 }
 
 static int stk_mutex_lock(mbedtls_platform_mutex_t *mutex)
 {
-    /* mbedTLS never re-locks a mutex already held by the calling thread, so
-     * Mutex's recursion support is simply unused here. */
+    /* mbedTLS never re-locks a mutex already held by the calling thread (FastMutex is non-recursive: such a
+     * re-lock would panic with KERNEL_PANIC_SYNC_DEADLOCK instead of dead-locking silently). */
     stk::port::AsMutex(mutex)->Lock();
     return 0;
 }
@@ -157,20 +159,24 @@ static int stk_cond_wait(mbedtls_platform_condition_variable_t *cond,
                          mbedtls_platform_mutex_t *mutex)
 {
     /* mutex must already be held by the calling task (mbedTLS's contract).
-     * ConditionVariable::Wait() atomically releases it, blocks the task,
-     * and re-locks it before returning - exactly what mbedtls_condition_
-     * variable_wait() requires. WAIT_INFINITE matches mbedTLS's expectation
-     * that this only returns once signaled/broadcast; the API explicitly
-     * tolerates spurious wakeups, so no predicate re-check loop is needed
-     * here (the caller is required to loop on its own predicate anyway).
+     * ConditionVariable::WaitEx() atomically releases it, blocks the task,
+     * and re-locks it before returning (in every outcome) - exactly what
+     * mbedtls_condition_variable_wait() requires. WAIT_INFINITE matches
+     * mbedTLS's expectation that this only returns once signaled/broadcast;
+     * the API explicitly tolerates spurious wakeups, so no predicate re-check
+     * loop is needed here (the caller is required to loop on its own
+     * predicate anyway).
      *
-     * Wait() returns false not just on timeout (which WAIT_INFINITE should
-     * never produce) but also on WAIT_RESULT_FAIL (an internal STK error).
-     * Report that as a usage error instead of silently claiming success -
-     * mirroring how the reference pthread backend's err_from_posix() never
-     * swallows a failed pthread_cond_wait(). */
-    const bool signaled = stk::port::AsCond(cond)->Wait(*stk::port::AsMutex(mutex), stk::WAIT_INFINITE);
-    return (signaled ? 0 : MBEDTLS_ERR_THREADING_USAGE_ERROR);
+     * A wait cancelled via IKernel::CancelTaskWait() is reported as a spurious
+     * wake-up (success): the mutex is held again and the caller re-checks its
+     * predicate, as it must do after any wake-up. Only a wait the kernel
+     * rejected (WAIT_RESULT_FAIL, an internal STK error) - or an impossible
+     * timeout with WAIT_INFINITE - is reported as a usage error, mirroring how
+     * the reference pthread backend's err_from_posix() never swallows a failed
+     * pthread_cond_wait(). */
+    const stk::EWaitResult wr = stk::port::AsCond(cond)->WaitEx(*stk::port::AsMutex(mutex), stk::WAIT_INFINITE);
+    const bool woken = ((wr == stk::WAIT_RESULT_SIGNAL) || (wr == stk::WAIT_RESULT_CANCELED));
+    return (woken ? 0 : MBEDTLS_ERR_THREADING_USAGE_ERROR);
 }
 
 void stk_mbedtls_threading_init(void)

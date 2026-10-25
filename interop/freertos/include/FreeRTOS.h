@@ -515,7 +515,7 @@ typedef struct
 /// Must be at least sizeof(FrtosEventGroup) bytes.  Declared as a fixed-size
 /// array of uintptr_t to enforce natural alignment without exposing
 /// FrtosEventGroup internals.
-#define STATIC_EVENT_GROUP_TCB_SIZE_WORDS  10U
+#define STATIC_EVENT_GROUP_TCB_SIZE_WORDS  11U
 typedef struct
 {
     uintptr_t _opaque[STATIC_EVENT_GROUP_TCB_SIZE_WORDS];

@@ -57,7 +57,7 @@ class ScopedCriticalSection final : public IMutex
     friend class Mutex;
     friend class FastMutex;
     friend class RWMutex;
-    friend class Semaphore;
+    template <typename T> friend class SemaphoreT;
     friend class Pipe;
     template <typename T, size_t N> friend class PipeT;
 

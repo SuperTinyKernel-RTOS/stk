@@ -55,9 +55,36 @@ extern "C" {
     #define STK_C_TIMER_HANDLER_STACK_SIZE (256U)
 #endif
 
+/*! \def   STK_C_TIMER_THREADS_COUNT
+    \brief Number of handler tasks serving expired timers in task mode (default: 1).
+           Sizes \a stk_timerhost_config_t::handler_stack and is forwarded to
+           \c STK_TIMER_THREADS_COUNT of the C++ implementation.
+    \note  Must have the same value in every translation unit of the application.
+*/
+#ifndef STK_C_TIMER_THREADS_COUNT
+    #define STK_C_TIMER_THREADS_COUNT (1U)
+#endif
+
 // =============================================================================
 // Types
 // =============================================================================
+
+/*! \brief  Optional configuration of the timer host tasks, see \a stk_timerhost_init_ex().
+    \note   Always fill with \a stk_timerhost_config_init() first, then override the fields of interest.
+    \note   Weights are strategy-specific and forwarded to the kernel unchanged (see stk::time::TimerHost,
+            "Scheduling weights"). With the preemption-threshold strategy the weights must be set explicitly,
+            the default weight is not neutral for it.
+    \note   Externally supplied stacks must outlive the host, be distinct from each other and satisfy the
+            alignment / memory protection requirements of the platform.
+*/
+typedef struct stk_timerhost_config_t {
+    stk_weight_t tick_weight;                                   //!< Weight of the tick task (default: kernel default weight).
+    stk_weight_t handler_weight;                                //!< Weight of every handler task (default: kernel default weight).
+    stk_word_t  *tick_stack;                                    //!< Stack of the tick task, or NULL for the internal buffer (default).
+    size_t       tick_stack_size;                               //!< Size of \a tick_stack in stk_word_t elements, ignored if \a tick_stack is NULL.
+    stk_word_t  *handler_stack[STK_C_TIMER_THREADS_COUNT];      //!< Stack of each handler task, a NULL entry selects the internal buffer (default).
+    size_t       handler_stack_size;                            //!< Size of every non-NULL \a handler_stack entry in stk_word_t elements.
+} stk_timerhost_config_t;
 
 /*! \brief  Opaque handle to a \c TimerHost instance (one per CPU core).
 */
@@ -67,12 +94,13 @@ typedef struct stk_timerhost_t stk_timerhost_t;
 */
 typedef struct stk_timer_t stk_timer_t;
 
-/*! \brief  Timer expiration callback invoked from within the TimerHost handler task.
+/*! \brief     Timer expiration callback invoked from within the TimerHost handler task (task mode)
+               or inline from \a stk_timerhost_process() (polled mode).
     \param[in] host: TimerHost that fired the timer.
     \param[in] timer: The timer that expired.
     \param[in] user_data: Opaque pointer supplied at timer creation time.
-    \warning  Must not call blocking kernel services (e.g. stk_mutex_lock with a
-              non-zero timeout) unless the handler task stack is large enough.
+    \warning   Must not call blocking kernel services (e.g. stk_mutex_lock with a
+               non-zero timeout) unless the handler task stack is large enough.
 */
 typedef void (*stk_timer_callback_t)(stk_timerhost_t *host,
                                      stk_timer_t     *timer,
@@ -101,10 +129,60 @@ void stk_timerhost_init(stk_timerhost_t *host,
                         stk_kernel_t    *kernel,
                         bool             privileged);
 
+/*! \brief      Fill a configuration with defaults (default weights, internal stack buffers).
+    \param[out] cfg: Configuration to initialize.
+*/
+void stk_timerhost_config_init(stk_timerhost_config_t *cfg);
+
+/*! \brief     Initialize the TimerHost in task mode with explicit weights / stacks and report failures.
+    \details   Same as \a stk_timerhost_init() but applies \a cfg and returns the result of adding the
+               internal tasks to the kernel.
+    \param[in] host: TimerHost handle obtained via \a stk_timerhost_get().
+    \param[in] kernel: Kernel instance the timer tasks will be added to.
+    \param[in] privileged: If \c true the handler tasks run in privileged mode, otherwise in user mode
+               (the tick task always runs in user mode).
+    \param[in] cfg: Weights and stacks, or NULL for defaults (equivalent to \a stk_timerhost_config_init()).
+    \return    STK_ADD_OK on success, otherwise the first failure reported by the kernel, e.g.
+               STK_ADD_FAIL_POOL_FULL (no free task slots), STK_ADD_FAIL_DUPLICATE (shared stack),
+               STK_ADD_FAIL_INVALID (e.g. HRT kernel: use \a stk_timerhost_init_polled() there).
+    \note      On failure the host is unusable; tasks added before the failure stay registered with the kernel.
+    \note      The host occupies 1 + \a STK_C_TIMER_THREADS_COUNT kernel task slots.
+    \see       stk_add_result_t, stk_timerhost_config_t
+*/
+stk_add_result_t stk_timerhost_init_ex(stk_timerhost_t              *host,
+                                       stk_kernel_t                 *kernel,
+                                       bool                          privileged,
+                                       const stk_timerhost_config_t *cfg);
+
+/*! \brief     Initialize the TimerHost in polled mode (no kernel tasks are created).
+    \details   The application drives the host by calling \a stk_timerhost_process() periodically; expired
+               timer callbacks run inline from that call. This is the mode to use with an HRT kernel,
+               where Initialize/\a stk_timerhost_init() is rejected.
+    \param[in] host: TimerHost handle.
+    \note      Mutually exclusive with \a stk_timerhost_init() / \a stk_timerhost_init_ex(), call one of them
+               before any other timer API. Cannot fail, needs no kernel, task slots, weights or stacks.
+*/
+void stk_timerhost_init_polled(stk_timerhost_t *host);
+
+/*! \brief     Run the host once (polled mode only): execute pending commands, evaluate deadlines and
+               invoke the callback of every expired timer inline.
+    \param[in] host: TimerHost handle initialized with \a stk_timerhost_init_polled().
+    \return    Ticks until the earliest active deadline: \c STK_NO_WAIT if a timer is already overdue
+               (call again without delay), \c STK_WAIT_INFINITE if no timer is active.
+    \note      Never blocks. Call from a single context only, not concurrently and not from a timer callback.
+               \a stk_timer_start() and the other control functions stay callable from any task and take
+               effect at the next call.
+    \note      A timer fires on the first call at or after its deadline, so the calling period is the timer
+               resolution. Callback execution time counts against the caller (e.g. the WCET of an HRT job).
+    \warning   Only valid after \a stk_timerhost_init_polled().
+*/
+stk_timeout_t stk_timerhost_process(stk_timerhost_t *host);
+
 /*! \brief     Gracefully shut down the TimerHost.
     \param[in] host: TimerHost handle.
     \return    \c true on success, \c false if the internal command queue is full.
-    \note      All active timers are stopped.  After shutdown the host must not be used.
+    \note      All active timers are stopped.  Task mode: after shutdown the host must not be used until
+               it is initialized again.  Polled mode: the host stays usable.
 */
 bool stk_timerhost_shutdown(stk_timerhost_t *host);
 
@@ -379,6 +457,8 @@ uint32_t stk_periodic_trigger_get_period(const stk_periodic_trigger_t *trig);
 #ifdef __cplusplus
 #undef STK_TIMER_COUNT_MAX
 #define STK_TIMER_COUNT_MAX (STK_C_TIMER_MAX)
+#undef STK_TIMER_THREADS_COUNT
+#define STK_TIMER_THREADS_COUNT (STK_C_TIMER_THREADS_COUNT)
 #undef STK_TIMER_HANDLER_STACK_SIZE
 #define STK_TIMER_HANDLER_STACK_SIZE (STK_C_TIMER_HANDLER_STACK_SIZE)
 #include "time/stk_time.h"
