@@ -48,15 +48,14 @@ public:
         return KernelMock::OnForceContextSwitch(id, idle, active);
     }
 
-    // Expose protected Kernel::TryAllocateNewTask() to drive its 'validate' = false path directly: Kernel::AddTask()
-    // always validates, and the legacy Kernel::AllocateNewTask() (used by the HRT overload) skips the validation
-    // only if assertions are inactive (NDEBUG without _STK_ASSERT_REDIRECT), which is never the case in this suite.
+    // Expose protected Kernel::TryAllocateNewTask() so it can be driven directly (both AddTask() overloads use it,
+    // it always validates the collision with the already added tasks).
     // Returns the result, 'bound' receives the user task bound to the allocated slot (nullptr if none).
-    EAddResult CallTryAllocateNewTask(ITask *user_task, bool validate, ITask **bound = nullptr)
+    EAddResult CallTryAllocateNewTask(ITask *user_task, ITask **bound = nullptr)
     {
         EAddResult result = ADD_FAIL_INVALID;
 
-        typename BaseType::KernelTask *const task = BaseType::TryAllocateNewTask(user_task, result, validate);
+        typename BaseType::KernelTask *const task = BaseType::TryAllocateNewTask(user_task, result);
 
         if (bound != nullptr)
         {
@@ -449,10 +448,10 @@ TEST(Kernel, AddTaskFromIsrBeforeStart)
     CHECK_EQUAL(0, g_CriticalSectionState);
 }
 
-// TryAllocateNewTask(): 'validate' = false stops at the first free slot (the release fast path of the legacy
-// AllocateNewTask()), covered by driving the function directly.
+// TryAllocateNewTask(): always scans the whole pool, i.e. checks the collision with the already added tasks
+// (also in a release build) and binds the first free slot, covered by driving the function directly.
 
-TEST(Kernel, TryAllocateNewTaskNoValidateStopsAtFirstFreeSlot)
+TEST(Kernel, TryAllocateNewTaskBindsFirstFreeSlot)
 {
     KernelMock<KERNEL_DYNAMIC, 3, SwitchStrategyRR, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task1, task2, task3;
@@ -462,12 +461,12 @@ TEST(Kernel, TryAllocateNewTaskNoValidateStopsAtFirstFreeSlot)
     kernel.AddTask(&task1);
     kernel.AddTask(&task2);
 
-    // slots 0 and 1 are busy, slot 2 is the first free slot: stop there
-    CHECK_EQUAL(ADD_OK, kernel.CallTryAllocateNewTask(&task3, false, &bound));
+    // slots 0 and 1 are busy, slot 2 is the first free slot
+    CHECK_EQUAL(ADD_OK, kernel.CallTryAllocateNewTask(&task3, &bound));
     POINTERS_EQUAL(&task3, bound);
 }
 
-TEST(Kernel, TryAllocateNewTaskNoValidateEmptyKernel)
+TEST(Kernel, TryAllocateNewTaskEmptyKernel)
 {
     KernelMock<KERNEL_DYNAMIC, 2, SwitchStrategyRR, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task1;
@@ -475,12 +474,12 @@ TEST(Kernel, TryAllocateNewTaskNoValidateEmptyKernel)
 
     kernel.Initialize();
 
-    // the very first slot is free: stop at once
-    CHECK_EQUAL(ADD_OK, kernel.CallTryAllocateNewTask(&task1, false, &bound));
+    // the very first slot is free
+    CHECK_EQUAL(ADD_OK, kernel.CallTryAllocateNewTask(&task1, &bound));
     POINTERS_EQUAL(&task1, bound);
 }
 
-TEST(Kernel, TryAllocateNewTaskNoValidatePoolFull)
+TEST(Kernel, TryAllocateNewTaskPoolFull)
 {
     KernelMock<KERNEL_DYNAMIC, 2, SwitchStrategyRR, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task1, task2, task3;
@@ -490,12 +489,12 @@ TEST(Kernel, TryAllocateNewTaskNoValidatePoolFull)
     kernel.AddTask(&task1);
     kernel.AddTask(&task2);
 
-    // no free slot: nothing to stop at, the whole pool is scanned
-    CHECK_EQUAL(ADD_FAIL_POOL_FULL, kernel.CallTryAllocateNewTask(&task3, false, &bound));
+    // no free slot: the whole pool is scanned and nothing is bound
+    CHECK_EQUAL(ADD_FAIL_POOL_FULL, kernel.CallTryAllocateNewTask(&task3, &bound));
     POINTERS_EQUAL(nullptr, bound);
 }
 
-TEST(Kernel, TryAllocateNewTaskNoValidateDuplicateBeforeFreeSlot)
+TEST(Kernel, TryAllocateNewTaskDuplicateBeforeFreeSlot)
 {
     KernelMock<KERNEL_DYNAMIC, 3, SwitchStrategyRR, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task1;
@@ -504,12 +503,12 @@ TEST(Kernel, TryAllocateNewTaskNoValidateDuplicateBeforeFreeSlot)
     kernel.Initialize();
     kernel.AddTask(&task1);
 
-    // the busy slots in front of the first free one are still checked: slot 0 holds this very task
-    CHECK_EQUAL(ADD_FAIL_DUPLICATE, kernel.CallTryAllocateNewTask(&task1, false, &bound));
+    // the busy slot in front of the first free one holds this very task
+    CHECK_EQUAL(ADD_FAIL_DUPLICATE, kernel.CallTryAllocateNewTask(&task1, &bound));
     POINTERS_EQUAL(nullptr, bound);
 }
 
-TEST(Kernel, TryAllocateNewTaskValidateFindsDuplicateAfterFreeSlot)
+TEST(Kernel, TryAllocateNewTaskFindsDuplicateAfterFreeSlot)
 {
     KernelMock<KERNEL_DYNAMIC, 3, SwitchStrategyRR, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task1, task2;
@@ -520,12 +519,14 @@ TEST(Kernel, TryAllocateNewTaskValidateFindsDuplicateAfterFreeSlot)
     kernel.AddTask(&task2);
     kernel.RemoveTask(&task1); // slot 0 is free again, task2 stays in slot 1
 
-    // validate = true scans past the first free slot and finds task2; the failed call must not bind a slot
-    CHECK_EQUAL(ADD_FAIL_DUPLICATE, kernel.CallTryAllocateNewTask(&task2, true, &bound));
+    // the scan continues past the first free slot and finds task2; the failed call must not bind a slot
+    CHECK_EQUAL(ADD_FAIL_DUPLICATE, kernel.CallTryAllocateNewTask(&task2, &bound));
     POINTERS_EQUAL(nullptr, bound);
 
-    // and the fast path (validate = false) stops at the free slot 0 and does not see it
-    CHECK_EQUAL(ADD_OK, kernel.CallTryAllocateNewTask(&task2, false, &bound));
+    // the free slot 0 is still available to another task
+    TaskMock<ACCESS_USER> task3;
+    CHECK_EQUAL(ADD_OK, kernel.CallTryAllocateNewTask(&task3, &bound));
+    POINTERS_EQUAL(&task3, bound);
 }
 
 // ---------------------------------------------------------------------------- //
@@ -902,9 +903,41 @@ TEST(Kernel, AddTaskFailStaticStarted)
     }
 }
 
-TEST(Kernel, AddTaskFailHrtStarted)
+TEST(Kernel, AddTaskFailHrtStartedDynamicReturnsResult)
 {
     Kernel<KERNEL_DYNAMIC | KERNEL_HRT, 2, SwitchStrategyRR, PlatformTestMock> kernel;
+    TaskMock<ACCESS_USER> task1, task2;
+
+    kernel.Initialize();
+    CHECK_EQUAL(ADD_OK, kernel.AddTask(&task1, 1, 1, 0));
+    kernel.Start();
+
+    // KERNEL_DYNAMIC: the failure is only returned, never asserted
+    CHECK_EQUAL(ADD_FAIL_INVALID, kernel.AddTask(&task2, 1, 1, 0));
+}
+
+TEST(Kernel, AddTaskHrtResults)
+{
+    Kernel<KERNEL_DYNAMIC | KERNEL_HRT, 2, SwitchStrategyRR, PlatformTestMock> kernel;
+    TaskMock<ACCESS_USER> task1, task2, task3;
+
+    kernel.Initialize();
+
+    CHECK_EQUAL(ADD_FAIL_INVALID, kernel.AddTask(nullptr, 1, 1, 0));
+    CHECK_EQUAL(ADD_FAIL_INVALID, kernel.AddTask(&task1, 0, 1, 0));          // periodicity
+    CHECK_EQUAL(ADD_FAIL_INVALID, kernel.AddTask(&task1, 1, 0, 0));          // deadline
+    CHECK_EQUAL(ADD_FAIL_INVALID, kernel.AddTask(&task1, 1, 1, -1));         // start delay
+    CHECK_EQUAL(ADD_FAIL_INVALID, kernel.AddTask(&task1, INT32_MAX, 1, 0));  // periodicity upper bound
+
+    CHECK_EQUAL(ADD_OK, kernel.AddTask(&task1, 1, 1, 0));
+    CHECK_EQUAL(ADD_FAIL_DUPLICATE, kernel.AddTask(&task1, 1, 1, 0));
+    CHECK_EQUAL(ADD_OK, kernel.AddTask(&task2, 1, 1, 0));
+    CHECK_EQUAL(ADD_FAIL_POOL_FULL, kernel.AddTask(&task3, 1, 1, 0));
+}
+
+TEST(Kernel, AddTaskFailHrtStarted)
+{
+    Kernel<KERNEL_STATIC | KERNEL_HRT, 2, SwitchStrategyRR, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task1, task2;
 
     kernel.Initialize();
@@ -915,7 +948,7 @@ TEST(Kernel, AddTaskFailHrtStarted)
     {
         g_TestContext.ExpectAssert(true);
         kernel.AddTask(&task2, 1, 1, 0);
-        CHECK_TEXT(false, "expecting to AddTask to fail when KERNEL_HRT");
+        CHECK_TEXT(false, "expecting to AddTask to fail when KERNEL_HRT is started");
     }
     catch (TestAssertPassed &pass)
     {

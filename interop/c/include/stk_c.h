@@ -211,11 +211,11 @@ typedef enum stk_wait_result_t {
     STK_WAIT_RESULT_CANCELED = 2   //!< The wait was cancelled by another task, independent of signal/timeout.
 } stk_wait_result_t;
 
-/*! \brief     Result of stk_kernel_add_task().
+/*! \brief     Result of stk_kernel_add_task() and stk_kernel_add_task_hrt().
     \note      It is a direct match for stk::EAddResult.
 */
 typedef enum stk_add_result_t {
-    STK_ADD_FAIL_INVALID   = -3, //!< Invalid call: task is NULL, kernel is not initialized, or adding is not allowed in the current kernel mode/state (HRT kernel, or static kernel after stk_kernel_start()).
+    STK_ADD_FAIL_INVALID   = -3, //!< Invalid call: task is NULL, kernel is not initialized, adding is not allowed in the current kernel mode/state (HRT kernel, or static kernel after stk_kernel_start()), or (HRT only) timing parameters are invalid or the call is made on a non-HRT kernel.
     STK_ADD_FAIL_DUPLICATE = -2, //!< The task (or its stack) is already added to the kernel. Application design failure.
     STK_ADD_FAIL_POOL_FULL = -1, //!< No free kernel slot left. In a dynamic kernel retry later, once a task has exited.
     STK_ADD_OK             = 0   //!< Task was added.
@@ -490,17 +490,28 @@ stk_add_result_t stk_kernel_add_task(stk_kernel_t *k, stk_task_t *tsk);
     \param[in] tsk: Task handle.
     \param[in] periodicity_ticks: Period in ticks.
     \param[in] deadline_ticks: Relative deadline in ticks.
-    \param[in] start_delay_ticks: Initial offset / phase in ticks (>= 0).
-    \warning   Tasks must be added before the scheduler is started (before stk_kernel_start()). Adding an HRT
-               task after the start is not supported (not even from an ISR): the HRT schedule is built from the
-               complete task set. Asserts if called after the start or on a non-HRT kernel.
+    \param[in] start_delay_ticks: Initial offset / phase in ticks (>= 0). 0 means activate immediately.
+    \return    See \a stk_add_result_t. The kernel is not changed if the result is not STK_ADD_OK.
+               STK_ADD_FAIL_INVALID is returned for a NULL task, an uninitialized or already started kernel,
+               invalid timing parameters, or a call on a non-HRT kernel.
+    \note      Periodicity and deadline must be > 0 and < INT32_MAX, start delay must be >= 0.
     \note      Must be called after stk_kernel_init() and before stk_kernel_start().
+    \warning   Tasks must be added before the scheduler is started (before stk_kernel_start()). Adding an HRT
+               task after the start is not supported (not even from an ISR or in a dynamic kernel): the HRT
+               schedule is built from the complete task set and is not recomputed at runtime.
+    \warning   Error handling depends on the kernel mode: dynamic kernel - any failure is only returned, never
+               asserted, the caller must check the result; static kernel - any failure asserts (application
+               design failure), in a release build the failure is only returned and the task is not added.
+    \warning   The task and stack collision check is always performed, also in a release build.
+    \warning   If the result is not STK_ADD_OK the task handle stays allocated: release it with
+               stk_task_destroy() if it is not going to be added again.
+    \see       stk_add_result_t
 */
-void stk_kernel_add_task_hrt(stk_kernel_t *k,
-                             stk_task_t   *tsk,
-                             int32_t       periodicity_ticks,
-                             int32_t       deadline_ticks,
-                             int32_t       start_delay_ticks);
+stk_add_result_t stk_kernel_add_task_hrt(stk_kernel_t *k,
+                                         stk_task_t   *tsk,
+                                         int32_t       periodicity_ticks,
+                                         int32_t       deadline_ticks,
+                                         int32_t       start_delay_ticks);
 
 /*! \brief     Remove finished task from dynamic kernel.
     \param[in] k: Kernel handle.
