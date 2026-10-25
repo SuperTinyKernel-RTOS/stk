@@ -562,20 +562,20 @@ void stk_kernel_set_event_overrider(stk_kernel_t *k, stk_event_overrider_t *over
     SetEventOverrider(CastCToKernelInterface(k), overrider);
 }
 
-void stk_kernel_add_task_hrt(stk_kernel_t *k,
-                             stk_task_t   *tsk,
-                             int32_t       periodicity_ticks,
-                             int32_t       deadline_ticks,
-                             int32_t       start_delay_ticks)
+stk_add_result_t stk_kernel_add_task_hrt(stk_kernel_t *k,
+                                         stk_task_t   *tsk,
+                                         int32_t       periodicity_ticks,
+                                         int32_t       deadline_ticks,
+                                         int32_t       start_delay_ticks)
 {
     STK_ASSERT(k != nullptr);
     STK_ASSERT(tsk != nullptr);
 
-    CastCToKernelInterface(k)->AddTask(
+    return static_cast<stk_add_result_t>(CastCToKernelInterface(k)->AddTask(
         &tsk->handle,
         periodicity_ticks,
         deadline_ticks,
-        start_delay_ticks);
+        start_delay_ticks));
 }
 
 // -----------------------------------------------------------------------------

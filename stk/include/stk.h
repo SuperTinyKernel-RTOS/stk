@@ -1390,7 +1390,7 @@ public:
                 // after Start() only KERNEL_DYNAMIC may add tasks
                 if (IsInitialized() && (IsDynamicMode() || !IsStarted()))
                 {
-                    KernelTask *const task = TryAllocateNewTask(user_task, result, true);
+                    KernelTask *const task = TryAllocateNewTask(user_task, result);
                     if (task != nullptr)
                     {
                         AddKernelTask(task);
@@ -1414,27 +1414,60 @@ public:
         \param[in] periodicity_tc: Activation period in ticks. Must be > 0 and < INT32_MAX.
         \param[in] deadline_tc: Maximum allowed active duration in ticks. Must be > 0 and < INT32_MAX.
         \param[in] start_delay_tc: Initial sleep delay in ticks before the first activation. 0 means activate immediately.
+        \return    See EAddResult. The kernel is not changed if the result is not ADD_OK.
+                   ADD_FAIL_INVALID is returned for a null task, an uninitialized kernel, a started kernel,
+                   invalid timing parameters or a call outside KERNEL_HRT mode.
         \warning   Tasks must be added before the scheduler is started (before Start()). Adding an HRT task
                    after Start() is not supported, not even from an ISR: the HRT schedule is built from the
                    complete task set and is not recomputed at runtime.
-        \warning   Asserts if called outside KERNEL_HRT mode (use the SRT overload instead) or after Start().
-                   The failure is not reported in a release build and the task is not added.
+        \warning   KERNEL_DYNAMIC: a failure is only returned, never asserted, the caller must handle it.
+                   KERNEL_STATIC: a failure asserts (application design failure). In a release build such
+                   a failure is not reported by an assertion, check the result, the task is not added.
+        \warning   Asserts if called outside KERNEL_HRT mode (use the SRT overload instead).
+        \warning   The task and stack collision check is always performed, also in a release build.
     */
-    __stk_attr_noinline void AddTask(ITask *user_task, Timeout periodicity_tc, Timeout deadline_tc,
+    __stk_attr_noinline EAddResult AddTask(ITask *user_task, Timeout periodicity_tc, Timeout deadline_tc,
         Timeout start_delay_tc) override
     {
+        EAddResult result = ADD_FAIL_INVALID;
+
         if __stk_constexpr_cpp17 (IsHrtMode())
         {
-            STK_ASSERT(user_task != nullptr);
-            STK_ASSERT(IsInitialized());
-            STK_ASSERT(!IsStarted());
+            // validate timing parameters up front so that the kernel stays unchanged on failure
+            const bool params_valid = (periodicity_tc > 0) && (periodicity_tc < INT32_MAX) &&
+                                      (deadline_tc > 0)    && (deadline_tc < INT32_MAX) &&
+                                      (start_delay_tc >= 0);
 
-            HrtAllocateAndAddNewTask(user_task, periodicity_tc, deadline_tc, start_delay_tc);
+            if ((user_task != nullptr) && params_valid)
+            {
+                // critical section: the kernel state is checked inside of it
+                const hw::CriticalSection::ScopedLock cs_;
+
+                // HRT schedule is built from the complete task set: only before Start()
+                if (IsInitialized() && !IsStarted())
+                {
+                    KernelTask *const task = TryAllocateNewTask(user_task, result);
+                    if (task != nullptr)
+                    {
+                        task->HrtInit(periodicity_tc, deadline_tc, start_delay_tc);
+
+                        AddKernelTask(task);
+                    }
+                }
+            }
         }
         else
         {
             STK_ASSERT(false);
         }
+
+        // KERNEL_DYNAMIC: the result is for the caller to handle, otherwise this is an application design failure
+        if __stk_constexpr_cpp17 (IsStaticMode())
+        {
+            STK_ASSERT(result == ADD_OK);
+        }
+
+        return result;
     }
 
     /*! \brief     Remove a previously added task from the kernel when it is not started.
@@ -1951,12 +1984,11 @@ protected:
     /*! \brief     Allocate new instance of KernelTask and bind the user task to it.
         \param[in]  user_task: User task for which kernel task object is allocated.
         \param[out] result: ADD_OK, ADD_FAIL_DUPLICATE or ADD_FAIL_POOL_FULL.
-        \param[in]  validate: If \c false the search stops at the first free slot and the collision
-                    with the already added tasks is not checked (assertions are inactive).
         \return     Bound kernel task, or \c nullptr (the kernel is not changed) if \a result is not ADD_OK.
         \note       Must be called inside a critical section when the kernel is started.
+        \note       Always checks the task and stack collision against the already added tasks.
     */
-    KernelTask *TryAllocateNewTask(ITask *user_task, EAddResult &result, const bool validate)
+    KernelTask *TryAllocateNewTask(ITask *user_task, EAddResult &result)
     {
         KernelTask *new_task = nullptr;
         bool collision = false;
@@ -1975,10 +2007,6 @@ protected:
             if (new_task == nullptr)
             {
                 new_task = task;
-                if (!validate)
-                {
-                    break;
-                }
             }
             else
             {
@@ -2005,31 +2033,6 @@ protected:
         return new_task;
     }
 
-    /*! \brief     Allocate new instance of KernelTask, asserts on failure.
-        \param[in] user_task: User task for which kernel task object is allocated.
-        \return    Kernel task.
-    */
-    KernelTask *AllocateNewTask(ITask *user_task)
-    {
-        // if assertions are inactive do not try to validate collision with existing tasks
-    #if defined(NDEBUG) && !defined(_STK_ASSERT_REDIRECT)
-        const bool validate = false;
-    #else
-        const bool validate = true;
-    #endif
-
-        EAddResult result;
-        KernelTask *const new_task = TryAllocateNewTask(user_task, result, validate);
-
-        // task or stack collision: application design failure
-        STK_ASSERT(result != ADD_FAIL_DUPLICATE);
-
-        // if nullptr - exceeded max supported kernel task count, application design failure
-        STK_ASSERT(new_task != nullptr);
-
-        return new_task;
-    }
-
     /*! \brief     Add kernel task to the scheduling strategy.
         \param[in] task: Pointer to the kernel task.
     */
@@ -2045,23 +2048,6 @@ protected:
     #endif
 
         m_strategy.AddTask(task);
-    }
-
-    /*! \brief     Allocate new instance of KernelTask and add it into the HRT scheduling process.
-        \note      Related to stk::KERNEL_HRT mode only.
-        \param[in] user_task: User task for which kernel task object is allocated.
-        \param[in] periodicity_tc: Periodicity time at which task is scheduled (ticks).
-        \param[in] deadline_tc: Deadline time within which a task must complete its work (ticks).
-        \param[in] start_delay_tc: Initial start delay for the task (ticks).
-    */
-    void HrtAllocateAndAddNewTask(ITask *user_task, Timeout periodicity_tc, Timeout deadline_tc, Timeout start_delay_tc)
-    {
-        KernelTask *const task = AllocateNewTask(user_task);
-        STK_ASSERT(task != nullptr);
-
-        task->HrtInit(periodicity_tc, deadline_tc, start_delay_tc);
-
-        AddKernelTask(task);
     }
 
     template <typename TaskPtr, typename Storage>

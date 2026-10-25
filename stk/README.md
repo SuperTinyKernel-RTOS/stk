@@ -152,7 +152,7 @@ Defines every kernel interface, type alias, and enumeration. Key contents:
 | `EKernelMode`    | `KERNEL_STATIC`, `KERNEL_DYNAMIC`, `KERNEL_HRT`, `KERNEL_SYNC`, `KERNEL_TICKLESS`, `KERNEL_TIMESLICE`                                                                                                |
 | `EKernelPanicId` | 13 panic codes (`KERNEL_PANIC_NONE` plus 12 fault reasons: spin-lock deadlock, stack corruption, assert, HRT hard fault, CPU exception, CS-nesting overflow, unknown SVC, bad state, bad mode, bad stack type, non-secure access, bad memory region) |
 | `EStackType`     | `STACK_USER_TASK`, `STACK_SLEEP_TRAP`, `STACK_EXIT_TRAP`                                                                                                                                              |
-| `EAddResult`     | `ADD_OK`, `ADD_FAIL_POOL_FULL`, `ADD_FAIL_DUPLICATE`, `ADD_FAIL_INVALID` — result of `IKernel::AddTask()`, see [Adding and removing tasks at runtime](#adding-and-removing-tasks-at-runtime-kernel_dynamic)|
+| `EAddResult`     | `ADD_OK`, `ADD_FAIL_POOL_FULL`, `ADD_FAIL_DUPLICATE`, `ADD_FAIL_INVALID` — result of `IKernel::AddTask()` (both the soft real-time and the hard real-time overloads), see [Adding and removing tasks at runtime](#adding-and-removing-tasks-at-runtime-kernel_dynamic)|
 | `EConsts`        | `PERIODICITY_MAX` (99 000 µs), `PERIODICITY_DEFAULT` (1 000 µs), `STACK_SIZE_MIN`                                                                                                                     |
 
 **Interfaces defined here:**
@@ -163,7 +163,7 @@ Defines every kernel interface, type alias, and enumeration. Key contents:
 - `ITaskSwitchStrategy` — scheduling strategy interface (`AddTask`, `RemoveTask`, `GetNext`, `GetFirst`, `GetSize`, `OnTaskSleep`, `OnTaskWake`, `OnTaskYield`, `OnTaskTimeSlice`, `OnTaskDeadlineMissed`, `OnTaskWeightChange`).
 - `IPlatform` — platform driver interface (`Initialize`, `Start`, `Stop`, `InitStack`, `SwitchToNext`, `Sleep`, `SleepUntil`, `Wait`, `ProcessTick`, `ProcessHardFault`, `SetEventOverrider`, `GetTid`, `Suspend`, `Resume`, `GetCallerSP`, `SetCpuFrequency(core_id, frequency)` (notifies the scheduler of a core's operating frequency for tick/tickless timing accuracy; pass `0xFF` as `core_id` to set the frequency for all cores at once — call it whenever a core's clock speed changes), etc.).
 - `IPlatform::IEventOverrider` — optional hook interface for extending the platform driver from user-space, registered via `IPlatform::SetEventOverrider(overrider, non_secure = false)` (the `non_secure` slot is TrustZone-only, for a separate Non-Secure-side overrider). Covers `OnSleep`, `OnHardFault`, `OnException` (per-exception fault reporting), and `OnConfigureMpu()` — returns a `const MpuConfig *` of global/background MPU regions applied underneath every task's own regions (see [MPU Configuration API](#mpu-configuration-api)).
-- `IKernel` — kernel control interface (`Initialize`, `AddTask` (two overloads: plain, returning `EAddResult`, and with HRT periodicity/deadline/start-delay), `RemoveTask`, `ScheduleTaskRemoval`, `SuspendTask`, `ResumeTask`, `EnumerateKernelTasks`, `EnumerateTasks`, `EnumerateTasksT<N>`, `Start`, `GetState`, `GetPlatform`, `GetSwitchStrategy`).
+- `IKernel` — kernel control interface (`Initialize`, `AddTask` (two overloads, both returning `EAddResult`: plain, and with HRT periodicity/deadline/start-delay), `RemoveTask`, `ScheduleTaskRemoval`, `SuspendTask`, `ResumeTask`, `EnumerateKernelTasks`, `EnumerateTasks`, `EnumerateTasksT<N>`, `Start`, `GetState`, `GetPlatform`, `GetSwitchStrategy`).
 - `IKernelService` — runtime service interface available to running tasks (`GetTid`, `GetTicks`, `GetTickResolution`, `GetSysTimerCount`, `GetSysTimerFrequency`, `Delay`, `Sleep`, `SleepUntil`, `SleepCancel`, `SwitchToNext`, `ExitTask`, `Wait`, `Wake`, `Suspend`, `Resume`, `InheritWeight`, `RestoreWeight`, `SetTimeSlice`).
 - `ISyncObject`, `IWaitObject`, `IMutex`, `ITraceable` — synchronization building blocks.
 - `StackMemoryDef<N>` — stack memory array type helper.
@@ -318,18 +318,18 @@ int main()
 
 ### Adding and removing tasks at runtime (`KERNEL_DYNAMIC`)
 
-`IKernel::AddTask(ITask *)` returns an `EAddResult`. The task is added **immediately**, inside a critical section: no request is deferred to the tick, the caller does not yield or wait, and the task is scheduled from the next tick. It can be called before `Start()`, from a task, and from an ISR.
+`IKernel::AddTask(ITask *)` (and the HRT overload `AddTask(task, periodicity, deadline, start_delay)`, see below) returns an `EAddResult`. The task is added **immediately**, inside a critical section: no request is deferred to the tick, the caller does not yield or wait, and the task is scheduled from the next tick. It can be called before `Start()`, from a task, and from an ISR.
 
 | `EAddResult`         | Meaning                                                                                              |
 |----------------------|------------------------------------------------------------------------------------------------------|
 | `ADD_OK`             | The task was added                                                                                   |
 | `ADD_FAIL_POOL_FULL` | No free kernel slot (`TSize` reached). Retry once a task has exited                                  |
 | `ADD_FAIL_DUPLICATE` | The task or its stack is already added, or the task is still being removed. Application design error |
-| `ADD_FAIL_INVALID`   | `nullptr` task, kernel not initialized, `KERNEL_HRT`, or `KERNEL_STATIC` after `Start()`              |
+| `ADD_FAIL_INVALID`   | `nullptr` task, kernel not initialized, `KERNEL_HRT` (plain overload), `KERNEL_STATIC` after `Start()`, or (HRT overload) invalid timing parameters or a call outside `KERNEL_HRT` |
 
-- **Error handling depends on the mode.** `KERNEL_DYNAMIC` only *returns* a failure and never asserts: the caller must check the result, otherwise the task is silently not added. All other modes assert on a failure (a design error), in a release build the task is not added. The kernel is not changed by a failed call, and the task and stack collision check always runs, also in a release build.
+- **Error handling depends on the mode** (same for both overloads). `KERNEL_DYNAMIC` only *returns* a failure and never asserts: the caller must check the result, otherwise the task is silently not added. `KERNEL_STATIC` asserts on a failure (a design error), in a release build the failure is only returned and the task is not added. The kernel is not changed by a failed call, and the task and stack collision check always runs, also in a release build.
 - **ISR callers:** the whole add (stack initialization, MPU setup and the `ITask` getters) runs with interrupts masked, so use a modest stack and a low-priority ISR. On Cortex-M the ISR priority must be numerically above `STK_CORTEX_M_SVCALL_ISR_PRIORITY`. With `KERNEL_TICKLESS`, a task added from an ISR while every task sleeps starts when the already armed timer fires, not on the next tick. Kernels are assumed to be per-core.
-- **HRT:** `AddTask(task, periodicity, deadline, start_delay)` must be called before `Start()`; adding an HRT task at runtime is not supported. The plain `AddTask(ITask *)` is rejected in `KERNEL_HRT` (`ADD_FAIL_INVALID`), so a component which registers its own tasks, such as `time::TimerHost` in task mode, must be used in its task-less polled mode there (see [`include/time`](#includetime--time-utilities)).
+- **HRT:** `EAddResult AddTask(task, periodicity, deadline, start_delay)` must be called before `Start()`; adding an HRT task at runtime is not supported, not even from an ISR or in `KERNEL_DYNAMIC`, because the HRT schedule is built from the complete task set and is not recomputed at runtime. Periodicity and deadline must be > 0 and < `INT32_MAX`, start delay must be >= 0. `ADD_FAIL_INVALID` is returned for a `nullptr` task, an uninitialized or already started kernel, invalid timing parameters, or a call outside `KERNEL_HRT` (use the plain overload there instead); the kernel is not changed by a failed call. The plain `AddTask(ITask *)` is rejected in `KERNEL_HRT` (`ADD_FAIL_INVALID`), so a component which registers its own tasks, such as `time::TimerHost` in task mode, must be used in its task-less polled mode there (see [`include/time`](#includetime--time-utilities)).
 
 ```cpp
 const stk::EAddResult res = kernel.AddTask(&worker);
@@ -706,7 +706,7 @@ public:
         }
     }
 };
-// kernel.AddTask(&job, period_ticks, deadline_ticks, start_delay_ticks);
+// stk::EAddResult res = kernel.AddTask(&job, period_ticks, deadline_ticks, start_delay_ticks);
 ```
 
 **When to use which:**

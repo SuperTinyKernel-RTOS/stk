@@ -130,7 +130,7 @@ void RunExample()
     typedef SwitchStrategyRM SchedulerType;
 #endif
 
-    static Kernel<KERNEL_STATIC | KERNEL_HRT, TASK_COUNT, SchedulerType, PlatformDefault> kernel;
+    static Kernel<KERNEL_STATIC | KERNEL_HRT | KERNEL_SYNC, TASK_COUNT, SchedulerType, PlatformDefault> kernel;
 
     // assume that hardware LED tasks have highest priority
     static HwLedTask<ACCESS_PRIVILEGED> hwt0(0), hwt1(1), hwt2(2), hwt3(3);

@@ -142,7 +142,7 @@ enum EWaitResult : int8_t
 };
 
 /*! \enum  EAddResult
-    \brief Result of IKernel::AddTask() (Soft Real-Time overload).
+    \brief Result of IKernel::AddTask() (both the Soft Real-Time and the Hard Real-Time overloads).
 */
 enum EAddResult : int8_t
 {
@@ -1627,15 +1627,22 @@ public:
         \param[in] periodicity_tc: Periodicity time at which task is scheduled (ticks).
         \param[in] deadline_tc: Deadline time within which a task must complete its work (ticks).
         \param[in] start_delay_tc: Initial start delay for the task (ticks). 0 means activate immediately.
-        \note      Periodicity and deadline must be > 0 and < INT32_MAX.
+        \note      Periodicity and deadline must be > 0 and < INT32_MAX, start delay must be >= 0.
+        \return    See EAddResult. The kernel is not changed if the result is not \a ADD_OK.
+                   \a ADD_FAIL_INVALID is returned for a null task, an uninitialized or already started kernel,
+                   invalid timing parameters, or a call outside \c KERNEL_HRT mode.
         \warning   Tasks must be added before the scheduler is started (before Start()). Adding an HRT task
                    after Start() is not supported, not even from an ISR or in \c KERNEL_DYNAMIC mode: the
                    HRT schedule (periodicity, deadlines, start delays) is built from the complete task set
-                   and is not recomputed at runtime. Asserts if called after Start() or outside
-                   \c KERNEL_HRT mode (use the SRT overload instead). The failure is not reported in a
-                   release build and the task is not added.
+                   and is not recomputed at runtime.
+        \warning   Error handling depends on the kernel mode:
+                   - \c KERNEL_DYNAMIC: any failure is only returned, never asserted. The caller is
+                     responsible for checking the result;
+                   - \c KERNEL_STATIC: any failure asserts (application design failure), in a release build
+                     the failure is only returned and the task is not added.
+        \warning   The task and stack collision check is always performed, also in a release build.
     */
-    virtual void AddTask(ITask *user_task, Timeout periodicity_tc, Timeout deadline_tc, Timeout start_delay_tc) = 0;
+    virtual EAddResult AddTask(ITask *user_task, Timeout periodicity_tc, Timeout deadline_tc, Timeout start_delay_tc) = 0;
 
     /*! \brief     Remove a previously added task from the kernel when it is not started.
         \param[in] user_task: User task to remove. Must not be \c nullptr.

@@ -134,8 +134,12 @@ int main(void) {
     stk_task_t *t0 = stk_task_create_privileged(task_led,    NULL, g_stack0, STACK_WORDS);
     stk_task_t *t1 = stk_task_create_privileged(task_sensor, NULL, g_stack1, STACK_WORDS);
 
-    STK_C_ASSERT(stk_kernel_add_task(k, t0) == STK_ADD_OK);
-    STK_C_ASSERT(stk_kernel_add_task(k, t1) == STK_ADD_OK);
+    /* call outside of the assert: it must not vanish if asserts are compiled out */
+    stk_add_result_t r = stk_kernel_add_task(k, t0);
+    STK_C_ASSERT(r == STK_ADD_OK);
+    r = stk_kernel_add_task(k, t1);
+    STK_C_ASSERT(r == STK_ADD_OK);
+    (void)r;
 
     stk_kernel_start(k);   /* never returns for KERNEL_STATIC */
 
@@ -248,8 +252,14 @@ With `KERNEL_HRT`, each task must be added with timing parameters:
 
 ```c
 /* period = 10 ticks, deadline = 8 ticks, start delay = 0 ticks */
-stk_kernel_add_task_hrt(k, task, 10, 8, 0);
+stk_add_result_t r = stk_kernel_add_task_hrt(k, task, 10, 8, 0);
+STK_C_ASSERT(r == STK_ADD_OK);   /* keep the call itself outside of the assert */
+(void)r;
 ```
+
+`stk_kernel_add_task_hrt()` returns a `stk_add_result_t` (see
+[Adding Tasks at Runtime](#adding-tasks-at-runtime)). Period and deadline must
+be > 0 and < `INT32_MAX`, the start delay must be >= 0.
 
 Inside an HRT task, call `stk_yield()` when the work for the current period is
 done. The kernel then suspends the task until the next period begins.
@@ -328,12 +338,14 @@ after `stk_kernel_start()`, from a task **or from an ISR**.
 | `STK_ADD_OK` | Task was added |
 | `STK_ADD_FAIL_POOL_FULL` | No free kernel slot (`STK_C_KERNEL_MAX_TASKS`); retry after a task has exited |
 | `STK_ADD_FAIL_DUPLICATE` | The task or its stack is already added (also returned while a removed task has not finished leaving, see below) |
-| `STK_ADD_FAIL_INVALID` | NULL task, kernel not initialized, or adding is not allowed in this mode/state (HRT kernel, or static kernel after `stk_kernel_start()`) |
+| `STK_ADD_FAIL_INVALID` | NULL task, kernel not initialized, adding is not allowed in this mode/state (HRT kernel, or static kernel after `stk_kernel_start()`), or (HRT only) invalid timing parameters or a call on a non-HRT kernel |
 
 Error handling depends on the kernel mode:
 
 - **`KERNEL_DYNAMIC`** — a failure is only *returned*, never asserted. Always check the result, otherwise the task is silently not added.
-- **Other kernels** — a failure asserts; in a release build the task is not added.
+- **`KERNEL_STATIC`** and other kernels — a failure asserts; in a release build the failure is only returned and the task is not added.
+
+The task and stack collision check is always performed, also in a release build.
 
 On failure the kernel is unchanged and the task handle stays allocated: retry
 later or release it with `stk_task_destroy()`.
@@ -353,9 +365,12 @@ Restrictions when called from an ISR:
 - On Cortex-M the ISR priority must be numerically above (less urgent than) the SVCall priority.
 - In a tickless kernel, a task added while all tasks sleep is first scheduled when the already armed timer expires, not on the next tick.
 
-> HRT: `stk_kernel_add_task_hrt()` returns `void` and must be called **before**
-> `stk_kernel_start()`. Adding an HRT task after the start is not supported, not
-> even from an ISR.
+> HRT: `stk_kernel_add_task_hrt()` returns a `stk_add_result_t` as well, with the
+> same error handling, and must be called **before** `stk_kernel_start()`. Adding
+> an HRT task after the start is not supported, not even from an ISR or in a
+> `KERNEL_DYNAMIC` kernel: the HRT schedule is built from the complete task set
+> and is not recomputed at runtime. The kernel is unchanged if the result is not
+> `STK_ADD_OK`.
 
 ### Leaving and Restarting a Task
 
@@ -1370,7 +1385,7 @@ macros are also available directly.
 
 ## Common Pitfalls
 
-**Ignoring the `stk_kernel_add_task()` result** — In a `KERNEL_DYNAMIC` kernel a
+**Ignoring the `stk_kernel_add_task()` / `stk_kernel_add_task_hrt()` result** — In a `KERNEL_DYNAMIC` kernel a
 failure (`STK_ADD_FAIL_POOL_FULL`, `STK_ADD_FAIL_DUPLICATE`, ...) is only returned,
 never asserted, so an unchecked call silently leaves the task unstarted. The handle
 also stays allocated: retry or `stk_task_destroy()` it.
