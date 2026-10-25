@@ -295,9 +295,14 @@ static ThreadCtrl  *s_ReapQueue[STK_C_PTHREAD_MAX_THREADS];
 static std::size_t  s_ReapHead  = 0U;
 static std::size_t  s_ReapCount = 0U;
 
-static sync::Semaphore *s_ReapSem = nullptr;
+// Counts the entries of s_ReapQueue: bounded by the queue capacity, so a signal beyond it (a defect) is caught
+// by the semaphore's own contract (Signal() asserts) instead of silently over-counting.
+typedef sync::SemaphoreT<uint16_t> ReapSemaphore;
+static_assert(STK_C_PTHREAD_MAX_THREADS <= ReapSemaphore::COUNT_MAX, "ReapSemaphore counter is too narrow for STK_C_PTHREAD_MAX_THREADS");
+
+static ReapSemaphore *s_ReapSem = nullptr;
 static struct {
-    alignas(sync::Semaphore) uint8_t data[sizeof(sync::Semaphore)];
+    alignas(ReapSemaphore) uint8_t data[sizeof(ReapSemaphore)];
 } s_ReapSemBuf;
 static stk_task_t  *s_ReaperTask = nullptr;
 static stk_word_t   s_ReaperStack[STK_C_PTHREAD_REAPER_STACK_WORDS];
@@ -321,7 +326,7 @@ static bool EnsureReaper()
         {
             if (s_ReapSem == nullptr)
             {
-                s_ReapSem = ConstructIn<sync::Semaphore>(s_ReapSemBuf, 0U);
+                s_ReapSem = ConstructIn<ReapSemaphore>(s_ReapSemBuf, 0U, static_cast<uint16_t>(STK_C_PTHREAD_MAX_THREADS));
             }
 
             stk_task_t *const task = stk_task_create_user(ReaperEntry, nullptr, s_ReaperStack,

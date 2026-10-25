@@ -35,8 +35,8 @@
  *
  * Mapping of lwIP sys_arch primitives onto STK:
  *
- *   sys_mutex_t  -> stk::sync::Mutex        (pool-allocated, recursive)
- *   sys_sem_t    -> stk::sync::Semaphore    (pool-allocated, binary 0/1)
+ *   sys_mutex_t  -> stk::sync::Mutex (pool-allocated, recursive)
+ *   sys_sem_t    -> LwipStkSemaphore (pool-allocated, binary 0/1)
  *   sys_mbox_t   -> stk::sync::MessageQueue (pool-allocated, msg_size=sizeof(void*))
  *   sys_thread_t -> a small stk::ITask implementation (pool-allocated, both the
  *                   control block and its stack)
@@ -90,6 +90,18 @@
 #include "memory/stk_memory.h"
 
 /* -----------------------------------------------------------------------------
+ * Types
+ * -------------------------------------------------------------------------- */
+
+namespace stk { namespace lwip {
+
+typedef stk::sync::Semaphore LwipStkSemaphore;
+
+} } // namespace stk::lwip
+
+using namespace stk::lwip;
+
+/* -----------------------------------------------------------------------------
  * Kernel registration
  * -------------------------------------------------------------------------- */
 
@@ -102,7 +114,7 @@ extern "C" void sys_arch_set_kernel(stk::IKernel *kernel)
 }
 
 /* -----------------------------------------------------------------------------
- * Small helpers
+ * Helpers
  * -------------------------------------------------------------------------- */
 
 /* Convert an lwIP millisecond timeout (0 already handled by caller as
@@ -200,8 +212,7 @@ extern "C" void sys_arch_msleep(u32_t delay_ms)
 
 #if !LWIP_COMPAT_MUTEX
 
-namespace
-{
+namespace stk { namespace lwip {
 
 alignas(alignof(void *)) uint8_t s_mutex_pool_storage[
      LWIP_STK_MUTEX_POOL_SIZE * stk::memory::BlockMemoryPool::AlignBlockSize(sizeof(stk::sync::Mutex))];
@@ -209,7 +220,7 @@ stk::memory::BlockMemoryPool s_mutex_pool(LWIP_STK_MUTEX_POOL_SIZE, sizeof(stk::
         s_mutex_pool_storage, sizeof(s_mutex_pool_storage),
         "lwip_stk.mutex_pool");
 
-} /* anonymous namespace */
+} } // namespace stk::lwip
 
 extern "C" err_t sys_mutex_new(sys_mutex_t *mutex)
 {
@@ -268,16 +279,15 @@ extern "C" void sys_mutex_free(sys_mutex_t *mutex)
  * 0 or 1).
  * -------------------------------------------------------------------------- */
 
-namespace
-{
+namespace stk { namespace lwip {
 
 alignas(alignof(void *)) uint8_t s_sem_pool_storage[
-     LWIP_STK_SEM_POOL_SIZE * stk::memory::BlockMemoryPool::AlignBlockSize(sizeof(stk::sync::Semaphore))];
-stk::memory::BlockMemoryPool s_sem_pool(LWIP_STK_SEM_POOL_SIZE, sizeof(stk::sync::Semaphore),
+     LWIP_STK_SEM_POOL_SIZE * stk::memory::BlockMemoryPool::AlignBlockSize(sizeof(LwipStkSemaphore))];
+stk::memory::BlockMemoryPool s_sem_pool(LWIP_STK_SEM_POOL_SIZE, sizeof(LwipStkSemaphore),
                                         s_sem_pool_storage, sizeof(s_sem_pool_storage),
                                         "lwip_stk.sem_pool");
 
-} /* anonymous namespace */
+} } // namespace stk::lwip
 
 extern "C" err_t sys_sem_new(sys_sem_t *sem, u8_t initial_count)
 {
@@ -296,7 +306,7 @@ extern "C" err_t sys_sem_new(sys_sem_t *sem, u8_t initial_count)
         return ERR_MEM;
     }
 
-    sem->sem = new (mem) stk::sync::Semaphore(static_cast<uint16_t>(initial_count), SYS_SEM_MAX_COUNT);
+    sem->sem = new (mem) LwipStkSemaphore(static_cast<uint16_t>(initial_count), SYS_SEM_MAX_COUNT);
     SYS_STATS_INC_USED(sem);
     return ERR_OK;
 }
@@ -306,7 +316,7 @@ extern "C" void sys_sem_signal(sys_sem_t *sem)
     LWIP_ASSERT("sem != NULL", sem != nullptr);
     LWIP_ASSERT("sem->sem != NULL", sem->sem != nullptr);
 
-    stk::sync::Semaphore *s = static_cast<stk::sync::Semaphore *>(sem->sem);
+    LwipStkSemaphore *s = static_cast<LwipStkSemaphore *>(sem->sem);
 
     s->TrySignal();
 }
@@ -316,7 +326,7 @@ extern "C" u32_t sys_arch_sem_wait(sys_sem_t *sem, u32_t timeout_ms)
     LWIP_ASSERT("sem != NULL", sem != nullptr);
     LWIP_ASSERT("sem->sem != NULL", sem->sem != nullptr);
 
-    stk::sync::Semaphore *s = static_cast<stk::sync::Semaphore *>(sem->sem);
+    LwipStkSemaphore *s = static_cast<LwipStkSemaphore *>(sem->sem);
     const stk::Timeout tmo = (timeout_ms == 0U) ? stk::WAIT_INFINITE : StkTimeoutFromMs(timeout_ms);
 
     if (!s->Wait(tmo))
@@ -336,8 +346,8 @@ extern "C" void sys_sem_free(sys_sem_t *sem)
     LWIP_ASSERT("sem != NULL", sem != nullptr);
     LWIP_ASSERT("sem->sem != NULL", sem->sem != nullptr);
 
-    stk::sync::Semaphore *s = static_cast<stk::sync::Semaphore *>(sem->sem);
-    s->~Semaphore();
+    LwipStkSemaphore *s = static_cast<LwipStkSemaphore *>(sem->sem);
+    s->~LwipStkSemaphore();
     s_sem_pool.Free(s);
 
     SYS_STATS_DEC(sem.used);
@@ -355,8 +365,7 @@ extern "C" void sys_sem_free(sys_sem_t *sem)
  * buffer pointer so sys_mbox_free() can release both.
  * -------------------------------------------------------------------------- */
 
-namespace
-{
+namespace stk { namespace lwip {
 
 struct LwipStkMbox
 {
@@ -385,7 +394,7 @@ stk::memory::BlockMemoryPool s_mbox_buf_pool(LWIP_STK_MBOX_POOL_SIZE, LWIP_STK_M
         s_mbox_buf_pool_storage, sizeof(s_mbox_buf_pool_storage),
         "lwip_stk.mbox_buf_pool");
 
-} /* anonymous namespace */
+} } // namespace stk::lwip
 
 extern "C" err_t sys_mbox_new(sys_mbox_t *mbox, int size)
 {
@@ -550,8 +559,7 @@ extern "C" void sys_mbox_free(sys_mbox_t *mbox)
  * Threads (sys_thread_t)
  * -------------------------------------------------------------------------- */
 
-namespace
-{
+namespace stk { namespace lwip {
 
 class LwipStkThread : public stk::ITask
 {
@@ -609,7 +617,7 @@ stk::memory::BlockMemoryPool s_thread_stack_pool(
     s_thread_stack_pool_storage, sizeof(s_thread_stack_pool_storage),
     "lwip_stk.thread_stack_pool");
 
-} /* anonymous namespace */
+} } // namespace stk::lwip
 
 extern "C" sys_thread_t sys_thread_new(const char *name, lwip_thread_fn thread, void *arg, int stacksize, int prio)
 {
@@ -673,8 +681,7 @@ extern "C" sys_thread_t sys_thread_new(const char *name, lwip_thread_fn thread, 
 
 #if LWIP_NETCONN_SEM_PER_THREAD
 
-namespace
-{
+namespace stk { namespace lwip {
 
 struct NetconnSemSlot
 {
@@ -685,7 +692,7 @@ struct NetconnSemSlot
 
 static NetconnSemSlot s_netconn_sems[LWIP_STK_NETCONN_SEM_MAX_THREADS];
 
-} /* anonymous namespace */
+} } // namespace stk::lwip
 
 extern "C" sys_sem_t *sys_arch_netconn_sem_get(void)
 {

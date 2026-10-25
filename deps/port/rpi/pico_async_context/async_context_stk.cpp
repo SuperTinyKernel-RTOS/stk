@@ -103,6 +103,29 @@ static stk::Timeout sensible_ticks_until(absolute_time_t until)
 }
 
 // -----------------------------------------------------------------------------
+// Waits forever for a signal and returns only once it was signaled. A cancelled wait
+// (IKernel::CancelTaskWait(), IKernelService::SleepCancel()) is absorbed and retried, and a cancelled wait
+// never consumes the signal. The callers can not report a cancellation: execute_sync() keeps its
+// rendezvous object on the stack and deinit() waits for the worker's exit, so returning early would let
+// the worker signal an object which no longer exists. A wait the kernel rejected is an internal defect.
+// -----------------------------------------------------------------------------
+static void wait_signaled(stk::sync::Semaphore &sem)
+{
+    stk::EWaitResult wr;
+
+    do
+    {
+        wr = sem.WaitEx(stk::WAIT_INFINITE);
+    }
+    while (wr == stk::WAIT_RESULT_CANCELED);
+
+    if (wr != stk::WAIT_RESULT_SIGNAL)
+    {
+        STK_KERNEL_PANIC(stk::KERNEL_PANIC_ASSERT);
+    }
+}
+
+// -----------------------------------------------------------------------------
 // process_under_lock: drains due callbacks/workers, then re-arms (or disarms) the one-shot
 // WakeTimer for whatever's due next, via TimerHost::Restart(), which atomically
 // stops-and-restarts the timer with a fresh delay.
@@ -163,12 +186,8 @@ void async_context_stk_wake_up(async_context_t *self_base)
         return; // worker task hasn't started running yet
     }
 
-    if (stk::hw::IsInsideISR())
-    {
-        self->task_wake_sem.TrySignal();
-        self->work_needed_sem.TrySignal();
-    }
-    else if (stk::GetTid() != self->task_tid)
+    // short-circuit: GetTid() is not evaluated in an ISR
+    if (stk::hw::IsInsideISR() || (stk::GetTid() != self->task_tid))
     {
         self->task_wake_sem.TrySignal();
         self->work_needed_sem.TrySignal();
@@ -271,7 +290,12 @@ bool async_context_stk_init(async_context_stk_t *self, async_context_stk_config_
     self->task.Bind(self, config->task_stack, config->task_stack_size,
                     config->task_weight, config->task_access_mode);
 
-    self->kernel->AddTask(&self->task);
+    // KERNEL_DYNAMIC returns a failure (e.g. out of kernel task slots) instead of asserting: without the
+    // worker task nothing would ever process the context, so report it and stay uninitialized
+    if (self->kernel->AddTask(&self->task) != stk::ADD_OK)
+    {
+        return false;
+    }
 
     self->initialized = true;
     return true;
@@ -295,7 +319,7 @@ void async_context_stk_deinit(async_context_t *self_base)
         // wakes the task if it is currently blocked in task_wake_sem.Wait().
         async_context_execute_sync(self_base, end_task_func, self);
 
-        self->task_complete_sem.Wait(); // WAIT_INFINITE, signaled by Worker::OnExit()
+        wait_signaled(self->task_complete_sem); // signaled by Worker::OnExit()
 
         if (self->timer.IsActive())
         {
@@ -364,7 +388,7 @@ uint32_t async_context_stk_execute_sync(async_context_t *self_base, uint32_t (*f
 
     async_context_add_when_pending_worker(self_base, &call.worker);
     async_context_set_work_pending(self_base, &call.worker);
-    call.sem.Wait(); // WAIT_INFINITE
+    wait_signaled(call.sem);
     async_context_remove_when_pending_worker(self_base, &call.worker);
 
     return call.rc;

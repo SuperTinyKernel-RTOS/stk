@@ -45,6 +45,13 @@ namespace test {
  */
 namespace semaphore {
 
+// Counter type limits: COUNT_MAX is the maximum value of the counter type minus one
+static_assert(sync::SemaphoreT<uint8_t>::COUNT_MAX  == 0xFFU,       "uint8_t COUNT_MAX must be 0xFF");
+static_assert(sync::SemaphoreT<uint16_t>::COUNT_MAX == 0xFFFFU,     "uint16_t COUNT_MAX must be 0xFFFF");
+static_assert(sync::SemaphoreT<uint32_t>::COUNT_MAX == 0xFFFFFFFFU, "uint32_t COUNT_MAX must be 0xFFFFFFFF");
+static_assert(sync::SemaphoreT<uint64_t>::COUNT_MAX == 0xFFFFFFFFFFFFFFFFULL, "uint64_t COUNT_MAX must be 0xFFFFFFFFFFFFFFFF");
+static_assert(sync::Semaphore::COUNT_MAX            == 0xFFFFU,     "default Semaphore must keep a 16-bit counter");
+
 // Test results storage
 static volatile int32_t g_TestResult = 0;
 static volatile int32_t g_SharedCounter = 0;
@@ -614,6 +621,309 @@ private:
     }
 };
 
+/*! \class TrySignalCeilingTask
+    \brief Tests TrySignal(ceiling) without waiters.
+    \note  Verifies that the per-call ceiling limits the counter when it is below max_count, that it is
+           clamped to max_count when it is above it, that a zero ceiling rejects the signal, that a ceiling
+           below the current count rejects the signal and leaves the counter unchanged, and that the plain
+           TrySignal() still works with the per-object maximum afterwards.
+*/
+template <EAccessMode _AccessMode>
+class TrySignalCeilingTask : public Task<_STK_SEM_STACK_SIZE, _AccessMode>
+{
+    uint8_t m_task_id;
+
+public:
+    TrySignalCeilingTask(uint8_t task_id, int32_t) : m_task_id(task_id)
+    {}
+
+private:
+    void Run()
+    {
+        if (m_task_id != 0)
+            return;
+
+        // (1) ceiling below max_count: g_TestSemaphore is constructed as (0, 10) - see RunTest call site
+        int32_t accepted = 0;
+        for (int32_t i = 0; i < 5; ++i)
+        {
+            if (g_TestSemaphore.TrySignal(3U))
+                ++accepted;
+        }
+        const int32_t count_below = (int32_t)g_TestSemaphore.GetCount();
+
+        // (2) ceiling above max_count is clamped to max_count
+        sync::Semaphore clamped(0, 2);
+        int32_t accepted_clamped = 0;
+        for (int32_t i = 0; i < 5; ++i)
+        {
+            if (clamped.TrySignal(100U))
+                ++accepted_clamped;
+        }
+        const int32_t count_clamped = (int32_t)clamped.GetCount();
+
+        // (3) zero ceiling on an empty semaphore: rejected, counter unchanged
+        sync::Semaphore zero_ceiling(0, 2);
+        const bool    zero_ok    = zero_ceiling.TrySignal(0U);
+        const int32_t count_zero = (int32_t)zero_ceiling.GetCount();
+
+        // (4) ceiling below the current count (3): rejected, counter unchanged
+        const bool    lower_ok    = g_TestSemaphore.TrySignal(2U);
+        const int32_t count_lower = (int32_t)g_TestSemaphore.GetCount();
+
+        // (5) plain TrySignal() still uses the per-object maximum (10), not the earlier ceiling
+        const bool    plain_ok    = g_TestSemaphore.TrySignal();
+        const int32_t count_plain = (int32_t)g_TestSemaphore.GetCount();
+
+        printf("trysignal ceiling: below=%d/%d(expect 3/3) clamped=%d/%d(expect 2/2) zero=%d/%d(expect 0/0) "\
+            "lower=%d/%d(expect 0/3) plain=%d/%d(expect 1/4)\n",
+            (int)accepted, (int)count_below, (int)accepted_clamped, (int)count_clamped,
+            (int)zero_ok, (int)count_zero, (int)lower_ok, (int)count_lower, (int)plain_ok, (int)count_plain);
+
+        if ((accepted == 3) && (count_below == 3) &&
+            (accepted_clamped == 2) && (count_clamped == 2) &&
+            !zero_ok && (count_zero == 0) &&
+            !lower_ok && (count_lower == 3) &&
+            plain_ok && (count_plain == 4))
+            g_TestResult = 1;
+    }
+};
+
+/*! \class TrySignalCeilingHandoffTask
+    \brief Tests TrySignal(ceiling) with a waiting task.
+    \note  Verifies that a waiter always gets the token by direct hand-off even if the ceiling is already
+           exceeded (ceiling 0), that the counter is not incremented by the hand-off, and that the same
+           call without a waiter is rejected.
+*/
+template <EAccessMode _AccessMode>
+class TrySignalCeilingHandoffTask : public Task<_STK_SEM_STACK_SIZE, _AccessMode>
+{
+    uint8_t m_task_id;
+
+public:
+    TrySignalCeilingHandoffTask(uint8_t task_id, int32_t) : m_task_id(task_id)
+    {}
+
+private:
+    void Run()
+    {
+        if (m_task_id == 0)
+        {
+            // Semaphore starts at count=0, max_count=10 (see RunTest call site).
+            stk::Sleep(_STK_SEM_TEST_SHORT_SLEEP); // let task 1 block on Wait()
+
+            const bool    handoff_ok          = g_TestSemaphore.TrySignal(0U); // waiter present: must hand off
+            const int32_t count_after_handoff = (int32_t)g_TestSemaphore.GetCount(); // must stay 0
+
+            stk::Sleep(_STK_SEM_TEST_SHORT_SLEEP); // let task 1 record the acquisition
+
+            const bool    no_waiter_ok         = g_TestSemaphore.TrySignal(0U); // nobody waits, ceiling 0: rejected
+            const int32_t count_after_no_waiter = (int32_t)g_TestSemaphore.GetCount();
+
+            printf("trysignal ceiling handoff: handoff=%d(expect 1) count=%d(expect 0) waiter_acquired=%d(expect 1) "\
+                "no_waiter=%d(expect 0) count=%d(expect 0)\n",
+                (int)handoff_ok, (int)count_after_handoff, (int)g_SharedCounter,
+                (int)no_waiter_ok, (int)count_after_no_waiter);
+
+            if (handoff_ok && (count_after_handoff == 0) && (g_SharedCounter == 1) &&
+                !no_waiter_ok && (count_after_no_waiter == 0))
+                g_TestResult = 1;
+        }
+        else
+        if (m_task_id == 1)
+        {
+            // Blocks before task 0's TrySignal(0) so that call has a waiter to hand off to.
+            stk::Sleep(_STK_SEM_TEST_SHORT_SLEEP / 2);
+
+            if (g_TestSemaphore.Wait(_STK_SEM_TEST_TIMEOUT))
+                g_SharedCounter = 1;
+        }
+    }
+};
+
+/*! \class WideCounter32Task
+    \brief Tests SemaphoreT<uint32_t> beyond the 16-bit range.
+    \note  Verifies that the initial count is not truncated, that the counter does not wrap at 65535,
+           and that the top of the range is handled correctly: a semaphore constructed as
+           (COUNT_MAX, COUNT_MAX) rejects TrySignal(), drops by one on Wait() and is restored by TrySignal().
+*/
+template <EAccessMode _AccessMode>
+class WideCounter32Task : public Task<_STK_SEM_STACK_SIZE, _AccessMode>
+{
+    uint8_t m_task_id;
+
+public:
+    WideCounter32Task(uint8_t task_id, int32_t) : m_task_id(task_id)
+    {}
+
+private:
+    void Run()
+    {
+        if (m_task_id != 0)
+            return;
+
+        typedef sync::SemaphoreT<uint32_t> Sem32;
+
+        // (1) initial count above the 16-bit range must not be truncated
+        Sem32 wide(70000U);
+        const uint32_t count_at_init = wide.GetCount();
+        const bool     taken         = wide.Wait(NO_WAIT);
+        const uint32_t count_after   = wide.GetCount();
+
+        // (2) the counter must not wrap at 65535
+        Sem32 crossing(0xFFFFU);
+        const bool     crossing_ok    = crossing.TrySignal();
+        const uint32_t count_crossing = crossing.GetCount();
+
+        // (3) top of the range: constructed saturated
+        Sem32 full(Sem32::COUNT_MAX, Sem32::COUNT_MAX);
+        const bool     signal_full    = full.TrySignal();           // saturated, no waiters: expect false
+        const bool     signal_ceiling = full.TrySignal(Sem32::COUNT_MAX); // same via the ceiling overload
+        const bool     taken_full     = full.Wait(NO_WAIT);         // COUNT_MAX -> COUNT_MAX - 1
+        const uint32_t count_minus    = full.GetCount();
+        const bool     signal_restore = full.TrySignal();           // COUNT_MAX - 1 -> COUNT_MAX
+        const uint32_t count_restored = full.GetCount();
+
+        printf("wide counter 32: init=%lu(expect 70000) taken=%d after=%lu(expect 69999) crossing=%d count=%lu(expect 65536)\n",
+            (unsigned long)count_at_init, (int)taken, (unsigned long)count_after,
+            (int)crossing_ok, (unsigned long)count_crossing);
+        printf("wide counter 32: full signal=%d ceiling=%d(expect 0/0) taken=%d minus=%lu(expect 4294967293) "\
+            "restore=%d restored=%lu(expect 4294967294)\n",
+            (int)signal_full, (int)signal_ceiling, (int)taken_full, (unsigned long)count_minus,
+            (int)signal_restore, (unsigned long)count_restored);
+
+        if ((count_at_init == 70000U) && taken && (count_after == 69999U) &&
+            crossing_ok && (count_crossing == 0x10000U) &&
+            !signal_full && !signal_ceiling && taken_full &&
+            (count_minus == (Sem32::COUNT_MAX - 1U)) &&
+            signal_restore && (count_restored == Sem32::COUNT_MAX))
+            g_TestResult = 1;
+    }
+};
+
+/*! \class NarrowCounter8Task
+    \brief Tests SemaphoreT<uint8_t> at its counter limit.
+    \note  Verifies that exactly COUNT_MAX (254) signals are accepted, the next one is rejected without
+           wrapping the counter, and that draining yields exactly 254 successful waits.
+*/
+template <EAccessMode _AccessMode>
+class NarrowCounter8Task : public Task<_STK_SEM_STACK_SIZE, _AccessMode>
+{
+    uint8_t m_task_id;
+
+public:
+    NarrowCounter8Task(uint8_t task_id, int32_t) : m_task_id(task_id)
+    {}
+
+private:
+    void Run()
+    {
+        if (m_task_id != 0)
+            return;
+
+        typedef sync::SemaphoreT<uint8_t> Sem8;
+
+        Sem8 narrow; // default max_count = COUNT_MAX = 254
+
+        int32_t accepted = 0;
+        for (int32_t i = 0; i < 300; ++i)
+        {
+            if (narrow.TrySignal())
+                ++accepted;
+        }
+        const int32_t count_full = (int32_t)narrow.GetCount();
+
+        int32_t drained = 0;
+        while (narrow.Wait(NO_WAIT))
+            ++drained;
+        const int32_t count_empty = (int32_t)narrow.GetCount();
+
+        printf("narrow counter 8: accepted=%d(expect 255) count=%d(expect 255) drained=%d(expect 255) count=%d(expect 0)\n",
+            (int)accepted, (int)count_full, (int)drained, (int)count_empty);
+
+        if ((accepted == 255) && (count_full == 255) && (drained == 255) && (count_empty == 0))
+            g_TestResult = 1;
+    }
+};
+
+/*! \class WideCounter64Task
+    \brief Tests SemaphoreT<uint64_t> beyond the 32-bit range.
+    \note  Verifies that an initial count above 32 bits is not truncated, that the counter does not wrap at
+           2^32, that a per-call ceiling above 32 bits works, and that the top of the range is handled
+           correctly: a semaphore constructed as (COUNT_MAX, COUNT_MAX) rejects TrySignal(), drops by one on
+           Wait() and is restored by TrySignal(). GetCount() of a counter wider than the native word is read
+           under the critical section (see SemaphoreT::GetCount()), so on a 32-bit target it can not be torn.
+           Values are printed as two 32-bit halves because a 64-bit printf conversion is not always available.
+*/
+template <EAccessMode _AccessMode>
+class WideCounter64Task : public Task<_STK_SEM_STACK_SIZE, _AccessMode>
+{
+    uint8_t m_task_id;
+
+public:
+    WideCounter64Task(uint8_t task_id, int32_t) : m_task_id(task_id)
+    {}
+
+private:
+    static unsigned long Hi(uint64_t v) { return (unsigned long)(v >> 32); }
+    static unsigned long Lo(uint64_t v) { return (unsigned long)(v & 0xFFFFFFFFULL); }
+
+    void Run()
+    {
+        if (m_task_id != 0)
+            return;
+
+        typedef sync::SemaphoreT<uint64_t> Sem64;
+
+        static const uint64_t BIT32 = 0x100000000ULL; // first value which does not fit 32 bits
+
+        // (1) initial count above the 32-bit range must not be truncated
+        Sem64 wide(BIT32 + 5U);
+        const uint64_t count_at_init = wide.GetCount();
+        const bool     taken         = wide.Wait(NO_WAIT);
+        const uint64_t count_after   = wide.GetCount();
+
+        // (2) the counter must not wrap at 2^32
+        Sem64 crossing(BIT32 - 1U);
+        const bool     crossing_ok    = crossing.TrySignal();
+        const uint64_t count_crossing = crossing.GetCount();
+
+        // (3) a per-call ceiling above the 32-bit range: accepted up to the ceiling, then rejected
+        Sem64 ceil_sem(BIT32 - 1U);
+        const bool     ceiling_ok     = ceil_sem.TrySignal(BIT32);  // BIT32 - 1 -> BIT32 (reaches the ceiling)
+        const bool     ceiling_full   = ceil_sem.TrySignal(BIT32);  // at the ceiling: rejected
+        const uint64_t count_ceiling  = ceil_sem.GetCount();
+
+        // (4) top of the range: constructed saturated
+        Sem64 full(Sem64::COUNT_MAX, Sem64::COUNT_MAX);
+        const bool     signal_full    = full.TrySignal();                 // saturated, no waiters: expect false
+        const bool     signal_ceiling = full.TrySignal(Sem64::COUNT_MAX); // same via the ceiling overload
+        const bool     taken_full     = full.Wait(NO_WAIT);               // COUNT_MAX -> COUNT_MAX - 1
+        const uint64_t count_minus    = full.GetCount();
+        const bool     signal_restore = full.TrySignal();                 // COUNT_MAX - 1 -> COUNT_MAX
+        const uint64_t count_restored = full.GetCount();
+
+        printf("wide counter 64: init=0x%08lX%08lX(expect 0x0000000100000005) taken=%d after=0x%08lX%08lX(expect 0x0000000100000004)\n",
+            Hi(count_at_init), Lo(count_at_init), (int)taken, Hi(count_after), Lo(count_after));
+        printf("wide counter 64: crossing=%d count=0x%08lX%08lX(expect 0x0000000100000000) ceiling=%d/%d(expect 1/0) "\
+            "count=0x%08lX%08lX(expect 0x0000000100000000)\n",
+            (int)crossing_ok, Hi(count_crossing), Lo(count_crossing), (int)ceiling_ok, (int)ceiling_full,
+            Hi(count_ceiling), Lo(count_ceiling));
+        printf("wide counter 64: full signal=%d ceiling=%d(expect 0/0) taken=%d minus=0x%08lX%08lX(expect 0xFFFFFFFFFFFFFFFD) "\
+            "restore=%d restored=0x%08lX%08lX(expect 0xFFFFFFFFFFFFFFFE)\n",
+            (int)signal_full, (int)signal_ceiling, (int)taken_full, Hi(count_minus), Lo(count_minus),
+            (int)signal_restore, Hi(count_restored), Lo(count_restored));
+
+        if ((count_at_init == (BIT32 + 5U)) && taken && (count_after == (BIT32 + 4U)) &&
+            crossing_ok && (count_crossing == BIT32) &&
+            ceiling_ok && !ceiling_full && (count_ceiling == BIT32) &&
+            !signal_full && !signal_ceiling && taken_full &&
+            (count_minus == (Sem64::COUNT_MAX - 1U)) &&
+            signal_restore && (count_restored == Sem64::COUNT_MAX))
+            g_TestResult = 1;
+    }
+};
+
 static const int32_t CW_INFINITE         = 1;
 static const int32_t CW_NOT_TIMEOUT      = 2;
 static const int32_t CW_NO_STALE_WAITER  = 3;
@@ -892,7 +1202,7 @@ static void ResetTestState(uint32_t initial_count = 0, uint32_t max_count = sync
     }
 
     // Re-construct the semaphore in-place with the requested initial count and max count
-    g_TestSemaphore.~Semaphore();
+    g_TestSemaphore.~SemaphoreT();
     new (&g_TestSemaphore) sync::Semaphore(initial_count, max_count);
 }
 
@@ -908,6 +1218,11 @@ static bool NeedsExtendedTasks(const char *test_name)
            (strcmp(test_name, "BoundedBuffer") != 0) &&
            (strcmp(test_name, "TrySignalSaturation") != 0) &&
            (strcmp(test_name, "AlreadySignaledOnInit") != 0) &&
+           (strcmp(test_name, "TrySignalCeiling") != 0) &&
+           (strcmp(test_name, "TrySignalCeilingHandoff") != 0) &&
+           (strcmp(test_name, "WideCounter32") != 0) &&
+           (strcmp(test_name, "NarrowCounter8") != 0) &&
+           (strcmp(test_name, "WideCounter64") != 0) &&
            (strncmp(test_name, "CancelWait", 10) != 0); // cancel tests use tasks 0-2 only
 }
 
@@ -1027,7 +1342,37 @@ int main(int argc, char **argv)
     else
         total_success++;
 
-    // Tests 10-21: cancelability of Semaphore waits (tasks 0-2 only), via IKernel::CancelTaskWait()
+    // Test 10: TrySignal(ceiling) without waiters - below/above max_count, zero ceiling, ceiling below count
+    if (RunTest<TrySignalCeilingTask<ACCESS_PRIVILEGED>>("TrySignalCeiling", 0, 0, 10) != TestContext::SUCCESS_EXIT_CODE)
+        total_failures++;
+    else
+        total_success++;
+
+    // Test 11: TrySignal(ceiling) with a waiter - hand-off must succeed even if the ceiling is exceeded
+    if (RunTest<TrySignalCeilingHandoffTask<ACCESS_PRIVILEGED>>("TrySignalCeilingHandoff", 0, 0, 10) != TestContext::SUCCESS_EXIT_CODE)
+        total_failures++;
+    else
+        total_success++;
+
+    // Test 12: SemaphoreT<uint32_t> - values beyond 16 bits and the top of the range
+    if (RunTest<WideCounter32Task<ACCESS_PRIVILEGED>>("WideCounter32") != TestContext::SUCCESS_EXIT_CODE)
+        total_failures++;
+    else
+        total_success++;
+
+    // Test 13: SemaphoreT<uint8_t> - exactly COUNT_MAX (254) signals accepted
+    if (RunTest<NarrowCounter8Task<ACCESS_PRIVILEGED>>("NarrowCounter8") != TestContext::SUCCESS_EXIT_CODE)
+        total_failures++;
+    else
+        total_success++;
+
+    // Test 14: SemaphoreT<uint64_t> - values beyond 32 bits, ceiling above 32 bits and the top of the range
+    if (RunTest<WideCounter64Task<ACCESS_PRIVILEGED>>("WideCounter64") != TestContext::SUCCESS_EXIT_CODE)
+        total_failures++;
+    else
+        total_success++;
+
+    // Tests 15-26: cancelability of Semaphore waits (tasks 0-2 only), via IKernel::CancelTaskWait()
     // and via stk::SleepCancel() (param + 100)
     {
         struct CancelCase { const char *name; int32_t param; };
@@ -1062,7 +1407,7 @@ int main(int argc, char **argv)
 
 #endif // __ARM_ARCH_6M__
 
-    // Test 22: Stress test (no signals lost)
+    // Test 27: Stress test (no signals lost)
     if (RunTest<StressTestTask<ACCESS_PRIVILEGED>>("StressTest", 400) != TestContext::SUCCESS_EXIT_CODE)
         total_failures++;
     else

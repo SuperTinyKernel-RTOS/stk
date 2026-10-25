@@ -35,6 +35,27 @@
     @{
 */
 
+// C++ API forward declarations for stk_*_get_instance().
+#ifdef __cplusplus
+namespace stk {
+    class IKernel;
+    class ITask;
+    namespace sync {
+        class Mutex;
+        class FastMutex;
+        class SpinLock;
+        class ConditionVariable;
+        template <typename T> class SemaphoreT;
+        class Event;
+        class EventFlags;
+        class Pipe;
+        class MessageQueue;
+        class RWMutex;
+        class Barrier;
+    }
+}
+#endif // __cplusplus
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -42,7 +63,7 @@ extern "C" {
 /*! \def       STK_C_VERSION
     \brief     Interface version.
 */
-#define STK_C_VERSION (0x20261004)
+#define STK_C_VERSION (0x20261024)
 
 // =============================================================================
 // Configuration macros (can be overridden before including this file)
@@ -89,6 +110,39 @@ extern "C" {
 #else
     #define STK_STATIC_CAST(type, val) ((type)(val))
 #endif
+
+/*! \def       STK_MIN
+    \brief     Returns the minimum of two values.
+    \details   Evaluates both arguments safely using parentheses to prevent precedence issues.
+    \param[in] a: First value.
+    \param[in] b: Second value.
+*/
+#define STK_MIN(a, b) (((a) < (b)) ? (a) : (b))
+
+/*! \def       STK_MAX
+    \brief     Returns the maximum of two values.
+    \details   Evaluates both arguments safely using parentheses to prevent precedence issues.
+    \param[in] a: First value.
+    \param[in] b: Second value.
+*/
+#define STK_MAX(a, b) (((a) > (b)) ? (a) : (b))
+
+/*! \def       STK_C_CEIL_DIV
+    \brief     Performs integer ceiling division (rounds up to the nearest multiple).
+    \details   Useful for calculating required word or block counts from byte sizes
+               without truncation issues.
+    \param[in] size: Numerator (e.g., total byte size).
+    \param[in] unit: Denominator (e.g., alignment or word size).
+*/
+#define STK_C_CEIL_DIV(size, unit) (((size) + (unit) - 1U) / (unit))
+
+/*! \def       STK_ROUND_UP
+    \brief     Rounds up a value to the nearest multiple of another value.
+    \details   Useful for aligning sizes, addresses, or counts to specific boundaries or alignments.
+    \param[in] x: Value to round up.
+    \param[in] a: Alignment or multiple to round up to.
+*/
+#define STK_ROUND_UP(x, a) ((((x) + (a) - 1U) / (a)) * (a))
 
 // =============================================================================
 // Types
@@ -233,16 +287,45 @@ typedef enum stk_resume_result_t {
     \see       STK_DEFINE_STACK_POOL
 */
 #define STK_GET_STACK_FROM_POOL(name, task_id) (name[task_id])
+
+/*! \def       STK_CALC_ALIGNED_BLOCKS
+    \brief     Calculates aligned block counts using nested rounding and ceiling division.
+    \details   Rounds up a base size to a secondary type alignment, adds a variable count
+               of additional units, rounds up to the maximum of word size or secondary type size,
+               and converts to word blocks.
+    \param[in] base:      Base size in bytes (e.g., STK_SEM_BASE_BYTES).
+    \param[in] val_size:  Size of the secondary type in bytes (e.g., sizeof(stk_sem_val_t)).
+    \param[in] count:     Number of secondary type units to add (e.g., 2U).
+*/
+#define STK_CALC_ALIGNED_BLOCKS(base, val_size, count) \
+    STK_C_CEIL_DIV( \
+        STK_ROUND_UP( \
+            STK_ROUND_UP((base), (val_size)) + ((count) * (val_size)), \
+            STK_MAX(sizeof(stk_word_t), (val_size)) \
+        ), \
+        sizeof(stk_word_t) \
+    )
    
 // =============================================================================
 // Attributes
 // =============================================================================
 
+/*! \def       __stk_c_align
+    \brief     Align to x bytes.
+    \param[in] x: Alignment value.
+    \see       __stk_c_stack, __stk_c_aligned
+*/
+#if defined(__GNUC__) || defined(__clang__) || defined(__ICCARM__)
+    #define __stk_c_align(x) __attribute__((aligned(x)))
+#else
+    #define __stk_c_align(x)
+#endif
+
 /*! \def       __stk_c_stack
     \brief     Stack attribute (applies required alignment for a stack memory).
 */
 #if defined(__GNUC__) || defined(__clang__) || defined(__ICCARM__)
-    #define __stk_c_stack __attribute__((aligned(STK_STACK_MEMORY_ALIGN)))
+    #define __stk_c_stack __stk_c_align(STK_STACK_MEMORY_ALIGN)
 #else
     #define __stk_c_stack
 #endif
@@ -251,7 +334,7 @@ typedef enum stk_resume_result_t {
     \brief     Memory buffer alignment attribute.
 */
 #if defined(__GNUC__) || defined(__clang__) || defined(__ICCARM__)
-    #define __stk_c_aligned __attribute__((aligned(STK_ALIGN_SIZE)))
+    #define __stk_c_aligned __stk_c_align(STK_ALIGN_SIZE)
 #else
     #define __stk_c_aligned
 #endif
@@ -357,8 +440,6 @@ Kernel<KERNEL_DYNAMIC | KERNEL_TICKLESS | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, S
 stk_kernel_t *stk_kernel_create(uint8_t core_nr);
 
 #ifdef __cplusplus
-namespace stk { class IKernel; }
-
 /*! \brief     Get the underlying C++ \c stk::IKernel object for a given core.
     \param[in] core_nr: Core id (0U = first core, ...). Must be < \a STK_C_CPU_COUNT.
     \return    Pointer to the \c stk::IKernel instance registered for \a core_nr.
@@ -679,8 +760,6 @@ const char *stk_task_get_name(const stk_task_t *tsk);
 stk_tid_t stk_task_get_id(const stk_task_t *tsk);
 
 #ifdef __cplusplus
-namespace stk { class ITask; }
-
 /*! \brief     Get the underlying C++ \c stk::ITask object wrapped by a \c stk_task_t handle.
     \details   Gateway for mixed C/C++ code: lets C++ callers linked against the C API reach
                the real polymorphic task object (e.g. to pass it to a C++-only API) without
@@ -1085,8 +1164,6 @@ bool stk_mutex_timed_lock(stk_mutex_t *mtx, stk_timeout_t timeout);
 stk_wait_result_t stk_mutex_timed_lock_ex(stk_mutex_t *mtx, stk_timeout_t timeout);
 
 #ifdef __cplusplus
-namespace stk { namespace sync { class Mutex; } }
-
 /*! \brief     Get the underlying C++ \c stk::sync::Mutex object wrapped by a \c stk_mutex_t handle.
     \param[in] mtx: Mutex handle obtained via \c stk_mutex_create().
     \return    Pointer to the wrapped \c stk::sync::Mutex instance. Never \c NULL for a valid handle.
@@ -1175,8 +1252,6 @@ bool stk_fastmutex_timed_lock(stk_fastmutex_t *mtx, stk_timeout_t timeout);
 stk_wait_result_t stk_fastmutex_timed_lock_ex(stk_fastmutex_t *mtx, stk_timeout_t timeout);
 
 #ifdef __cplusplus
-namespace stk { namespace sync { class FastMutex; } }
-
 /*! \brief     Get the underlying C++ \c stk::sync::FastMutex object wrapped by a \c stk_fastmutex_t handle.
     \param[in] mtx: FastMutex handle obtained via \c stk_fastmutex_create().
     \return    Pointer to the wrapped \c stk::sync::FastMutex instance. Never \c NULL for a valid handle.
@@ -1226,8 +1301,6 @@ bool stk_spinlock_trylock(stk_spinlock_t *slock);
 void stk_spinlock_unlock(stk_spinlock_t *slock);
 
 #ifdef __cplusplus
-namespace stk { namespace sync { class SpinLock; } }
-
 /*! \brief     Get the underlying C++ \c stk::sync::SpinLock object wrapped by a \c stk_spinlock_t handle.
     \param[in] slock: SpinLock handle obtained via \c stk_spinlock_create().
     \return    Pointer to the wrapped \c stk::sync::SpinLock instance. Never \c NULL for a valid handle.
@@ -1337,8 +1410,6 @@ void stk_cv_notify_one(stk_cv_t *cv);
 void stk_cv_notify_all(stk_cv_t *cv);
 
 #ifdef __cplusplus
-namespace stk { namespace sync { class ConditionVariable; } }
-
 /*! \brief     Get the underlying C++ \c stk::sync::ConditionVariable object wrapped by a \c stk_cv_t handle.
     \param[in] cv: CV handle obtained via \c stk_cv_create().
     \return    Pointer to the wrapped \c stk::sync::ConditionVariable instance. Never \c NULL for a valid handle.
@@ -1428,8 +1499,6 @@ bool stk_event_reset(stk_event_t *ev);
 void stk_event_pulse(stk_event_t *ev);
 
 #ifdef __cplusplus
-namespace stk { namespace sync { class Event; } }
-
 /*! \brief     Get the underlying C++ \c stk::sync::Event object wrapped by a \c stk_event_t handle.
     \param[in] ev: Event handle obtained via \c stk_event_create().
     \return    Pointer to the wrapped \c stk::sync::Event instance. Never \c NULL for a valid handle.
@@ -1440,14 +1509,30 @@ extern "C" stk::sync::Event *stk_event_get_instance(stk_event_t *ev);
 
 // ----- Semaphore -------------------------------------------------------------
 
-/*! \brief     A memory size (multiples of stk_word_t) required for Semaphore instance.
+/*! \brief     Semaphore counter value type (unsigned integer type, default uint16_t).
+    \note      Maps to the template argument of stk::sync::SemaphoreT. Override STK_C_SEM_VALUE_TYPE
+               (uint8_t, uint16_t, uint32_t or uint64_t) before including this file to select a
+               different counter width. A counter wider than a pointer (e.g. uint64_t on a 32-bit MCU)
+               is supported, see stk_sem_get_count().
 */
-#define STK_SEM_IMPL_SIZE (8U + (STK_SYNC_DEBUG_NAMES ? 1U : 0U))
+#ifndef STK_C_SEM_VALUE_TYPE
+    #define STK_C_SEM_VALUE_TYPE uint16_t
+#endif
+typedef STK_C_SEM_VALUE_TYPE stk_sem_val_t;
+
+/*! \brief     A memory size (multiples of stk_word_t) required for Semaphore instance.
+    \note      The semaphore holds two counters of type stk_sem_val_t. The formula includes the
+               alignment padding in front of the counters and at the tail of the object, which
+               matters when stk_sem_val_t is wider than stk_word_t (e.g. uint64_t on a 32-bit MCU).
+*/
+#define STK_SEM_BASE_BYTES ((7U + (STK_SYNC_DEBUG_NAMES ? 1U : 0U)) * sizeof(stk_word_t))
+#define STK_SEM_IMPL_SIZE STK_CALC_ALIGNED_BLOCKS(STK_SEM_BASE_BYTES, sizeof(stk_sem_val_t), 2U)
 
 /*! \brief     Opaque memory container for a Semaphore instance.
+    \note      Alignment guarantees compatibility with underlying C++ representation.
 */
 typedef struct stk_sem_mem_t {
-    stk_word_t data[STK_SEM_IMPL_SIZE] __stk_c_aligned;
+    stk_word_t data[STK_SEM_IMPL_SIZE] __stk_c_align(STK_MAX(sizeof(stk_word_t), sizeof(stk_sem_val_t)));
 } stk_sem_mem_t;
 
 /*! \brief     Opaque handle to a Semaphore instance.
@@ -1458,12 +1543,13 @@ typedef struct stk_sem_t stk_sem_t;
     \param[in] membuf: Pointer to static memory container.
     \param[in] initial_count: Starting value of the resource counter.
     \param[in] max_count: Maximum value the counter is allowed to reach.
-               Pass 0 to use the default maximum (65534). Must be >= initial_count.
+               Pass 0 to use the default maximum: the maximum value of \a stk_sem_val_t
+               (65535 for the default uint16_t). Must be >= initial_count.
     \return    Semaphore handle.
 */
 stk_sem_t *stk_sem_create(stk_sem_mem_t *const membuf,
-                          uint32_t       initial_count, 
-                          uint32_t       max_count);
+                          stk_sem_val_t  initial_count,
+                          stk_sem_val_t  max_count);
 
 /*! \brief     Destroy a Semaphore.
     \param[in] sem: Semaphore handle.
@@ -1528,23 +1614,38 @@ void stk_sem_signal(stk_sem_t *sem);
 */
 bool stk_sem_trysignal(stk_sem_t *sem);
 
+/*! \brief     Try to signal/release a semaphore resource without exceeding a caller-supplied ceiling.
+    \details   Same as \c stk_sem_trysignal(), but the counter is additionally limited by
+               \a ceiling (the effective limit is the smaller of \a ceiling and the
+               \a max_count given to stk_sem_create()). Intended for APIs where the ceiling is
+               a per-call argument (e.g. ThreadX tx_semaphore_ceiling_put). The check and
+               the increment (or hand-off to a waiter) are atomic.
+    \param[in] sem: Semaphore handle.
+    \param[in] ceiling: Maximum counter value allowed for this call.
+    \return    True if signaled (incremented, or handed directly to a waiter),
+               False if the counter was already at or above the effective limit and
+               nobody was waiting.
+    \warning   ISR-safe.
+*/
+bool stk_sem_trysignal_ceiling(stk_sem_t *sem, stk_sem_val_t ceiling);
+
 /*! \brief     Get the current counter value.
     \param[in] sem: Semaphore handle.
     \return    Advisory snapshot of the counter. May be stale by the time
                the caller acts on it.
-    \note      ISR-safe on targets where a 16-bit aligned read is atomic.
+    \note      ISR-safe. If \a stk_sem_val_t is not wider than a pointer the value is read with a
+               single aligned load, otherwise (e.g. uint64_t on a 32-bit MCU) it is read under a
+               critical section so it can not be torn by a concurrent update.
 */
-uint16_t stk_sem_get_count(const stk_sem_t *sem);
+stk_sem_val_t stk_sem_get_count(const stk_sem_t *sem);
 
 #ifdef __cplusplus
-namespace stk { namespace sync { class Semaphore; } }
-
-/*! \brief     Get the underlying C++ \c stk::sync::Semaphore object wrapped by a \c stk_sem_t handle.
+/*! \brief     Get the underlying C++ \c stk::sync::SemaphoreT<stk_sem_val_t> object wrapped by a \c stk_sem_t handle.
     \param[in] sem: Semaphore handle obtained via \c stk_sem_create().
-    \return    Pointer to the wrapped \c stk::sync::Semaphore instance. Never \c NULL for a valid handle.
+    \return    Pointer to the wrapped \c stk::sync::SemaphoreT<stk_sem_val_t> instance. Never \c NULL for a valid handle.
     \note      C++ callers only (guarded by \c __cplusplus); not part of the C ABI.
 */
-extern "C" stk::sync::Semaphore *stk_sem_get_instance(stk_sem_t *sem);
+extern "C" stk::sync::SemaphoreT<stk_sem_val_t> *stk_sem_get_instance(stk_sem_t *sem);
 #endif // __cplusplus
 
 // ----- EventFlags ------------------------------------------------------------
@@ -1769,8 +1870,6 @@ stk_wait_result_t stk_ef_sync(stk_ef_t *ef, stk_ef_sync_ctx_t *ctx, uint32_t set
                               stk_timeout_t timeout, uint32_t *actual_flags);
 
 #ifdef __cplusplus
-namespace stk { namespace sync { class EventFlags; } }
-
 /*! \brief     Get the underlying C++ \c stk::sync::EventFlags object wrapped by a \c stk_ef_t handle.
     \param[in] ef: EventFlags handle obtained via \c stk_ef_create().
     \return    Pointer to the wrapped \c stk::sync::EventFlags instance. Never \c NULL for a valid handle.
@@ -2148,8 +2247,6 @@ bool stk_pipe_is_full(const stk_pipe_t *pipe);
 bool stk_pipe_is_storage_valid(const stk_pipe_t *pipe);
 
 #ifdef __cplusplus
-namespace stk { namespace sync { class Pipe; } }
-
 /*! \brief     Get the underlying C++ \c stk::sync::Pipe object wrapped by a \c stk_pipe_t handle.
     \param[in] pipe: Pipe handle obtained via \c stk_pipe_create().
     \return    Pointer to the wrapped \c stk::sync::Pipe instance. Never \c NULL for a valid handle.
@@ -2510,8 +2607,6 @@ bool stk_msgq_is_full(const stk_msgq_t *mq);
 bool stk_msgq_is_storage_valid(const stk_msgq_t *mq);
 
 #ifdef __cplusplus
-namespace stk { namespace sync { class MessageQueue; } }
-
 /*! \brief     Get the underlying C++ \c stk::sync::MessageQueue object wrapped by a \c stk_msgq_t handle.
     \param[in] mq: MessageQueue handle obtained via \c stk_msgq_create().
     \return    Pointer to the wrapped \c stk::sync::MessageQueue instance. Never \c NULL for a valid handle.
@@ -2641,8 +2736,6 @@ stk_wait_result_t stk_rwmutex_timed_lock_ex(stk_rwmutex_t *rw, stk_timeout_t tim
 void stk_rwmutex_unlock(stk_rwmutex_t *rw);
 
 #ifdef __cplusplus
-namespace stk { namespace sync { class RWMutex; } }
-
 /*! \brief     Get the underlying C++ \c stk::sync::RWMutex object wrapped by a \c stk_rwmutex_t handle.
     \param[in] rw: RWMutex handle obtained via \c stk_rwmutex_create().
     \return    Pointer to the wrapped \c stk::sync::RWMutex instance. Never \c NULL for a valid handle.
@@ -2723,8 +2816,6 @@ stk_barrier_result_t stk_barrier_wait_ex(stk_barrier_t *barrier);
 uint32_t stk_barrier_get_threshold(const stk_barrier_t *barrier);
 
 #ifdef __cplusplus
-namespace stk { namespace sync { class Barrier; } }
-
 /*! \brief     Get the underlying C++ \c stk::sync::Barrier object wrapped by a \c stk_barrier_t handle.
     \param[in] barrier: Barrier handle obtained via \c stk_barrier_create().
     \return    Pointer to the wrapped \c stk::sync::Barrier instance. Never \c NULL for a valid handle.
