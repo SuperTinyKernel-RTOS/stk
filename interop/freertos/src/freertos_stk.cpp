@@ -847,15 +847,15 @@ static stk::time::TimerHost *g_TimerHost = nullptr;
 // Static storage for the TimerHost (avoids heap for the host object itself).
 static stk::Word g_TimerHostBuf[StkGetWordCountForType<stk::time::TimerHost>()];
 
-struct FrtosTimer : public stk::time::TimerHost::Timer
+struct FrtosTimer : public stk::time::Timer
 {
     explicit FrtosTimer(const char             *name,
                         TickType_t              period,
                         bool                    auto_reload,
                         void                   *timer_id,
                         TimerCallbackFunction_t  cb)
-        : m_name(name), m_period(period), m_auto_reload(auto_reload),
-          m_timer_id(timer_id), m_callback(cb), m_cb_owned(true)
+        : m_name(name), m_period(period), m_timer_id(timer_id), m_callback(cb),
+          m_cb_owned(true), m_auto_reload(auto_reload)
     {}
 
     virtual ~FrtosTimer() {}
@@ -877,10 +877,10 @@ struct FrtosTimer : public stk::time::TimerHost::Timer
 
     const char             *m_name;
     TickType_t              m_period;       // ticks, stored for Reset/ChangePeriod
-    bool                    m_auto_reload;
     void                   *m_timer_id;
     TimerCallbackFunction_t m_callback;
     bool                    m_cb_owned;
+    bool                    m_auto_reload;
 };
 
 // ===========================================================================
@@ -895,7 +895,7 @@ struct FrtosTimer : public stk::time::TimerHost::Timer
 //   static stk::sync::PipeT<PendCall, FREERTOS_STK_PEND_CALL_QUEUE_SIZE>
 //       g_PendCallPipe;
 //
-// FrtosPendDrainer is a singleton TimerHost::Timer that is started once (as a
+// FrtosPendDrainer is a singleton Timer that is started once (as a
 // 1-tick auto-reload timer) the first time xTimerPendFunctionCall[FromISR]()
 // is called.  On every OnExpired() tick it drains g_PendCallPipe to completion,
 // invoking each PendCall callback in the TimerHost handler task context —
@@ -932,12 +932,12 @@ struct PendCall
 static stk::sync::PipeT<PendCall, FREERTOS_STK_PEND_CALL_QUEUE_SIZE> g_PendCallPipe;
 
 // Static storage for the singleton drainer timer (avoids a heap allocation).
-static stk::Word g_PendDrainerBuf[StkGetWordCountForType<stk::time::TimerHost::Timer>()];
-static stk::time::TimerHost::Timer *g_PendDrainer = nullptr;
+static stk::Word g_PendDrainerBuf[StkGetWordCountForType<stk::time::Timer>()];
+static stk::time::Timer *g_PendDrainer = nullptr;
 
 // Singleton drainer: drains g_PendCallPipe each time it fires, then stops
 // itself when the pipe is empty to avoid unnecessary timer ticks.
-struct FrtosPendDrainer : public stk::time::TimerHost::Timer
+struct FrtosPendDrainer : public stk::time::Timer
 {
     void OnExpired(stk::time::TimerHost *host) override
     {

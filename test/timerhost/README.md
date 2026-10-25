@@ -1,7 +1,8 @@
 # TimerHost Test Suite
 
 Test suite for `stk::time::TimerHost`: timer operations in task mode, `Initialize()` with `Config` (weights, external
-stack buffers, result codes) and the polled mode (`InitializePolled()` / `Process()`).  
+stack buffers, result codes), the polled mode (`InitializePolled()` / `Process()`) and the synchronous API
+(`StartSync()`, `StopSync()`, ... with the guarantees of `StopSync()`).  
 Source: `test/timer/test_timerhost.cpp`
 
 ---
@@ -23,13 +24,13 @@ Two timer modes are supported:
 - **Polled mode** (`InitializePolled()`): `TimerHost` registers no kernel tasks; the application calls `Process()` periodically and expired timers are handled inline. This is the mode for kernels where tasks must not block on queues, e.g. `KERNEL_HRT` (see the HRT suite, `test_hrt.cpp`)
 
 In task mode `TimerHost` internally runs two categories of tasks:
-- One **tick task** that maintains the active timer list, evaluates deadlines every wake cycle, and queues expired timers for dispatch
-- One or more **handler tasks** (see `_STK_TIMER_THREADS_COUNT`) that dequeue expired timers and invoke their `OnExpired()` callbacks
+- One **tick task** that maintains the active timer list, evaluates deadlines every wake cycle, and hands expired timers over to the handler tasks through an intrusive **ready list** (one node per `Timer`)
+- One or more **handler tasks** (see `_STK_TIMER_THREADS_COUNT`) that take expired timers from the ready list and invoke their `OnExpired()` callbacks
 
-Maximum concurrent active timers: `_STK_TIMER_COUNT_MAX` (default 32).  
-All API calls are **asynchronous** — they push commands to an internal queue and return immediately; the tick task (task mode) or the next `Process()` call (polled mode) processes the commands.
+Command queue capacity: `STK_TIMER_COMMAND_QUEUE_SIZE` (default 32; the old name `STK_TIMER_COUNT_MAX` is deprecated); it does not limit the number of timers.  
+The basic API calls are **asynchronous** — they push commands to an internal queue and return immediately (when the queue is full, a caller which can wait blocks for a free slot, any other caller gets `RES_QUEUE_FULL`; before `Initialize()` / after `Shutdown()` they return `RES_NOT_READY`); the tick task (task mode) or the next `Process()` call (polled mode) processes the commands. The `...Sync()` variants queue the same command with a completion and **block** until the result is known (task context, task mode only; otherwise they return `RES_QUEUED`, or `RES_NOT_READY` if the host is not initialized or has been shut down).
 
-Requires kernel mode: `KERNEL_SYNC` (the queues are `sync::Pipe` based) and, in task mode, `KERNEL_DYNAMIC` (the host tasks exit on `Shutdown()`). Task mode cannot be used with `KERNEL_HRT`: the kernel rejects the soft real-time `AddTask()` (`ADD_FAIL_INVALID`).
+Requires kernel mode: `KERNEL_SYNC` (the command queue is `sync::Pipe` based, the handler tasks wait on a `sync::Event`) and, in task mode, `KERNEL_DYNAMIC` (the host tasks exit on `Shutdown()`). Task mode cannot be used with `KERNEL_HRT`: the kernel rejects the soft real-time `AddTask()` (`ADD_FAIL_INVALID`).
 
 ```cpp
 // Construction
@@ -82,13 +83,21 @@ for (;;)
 | `Initialize` | `EAddResult Initialize(IKernel *kernel, EAccessMode mode, const Config &cfg = Config())` | Initialize timer host in task mode. Must be called before `Start()`. Creates tick task and handler task(s) with the weights and stacks of `cfg`. Returns `ADD_OK` or the first failure of `IKernel::AddTask()` (e.g. `ADD_FAIL_POOL_FULL`, `ADD_FAIL_DUPLICATE`, `ADD_FAIL_INVALID`); after a failure the host is unusable. `mode` applies to the handler tasks, the tick task is always `ACCESS_USER`. |
 | `InitializePolled` | `void InitializePolled()` | Initialize timer host in polled mode: no kernel tasks are created, `Config` does not apply. Mutually exclusive with `Initialize()`; after `Shutdown()` the host can be initialized again in either mode. |
 | `Process` | `Timeout Process()` | Polled mode only. Applies pending commands, evaluates deadlines and invokes `OnExpired()` of every expired timer inline. Never blocks. Returns ticks until the earliest deadline: `NO_WAIT` if a timer is overdue, `WAIT_INFINITE` if none is active. Call from one context only, not from a callback. |
-| `Start` | `bool Start(Timer &timer, uint32_t delay, uint32_t period = 0)` | Start timer. `delay` = initial delay in ticks before first expiration. `period` = reload period (0 for one-shot). Returns `false` if timer already active or command queue full. Asynchronous. |
-| `Stop` | `bool Stop(Timer &timer)` | Stop running timer. Returns `false` if timer not active or queue full. Asynchronous. |
-| `Reset` | `bool Reset(Timer &timer)` | Reset periodic timer's deadline to `now + period`. Only works for active periodic timers. Returns `false` if timer inactive, one-shot, or queue full. Asynchronous. |
-| `Restart` | `bool Restart(Timer &timer, uint32_t delay, uint32_t period = 0)` | Atomically stop and re-start timer with new parameters. Safe to call regardless of current active state. Only one command queue slot consumed. Returns `false` if queue full. Asynchronous. |
-| `StartOrReset` | `bool StartOrReset(Timer &timer, uint32_t delay, uint32_t period = 0)` | Start timer if inactive, or reset deadline if already active and periodic. Atomic operation eliminates TOCTOU race. If timer is active one-shot, no action taken. Returns `false` if queue full. Asynchronous. |
-| `SetPeriod` | `bool SetPeriod(Timer &timer, uint32_t period)` | Change reload period of running periodic timer. Current deadline unaffected; new period takes effect on next reload. Returns `false` if timer inactive, one-shot, or queue full. Asynchronous. |
-| `Shutdown` | `bool Shutdown()` | Gracefully shut down timer host. Task mode: wakes all handler tasks with shutdown sentinels, the host tasks exit. Polled mode: stops and releases all timers at the next `Process()`, the host stays usable. Returns `false` if queue full. Asynchronous. |
+| `Start` | `EResult Start(Timer &timer, uint32_t delay, uint32_t period = 0)` | Start timer. `delay` = initial delay in ticks before first expiration. `period` = reload period (0 for one-shot). Returns `RES_OK` (queued), `RES_ACTIVE` if the timer is already active (nothing queued), `RES_QUEUE_FULL`, `RES_CANCELLED`, `RES_NOT_READY`. Asynchronous. |
+| `Stop` | `EResult Stop(Timer &timer)` | Stop running timer. Returns `RES_OK` (queued), `RES_INACTIVE` if the timer is not active (nothing queued), `RES_QUEUE_FULL`, `RES_CANCELLED`, `RES_NOT_READY`. Asynchronous. |
+| `Reset` | `EResult Reset(Timer &timer)` | Reset periodic timer's deadline to `now + period`. Only works for active periodic timers. Returns `RES_OK` (queued), `RES_INACTIVE`, `RES_NOT_PERIODIC` (nothing queued in the last two cases), `RES_QUEUE_FULL`, `RES_CANCELLED`, `RES_NOT_READY`. Asynchronous. |
+| `Restart` | `EResult Restart(Timer &timer, uint32_t delay, uint32_t period = 0)` | Atomically stop and re-start timer with new parameters. Safe to call regardless of current active state. Only one command queue slot consumed. Returns `RES_OK` (also when merged into an earlier queued re-arm), `RES_QUEUE_FULL`, `RES_CANCELLED`, `RES_NOT_READY`. Asynchronous. |
+| `StartOrReset` | `EResult StartOrReset(Timer &timer, uint32_t delay, uint32_t period = 0)` | Start timer if inactive, or reset deadline if already active and periodic. Atomic operation eliminates TOCTOU race. If timer is active one-shot, no action taken. Returns `RES_OK` (also when merged into an earlier queued re-arm), `RES_QUEUE_FULL`, `RES_CANCELLED`, `RES_NOT_READY`. Asynchronous. |
+| `SetPeriod` | `EResult SetPeriod(Timer &timer, uint32_t period)` | Change reload period of running periodic timer. Current deadline unaffected; new period takes effect on next reload. Returns `RES_OK` (queued), `RES_INVALID_PARAM` (period 0 or larger than `WAIT_INFINITE`), `RES_INACTIVE`, `RES_NOT_PERIODIC` (nothing queued in these cases), `RES_QUEUE_FULL`, `RES_CANCELLED`, `RES_NOT_READY`. Asynchronous. |
+| `StartSync` | `EResult StartSync(Timer &timer, uint32_t delay, uint32_t period = 0)` | Synchronous `Start()`. `RES_OK`, or `RES_ACTIVE` if the timer is already active (nothing changed). |
+| `ActivateSync` | `EResult ActivateSync(Timer &timer)` | Start with the delay and period stored in the timer (last start / restart / `ChangeSync()`). `RES_OK` or `RES_ACTIVE`. |
+| `StopSync` | `EResult StopSync(Timer &timer)` | Synchronous `Stop()`. `RES_OK` if it was active, `RES_INACTIVE` otherwise. Cancels a queued expiration and waits for a callback which is already running, so the `Timer` can be released afterwards (not from a callback: there it does not wait). |
+| `RestartSync` | `EResult RestartSync(Timer &timer, uint32_t delay, uint32_t period = 0)` | Synchronous `Restart()`. `RES_OK`. |
+| `ResetSync` | `EResult ResetSync(Timer &timer)` | Synchronous `Reset()`. `RES_OK`, `RES_INACTIVE` or `RES_NOT_PERIODIC`. |
+| `SetPeriodSync` | `EResult SetPeriodSync(Timer &timer, uint32_t period)` | Synchronous `SetPeriod()`. `RES_OK`, `RES_INACTIVE` or `RES_NOT_PERIODIC`; `RES_INVALID_PARAM` (nothing queued) if `period` is 0 or larger than `WAIT_INFINITE`. |
+| `ChangeSync` | `EResult ChangeSync(Timer &timer, uint32_t delay, uint32_t period)` | Store a new delay and period in an inactive timer without starting it. `RES_OK` or `RES_ACTIVE`. |
+| `QuerySync` | `EResult QuerySync(Timer &timer, TimerInfo &info)` | Snapshot (`active`, `remaining`, `delay`, `period`) evaluated by the tick task; advisory (`RES_OK`) where it cannot wait. |
+| `Shutdown` | `EResult Shutdown()` | Gracefully shut down timer host. Task mode: sets a shutdown flag and wakes the handler tasks, which drain the ready list and exit. Polled mode: stops and releases all timers at the next `Process()`, the host stays usable. Returns `RES_OK` (queued), `RES_QUEUE_FULL`, `RES_CANCELLED`, `RES_NOT_READY` (not initialized or already shut down). Asynchronous. |
 
 ### TimerHost::Config
 
@@ -121,20 +130,24 @@ External stack buffers must outlive the host and be distinct from each other and
 | `GetDeadline` | `Ticks GetDeadline() const` | Returns absolute expiration time in ticks. |
 | `GetTimestamp` | `Ticks GetTimestamp() const` | Returns time at which timer last expired (updated by `TimerHost`). |
 | `GetPeriod` | `uint32_t GetPeriod() const` | Returns reload period in ticks (0 for one-shot). |
-| `GetRemainingTime` | `uint32_t GetRemainingTime() const` | Returns ticks remaining until next expiration, or 0 if already expired or inactive. Advisory only; computed from cached `m_now` which may be up to one tick cycle stale. |
+| `GetDelay` | `uint32_t GetDelay() const` | Returns the initial delay stored by the last start, restart or change command (0 if none). Used by `ActivateSync()`. |
+| `GetRemainingTicks` | `uint32_t GetRemainingTicks() const` | Returns ticks remaining until next expiration, or 0 if already expired or inactive. Advisory only; computed from cached `m_now` which may be up to one tick cycle stale. |
 
 **Key invariants:**
 
-- **Asynchronous operations:** All `TimerHost` methods (`Start`, `Stop`, `Reset`, `Restart`, `StartOrReset`, `SetPeriod`) push commands to `m_commands` pipe and return immediately. The tick task (`UpdateTime`) processes commands asynchronously; in polled mode they take effect at the next `Process()`. Tests must account for this latency.
+- **Asynchronous operations:** The plain `TimerHost` methods (`Start`, `Stop`, `Reset`, `Restart`, `StartOrReset`, `SetPeriod`) push commands to `m_commands` pipe and return immediately. The tick task (`UpdateTime`) processes commands asynchronously; in polled mode they take effect at the next `Process()`. Tests of these methods must account for this latency. The `...Sync()` methods do not need it: the result is the exact outcome of the command.
+- **Result codes:** every command returns `EResult`, `RES_OK` is 0. The asynchronous ones return `RES_OK` when the command was accepted into the queue (its outcome is not reported), `RES_ACTIVE` / `RES_INACTIVE` / `RES_NOT_PERIODIC` / `RES_INVALID_PARAM` when a precondition or an argument is wrong (nothing queued, judged against the state applied by the last tick-task pass), `RES_QUEUE_FULL` / `RES_CANCELLED` when the queue has no room, `RES_NOT_READY` when the host is not initialized or has been shut down. The synchronous ones return the exact outcome (`RES_OK` = executed, ...), `RES_QUEUED` from a context which cannot wait, or an error.
+- **Synchronous operations:** a `...Sync()` call waits only in task context with the kernel running in task mode. From any other context it queues the command and returns `RES_QUEUED` (`QuerySync()` returns an advisory snapshot). In polled mode nothing completes a command between `Process()` calls, so every sync call returns `RES_QUEUED`. If the host is not initialized or has been shut down they return `RES_NOT_READY` without queuing anything.
+- **`StopSync()` guarantees:** after `RES_OK` / `RES_INACTIVE` the timer is not in the ready list (the command unlinks it), no callback of it will start, and a callback which a handler had already started has returned (`StopSync()` waits for it). Called from a callback it does not wait (a callback which stops its own timer would wait for itself) and guarantees only that no further callback starts.
 - **Deadline computation:** One-shot: `deadline = m_now + delay`. Periodic: first fire at `deadline = m_now + delay`, subsequent fires at `deadline = previous_deadline + period - drift`.
-- **Command queue depth:** `_STK_TIMER_COUNT_MAX` (default 32). If queue is full, commands fail and return `false`.
-- **Wake policy:** Expired timers are pushed to `m_queue` (capacity 32). Handler tasks (`ProcessTimers`) dequeue and invoke `OnExpired()` callbacks.
+- **Command queue depth:** `STK_TIMER_COMMAND_QUEUE_SIZE` (default 32). If the queue is full, a caller which can wait (task context, task mode, kernel running, not the tick task) blocks until the tick task has drained a slot; a caller which cannot wait (ISR, kernel not started, polled mode) gets `RES_QUEUE_FULL` and nothing is queued. No assertion fires.
+- **Wake policy:** An expired timer is linked into the ready list `m_ready_list` through its own node (one node per `Timer`, so it is queued at most once and the list cannot overflow) and a handler is woken through `m_ready_event`. Handler tasks (`ProcessTimers`) unlink the timer, claim the expiration and invoke `OnExpired()`. Commands which cancel or re-arm a timer unlink its node.
 - **Polled mode:** no handler queue is used: `OnExpired()` runs inline inside `Process()`, one expiration per timer per call. A timer which is overdue by more than its period fires once per call until its schedule has caught up (no drift is accumulated). Commands issued by a callback take effect at the next call.
 - **Re-initialization:** `Initialize()` selects task mode again, so one host object can be used in either mode in turn (after `Shutdown()`).
 
 **Blocking behavior:**
 - Tick task: blocks on `m_commands.Read(cmd, next_sleep)` where `next_sleep` is the shortest deadline among all active timers (or `WAIT_INFINITE` if no timers active).
-- Handler tasks: block on `m_queue.Read(timer)` waiting for expired timers.
+- Handler tasks: block on `m_ready_event` while the ready list is empty. After `Shutdown()` they drain the list and exit (each exiting handler wakes the next).
 - Polled mode: nothing blocks; `Process()` drains the command queue with non-blocking reads (an empty list of active timers does not turn this into an infinite wait).
 
 ---
@@ -151,20 +164,23 @@ External stack buffers must outlive the host and be distinct from each other and
 
 **Kernel task count:** `_STK_TIMER_TEST_TASKS_MAX + TimerHost::TASK_COUNT` to account for TimerHost's internal tasks (1 tick task + `_STK_TIMER_THREADS_COUNT` handler tasks, default 2 total).
 
-`g_TimerHost` is **initialized fresh** before each test. Tests 1–8 and 25 use the default path: `g_TimerHost.Initialize(&g_Kernel, ACCESS_PRIVILEGED)` in `RunTest()` before the test tasks are added, and `g_TimerHost.Shutdown()` at the end of each test's verifier task.
+`g_TimerHost` is **initialized fresh** before each test. Tests 1–8 and 28–33 use the default path: `g_TimerHost.Initialize(&g_Kernel, ACCESS_PRIVILEGED)` in `RunTest()` before the test tasks are added, and `g_TimerHost.Shutdown()` at the end of each test's verifier task.
 
-The `Config` group (tests 9–14) and the polled group (tests 15–24) select their own initialization through `g_HostInit` before `RunTest()`; `InitHost()` then initializes the host **after** the test tasks were added to the kernel (a duplicate stack can only be detected then), and `RunTest()` resets `g_HostInit` to the default afterwards:
+The `Config` group (tests 9–14) and the polled group (tests 15–27) select their own initialization through `g_HostInit` before `RunTest()`; `InitHost()` then initializes the host **after** the test tasks were added to the kernel (a duplicate stack can only be detected then), and `RunTest()` resets `g_HostInit` to the default afterwards:
 
 | Variable | Purpose |
 |----------|---------|
-| `g_HostInit` | `HOST_TASKS_DEFAULT` (tests 1–8, 25), `HOST_TASKS_CONFIG` (tests 9–14), `HOST_POLLED` (tests 15–24) |
-| `g_ConfigParam` / `g_PolledParam` | Scenario id of `ConfigTask` (`CF_*`) / `PolledTask` (`PL_*`) |
+| `g_HostInit` | `HOST_TASKS_DEFAULT` (tests 1–8, 28–33), `HOST_TASKS_CONFIG` (tests 9–14), `HOST_POLLED` (tests 15–27) |
+| `g_ConfigParam` / `g_PolledParam` / `g_SyncParam` | Scenario id of `ConfigTask` (`CF_*`) / `PolledTask` (`PL_*`) / `SyncTask` (`SY_*`) |
 | `g_InitResult` | `EAddResult` returned by `Initialize()` in `InitHost()` |
 | `g_ExtTickStack`, `g_ExtHandlerStack[]` | External stack buffers used by the `Config` scenarios |
 | `g_InProcess`, `g_InlineCount` | `true` while the poller is inside `Process()` / number of callbacks which ran in that state (proves inline execution) |
 | `g_PolledDone` | Event set by the poller when its scenario is complete |
+| `g_SyncDone` | Event set by task 1 of `SyncTask` when its scenario is complete |
+| `g_CbStarted`, `g_CbDone` | `SlowTimer` callback: event signaled on entry / flag set as its last action (proves a callback is running, and that it has returned) |
+| `g_CbResult` | Result of the `StopSync()` which `SelfStopTimer` issues from its own callback |
 
-Both groups run in the same way as the others: task 1 does the work, task 0 verifies. Polled scenarios always end with `Shutdown()` and one more `Process()`, which releases all timers because `g_TimerHost` is shared with the following tests.
+All groups run in the same way as the others: task 1 does the work, task 0 verifies. Polled scenarios always end with `Shutdown()` and one more `Process()`, which releases all timers because `g_TimerHost` is shared with the following tests.
 
 `NeedsExtendedTasks` returns `false` for `StressTest` (uses all 5 tasks), `true` for all others (use only tasks 0–1).
 
@@ -172,7 +188,7 @@ Both groups run in the same way as the others: task 1 does the work, task 0 veri
 
 ## Platform Notes
 
-On **Cortex-M0** (`__ARM_ARCH_6M__`) the device has insufficient RAM to link eleven distinct task class templates simultaneously. Tests 1–24 are skipped on M0 and only `StressTest` (test 25) runs; the rest is under `#ifndef __ARM_ARCH_6M__`.
+On **Cortex-M0** (`__ARM_ARCH_6M__`) the device has insufficient RAM to link twelve distinct task class templates simultaneously. Tests 1–32 are skipped on M0 and only `StressTest` (test 33) runs; the rest is under `#ifndef __ARM_ARCH_6M__`.
 
 `StressTest` runs on M0 because it uses a single task class template (`StressTestTask`) instantiated for all five task slots, fitting within the available memory.
 
@@ -280,7 +296,7 @@ For test 14 the host is not usable and task 1 only reports success; no host task
 
 ---
 
-### Tests 15–24 — Polled mode (`PolledTask`)
+### Tests 15–27 — Polled mode (`PolledTask`)
 **Tasks:** 0–1 &nbsp;|&nbsp; **Param:** scenario `PL_*` selected by `g_PolledParam` &nbsp;|&nbsp; **Host init:** `HOST_POLLED` (`InitializePolled()`)
 
 There are no host tasks. Task 1 is the only caller of `Process()` and runs the scenario, polling every 2 ticks (`PollOnce()` / `PollFor()` / `PollUntilCount()`); `PolledTimer` additionally counts the callbacks which ran while the poller was inside `Process()`. Task 0 only waits (up to 3000ms) for `g_PolledDone`. Each scenario returns a `bool` and always ends with `Shutdown()` plus one `Process()`.
@@ -297,15 +313,37 @@ There are no host tasks. Task 1 is the only caller of `Process()` and runs the s
 | 22 | `Polled_SelfReArm` | `PL_SELF_REARM` | the callback of a one-shot timer re-starts itself (20 ticks) until 3 expirations (`ReArmTimer`) | 3 expirations, all inline, timer inactive: commands issued from a callback are applied by the next `Process()` and a one-shot timer can restart itself |
 | 23 | `Polled_ShutdownReuse` | `PL_SHUTDOWN_REUSE` | two periodic timers (30 / 40ms), `Shutdown()`, then `Start(20)` again | `GetSize() == 2` before and `0` after `Shutdown()`, both timers inactive, nothing fires for 100ms, then 1 expiration: the host stays usable |
 | 24 | `Polled_IdleNoBlock` | `PL_IDLE_NO_BLOCK` | three `Process()` calls with no active timer and no command | each returns `WAIT_INFINITE`, total time `< 30`ms (a blocking read would hang): guards the polled-mode exception to the "sleep forever when nothing is active" rule |
+| 25 | `Polled_SyncQueued` | `PL_SYNC_QUEUED` | `StartSync(100)`, `QuerySync()`, `Process()`, `QuerySync()`, `StopSync()`, `Process()` | both `StartSync()` and `StopSync()` return `RES_QUEUED` (no one can complete a command in this mode, so they do not wait); `QuerySync()` is an advisory snapshot: inactive before the first `Process()`, then active with `delay == 100`, `period == 0`, `remaining` in `(0, 100]`; inactive after the stop, never fired |
+| 26 | `Polled_AsyncResults` | `PL_ASYNC_RESULTS` | Result codes of the asynchronous API: commands are applied only by `Process()`, so the precondition checks see a known state | `Start()` → `RES_OK` (queued), `Stop()` before the `Process()` → `RES_INACTIVE`; on an active one-shot: `Start()` → `RES_ACTIVE`, `Reset()` / `SetPeriod(50)` → `RES_NOT_PERIODIC`; `SetPeriod(0)`, `SetPeriod(WAIT_INFINITE + 1)` and `SetPeriodSync(0)` → `RES_INVALID_PARAM`; on an inactive timer: `Stop()` / `Reset()` / `SetPeriod(50)` → `RES_INACTIVE`; `Restart()` / `StartOrReset()` → `RES_OK` (the second is merged into the first); on an active periodic timer `Reset()` and `SetPeriod(50)` → `RES_OK`, and the period is 50 afterwards; no expiration |
+| 27 | `Polled_QueueFull` | `PL_QUEUE_FULL` | `Start()` repeatedly on an inactive timer without calling `Process()` until the command queue is full | the queue fills within `STK_TIMER_COMMAND_QUEUE_SIZE` commands and the next call returns `RES_QUEUE_FULL` (polled mode cannot wait: no block, no assertion); `Restart()`, `StartOrReset()`, `StartSync()` and `StopSync()` also return `RES_QUEUE_FULL`; after `Process()` drained the queue (one timer active) `Restart()` and `Stop()` return `RES_OK` again, i.e. the failed `Restart()` left no stale "re-arm queued" mark; no expiration. The exact capacity is not asserted, only that it does not exceed the macro |
 
-**Pass condition (all ten):** the scenario function returns `true` and `g_PolledDone` was set in time (`g_TestResult == 1`)
+**Pass condition (all thirteen):** the scenario function returns `true` and `g_PolledDone` was set in time (`g_TestResult == 1`)
 
 ---
 
-### Test 25 — `StressTest`
+### Tests 28–32 — Synchronous API (`SyncTask`)
+**Tasks:** 0–1 &nbsp;|&nbsp; **Param:** scenario `SY_*` selected by `g_SyncParam` &nbsp;|&nbsp; **Host init:** default (task mode)
+
+Task 1 runs the scenario (`bool`), task 0 waits up to 3000ms for `g_SyncDone`, checks the result and calls `Shutdown()`. The tests which need a running callback use `SlowTimer`, whose `OnExpired()` signals `g_CbStarted`, sleeps 80 ticks and sets `g_CbDone` as its very last action; it does not touch `g_ExpiredCount`.
+
+| # | Test | Scenario | What it does | Pass condition |
+|---|------|----------|--------------|----------------|
+| 28 | `Sync_Basic` | `SY_BASIC` | Runs every synchronous command and checks its result | `StartSync()` → `RES_OK`, again → `RES_ACTIVE`; `QuerySync()` consistent (`active`, `delay`, `period`, `remaining`); `ChangeSync()` of an active timer → `RES_ACTIVE`; `StopSync()` → `RES_OK` then `RES_INACTIVE`; `ResetSync()` / `SetPeriodSync()` of an inactive timer → `RES_INACTIVE`; `ChangeSync()` stores the values without starting; `ActivateSync()` fires 25–50ms later; `ResetSync()` / `SetPeriodSync()` of an active one-shot → `RES_NOT_PERIODIC`; of an active periodic timer → `RES_OK`; `SetPeriodSync(0)` → `RES_INVALID_PARAM`; `QuerySync()` then shows the new period |
+| 29 | `Sync_StopWaits` | `SY_STOP_WAITS` | `StartSync(20)` of a `SlowTimer`, wait until its callback has started, then `StopSync()` | returns `RES_INACTIVE` (the one-shot already expired) only after the callback has returned (`g_CbDone` set, at least 50ms spent in the call), timer inactive |
+| 30 | `Sync_StopSelf` | `SY_STOP_SELF` | a 20ms periodic `SelfStopTimer` stops itself with `StopSync()` from its own callback | no deadlock; the call returns `RES_OK` (stored in `g_CbResult`); exactly one expiration in the following 100ms, timer inactive |
+| 31 | `Sync_StopQueued` | `SY_STOP_QUEUED` | the only handler task is busy in a `SlowTimer` callback while a 20ms one-shot expires and stays in the ready list; `StopSync()` of the one-shot | returns `RES_INACTIVE`; the cancelled callback never runs (`g_ExpiredCount == 0` after the slow callback finished); the timer can be started again and fires exactly once |
+| 32 | `Sync_NotReady` | `SY_NOT_READY` | `Shutdown()` (the only command queued), 100ms pause until the tick task has exited, then every kind of call | `Shutdown()` → `RES_OK`; afterwards `Start()`, `Restart()`, `Shutdown()`, `StartSync()`, `StopSync()` and `QuerySync()` all return `RES_NOT_READY` and queue nothing (a sync call would hang on a command which nobody completes), the timer stays inactive, `GetSize() == 0`. The shared host is initialized again by the next test |
+
+**Pass condition (all five):** the scenario function returns `true` and `g_SyncDone` was set in time (`g_TestResult == 1`)
+
+> `Sync_StopQueued` assumes `_STK_TIMER_THREADS_COUNT == 1` (the default): with more handler tasks a second handler would run the queued timer instead of leaving it in the ready list.
+
+---
+
+### Test 33 — `StressTest`
 **Tasks:** 0–4 — **runs on all platforms including Cortex-M0** &nbsp;|&nbsp; **Param:** `iterations = 20`
 
-All five tasks run 20 iterations each. Each task manages its own dedicated `TestTimer` instance (timer0–timer4 with corresponding IDs). On each iteration, a task starts its timer with a delay of `10 + (task_id × 10)` ms (task 0 = 10ms, task 1 = 20ms, ..., task 4 = 50ms), waits for that specific timer to fire (busy-wait on `g_LastExpired[m_task_id]` event), increments a per-task counter if the global `g_ExpiredCount` increased (confirming a firing occurred), stops its timer, and paces every 5th iteration with a 1ms sleep to avoid overwhelming the command queue. Task 4 is also the verifier: it waits for all 5 tasks to complete (waits on `g_SharedCounter == 5`), then verifies each task's per-task counter equals 20 (each task's timer fired all 20 times without loss). Confirms no data corruption or timer loss under full five-task contention with varying timer delays. It runs last, in task mode again after the polled tests, which also confirms that `Initialize()` switches the host back from polled mode.
+All five tasks run 20 iterations each. Each task manages its own dedicated `TestTimer` instance (timer0–timer4 with corresponding IDs). On each iteration, a task starts its timer with a delay of `10 + (task_id × 10)` ms (task 0 = 10ms, task 1 = 20ms, ..., task 4 = 50ms), waits for that specific timer to fire (busy-wait on `g_LastExpired[m_task_id]` event), increments a per-task counter if the global `g_ExpiredCount` increased (confirming a firing occurred), stops its timer, and paces every 5th iteration with a 1ms sleep to avoid overwhelming the command queue. Task 4 is also the verifier: it waits for all 5 tasks to complete (waits on `g_SharedCounter == 5`), then verifies each task's per-task counter equals 20 (each task's timer fired all 20 times without loss). Confirms no data corruption or timer loss under full five-task contention with varying timer delays. It runs last, in task mode again after the polled and synchronous tests, which also confirms that `Initialize()` switches the host back from polled mode.
 
 **Pass condition:** all five per-task counters equal 20 (100 total firings, no loss)
 
@@ -339,4 +377,12 @@ All five tasks run 20 iterations each. Each task manages its own dedicated `Test
 | 22 | `Polled_SelfReArm` | 0–1 | 3 expirations, all inline | Callback re-starts its own one-shot timer |
 | 23 | `Polled_ShutdownReuse` | 0–1 | timers released, host reusable | `Shutdown()` in polled mode |
 | 24 | `Polled_IdleNoBlock` | 0–1 | `WAIT_INFINITE`, returns within 30ms | `Process()` never blocks when idle |
-| 25 | `StressTestTask` | 0–4 | `all counters == 20` | No loss or corruption under full contention; 5 tasks × 20 iterations = 100 firings; runs on all platforms |
+| 25 | `Polled_SyncQueued` | 0–1 | `RES_QUEUED` from the sync calls | Sync API cannot wait in polled mode; `QuerySync()` is advisory |
+| 26 | `Polled_AsyncResults` | 0–1 | exact `EResult` of every asynchronous command | `RES_OK`, `RES_ACTIVE`, `RES_INACTIVE`, `RES_NOT_PERIODIC`, `RES_INVALID_PARAM` of the asynchronous API |
+| 27 | `Polled_QueueFull` | 0–1 | `RES_QUEUE_FULL` from every command kind | Full command queue in a context which cannot wait gives an error (no block, no assert) and leaves no stale re-arm mark |
+| 28 | `Sync_Basic` | 0–1 | exact `EResult` of every command | Results of `StartSync`, `StopSync`, `RestartSync`, `ResetSync`, `SetPeriodSync`, `ChangeSync`, `ActivateSync`, `QuerySync` |
+| 29 | `Sync_StopWaits` | 0–1 | `StopSync()` returns after the running callback | `StopSync()` waits for a callback which is already running |
+| 30 | `Sync_StopSelf` | 0–1 | no deadlock, `RES_OK`, one expiration | A callback can stop its own timer with `StopSync()` |
+| 31 | `Sync_StopQueued` | 0–1 | queued expiration cancelled, restart works | `StopSync()` removes an expiration waiting in the ready list |
+| 32 | `Sync_NotReady` | 0–1 | `RES_NOT_READY` from every call kind | A stopped host rejects asynchronous and synchronous commands without queuing them |
+| 33 | `StressTestTask` | 0–4 | `all counters == 20` | No loss or corruption under full contention; 5 tasks × 20 iterations = 100 firings; runs on all platforms |

@@ -505,10 +505,10 @@ typedef struct
 /// of uintptr_t to enforce natural alignment without exposing FrtosTimer internals.
 /// Size is conservative: covers FrtosTimer (vtable ptr + base + 5 members) on
 /// all supported targets.
-#define STATIC_TIMER_TCB_SIZE_WORDS  16U
+#define STATIC_TIMER_TCB_SIZE_WORDS  10U
 typedef struct
 {
-    uintptr_t _opaque[STATIC_TIMER_TCB_SIZE_WORDS];
+    uint64_t _opaque[STATIC_TIMER_TCB_SIZE_WORDS]; // requires 64-bit alignment for stk::time::TimerHost::Timer
 } StaticTimer_t;
 
 /// Opaque buffer type that the caller must supply for xEventGroupCreateStatic().

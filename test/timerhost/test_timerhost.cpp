@@ -56,7 +56,7 @@ static time::TimerHost g_TimerHost;
 /*! \class TestTimer
     \brief Concrete timer implementation that increments g_ExpiredCount on each expiry.
 */
-class TestTimer : public time::TimerHost::Timer
+class TestTimer : public time::Timer
 {
     uint8_t m_timer_id;
 
@@ -698,6 +698,16 @@ static const int32_t PL_OVERDUE           = 7;
 static const int32_t PL_SELF_REARM        = 8;
 static const int32_t PL_SHUTDOWN_REUSE    = 9;
 static const int32_t PL_IDLE_NO_BLOCK     = 10;
+static const int32_t PL_SYNC_QUEUED       = 11;
+static const int32_t PL_ASYNC_RESULTS     = 12;
+static const int32_t PL_QUEUE_FULL        = 13;
+
+// synchronous API scenarios (see SyncTask)
+static const int32_t SY_BASIC             = 1;
+static const int32_t SY_STOP_WAITS        = 2;
+static const int32_t SY_STOP_SELF         = 3;
+static const int32_t SY_STOP_QUEUED       = 4;
+static const int32_t SY_NOT_READY         = 5;
 
 // external stack buffers for the Config scenarios
 typedef StackMemoryDef<time::TimerHost::TASK_TICK_MEMORY_SIZE>::Type   ExtTickStack;
@@ -710,6 +720,13 @@ static ExtHandlerStack g_ExtHandlerStack[STK_TIMER_THREADS_COUNT];
 static volatile bool    g_InProcess   = false; // true while the poller is inside TimerHost::Process()
 static volatile int32_t g_InlineCount = 0;     // number of OnExpired() calls made while g_InProcess was set
 static sync::Event      g_PolledDone;
+
+// synchronous API state
+static volatile int32_t g_SyncParam = 0;      // scenario of SyncTask
+static volatile bool    g_CbDone    = false;  // set when the callback of SlowTimer returned
+static volatile int32_t g_CbResult  = -100;   // result of StopSync() issued by the callback of SelfStopTimer
+static sync::Event      g_CbStarted;          // signaled when the callback of SlowTimer started
+static sync::Event      g_SyncDone;           // signaled by the scenario task when it is finished
 
 /*! \class PolledTimer
     \brief TestTimer which also counts the callbacks executed inline from TimerHost::Process().
@@ -753,6 +770,49 @@ static PolledTimer g_PolledTimer1(1);
 static PolledTimer g_PolledTimer2(2);
 static ReArmTimer  g_PolledReArm(3, 3);
 static TestTimer   g_ConfigTimer(1);
+
+/*! \class SlowTimer
+    \brief Timer whose callback blocks (sleeps) for \a block_ms, so that it can be observed while it is running.
+    \note  Does not touch g_ExpiredCount: it signals g_CbStarted on entry and sets g_CbDone as its very last action.
+*/
+class SlowTimer : public time::Timer
+{
+    int32_t m_block_ms;
+
+public:
+    SlowTimer(int32_t block_ms) : m_block_ms(block_ms)
+    {}
+
+    void OnExpired(time::TimerHost */*host*/)
+    {
+        g_CbStarted.Set();
+        stk::Sleep(m_block_ms);
+        g_CbDone = true;
+    }
+};
+
+/*! \class SelfStopTimer
+    \brief TestTimer which stops itself synchronously from its own callback (StopSync() must not wait for the
+           callback which is issuing it) and stores the result in g_CbResult.
+*/
+class SelfStopTimer : public TestTimer
+{
+public:
+    SelfStopTimer(uint8_t timer_id) : TestTimer(timer_id)
+    {}
+
+    void OnExpired(time::TimerHost *host)
+    {
+        TestTimer::OnExpired(host);
+
+        g_CbResult = static_cast<int32_t>(host->StopSync(*this));
+    }
+};
+
+static TestTimer     g_SyncTimer(1);
+static TestTimer     g_SyncTimerB(2);
+static SlowTimer     g_SlowTimer(80);
+static SelfStopTimer g_SelfStopTimer(1);
 
 /*! \class StackProbeTask
     \brief Minimal task which owns no stack but reports an existing buffer as its stack (never runs).
@@ -1149,6 +1209,126 @@ static bool PolledIdleNoBlock()
     return ok && ((GetTimeNowMs() - start) < 30);
 }
 
+static bool PolledSyncQueued()
+{
+    time::TimerHost::TimerInfo info = {};
+
+    // no tick task completes a command in polled mode, so a synchronous call can not wait: it queues the
+    // command and the outcome is unknown to the caller
+    bool ok = (g_TimerHost.StartSync(g_PolledTimer1, 100) == time::TimerHost::RES_QUEUED);
+
+    // QuerySync() is an advisory snapshot taken in the caller's context: the Start is not applied yet
+    ok = ok && (g_TimerHost.QuerySync(g_PolledTimer1, info) == time::TimerHost::RES_OK) && !info.active;
+
+    PollOnce(); // applies the queued Start
+
+    ok = ok && g_PolledTimer1.IsActive() &&
+        (g_TimerHost.QuerySync(g_PolledTimer1, info) == time::TimerHost::RES_OK) &&
+        info.active && (info.delay == 100) && (info.period == 0) && (info.remaining > 0) && (info.remaining <= 100);
+
+    ok = ok && (g_TimerHost.StopSync(g_PolledTimer1) == time::TimerHost::RES_QUEUED);
+
+    PollOnce(); // applies the queued Stop
+
+    return ok && !g_PolledTimer1.IsActive() && (g_ExpiredCount == 0);
+}
+
+static bool PolledAsyncResults()
+{
+    typedef time::TimerHost TH;
+
+    TH &host = g_TimerHost;
+    bool ok  = true;
+
+    // an accepted asynchronous command returns RES_OK ("queued"), its outcome is unknown to the caller.
+    // The checks see the state applied by the last Process(), commands are applied by it
+    ok = ok && (host.Start(g_PolledTimer1, 100) == TH::RES_OK);
+    ok = ok && (host.Stop(g_PolledTimer1) == TH::RES_INACTIVE); // the Start() is not applied yet
+
+    PollOnce();
+
+    ok = ok && g_PolledTimer1.IsActive();
+
+    // active one-shot timer
+    ok = ok && (host.Start(g_PolledTimer1, 100) == TH::RES_ACTIVE);
+    ok = ok && (host.Reset(g_PolledTimer1) == TH::RES_NOT_PERIODIC);
+    ok = ok && (host.SetPeriod(g_PolledTimer1, 50) == TH::RES_NOT_PERIODIC);
+
+    // an invalid period is reported first, whatever the state of the timer
+    ok = ok && (host.SetPeriod(g_PolledTimer1, 0) == TH::RES_INVALID_PARAM);
+    ok = ok && (host.SetPeriod(g_PolledTimer1, static_cast<uint32_t>(WAIT_INFINITE) + 1U) == TH::RES_INVALID_PARAM);
+    ok = ok && (host.SetPeriodSync(g_PolledTimer1, 0) == TH::RES_INVALID_PARAM);
+
+    ok = ok && (host.Stop(g_PolledTimer1) == TH::RES_OK);
+
+    PollOnce();
+
+    // inactive timer
+    ok = ok && !g_PolledTimer1.IsActive();
+    ok = ok && (host.Stop(g_PolledTimer1) == TH::RES_INACTIVE);
+    ok = ok && (host.Reset(g_PolledTimer1) == TH::RES_INACTIVE);
+    ok = ok && (host.SetPeriod(g_PolledTimer1, 50) == TH::RES_INACTIVE);
+
+    // commands which have no precondition are always queued
+    ok = ok && (host.Restart(g_PolledTimer1, 100) == TH::RES_OK);
+    ok = ok && (host.StartOrReset(g_PolledTimer1, 100) == TH::RES_OK);
+
+    PollOnce();
+
+    // active periodic timer: reset and set period are accepted
+    ok = ok && (host.Restart(g_PolledTimer1, 100, 100) == TH::RES_OK);
+
+    PollOnce();
+
+    ok = ok && (host.Reset(g_PolledTimer1) == TH::RES_OK);
+    ok = ok && (host.SetPeriod(g_PolledTimer1, 50) == TH::RES_OK);
+
+    PollOnce();
+
+    return ok && g_PolledTimer1.IsActive() && (g_PolledTimer1.GetPeriod() == 50) && (g_ExpiredCount == 0);
+}
+
+static bool PolledQueueFull()
+{
+    typedef time::TimerHost TH;
+
+    TH &host = g_TimerHost;
+    bool ok  = true;
+
+    // nothing applies the commands before Process(), the timer stays inactive, so every Start() is queued
+    size_t pushed = 0;
+    TH::EResult res;
+
+    do
+    {
+        res = host.Start(g_PolledTimer1, 100);
+
+        if (res == TH::RES_OK)
+            ++pushed;
+    }
+    while ((res == TH::RES_OK) && (pushed <= STK_TIMER_COMMAND_QUEUE_SIZE));
+
+    // the queue became full within its capacity and polled mode can not wait: an error, not a block or an assert
+    ok = ok && (res == TH::RES_QUEUE_FULL) && (pushed > 0) && (pushed <= STK_TIMER_COMMAND_QUEUE_SIZE);
+
+    // every kind of command gets the same error, nothing is queued
+    ok = ok && (host.Restart(g_PolledTimer1, 100) == TH::RES_QUEUE_FULL);
+    ok = ok && (host.StartOrReset(g_PolledTimer1, 100) == TH::RES_QUEUE_FULL);
+    ok = ok && (host.StartSync(g_PolledTimer1, 100) == TH::RES_QUEUE_FULL);
+    ok = ok && (host.StopSync(g_PolledTimer1) == TH::RES_QUEUE_FULL);
+
+    // a failed Restart() must not leave the timer marked as "re-arm queued": it works once there is room
+    PollOnce(); // drains the queue: the first Start() is applied, the others find the timer active
+
+    ok = ok && g_PolledTimer1.IsActive() && (host.GetSize() == 1);
+    ok = ok && (host.Restart(g_PolledTimer1, 100) == TH::RES_OK);
+    ok = ok && (host.Stop(g_PolledTimer1) == TH::RES_OK);
+
+    PollOnce();
+
+    return ok && !g_PolledTimer1.IsActive() && (host.GetSize() == 0) && (g_ExpiredCount == 0);
+}
+
 static bool RunPolledScenario(int32_t scenario)
 {
     switch (scenario)
@@ -1163,6 +1343,9 @@ static bool RunPolledScenario(int32_t scenario)
     case PL_SELF_REARM:        return PolledSelfReArm();
     case PL_SHUTDOWN_REUSE:    return PolledShutdownReuse();
     case PL_IDLE_NO_BLOCK:     return PolledIdleNoBlock();
+    case PL_SYNC_QUEUED:       return PolledSyncQueued();
+    case PL_ASYNC_RESULTS:     return PolledAsyncResults();
+    case PL_QUEUE_FULL:        return PolledQueueFull();
     default:                   return false;
     }
 }
@@ -1176,7 +1359,11 @@ static bool RunPolledScenario(int32_t scenario)
            6 = the return value of Process() (WAIT_INFINITE / ticks to the earliest deadline); 7 = an overdue
            periodic timer fires once per call until it has caught up (returns NO_WAIT meanwhile); 8 = a callback
            can re-start its own one-shot timer; 9 = Shutdown() stops all timers and the host stays usable;
-           10 = Process() never blocks when nothing is active. Task 0 only waits for the scenario to complete.
+           10 = Process() never blocks when nothing is active; 11 = the synchronous API can not wait in this
+           mode: commands are queued (RES_QUEUED) and QuerySync() is an advisory snapshot; 12 = result codes of the
+           asynchronous API (RES_OK, RES_ACTIVE, RES_INACTIVE, RES_NOT_PERIODIC, RES_INVALID_PARAM); 13 = a full
+           command queue gives RES_QUEUE_FULL in a context which can not wait.
+           Task 0 only waits for the scenario to complete.
            The scenario always ends with Shutdown() and one more Process() which releases all timers, because
            g_TimerHost is shared with the following tests.
 */
@@ -1216,6 +1403,221 @@ private:
     }
 };
 
+// Synchronous API scenarios (task 1 of SyncTask runs them, the host is in task mode)
+
+static bool SyncBasic()
+{
+    typedef time::TimerHost TH;
+
+    TH::TimerInfo info = {};
+    bool ok = true;
+
+    // start: the second start finds the timer active and changes nothing
+    ok = ok && (g_TimerHost.StartSync(g_SyncTimer, 100) == TH::RES_OK);
+    ok = ok && (g_TimerHost.StartSync(g_SyncTimer, 100) == TH::RES_ACTIVE);
+
+    // the snapshot is consistent and evaluated by the tick task
+    ok = ok && (g_TimerHost.QuerySync(g_SyncTimer, info) == TH::RES_OK);
+    ok = ok && info.active && (info.delay == 100) && (info.period == 0) && (info.remaining > 0) && (info.remaining <= 100);
+
+    // the parameters of an active timer can not be changed
+    ok = ok && (g_TimerHost.ChangeSync(g_SyncTimer, 30, 0) == TH::RES_ACTIVE);
+
+    // the outcome of a stop is exact: the result is valid as soon as the call returns
+    ok = ok && (g_TimerHost.StopSync(g_SyncTimer) == TH::RES_OK);
+    ok = ok && !g_SyncTimer.IsActive();
+    ok = ok && (g_TimerHost.StopSync(g_SyncTimer) == TH::RES_INACTIVE);
+    ok = ok && (g_TimerHost.ResetSync(g_SyncTimer) == TH::RES_INACTIVE);
+
+    // change stores the parameters of an inactive timer without starting it
+    ok = ok && (g_TimerHost.ChangeSync(g_SyncTimer, 30, 0) == TH::RES_OK);
+    ok = ok && (g_TimerHost.QuerySync(g_SyncTimer, info) == TH::RES_OK);
+    ok = ok && !info.active && (info.delay == 30) && (info.period == 0) && (info.remaining == 0);
+
+    // activate starts the timer with the stored parameters (one-shot, 30 ticks)
+    const int64_t start = GetTimeNowMs();
+
+    ok = ok && (g_TimerHost.ActivateSync(g_SyncTimer) == TH::RES_OK);
+    ok = ok && g_LastExpired[1].Wait(200);
+
+    const int64_t elapsed = g_ExpiredTime[1] - start;
+
+    ok = ok && (g_ExpiredCount == 1) && (elapsed >= 25) && (elapsed <= 50) && !g_SyncTimer.IsActive();
+
+    // reset of an active one-shot timer is rejected, of an active periodic timer it is accepted
+    ok = ok && (g_TimerHost.RestartSync(g_SyncTimer, 200, 0) == TH::RES_OK);
+    ok = ok && (g_TimerHost.ResetSync(g_SyncTimer) == TH::RES_NOT_PERIODIC);
+    ok = ok && (g_TimerHost.SetPeriodSync(g_SyncTimer, 30) == TH::RES_NOT_PERIODIC);
+    ok = ok && (g_TimerHost.RestartSync(g_SyncTimer, 20, 20) == TH::RES_OK);
+    ok = ok && (g_TimerHost.ResetSync(g_SyncTimer) == TH::RES_OK);
+
+    // set period: a zero period is rejected without queuing, an active periodic timer takes the new period
+    ok = ok && (g_TimerHost.SetPeriodSync(g_SyncTimer, 0) == TH::RES_INVALID_PARAM);
+    ok = ok && (g_TimerHost.SetPeriodSync(g_SyncTimer, 40) == TH::RES_OK);
+    ok = ok && (g_TimerHost.QuerySync(g_SyncTimer, info) == TH::RES_OK) && info.active && (info.period == 40);
+
+    ok = ok && (g_TimerHost.StopSync(g_SyncTimer) == TH::RES_OK);
+    ok = ok && !g_SyncTimer.IsActive();
+    ok = ok && (g_TimerHost.SetPeriodSync(g_SyncTimer, 40) == TH::RES_INACTIVE);
+
+    return ok;
+}
+
+static bool SyncStopWaits()
+{
+    typedef time::TimerHost TH;
+
+    // one-shot whose callback blocks for 80 ticks
+    bool ok = (g_TimerHost.StartSync(g_SlowTimer, 20) == TH::RES_OK);
+
+    ok = ok && g_CbStarted.Wait(500); // the callback is running now
+
+    const int64_t start = GetTimeNowMs();
+
+    // the timer has already expired (inactive) but its callback is still running: StopSync() must not return
+    // before the callback has returned, because the application is free to release the Timer afterwards
+    const TH::EResult res = g_TimerHost.StopSync(g_SlowTimer);
+
+    const bool    done   = g_CbDone;
+    const int64_t waited = GetTimeNowMs() - start;
+
+    ok = ok && (res == TH::RES_INACTIVE) && done && (waited >= 50) && !g_SlowTimer.IsActive();
+
+    return ok;
+}
+
+static bool SyncStopSelf()
+{
+    typedef time::TimerHost TH;
+
+    // periodic timer which stops itself from its own callback with StopSync(): the wait for a running callback
+    // is skipped for a callback (it would wait for itself), the call must complete and the timer must stop
+    bool ok = (g_TimerHost.StartSync(g_SelfStopTimer, 20, 20) == TH::RES_OK);
+
+    ok = ok && g_LastExpired[1].Wait(500);
+
+    stk::Sleep(100); // a periodic timer which was not stopped would fire ~5 more times
+
+    ok = ok && (g_ExpiredCount == 1) && !g_SelfStopTimer.IsActive() && (g_CbResult == static_cast<int32_t>(TH::RES_OK));
+
+    return ok;
+}
+
+static bool SyncStopQueued()
+{
+    typedef time::TimerHost TH;
+
+    // the only handler task is busy with the long callback of the slow timer ...
+    bool ok = (g_TimerHost.StartSync(g_SlowTimer, 10) == TH::RES_OK);
+
+    ok = ok && g_CbStarted.Wait(500);
+
+    // ... so the one-shot expires (~20 ticks) but its expiration stays queued in the ready list
+    ok = ok && (g_TimerHost.StartSync(g_SyncTimerB, 20) == TH::RES_OK);
+
+    stk::Sleep(40);
+
+    // the timer is a one-shot which already expired (inactive): the stop cancels the queued expiration
+    ok = ok && (g_TimerHost.StopSync(g_SyncTimerB) == TH::RES_INACTIVE);
+
+    // let the slow callback finish, the cancelled callback must not run afterwards
+    for (int32_t i = 0; (i < 50) && !g_CbDone; ++i)
+        stk::Sleep(_STK_TIMER_TEST_SHORT_SLEEP);
+
+    stk::Sleep(50);
+
+    ok = ok && g_CbDone && (g_ExpiredCount == 0);
+
+    // nothing queued is left behind: the timer can be started again and fires exactly once
+    ok = ok && (g_TimerHost.StartSync(g_SyncTimerB, 20) == TH::RES_OK);
+    ok = ok && g_LastExpired[2].Wait(200) && (g_ExpiredCount == 1);
+
+    return ok;
+}
+
+static bool SyncNotReady()
+{
+    typedef time::TimerHost TH;
+
+    TH &host = g_TimerHost;
+    TH::TimerInfo info = {};
+
+    // the only command queued by this scenario: nothing may stay in the queue after the host has stopped,
+    // g_TimerHost is shared with the following tests
+    bool ok = (host.Shutdown() == TH::RES_OK);
+
+    stk::Sleep(100); // the tick task processes CMD_SHUTDOWN and exits, the host has no consumer of the queue now
+
+    // every call reports the same state, asynchronous and synchronous, and queues nothing (a sync call would not
+    // return if it queued a command which nobody completes)
+    ok = ok && (host.Start(g_SyncTimer, 50) == TH::RES_NOT_READY);
+    ok = ok && (host.Restart(g_SyncTimer, 50) == TH::RES_NOT_READY);
+    ok = ok && (host.Shutdown() == TH::RES_NOT_READY);
+    ok = ok && (host.StartSync(g_SyncTimer, 50) == TH::RES_NOT_READY);
+    ok = ok && (host.StopSync(g_SyncTimer) == TH::RES_NOT_READY);
+    ok = ok && (host.QuerySync(g_SyncTimer, info) == TH::RES_NOT_READY);
+
+    return ok && !g_SyncTimer.IsActive() && (host.GetSize() == 0);
+}
+
+static bool RunSyncScenario(int32_t scenario)
+{
+    switch (scenario)
+    {
+    case SY_BASIC:       return SyncBasic();
+    case SY_STOP_WAITS:  return SyncStopWaits();
+    case SY_STOP_SELF:   return SyncStopSelf();
+    case SY_STOP_QUEUED: return SyncStopQueued();
+    case SY_NOT_READY:   return SyncNotReady();
+    default:             return false;
+    }
+}
+
+/*! \class SyncTask
+    \brief Tests the synchronous API (StartSync(), StopSync(), ...) and the guarantees of StopSync().
+    \note  Task 1 runs the scenario selected by g_SyncParam: 1 = results of all synchronous commands
+           (RES_OK / RES_ACTIVE / RES_INACTIVE / RES_NOT_PERIODIC / RES_INVALID_PARAM for SetPeriodSync(0)) and QuerySync(); 2 = StopSync() returns only after
+           a callback which is already running has returned; 3 = a callback can stop its own timer with StopSync()
+           without deadlock (the wait for a running callback is skipped in a callback); 4 = StopSync() cancels an
+           expiration which is queued for a busy handler task, the callback never runs and the timer can be started
+           again; 5 = after Shutdown() every call (asynchronous and synchronous) returns RES_NOT_READY and queues nothing.
+           Task 0 only waits for the scenario to complete and shuts the host down (RES_NOT_READY if it already is).
+*/
+template <EAccessMode _AccessMode>
+class SyncTask : public Task<_STK_TIMER_STACK_SIZE, _AccessMode>
+{
+    uint8_t m_task_id;
+
+public:
+    SyncTask(uint8_t task_id, int32_t) : m_task_id(task_id)
+    {}
+
+private:
+    void Run()
+    {
+        if (m_task_id == 1)
+        {
+            if (RunSyncScenario(g_SyncParam))
+                g_SharedCounter = 1;
+
+            g_SyncDone.Set();
+        }
+        else
+        if (m_task_id == 0)
+        {
+            const bool done = g_SyncDone.Wait(3000);
+
+            printf("sync %d: done=%d, count=%d, result=%d (expected 1)\n",
+                (int)g_SyncParam, (int)done, (int)g_ExpiredCount, (int)g_SharedCounter);
+
+            if (done && (g_SharedCounter == 1))
+                g_TestResult = 1;
+
+            g_TimerHost.Shutdown();
+        }
+    }
+};
+
 #endif // __ARM_ARCH_6M__
 
 // Helper function to reset test state
@@ -1236,6 +1638,10 @@ static void ResetTestState()
     g_InlineCount = 0;
     g_InitResult  = ADD_OK;
     g_PolledDone.Reset();
+    g_CbDone      = false;
+    g_CbResult    = -100;
+    g_CbStarted.Reset();
+    g_SyncDone.Reset();
 #endif
 }
 
@@ -1407,7 +1813,7 @@ int main(int argc, char **argv)
         }
     }
 
-    // Tests 15-24: polled mode, InitializePolled() and Process() (no host tasks)
+    // Tests 15-27: polled mode, InitializePolled() and Process() (no host tasks)
     {
         struct PolledCase { const char *name; int32_t param; };
 
@@ -1422,7 +1828,10 @@ int main(int argc, char **argv)
             { "Polled_Overdue",          PL_OVERDUE           },
             { "Polled_SelfReArm",        PL_SELF_REARM        },
             { "Polled_ShutdownReuse",    PL_SHUTDOWN_REUSE    },
-            { "Polled_IdleNoBlock",      PL_IDLE_NO_BLOCK     }
+            { "Polled_IdleNoBlock",      PL_IDLE_NO_BLOCK     },
+            { "Polled_SyncQueued",       PL_SYNC_QUEUED       },
+            { "Polled_AsyncResults",     PL_ASYNC_RESULTS     },
+            { "Polled_QueueFull",        PL_QUEUE_FULL        }
         };
 
         for (size_t i = 0; i < (sizeof(cases) / sizeof(cases[0])); ++i)
@@ -1437,9 +1846,33 @@ int main(int argc, char **argv)
         }
     }
 
+    // Tests 28-32: synchronous API (task mode again after the polled tests) and the guarantees of StopSync()
+    {
+        struct SyncCase { const char *name; int32_t param; };
+
+        static const SyncCase cases[] =
+        {
+            { "Sync_Basic",       SY_BASIC       },
+            { "Sync_StopWaits",   SY_STOP_WAITS  },
+            { "Sync_StopSelf",    SY_STOP_SELF   },
+            { "Sync_StopQueued",  SY_STOP_QUEUED },
+            { "Sync_NotReady",    SY_NOT_READY   }
+        };
+
+        for (size_t i = 0; i < (sizeof(cases) / sizeof(cases[0])); ++i)
+        {
+            g_SyncParam = cases[i].param;
+
+            if (RunTest<SyncTask<ACCESS_PRIVILEGED>>(cases[i].name, cases[i].param) != TestContext::SUCCESS_EXIT_CODE)
+                total_failures++;
+            else
+                total_success++;
+        }
+    }
+
 #endif // __ARM_ARCH_6M__
 
-    // Test 25: Stress test under full five-task contention with varying timer delays (task mode again after the polled tests)
+    // Test 33: Stress test under full five-task contention with varying timer delays (task mode again after the polled tests)
     if (RunTest<StressTestTask<ACCESS_PRIVILEGED>>("StressTest", 20) != TestContext::SUCCESS_EXIT_CODE)
         total_failures++;
     else
