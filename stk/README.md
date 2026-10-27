@@ -73,9 +73,9 @@ stk/
 │   │   ├── stk_sync_fastmutex.h  ← FastMutex (non-recursive)
 │   │   ├── stk_sync_spinlock.h   ← SpinLock (recursive)
 │   │   ├── stk_sync_rwmutex.h    ← RWMutex (reader-writer)
-│   │   ├── stk_sync_semaphore.h  ← Semaphore (counting)
+│   │   ├── stk_sync_semaphore.h  ← SemaphoreT<T> / Semaphore (counting)
 │   │   ├── stk_sync_event.h      ← Event (binary, auto/manual reset)
-│   │   ├── stk_sync_eventflags.h ← EventFlags (32-bit multi-flag)
+│   │   ├── stk_sync_eventflags.h ← EventFlagsT<T> / EventFlags (multi-flag, 8/16/32/64-bit)
 │   │   ├── stk_sync_pipe.h       ← Pipe<T, N> (typed FIFO)
 │   │   ├── stk_sync_msgqueue.h   ← MessageQueue / MessageQueueT<N,MSG>
 │   │   └── stk_sync_barrier.h    ← Barrier (cyclic rendezvous)
@@ -554,9 +554,11 @@ Requires `KERNEL_SYNC` in the kernel mode bitmask for most primitives. `ScopedCr
 | `sync::FastMutex`             | `stk_sync_fastmutex.h`  | Non-recursive (binary) mutex, smaller and faster than `Mutex`. Self-lock fails/asserts. FIFO handover                              |
 | `sync::SpinLock`              | `stk_sync_spinlock.h`   | Recursive spinlock for ultra-short sections. ISR-unsafe                                                                            |
 | `sync::RWMutex`               | `stk_sync_rwmutex.h`    | Non-recursive reader-writer lock with writer-preference policy. RAII guards included                                               |
-| `sync::Semaphore`             | `stk_sync_semaphore.h`  | Counting semaphore with direct handover on `Signal()`                                                                              |
+| `sync::SemaphoreT<T>`         | `stk_sync_semaphore.h`  | Counting semaphore with a selectable unsigned counter type (`uint8_t`/`uint16_t`/`uint32_t`/`uint64_t`). Direct handover on `Signal()`, `TrySignal()` (optionally with a per-call ceiling) |
+| `sync::Semaphore`             | `stk_sync_semaphore.h`  | `typedef SemaphoreT<uint16_t> Semaphore`: default counting semaphore with a 16-bit counter (max count 0xFFFF)                      |
 | `sync::Event`                 | `stk_sync_event.h`      | Binary signal. Auto-reset or manual-reset. `Set`, `Reset`, `Wait`, `TryWait`, `Pulse`                                              |
-| `sync::EventFlags`            | `stk_sync_eventflags.h` | 32-bit multi-flag group. `OPT_WAIT_ANY` / `OPT_WAIT_ALL` / `OPT_NO_CLEAR`. Error sentinels                                         |
+| `sync::EventFlagsT<T>`        | `stk_sync_eventflags.h` | Multi-flag group with a selectable unsigned flags word (`uint8_t`/`uint16_t`/`uint32_t`/`uint64_t`; MSB reserved for errors, so 7/15/31/63 usable flags). `OPT_WAIT_ANY` / `OPT_WAIT_ALL` / `OPT_NO_CLEAR`. Error sentinels. `Set`, `Clear`, `And`, `Get`, `Wait`, `WaitEx`, `Sync` (rendezvous) |
+| `sync::EventFlags`            | `stk_sync_eventflags.h` | `typedef EventFlagsT<uint32_t> EventFlags`: default 32-bit group (31 usable flags), source-compatible with earlier releases        |
 | `sync::Pipe<T, N>`            | `stk_sync_pipe.h`       | Typed FIFO ring-buffer. Single-element and bulk read/write. `memcpy` fast-path for scalars                                         |
 | `sync::MessageQueue`          | `stk_sync_msgqueue.h`   | Opaque-message FIFO over external buffer. `Put/Get`, `TryPut/TryGet`, `Reset`                                                      |
 | `sync::Barrier`               | `stk_sync_barrier.h`    | Cyclic rendezvous point for a fixed-size group of tasks. `Wait` returns `true` for the last arriver; `WaitEx` reports cancellation |
@@ -568,14 +570,40 @@ Requires `KERNEL_SYNC` in the kernel mode bitmask for most primitives. `ScopedCr
 |------------------------------------------------------------|-------------------------------------------------------------------|
 | `ScopedCriticalSection`                                    | All                                                               |
 | `Event`                                                    | `Set()`, `Pulse()`, `Reset()`, `TryWait()`                        |
-| `EventFlags`                                               | `Set()`, `Clear()`, `Get()`, `TryWait()`, `Wait(NO_WAIT)`         |
-| `Semaphore`                                                | `Signal()`, `TryWait()`                                           |
+| `EventFlagsT<T>` / `EventFlags`                            | `Set()`, `Clear()`, `And()`, `Get()`, `TryWait()`, `TryWaitEx()`, `Wait(NO_WAIT)` |
+| `SemaphoreT<T>` / `Semaphore`                              | `Signal()`, `TrySignal()`, `TryWait()`, `GetCount()`              |
 | `ConditionVariable`                                        | `NotifyOne()`, `NotifyAll()`, `Wait(NO_WAIT)`                     |
 | `Pipe`                                                     | All `Try*` and `NO_WAIT` variants                                 |
 | `MessageQueue`                                             | `Put(NO_WAIT)`, `TryPut()`, `Get(NO_WAIT)`, `TryGet()`, `Reset()` |
 | `SpinLock` / `Mutex` / `FastMutex` / `RWMutex` / `Barrier` | None                                                              |
 
 > Calling a blocking method from an ISR is undefined behaviour. In debug builds `STK_ASSERT` halts execution if an ISR-unsafe method is called from interrupt context.
+
+> `EventFlagsT<T>::Get()` and `SemaphoreT<T>::GetCount()` are plain loads when `T` is not wider than a pointer; for wider types (e.g. `uint64_t` on a 32-bit MCU) they are read inside a critical section so the value cannot be torn. All flag/counter mutators always run inside the critical section.
+
+**`sync::EventFlagsT<T>` usage:**
+
+```cpp
+stk::sync::EventFlags            g_Flags;    // 32-bit, 31 usable flags
+stk::sync::EventFlagsT<uint64_t> g_Channels; // 64-bit, 63 usable flags
+stk::sync::EventFlagsT<uint8_t>  g_Small;    // 8-bit, 7 usable flags (object size may not shrink due to padding)
+
+uint32_t raised = g_Flags.Wait(FLAG_GPS | FLAG_IMU, stk::sync::EventFlags::OPT_WAIT_ALL, 5000);
+if (stk::sync::EventFlags::IsError(raised)) { /* ERROR_TIMEOUT, ERROR_CANCELED, ... */ }
+```
+
+**`sync::SemaphoreT<T>` usage:**
+
+```cpp
+stk::sync::Semaphore             g_Limiter(3);  // 16-bit counter (SemaphoreT<uint16_t>)
+stk::sync::SemaphoreT<uint8_t>   g_Slots(0, 8); // 8-bit counter, max count 8
+stk::sync::SemaphoreT<uint32_t>  g_Credits(0);  // 32-bit counter (e.g. bytes or credits)
+stk::sync::SemaphoreT<uint64_t>  g_Ticket(0);   // 64-bit counter
+
+if (g_Limiter.Wait(1000)) { /* ... */ g_Limiter.Signal(); }
+```
+
+> `T` must be an unsigned integer type for both `EventFlagsT<T>` and `SemaphoreT<T>` (enforced at compile time). Forward declarations written as `class EventFlags;` or `class Semaphore;` no longer compile, because both are now typedefs.
 
 For full API reference, C API (`stk_c.h`), C++ and C usage examples, and Eclipse project links, see [`include/sync/README.md`](include/sync/README.md).
 

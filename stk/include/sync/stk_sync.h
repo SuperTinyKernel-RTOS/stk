@@ -26,8 +26,8 @@
     | Primitive             | ISR Safe Methods                                                                                                                                   |
     | :-------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------- |
     | **Event**             | \c Set(), \c Pulse(), \c Reset(), \c TryWait()                                                                                                     |
-    | **EventFlags**        | \c Set(), \c Clear(), \c And(), \c Get(), \c TryWait(), \c Wait(NO_WAIT), \c TryWaitEx(), \c WaitEx(NO_WAIT), \c Sync(NO_WAIT)                     |
-    | **Semaphore**         | \c Signal(), \c TryWait()                                                                                                                          |
+    | **EventFlagsT**       | \c Set(), \c Clear(), \c And(), \c Get(), \c TryWait(), \c Wait(NO_WAIT), \c TryWaitEx(), \c WaitEx(NO_WAIT), \c Sync(NO_WAIT)                     |
+    | **Semaphore**         | \c Signal(), \c TrySignal(), \c TrySignal(ceiling), \c TryWait(), \c Wait(NO_WAIT), \c WaitEx(NO_WAIT), \c GetCount()                              |
     | **SpinLock**          | \c None                                                                                                                                            |
     | **Mutex**             | \c None                                                                                                                                            |
     | **FastMutex**         | \c None                                                                                                                                            |
@@ -38,6 +38,8 @@
     | **MessageQueue**      | \c Put(NO_WAIT), \c TryPut(), \c Get(NO_WAIT), \c TryGet(), \c Reset()                                                                             |
 
     NOTE:
+    - **EventFlagsT**: Applies to every flags type, including the default \c EventFlags typedef
+      (\c EventFlagsT<uint32_t>).
     - **SpinLock**, **Mutex**, **FastMutex**, **RWMutex**: Ownership is tied to a Task ID (\a TId).
       Since ISRs lack a valid Task ID context, and these primitives use internal Mutex 
       logic for state protection, their operations are never safe in ISRs.

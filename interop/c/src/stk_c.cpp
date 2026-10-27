@@ -7,19 +7,13 @@
  * License: MIT License, see LICENSE for a full text.
  */
 
-#include <cstddef> // for std::size_t
-
-#include "stk.h"
-#include "sync/stk_sync.h"
-#include "memory/stk_memory.h"
-
-#include "stk_c.h"
+#include <stk.h>
+#include "stk_c.h"              // must be included AFTER stk.h
 #include "stk_c_time.h"
-
-// Override STK_TIMER_COUNT_MAX with STK_C_TIMER_MAX.
-#undef STK_TIMER_COUNT_MAX
-#define STK_TIMER_COUNT_MAX (STK_C_TIMER_MAX)
-#include "time/stk_time.h"
+#include "stk_c_memory.h"
+#include <sync/stk_sync.h>
+#include <time/stk_time.h>      // must be included AFTER stk_c_time.h, see notes in stk_c_time.h
+#include <memory/stk_memory.h>  // for placement new
 
 // Check correctness of stk_config.h
 #ifndef STK_C_KERNEL_TYPE_CPU_0

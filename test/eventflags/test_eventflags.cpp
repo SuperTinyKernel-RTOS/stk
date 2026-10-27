@@ -1442,7 +1442,7 @@ static void ResetTestState(uint32_t initial_flags = 0U)
     }
 
     // Re-construct the EventFlags object in-place with the requested initial value
-    g_Flags.~EventFlags();
+    g_Flags.~EventFlagsT();
     new (&g_Flags) sync::EventFlags(initial_flags);
 
     for (int32_t i = 0; i < 2; ++i)

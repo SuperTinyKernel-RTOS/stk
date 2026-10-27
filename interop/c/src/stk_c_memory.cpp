@@ -7,15 +7,10 @@
  * License: MIT License, see LICENSE for a full text.
  */
 
-#include <cstddef> // for std::size_t
-
-#include <stk_config.h>
 #include <stk.h>
-#include <memory/stk_memory.h>
-#include <memory/stk_memory_bytepool.h>
-
-#include "stk_c.h"
+#include "stk_c.h" // must be included AFTER stk.h
 #include "stk_c_memory.h"
+#include <memory/stk_memory.h>
 
 using namespace stk;
 using namespace stk::memory;

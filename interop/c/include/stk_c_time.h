@@ -13,19 +13,34 @@
 #include "stk_c.h"
 
 /*! \file     stk_c_time.h
-    \brief    C language binding for stk::time::TimerHost and stk::time::TimerHost::Timer.
+    \brief    C language binding for stk::time::TimerHost and stk::time::Timer.
 
     One \a stk_timerhost_t instance is pre-allocated per CPU core (up to
     \a STK_C_CPU_COUNT cores).  Obtain a handle for a given core with
     \a stk_timerhost_get() before calling any other timer API.
 
-    Concrete timers (\a stk_timer_t) are allocated from a fixed-size static
-    pool of \a STK_C_TIMER_MAX slots shared across all cores.  Each timer
-    stores a user callback (\a stk_timer_callback_t) and an opaque user data
-    pointer that are forwarded when the timer expires.
+    Concrete timers (\a stk_timer_t) are standalone objects constructed in caller-supplied
+    memory (\a stk_timer_mem_t), exactly like the objects of the synchronization API
+    (stk_mutex_create(), stk_sem_create(), ...): there is no internal timer pool, so the number
+    of timers is limited only by the memory the application provides.  Each timer stores a user
+    callback (\a stk_timer_callback_t) and an opaque user data pointer that are forwarded when
+    the timer expires.
+
+    Typical usage:
+    \code
+    static stk_timer_mem_t tmr_mem;
+
+    static void OnTimer(stk_timerhost_t *host, stk_timer_t *tmr, void *user_data) { ... }
+
+    stk_timer_t *tmr = stk_timer_create(&tmr_mem, OnTimer, NULL);
+    if (stk_timer_start(stk_timerhost_get(0), tmr, 100, 100) != STK_TIMER_RES_OK)
+    {
+        // e.g. STK_TIMER_RES_NOT_READY, STK_TIMER_RES_QUEUE_FULL
+    }
+    \endcode
 
     \defgroup c_api_time STK C Timer API
-    \brief    Pure C interface for stk::time::TimerHost and stk::time::TimerHost::Timer.
+    \brief    Pure C interface for stk::time::TimerHost and stk::time::Timer.
     @{
 */
 
@@ -37,15 +52,26 @@ extern "C" {
 // Configuration macros
 // =============================================================================
 
-/*! \def   STK_C_TIMER_MAX
-    \brief Maximum number of concurrent \a stk_timer_t instances per core (default: 32).
-           The total pool size is \a STK_C_TIMER_MAX × \a STK_C_CPU_COUNT slots, shared
-           across all cores.  When the pool is exhausted \a stk_timer_create() asserts
-           in debug builds and returns NULL in release builds.
-    \note  Increase if your application needs more simultaneous timers.
+/*! \def   STK_C_COMMAND_QUEUE_MAX
+    \brief Capacity of the command queue of every \a stk_timerhost_t (default: 32), forwarded to
+           \c STK_TIMER_COMMAND_QUEUE_SIZE of the C++ implementation.
+    \note  It does NOT limit the number of timers: timers live in caller-supplied memory
+           (\a stk_timer_mem_t) and are only linked into the host while they are active.  The
+           queue holds the commands (\a stk_timer_start(), \a stk_timer_stop(), ...) which were
+           issued but not yet executed by the tick task, size it for the largest burst of commands
+           expected between two runs of the tick task.  When the queue is full a caller which can
+           wait (task context, task mode) blocks until a slot is free, any other caller gets
+           \a STK_TIMER_RES_QUEUE_FULL (see stk::time::TimerHost, "Command queue").
+    \note  Must have the same value in every translation unit of the application.
+    \note  For backward compatibility, if this macro is not defined but the deprecated STK_C_TIMER_MAX is,
+           the value of STK_C_TIMER_MAX is used.
 */
-#ifndef STK_C_TIMER_MAX
-    #define STK_C_TIMER_MAX (32U)
+#ifndef STK_C_TIMER_COMMAND_QUEUE_MAX
+    #ifdef STK_C_TIMER_MAX
+        #define STK_C_TIMER_COMMAND_QUEUE_MAX STK_C_TIMER_MAX
+    #else
+    #define STK_C_TIMER_COMMAND_QUEUE_MAX (32U)
+    #endif
 #endif
 
 /*! \def   STK_C_TIMER_HANDLER_STACK_SIZE
@@ -90,9 +116,47 @@ typedef struct stk_timerhost_config_t {
 */
 typedef struct stk_timerhost_t stk_timerhost_t;
 
+/*! \brief  A memory size (multiples of uint64_t) required for the \a stk_timer_t instance.
+    \note   The timer holds 64-bit tick values, the size covers LP64 targets (the 32-bit value is
+            sufficient for 32-bit ones, but one value keeps the memory type portable). Verified at
+            build time by ConstructIn() in stk_timer_create(), increase this value if it fails.
+*/
+#define STK_TIMER_IMPL_SIZE (14U)
+
+/*! \brief  Opaque memory container for a \a stk_timer_t instance.
+    \note   Declare as \c static or on the stack (not on the heap), it must outlive the timer.
+    \note   Aligned to 8 bytes because the timer holds 64-bit Ticks values.
+*/
+typedef struct stk_timer_mem_t {
+    uint64_t data[STK_TIMER_IMPL_SIZE] __stk_c_align(sizeof(uint64_t));
+} stk_timer_mem_t;
+
 /*! \brief  Opaque handle to a concrete timer managed by \a stk_timerhost_t.
 */
 typedef struct stk_timer_t stk_timer_t;
+
+/*! \brief  Outcome of a timer or host command, mirrors stk::time::TimerHost::EResult.
+    \note   Negative values are errors: nothing was queued. Positive values report the state of the
+            timer, or that the outcome is unknown. \a STK_TIMER_RES_OK is 0: a check like
+            \c if(stk_timer_start(...)) means "failed", compare with \a STK_TIMER_RES_OK explicitly.
+    \note   The control functions are asynchronous: \a STK_TIMER_RES_OK means the command was accepted
+            into the command queue, it is executed later by the tick task and its outcome is not
+            reported. The timer state checks (ACTIVE / INACTIVE / NOT_PERIODIC) are advisory: they
+            are evaluated from the state applied by the tick task so far. The synchronous functions
+            (\a stk_timer_start_sync() and the others) report the exact outcome instead.
+*/
+typedef enum stk_timer_result_t {
+    STK_TIMER_RES_CANCELLED     = -5, //!< The wait for a free command queue slot was cancelled, nothing is queued.
+    STK_TIMER_RES_INVALID_PARAM = -4, //!< An argument is out of range (e.g. zero period for stk_timer_set_period()).
+    STK_TIMER_RES_QUEUE_FULL    = -3, //!< Command queue is full and the caller can not wait (ISR, kernel not started, polled mode, tick task).
+    STK_TIMER_RES_NOT_READY     = -2, //!< Host is not initialized (or its initialization failed), or it has been shut down.
+    STK_TIMER_RES_FAIL          = -1, //!< Unspecified failure.
+    STK_TIMER_RES_OK            = 0,  //!< The command was accepted into the command queue.
+    STK_TIMER_RES_ACTIVE        = 1,  //!< The timer is active, but the command requires it to be inactive.
+    STK_TIMER_RES_INACTIVE      = 2,  //!< The timer is not active, but the command requires it to be active.
+    STK_TIMER_RES_NOT_PERIODIC  = 3,  //!< The timer is not periodic, but the command requires it to be.
+    STK_TIMER_RES_QUEUED        = 4   //!< Synchronous API only: the calling context can not wait, the command was queued asynchronously, its outcome is unknown.
+} stk_timer_result_t;
 
 /*! \brief     Timer expiration callback invoked from within the TimerHost handler task (task mode)
                or inline from \a stk_timerhost_process() (polled mode).
@@ -180,11 +244,12 @@ stk_timeout_t stk_timerhost_process(stk_timerhost_t *host);
 
 /*! \brief     Gracefully shut down the TimerHost.
     \param[in] host: TimerHost handle.
-    \return    \c true on success, \c false if the internal command queue is full.
+    \return    \a STK_TIMER_RES_OK if the request was accepted, otherwise the error, e.g.
+               \a STK_TIMER_RES_QUEUE_FULL or \a STK_TIMER_RES_NOT_READY (not initialized or already shut down).
     \note      All active timers are stopped.  Task mode: after shutdown the host must not be used until
                it is initialized again.  Polled mode: the host stays usable.
 */
-bool stk_timerhost_shutdown(stk_timerhost_t *host);
+stk_timer_result_t stk_timerhost_shutdown(stk_timerhost_t *host);
 
 /*! \brief     Return \c true when no timers are currently active on this host.
     \param[in] host: TimerHost handle.
@@ -208,22 +273,27 @@ int64_t stk_timerhost_get_time_now(const stk_timerhost_t *host);
 // Timer lifecycle
 // =============================================================================
 
-/*! \brief     Allocate a timer from the static pool.
+/*! \brief     Construct a timer in the supplied memory buffer.
+    \param[in] membuf: Pointer to the caller-supplied memory container, must not be NULL.
     \param[in] callback: Function to call when the timer expires (must not be NULL).
     \param[in] user_data: Opaque pointer forwarded to \a callback on expiration.
-    \return    Timer handle, or NULL if the pool is exhausted
-               (\a STK_C_TIMER_MAX × \a STK_C_CPU_COUNT slots total).
-    \note      The returned handle is valid until \a stk_timer_destroy() is called.
-               It must not be active (i.e. not currently started) when destroyed.
-    \note      The pool is shared across all CPU cores. Total capacity is
-               \a STK_C_TIMER_MAX * \a STK_C_CPU_COUNT.
+    \return    Timer handle on success, or NULL if \a membuf is NULL.
+    \note      The handle is valid until \a stk_timer_destroy() is called and \a membuf must stay valid
+               (not reused, not freed) for that time.  There is no limit on the number of timers.
+    \note      The timer is created inactive, start it with \a stk_timer_start().
 */
-stk_timer_t *stk_timer_create(stk_timer_callback_t callback, void *user_data);
+stk_timer_t *stk_timer_create(stk_timer_mem_t *const membuf,
+                              stk_timer_callback_t   callback,
+                              void                  *user_data);
 
-/*! \brief     Return a timer handle back to the static pool.
-    \param[in] tmr: Timer handle.
+/*! \brief     Destroy a timer (calls the C++ destructor in-place).
+    \param[in] tmr: Timer handle. May be NULL (no-op).
     \warning   The timer must have been stopped (or never started) before calling this.
                Destroying an active timer is a programming error and triggers an assertion.
+    \warning   The timer memory is owned by the caller and may be reused right after this call.  Stop the
+               timer with \a stk_timer_stop_sync() first: it returns only when the host holds no reference
+               to the timer and no callback of it is running.  The asynchronous \a stk_timer_stop() only
+               queues the request and gives no such guarantee.
 */
 void stk_timer_destroy(stk_timer_t *tmr);
 
@@ -236,29 +306,30 @@ void stk_timer_destroy(stk_timer_t *tmr);
     \param[in] tmr: Timer handle.  Must not already be active.
     \param[in] delay: Initial delay in ticks before the first expiration.
     \param[in] period: Reload period in ticks.  Pass 0 for a one-shot timer.
-    \return    \c true on success, \c false if the timer is already active or
-               the command queue is full.
+    \return    \a STK_TIMER_RES_OK if the command was accepted, otherwise the reason:
+               \a STK_TIMER_RES_ACTIVE, \a STK_TIMER_RES_NOT_READY, \a STK_TIMER_RES_QUEUE_FULL, ...
 */
-bool stk_timer_start(stk_timerhost_t *host,
-                     stk_timer_t     *tmr,
-                     uint32_t         delay,
-                     uint32_t         period);
+stk_timer_result_t stk_timer_start(stk_timerhost_t *host,
+                                   stk_timer_t     *tmr,
+                                   uint32_t         delay,
+                                   uint32_t         period);
 
 /*! \brief     Stop a running timer.
     \param[in] host: TimerHost managing the timer.
     \param[in] tmr: Timer handle.  Must be currently active.
-    \return    \c true on success, \c false if the timer is not active or
-               the command queue is full.
+    \return    \a STK_TIMER_RES_OK if the command was accepted, otherwise the reason:
+               \a STK_TIMER_RES_INACTIVE, \a STK_TIMER_RES_NOT_READY, \a STK_TIMER_RES_QUEUE_FULL, ...
 */
-bool stk_timer_stop(stk_timerhost_t *host, stk_timer_t *tmr);
+stk_timer_result_t stk_timer_stop(stk_timerhost_t *host, stk_timer_t *tmr);
 
 /*! \brief     Reset a periodic timer's deadline (re-arm from now).
     \param[in] host: TimerHost managing the timer.
     \param[in] tmr: Timer handle.  Must be active and periodic (period != 0).
-    \return    \c true on success, \c false if preconditions are not met or
-               the command queue is full.
+    \return    \a STK_TIMER_RES_OK if the command was accepted, otherwise the reason:
+               \a STK_TIMER_RES_INACTIVE, \a STK_TIMER_RES_NOT_PERIODIC, \a STK_TIMER_RES_NOT_READY,
+               \a STK_TIMER_RES_QUEUE_FULL, ...
 */
-bool stk_timer_reset(stk_timerhost_t *host, stk_timer_t *tmr);
+stk_timer_result_t stk_timer_reset(stk_timerhost_t *host, stk_timer_t *tmr);
 
 /*! \brief     Atomically stop and re-start a timer.
     \details   Unlike calling \a stk_timer_stop() + \a stk_timer_start(), this
@@ -269,12 +340,13 @@ bool stk_timer_reset(stk_timerhost_t *host, stk_timer_t *tmr);
     \param[in] tmr: Timer handle (active or inactive).
     \param[in] delay: Initial delay in ticks before the first expiration.
     \param[in] period: Reload period in ticks (0 = one-shot).
-    \return    \c true on success, \c false if the command queue is full.
+    \return    \a STK_TIMER_RES_OK if the command was accepted, otherwise the reason:
+               \a STK_TIMER_RES_NOT_READY, \a STK_TIMER_RES_QUEUE_FULL, ...
 */
-bool stk_timer_restart(stk_timerhost_t *host,
-                       stk_timer_t     *tmr,
-                       uint32_t         delay,
-                       uint32_t         period);
+stk_timer_result_t stk_timer_restart(stk_timerhost_t *host,
+                                     stk_timer_t     *tmr,
+                                     uint32_t         delay,
+                                     uint32_t         period);
 
 /*! \brief     Start the timer if inactive, or reset its deadline if already active and periodic.
     \details   Collapses the common pattern:
@@ -288,12 +360,13 @@ bool stk_timer_restart(stk_timerhost_t *host,
     \param[in] tmr: Timer handle (active or inactive).
     \param[in] delay: Initial delay in ticks (used only when starting).
     \param[in] period_ticks: Reload period in ticks (used only when starting, 0 = one-shot).
-    \return    \c true on success, \c false if the command queue is full.
+    \return    \a STK_TIMER_RES_OK if the command was accepted, otherwise the reason:
+               \a STK_TIMER_RES_NOT_READY, \a STK_TIMER_RES_QUEUE_FULL, ...
 */
-bool stk_timer_start_or_reset(stk_timerhost_t *host,
-                              stk_timer_t     *tmr,
-                              uint32_t         delay,
-                              uint32_t         period_ticks);
+stk_timer_result_t stk_timer_start_or_reset(stk_timerhost_t *host,
+                                            stk_timer_t     *tmr,
+                                            uint32_t         delay,
+                                            uint32_t         period_ticks);
 
 /*! \brief     Change the period of a running periodic timer without affecting the current deadline.
     \details   The new period takes effect on the next reload after the current deadline fires.
@@ -301,12 +374,147 @@ bool stk_timer_start_or_reset(stk_timerhost_t *host,
     \param[in] host: TimerHost managing the timer.
     \param[in] tmr: Timer handle.  Must be active and periodic.
     \param[in] period_ticks: New reload period in ticks.  Must be non-zero.
-    \return    \c true on success, \c false if preconditions are not met or
-               the command queue is full.
+    \return    \a STK_TIMER_RES_OK if the command was accepted, otherwise the reason:
+               \a STK_TIMER_RES_INVALID_PARAM, \a STK_TIMER_RES_INACTIVE, \a STK_TIMER_RES_NOT_PERIODIC,
+               \a STK_TIMER_RES_NOT_READY, \a STK_TIMER_RES_QUEUE_FULL, ...
 */
-bool stk_timer_set_period(stk_timerhost_t *host,
-                          stk_timer_t     *tmr,
-                          uint32_t         period_ticks);
+stk_timer_result_t stk_timer_set_period(stk_timerhost_t *host,
+                                        stk_timer_t     *tmr,
+                                        uint32_t         period_ticks);
+
+// =============================================================================
+// Timer control - synchronous API
+// =============================================================================
+
+/*! \brief  Consistent snapshot of a timer, see \a stk_timer_query_sync().
+*/
+typedef struct stk_timer_info_t {
+    bool     active;    //!< true if the timer is active.
+    uint32_t remaining; //!< Ticks until the next expiration, 0 if not active or overdue.
+    uint32_t delay;     //!< Initial delay stored by the last start / restart / change.
+    uint32_t period;    //!< Reload period in ticks, 0 for a one-shot timer.
+} stk_timer_info_t;
+
+/*! \defgroup c_api_timer_sync STK C Timer Synchronous API
+    \brief    Blocking variants of the timer control functions.
+    \details  The asynchronous functions above only queue a request and report whether it was accepted. The
+               functions below queue the same command together with a completion point and block the caller
+               until the tick task has executed it, so the result is the exact outcome of the command (e.g.
+               \a STK_TIMER_RES_ACTIVE for a timer which was already active).
+    \note     A call waits only where waiting is possible: task context, kernel running, task mode. From an ISR,
+               before the kernel is started, or in polled mode the command is queued asynchronously and
+               \a STK_TIMER_RES_QUEUED is returned (\a STK_TIMER_RES_QUEUE_FULL if the queue is full).
+    \note     A sync call blocks while the command queue is full instead of failing (see \a STK_C_TIMER_COMMAND_QUEUE_MAX).
+    \note     The tick task must be at least as urgent as every task which uses this API, see
+               \a stk_timerhost_config_t (weights).
+    \note     Callbacks may use this API in task mode (they run in handler tasks).
+    @{
+*/
+
+/*! \brief     Start a timer and wait for the result.
+    \param[in] host: TimerHost that will manage this timer.
+    \param[in] tmr: Timer handle.  Must not be active.
+    \param[in] delay: Initial delay in ticks before the first expiration (stored in the timer).
+    \param[in] period: Reload period in ticks, 0 for a one-shot timer (stored in the timer).
+    \return    \a STK_TIMER_RES_OK if started, \a STK_TIMER_RES_ACTIVE if already active (nothing is changed),
+               \a STK_TIMER_RES_QUEUED, or an error (\a STK_TIMER_RES_NOT_READY, \a STK_TIMER_RES_QUEUE_FULL,
+               \a STK_TIMER_RES_CANCELLED).
+*/
+stk_timer_result_t stk_timer_start_sync(stk_timerhost_t *host,
+                                        stk_timer_t     *tmr,
+                                        uint32_t         delay,
+                                        uint32_t         period);
+
+/*! \brief     Start a timer with the delay and period stored in it and wait for the result.
+    \param[in] host: TimerHost that will manage this timer.
+    \param[in] tmr: Timer handle.  Must not be active.
+    \return    As \a stk_timer_start_sync().
+    \note      The parameters are those of the last start, restart or \a stk_timer_change_sync(), the
+               expiration is relative to the moment of the call.
+*/
+stk_timer_result_t stk_timer_activate_sync(stk_timerhost_t *host, stk_timer_t *tmr);
+
+/*! \brief     Stop a timer and wait for the result.
+    \param[in] host: TimerHost managing the timer.
+    \param[in] tmr: Timer handle.
+    \return    \a STK_TIMER_RES_OK if it was active, \a STK_TIMER_RES_INACTIVE if it was not (e.g. a one-shot which
+               already expired; its queued callback is cancelled if it has not started yet),
+               \a STK_TIMER_RES_QUEUED, or an error (\a STK_TIMER_RES_NOT_READY, \a STK_TIMER_RES_QUEUE_FULL,
+               \a STK_TIMER_RES_CANCELLED).
+    \note      Also waits until a callback of this timer which a handler task has already started has returned:
+               after \a STK_TIMER_RES_OK / \a STK_TIMER_RES_INACTIVE the host holds no reference to the timer and
+               its memory (\a stk_timer_mem_t) may be released, see \a stk_timer_destroy().
+    \warning   Called from a timer callback it does not wait for running callbacks (deadlock guard): it only
+               guarantees that no further callback of the timer starts.  Do not release the timer from a
+               callback of another timer.
+*/
+stk_timer_result_t stk_timer_stop_sync(stk_timerhost_t *host, stk_timer_t *tmr);
+
+/*! \brief     Atomically stop and re-start a timer and wait for the result.
+    \param[in] host: TimerHost managing the timer.
+    \param[in] tmr: Timer handle (active or inactive).
+    \param[in] delay: Initial delay in ticks before the first expiration (stored in the timer).
+    \param[in] period: Reload period in ticks, 0 for a one-shot timer (stored in the timer).
+    \return    \a STK_TIMER_RES_OK, \a STK_TIMER_RES_QUEUED, or an error (\a STK_TIMER_RES_NOT_READY,
+               \a STK_TIMER_RES_QUEUE_FULL, \a STK_TIMER_RES_CANCELLED).
+*/
+stk_timer_result_t stk_timer_restart_sync(stk_timerhost_t *host,
+                                          stk_timer_t     *tmr,
+                                          uint32_t         delay,
+                                          uint32_t         period);
+
+/*! \brief     Reset a periodic timer's deadline (re-arm from now) and wait for the result.
+    \param[in] host: TimerHost managing the timer.
+    \param[in] tmr: Timer handle.  Must be active and periodic.
+    \return    \a STK_TIMER_RES_OK, \a STK_TIMER_RES_INACTIVE, \a STK_TIMER_RES_NOT_PERIODIC,
+               \a STK_TIMER_RES_QUEUED, or an error (\a STK_TIMER_RES_NOT_READY, \a STK_TIMER_RES_QUEUE_FULL,
+               \a STK_TIMER_RES_CANCELLED).
+*/
+stk_timer_result_t stk_timer_reset_sync(stk_timerhost_t *host, stk_timer_t *tmr);
+
+/*! \brief     Change the period of a running periodic timer without affecting the current deadline and
+               wait for the result.
+    \param[in] host: TimerHost managing the timer.
+    \param[in] tmr: Timer handle.  Must be active and periodic.
+    \param[in] period_ticks: New reload period in ticks.  Must be non-zero.
+    \return    \a STK_TIMER_RES_OK, \a STK_TIMER_RES_INACTIVE or \a STK_TIMER_RES_NOT_PERIODIC (nothing is changed),
+               \a STK_TIMER_RES_INVALID_PARAM (zero or too large period, nothing is queued),
+               \a STK_TIMER_RES_QUEUED, or an error (\a STK_TIMER_RES_NOT_READY, \a STK_TIMER_RES_QUEUE_FULL,
+               \a STK_TIMER_RES_CANCELLED).
+    \note      Unlike \a stk_timer_set_period() the state is evaluated by the tick task, so the outcome is exact.
+               The new period takes effect on the next reload, follow with \a stk_timer_reset_sync() to
+               apply it immediately.
+*/
+stk_timer_result_t stk_timer_set_period_sync(stk_timerhost_t *host,
+                                             stk_timer_t     *tmr,
+                                             uint32_t         period_ticks);
+
+/*! \brief     Change the delay and period of an inactive timer and wait for the result.
+    \param[in] host: TimerHost managing the timer.
+    \param[in] tmr: Timer handle.  Must not be active.
+    \param[in] delay: New initial delay in ticks.
+    \param[in] period: New reload period in ticks, 0 for a one-shot timer.
+    \return    \a STK_TIMER_RES_OK, \a STK_TIMER_RES_ACTIVE if the timer is active (nothing is changed),
+               \a STK_TIMER_RES_QUEUED, or an error (\a STK_TIMER_RES_NOT_READY, \a STK_TIMER_RES_QUEUE_FULL,
+               \a STK_TIMER_RES_CANCELLED).
+    \note      The timer is not started, the values are used by the next \a stk_timer_activate_sync().
+*/
+stk_timer_result_t stk_timer_change_sync(stk_timerhost_t *host,
+                                         stk_timer_t     *tmr,
+                                         uint32_t         delay,
+                                         uint32_t         period);
+
+/*! \brief      Get a consistent snapshot of a timer (evaluated by the tick task).
+    \param[in]  host: TimerHost managing the timer.
+    \param[in]  tmr: Timer handle.
+    \param[out] info: Snapshot, valid if the result is \a STK_TIMER_RES_OK.
+    \return     \a STK_TIMER_RES_OK, or \a STK_TIMER_RES_NOT_READY if the host is not initialized or has been shut down.
+    \note       From a context which can not wait the snapshot is read without synchronization and is advisory
+                (\a STK_TIMER_RES_OK is returned).
+*/
+stk_timer_result_t stk_timer_query_sync(stk_timerhost_t *host, stk_timer_t *tmr, stk_timer_info_t *info);
+
+/** @} */
 
 // =============================================================================
 // Timer query
@@ -375,7 +583,7 @@ uint32_t stk_timer_get_remaining_ticks(const stk_timer_t *tmr);
     \note   Aligned to 8 bytes due to PeriodicTrigger using 64-bit Ticks type.
 */
 typedef struct stk_periodic_trigger_mem_t {
-    stk_word_t data[STK_PERIODIC_TRIGGER_IMPL_SIZE] __attribute__((aligned(8U)));
+    stk_word_t data[STK_PERIODIC_TRIGGER_IMPL_SIZE] __stk_c_align(8U);
 } stk_periodic_trigger_mem_t;
 
 /*! \brief  Opaque handle to a \a stk::time::PeriodicTrigger instance.
@@ -446,22 +654,42 @@ uint32_t stk_periodic_trigger_get_period(const stk_periodic_trigger_t *trig);
 // =============================================================================
 // C++ instance access
 // =============================================================================
-// Deliberately outside the extern "C" block above: TimerHost::Timer is a
-// *nested* class, so unlike stk::memory::BlockMemoryPool (a top-level class,
-// forward-declarable on its own) it cannot be named until TimerHost itself is
-// a complete type. Pulling in the full definitions - and any templates or
-// free namespace-scope functions they declare - requires genuine C++ linkage,
-// which extern "C" would break. This section is invisible to C translation
-// units.
+// Deliberately outside the extern "C" block above: the namespace declarations
+// below require genuine C++ linkage, which extern "C" would break. This section
+// is invisible to C translation units.
+//
+// Only forward declarations are made here, the full definitions are NOT pulled in.
+// C++ code which dereferences the returned pointers must include "time/stk_time.h"
+// itself, after this header: the configuration macros below must be in effect before
+// stk_time.h is included.
 
 #ifdef __cplusplus
+// Fail loudly if stk_time.h was included first with a different configuration: TimerHost would be
+// sized differently here and in the C binding (ODR violation). Include this header before stk_time.h.
+#ifdef STK_TIME_TIMER_H_
+    #if (STK_TIMER_COMMAND_QUEUE_SIZE != STK_C_TIMER_COMMAND_QUEUE_MAX) || \
+        (STK_TIMER_THREADS_COUNT      != STK_C_TIMER_THREADS_COUNT)      || \
+        (STK_TIMER_HANDLER_STACK_SIZE != STK_C_TIMER_HANDLER_STACK_SIZE)
+        #error "stk_c_time.h must be included before stk_time.h (TimerHost configuration mismatch)"
+    #endif
+#endif
+
+// STK_C_TIMER_COMMAND_QUEUE_MAX is the capacity of the command queue.
 #undef STK_TIMER_COUNT_MAX
-#define STK_TIMER_COUNT_MAX (STK_C_TIMER_MAX)
+#undef STK_TIMER_COMMAND_QUEUE_SIZE
+#define STK_TIMER_COMMAND_QUEUE_SIZE (STK_C_TIMER_COMMAND_QUEUE_MAX)
 #undef STK_TIMER_THREADS_COUNT
 #define STK_TIMER_THREADS_COUNT (STK_C_TIMER_THREADS_COUNT)
 #undef STK_TIMER_HANDLER_STACK_SIZE
 #define STK_TIMER_HANDLER_STACK_SIZE (STK_C_TIMER_HANDLER_STACK_SIZE)
-#include "time/stk_time.h"
+
+namespace stk {
+namespace time {
+    class TimerHost;
+    class Timer;
+    class PeriodicTrigger;
+} // namespace time
+} // namespace stk
 
 /*! \brief     Get the underlying C++ \c stk::time::TimerHost object wrapped by a \c stk_timerhost_t handle.
     \param[in] host: TimerHost handle obtained via \c stk_timerhost_get().
@@ -470,15 +698,15 @@ uint32_t stk_periodic_trigger_get_period(const stk_periodic_trigger_t *trig);
 */
 extern "C" stk::time::TimerHost *stk_timerhost_get_instance(stk_timerhost_t *host);
 
-/*! \brief     Get the underlying C++ \c stk::time::TimerHost::Timer object wrapped by a \c stk_timer_t handle.
+/*! \brief     Get the underlying C++ \c stk::time::Timer object wrapped by a \c stk_timer_t handle.
     \param[in] tmr: Timer handle obtained via \c stk_timer_create().
-    \return    Pointer to the wrapped \c stk::time::TimerHost::Timer instance. Never \c NULL for a valid handle.
+    \return    Pointer to the wrapped \c stk::time::Timer instance. Never \c NULL for a valid handle.
     \note      C++ callers only (guarded by \c __cplusplus); not part of the C ABI.
     \warning   The concrete object is an internal subclass used to bridge to the C callback;
                do not \c static_cast or \c delete it - treat it strictly as a
-               \c stk::time::TimerHost::Timer base pointer.
+               \c stk::time::Timer base pointer.
 */
-extern "C" stk::time::TimerHost::Timer *stk_timer_get_instance(stk_timer_t *tmr);
+extern "C" stk::time::Timer *stk_timer_get_instance(stk_timer_t *tmr);
 
 /*! \brief     Get the underlying C++ \c stk::time::PeriodicTrigger object wrapped by a \c stk_periodic_trigger_t handle.
     \param[in] trig: Trigger handle obtained via \c stk_periodic_trigger_create().
