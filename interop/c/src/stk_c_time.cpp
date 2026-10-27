@@ -7,43 +7,31 @@
  * License: MIT License, see LICENSE for a full text.
  */
 
-#include <cstddef> // for std::size_t
+#include <stk.h>
+#include "stk_c_time.h"         // must be included AFTER stk.h
+#include <time/stk_time.h>      // must be included AFTER stk_c_time.h, see notes in stk_c_time.h
+#include <memory/stk_memory.h>  // for placement new
 
-#include "stk.h"
-#include "memory/stk_memory.h"
-
-#include "stk_c.h"
-#include "stk_c_time.h"
-
-#define STK_C_TIMERS_TOTAL (STK_C_TIMER_MAX * STK_C_CPU_COUNT)
-
-// Override STK_TIMER_COUNT_MAX with STK_C_TIMER_MAX.
-#undef STK_TIMER_COUNT_MAX
-#define STK_TIMER_COUNT_MAX (STK_C_TIMER_MAX)
-// Override STK_TIMER_HANDLER_STACK_SIZE with STK_C_TIMER_HANDLER_STACK_SIZE.
-#undef STK_TIMER_HANDLER_STACK_SIZE
-#define STK_TIMER_HANDLER_STACK_SIZE (STK_C_TIMER_HANDLER_STACK_SIZE)
-#include "time/stk_time.h"
+// Note: stk_c_time.h (C++ section) maps STK_C_TIMER_MAX to STK_TIMER_COMMAND_QUEUE_SIZE, and
+// STK_C_TIMER_THREADS_COUNT / STK_C_TIMER_HANDLER_STACK_SIZE to their C++ counterparts, before
+// it includes time/stk_time.h.
 
 using namespace stk;
 using namespace stk::time;
 
 // -----------------------------------------------------------------------------
-// Internal concrete Timer subclass that bridges C++ OnExpired() -> C callback
+// stk_timer_t - concrete Timer subclass that bridges C++ OnExpired() -> C callback
+//
+// The object is constructed by stk_timer_create() in caller-supplied memory
+// (stk_timer_mem_t), there is no internal pool. The struct is opaque to C callers.
 // -----------------------------------------------------------------------------
 
-class CTimerWrapper final : public TimerHost::Timer
+struct stk_timer_t final : public Timer
 {
-public:
-    CTimerWrapper() : m_host_handle(nullptr), m_callback(nullptr), m_user_data(nullptr)
-    {}
-
-    void Initialize(stk_timer_callback_t const callback, void *user_data)
+    stk_timer_t(stk_timer_callback_t callback, void *user_data)
+        : m_host_handle(nullptr), m_callback(callback), m_user_data(user_data)
     {
         STK_ASSERT(callback != nullptr);
-
-        m_callback  = callback;
-        m_user_data = user_data;
     }
 
     // Update the host association without touching callback/user_data.
@@ -51,36 +39,21 @@ public:
     // always receives the correct host pointer.
     void SetHostHandle(stk_timerhost_t *host_handle) { m_host_handle = host_handle; }
 
-    // Clear all fields so the slot can be reused after stk_timer_destroy().
-    void Reset()
+    void OnExpired(TimerHost *host) override
     {
-        m_callback    = nullptr;
-        m_user_data   = nullptr;
-        m_host_handle = nullptr;
+        STK_UNUSED(host);
+
+        if (m_callback != nullptr)
+        {
+            m_callback(m_host_handle, this, m_user_data);
+        }
     }
-
-    stk_timer_callback_t GetCallback() { return m_callback; }
-    void *GetUserData()                { return m_user_data; }
-    stk_timerhost_t *GetHostHandle()   { return m_host_handle; }
-
-    void OnExpired(TimerHost *host) override;
 
 private:
     stk_timerhost_t     *m_host_handle; //!< C-level host, forwarded to the callback
     stk_timer_callback_t m_callback;
     void                *m_user_data;
 };
-
-struct stk_timer_t
-{
-    CTimerWrapper handle;
-};
-
-// Cast from CTimerWrapper to stk_timer_t without a warning.
-static __stk_forceinline stk_timer_t *CastCppTimerWrapperToC(CTimerWrapper *const t)
-{
-    return reinterpret_cast<stk_timer_t *>(reinterpret_cast<void *>(t));
-}
 
 // Interop-private helpers
 namespace stk {
@@ -93,28 +66,23 @@ extern EAddResult InitializeTimerHostEx(stk_kernel_t *kernel, stk::time::TimerHo
 } // interop_c_helper
 } // stk
 
-void CTimerWrapper::OnExpired(TimerHost *host)
+// maps the C++ command result to the C API result
+static __stk_forceinline stk_timer_result_t ToCTimerResult(TimerHost::EResult r)
 {
-    STK_UNUSED(host);
+    // C result enum must stay in sync with its C++ counterpart (values are cast directly)
+    STK_STATIC_ASSERT_DESC(static_cast<int>(STK_TIMER_RES_CANCELLED)     == static_cast<int>(TimerHost::RES_CANCELLED),     "stk_timer_result_t mismatch");
+    STK_STATIC_ASSERT_DESC(static_cast<int>(STK_TIMER_RES_INVALID_PARAM) == static_cast<int>(TimerHost::RES_INVALID_PARAM), "stk_timer_result_t mismatch");
+    STK_STATIC_ASSERT_DESC(static_cast<int>(STK_TIMER_RES_QUEUE_FULL)    == static_cast<int>(TimerHost::RES_QUEUE_FULL),    "stk_timer_result_t mismatch");
+    STK_STATIC_ASSERT_DESC(static_cast<int>(STK_TIMER_RES_NOT_READY)     == static_cast<int>(TimerHost::RES_NOT_READY),     "stk_timer_result_t mismatch");
+    STK_STATIC_ASSERT_DESC(static_cast<int>(STK_TIMER_RES_FAIL)          == static_cast<int>(TimerHost::RES_FAIL),          "stk_timer_result_t mismatch");
+    STK_STATIC_ASSERT_DESC(static_cast<int>(STK_TIMER_RES_OK)            == static_cast<int>(TimerHost::RES_OK),            "stk_timer_result_t mismatch");
+    STK_STATIC_ASSERT_DESC(static_cast<int>(STK_TIMER_RES_ACTIVE)        == static_cast<int>(TimerHost::RES_ACTIVE),        "stk_timer_result_t mismatch");
+    STK_STATIC_ASSERT_DESC(static_cast<int>(STK_TIMER_RES_INACTIVE)      == static_cast<int>(TimerHost::RES_INACTIVE),      "stk_timer_result_t mismatch");
+    STK_STATIC_ASSERT_DESC(static_cast<int>(STK_TIMER_RES_NOT_PERIODIC)  == static_cast<int>(TimerHost::RES_NOT_PERIODIC),  "stk_timer_result_t mismatch");
+    STK_STATIC_ASSERT_DESC(static_cast<int>(STK_TIMER_RES_QUEUED)        == static_cast<int>(TimerHost::RES_QUEUED),        "stk_timer_result_t mismatch");
 
-    if (m_callback != nullptr)
-    {
-        m_callback(m_host_handle, CastCppTimerWrapperToC(this), m_user_data);
-    }
+    return static_cast<stk_timer_result_t>(static_cast<int>(r));
 }
-
-// -----------------------------------------------------------------------------
-// Timer slot pool
-// -----------------------------------------------------------------------------
-static struct TimerSlot
-{
-    TimerSlot() : timer(), busy(false)
-    {}
-
-    stk_timer_t timer;
-    bool        busy;
-}
-s_Timers[STK_C_TIMERS_TOTAL];
 
 // -----------------------------------------------------------------------------
 // stk_timerhost_t — wraps a TimerHost instance
@@ -227,11 +195,11 @@ stk_timeout_t stk_timerhost_process(stk_timerhost_t *host)
     return static_cast<stk_timeout_t>(host->handle.Process());
 }
 
-bool stk_timerhost_shutdown(stk_timerhost_t *host)
+stk_timer_result_t stk_timerhost_shutdown(stk_timerhost_t *host)
 {
     STK_ASSERT(host != nullptr);
 
-    return host->handle.Shutdown();
+    return ToCTimerResult(host->handle.Shutdown());
 }
 
 bool stk_timerhost_is_empty(const stk_timerhost_t *host)
@@ -259,121 +227,193 @@ int64_t stk_timerhost_get_time_now(const stk_timerhost_t *host)
 // Timer lifecycle
 // -----------------------------------------------------------------------------
 
-stk_timer_t *stk_timer_create(stk_timer_callback_t callback, void *user_data)
+stk_timer_t *stk_timer_create(stk_timer_mem_t *const membuf,
+                              stk_timer_callback_t   callback,
+                              void                  *user_data)
 {
+    STK_ASSERT(membuf != nullptr);
     STK_ASSERT(callback != nullptr);
 
-    const sync::ScopedCriticalSection __cs;
-
     stk_timer_t *result = nullptr;
-
-    for (uint32_t i = 0U; i < STK_C_TIMERS_TOTAL; ++i)
+    if ((membuf != nullptr) && (callback != nullptr))
     {
-        if (!s_Timers[i].busy)
-        {
-            s_Timers[i].busy = true;
-            s_Timers[i].timer.handle.Initialize(callback, user_data);
-            result = &s_Timers[i].timer;
-            break;
-        }
+        result = ConstructIn<stk_timer_t>(*membuf, callback, user_data);
     }
-
-    // pool exhausted, you must increase STK_C_TIMER_MAX
-    STK_ASSERT(result != nullptr);
 
     return result;
 }
 
 void stk_timer_destroy(stk_timer_t *tmr)
 {
-    STK_ASSERT(tmr != nullptr);
-
-    // destroying an active timer is a programming error
-    STK_ASSERT(!tmr->handle.IsActive());
-
-    const sync::ScopedCriticalSection __cs;
-
-    bool found = false;
-
-    for (uint32_t i = 0U; ((i < STK_C_TIMERS_TOTAL) && !found); ++i)
+    if (tmr != nullptr)
     {
-        if (s_Timers[i].busy && (&s_Timers[i].timer == tmr))
-        {
-            tmr->handle.Reset();
-            s_Timers[i].busy = false;
-            found = true;
-        }
-    }
+        // destroying an active timer is a programming error
+        STK_ASSERT(!tmr->IsActive());
 
-    // timer not found in the pool: indicates a double-free or corruption
-    STK_ASSERT(found);
+        tmr->~stk_timer_t();
+    }
 }
 
 // -----------------------------------------------------------------------------
 // Timer control helpers
 //
 // Every control function that rearms a timer also refreshes the host handle
-// stored in the wrapper so the C callback always receives the correct host.
+// stored in the timer so the C callback always receives the correct host.
 // -----------------------------------------------------------------------------
 
-bool stk_timer_start(stk_timerhost_t *host,
-                     stk_timer_t     *tmr,
-                     uint32_t         delay,
-                     uint32_t         period)
-{
-    STK_ASSERT(host  != nullptr);
-    STK_ASSERT(tmr != nullptr);
-
-    // refresh host association before timer can fire
-    tmr->handle.SetHostHandle(host);
-
-    return host->handle.Start(tmr->handle, delay, period);
-}
-
-bool stk_timer_stop(stk_timerhost_t *host, stk_timer_t *tmr)
-{
-    STK_ASSERT(host != nullptr);
-    STK_ASSERT(tmr != nullptr);
-
-    return host->handle.Stop(tmr->handle);
-}
-
-bool stk_timer_reset(stk_timerhost_t *host, stk_timer_t *tmr)
-{
-    STK_ASSERT(host != nullptr);
-    STK_ASSERT(tmr != nullptr);
-
-    return host->handle.Reset(tmr->handle);
-}
-
-bool stk_timer_restart(stk_timerhost_t *host, stk_timer_t *tmr, uint32_t delay, uint32_t period)
+stk_timer_result_t stk_timer_start(stk_timerhost_t *host,
+                                   stk_timer_t     *tmr,
+                                   uint32_t         delay,
+                                   uint32_t         period)
 {
     STK_ASSERT(host != nullptr);
     STK_ASSERT(tmr != nullptr);
 
     // refresh host association before timer can fire
-    tmr->handle.SetHostHandle(host);
+    tmr->SetHostHandle(host);
 
-    return host->handle.Restart(tmr->handle, delay, period);
+    return ToCTimerResult(host->handle.Start(*tmr, delay, period));
 }
 
-bool stk_timer_start_or_reset(stk_timerhost_t *host, stk_timer_t *tmr, uint32_t delay, uint32_t period_ticks)
+stk_timer_result_t stk_timer_stop(stk_timerhost_t *host, stk_timer_t *tmr)
+{
+    STK_ASSERT(host != nullptr);
+    STK_ASSERT(tmr != nullptr);
+
+    return ToCTimerResult(host->handle.Stop(*tmr));
+}
+
+stk_timer_result_t stk_timer_reset(stk_timerhost_t *host, stk_timer_t *tmr)
+{
+    STK_ASSERT(host != nullptr);
+    STK_ASSERT(tmr != nullptr);
+
+    return ToCTimerResult(host->handle.Reset(*tmr));
+}
+
+stk_timer_result_t stk_timer_restart(stk_timerhost_t *host, stk_timer_t *tmr, uint32_t delay, uint32_t period)
+{
+    STK_ASSERT(host != nullptr);
+    STK_ASSERT(tmr != nullptr);
+
+    // refresh host association before timer can fire
+    tmr->SetHostHandle(host);
+
+    return ToCTimerResult(host->handle.Restart(*tmr, delay, period));
+}
+
+stk_timer_result_t stk_timer_start_or_reset(stk_timerhost_t *host, stk_timer_t *tmr, uint32_t delay, uint32_t period_ticks)
 {
     STK_ASSERT(host != nullptr);
     STK_ASSERT(tmr != nullptr);
 
     // refresh host association (harmless if timer is already active on host)
-    tmr->handle.SetHostHandle(host);
+    tmr->SetHostHandle(host);
 
-    return host->handle.StartOrReset(tmr->handle, delay, period_ticks);
+    return ToCTimerResult(host->handle.StartOrReset(*tmr, delay, period_ticks));
 }
 
-bool stk_timer_set_period(stk_timerhost_t *host, stk_timer_t *tmr, uint32_t period_ticks)
+stk_timer_result_t stk_timer_set_period(stk_timerhost_t *host, stk_timer_t *tmr, uint32_t period_ticks)
 {
     STK_ASSERT(host != nullptr);
     STK_ASSERT(tmr != nullptr);
 
-    return host->handle.SetPeriod(tmr->handle, period_ticks);
+    return ToCTimerResult(host->handle.SetPeriod(*tmr, period_ticks));
+}
+
+// -----------------------------------------------------------------------------
+// Timer control - synchronous API
+// -----------------------------------------------------------------------------
+
+stk_timer_result_t stk_timer_start_sync(stk_timerhost_t *host,
+                                        stk_timer_t     *tmr,
+                                        uint32_t         delay,
+                                        uint32_t         period)
+{
+    STK_ASSERT(host != nullptr);
+    STK_ASSERT(tmr != nullptr);
+
+    // refresh host association before timer can fire
+    tmr->SetHostHandle(host);
+
+    return ToCTimerResult(host->handle.StartSync(*tmr, delay, period));
+}
+
+stk_timer_result_t stk_timer_activate_sync(stk_timerhost_t *host, stk_timer_t *tmr)
+{
+    STK_ASSERT(host != nullptr);
+    STK_ASSERT(tmr != nullptr);
+
+    // refresh host association before timer can fire
+    tmr->SetHostHandle(host);
+
+    return ToCTimerResult(host->handle.ActivateSync(*tmr));
+}
+
+stk_timer_result_t stk_timer_stop_sync(stk_timerhost_t *host, stk_timer_t *tmr)
+{
+    STK_ASSERT(host != nullptr);
+    STK_ASSERT(tmr != nullptr);
+
+    return ToCTimerResult(host->handle.StopSync(*tmr));
+}
+
+stk_timer_result_t stk_timer_restart_sync(stk_timerhost_t *host, stk_timer_t *tmr, uint32_t delay, uint32_t period)
+{
+    STK_ASSERT(host != nullptr);
+    STK_ASSERT(tmr != nullptr);
+
+    // refresh host association before timer can fire
+    tmr->SetHostHandle(host);
+
+    return ToCTimerResult(host->handle.RestartSync(*tmr, delay, period));
+}
+
+stk_timer_result_t stk_timer_reset_sync(stk_timerhost_t *host, stk_timer_t *tmr)
+{
+    STK_ASSERT(host != nullptr);
+    STK_ASSERT(tmr != nullptr);
+
+    return ToCTimerResult(host->handle.ResetSync(*tmr));
+}
+
+stk_timer_result_t stk_timer_set_period_sync(stk_timerhost_t *host, stk_timer_t *tmr, uint32_t period_ticks)
+{
+    STK_ASSERT(host != nullptr);
+    STK_ASSERT(tmr != nullptr);
+
+    return ToCTimerResult(host->handle.SetPeriodSync(*tmr, period_ticks));
+}
+
+stk_timer_result_t stk_timer_change_sync(stk_timerhost_t *host, stk_timer_t *tmr, uint32_t delay, uint32_t period)
+{
+    STK_ASSERT(host != nullptr);
+    STK_ASSERT(tmr != nullptr);
+
+    // refresh host association before timer can fire
+    tmr->SetHostHandle(host);
+
+    return ToCTimerResult(host->handle.ChangeSync(*tmr, delay, period));
+}
+
+stk_timer_result_t stk_timer_query_sync(stk_timerhost_t *host, stk_timer_t *tmr, stk_timer_info_t *info)
+{
+    STK_ASSERT(host != nullptr);
+    STK_ASSERT(tmr != nullptr);
+    STK_ASSERT(info != nullptr);
+
+    TimerHost::TimerInfo ti = {};
+    const TimerHost::EResult res = host->handle.QuerySync(*tmr, ti);
+
+    if (res == TimerHost::RES_OK)
+    {
+        info->active    = ti.active;
+        info->remaining = ti.remaining;
+        info->delay     = ti.delay;
+        info->period    = ti.period;
+    }
+
+    return ToCTimerResult(res);
 }
 
 // -----------------------------------------------------------------------------
@@ -384,35 +424,35 @@ bool stk_timer_is_active(const stk_timer_t *tmr)
 {
     STK_ASSERT(tmr != nullptr);
 
-    return tmr->handle.IsActive();
+    return tmr->IsActive();
 }
 
 uint32_t stk_timer_get_period(const stk_timer_t *tmr)
 {
     STK_ASSERT(tmr != nullptr);
 
-    return tmr->handle.GetPeriod();
+    return tmr->GetPeriod();
 }
 
 int64_t stk_timer_get_deadline(const stk_timer_t *tmr)
 {
     STK_ASSERT(tmr != nullptr);
 
-    return static_cast<int64_t>(tmr->handle.GetDeadline());
+    return static_cast<int64_t>(tmr->GetDeadline());
 }
 
 int64_t stk_timer_get_timestamp(const stk_timer_t *tmr)
 {
     STK_ASSERT(tmr != nullptr);
 
-    return static_cast<int64_t>(tmr->handle.GetTimestamp());
+    return static_cast<int64_t>(tmr->GetTimestamp());
 }
 
 uint32_t stk_timer_get_remaining_ticks(const stk_timer_t *tmr)
 {
     STK_ASSERT(tmr != nullptr);
 
-    return tmr->handle.GetRemainingTicks();
+    return tmr->GetRemainingTicks();
 }
 
 // -----------------------------------------------------------------------------
@@ -424,7 +464,7 @@ struct stk_periodic_trigger_t
     stk_periodic_trigger_t(uint32_t period, bool start) : handle(period, start)
     {}
 
-    time::PeriodicTrigger handle;
+    PeriodicTrigger handle;
 };
 
 stk_periodic_trigger_t *stk_periodic_trigger_create(stk_periodic_trigger_mem_t *const membuf,
@@ -489,11 +529,11 @@ TimerHost *stk_timerhost_get_instance(stk_timerhost_t *host)
     return &host->handle;
 }
 
-TimerHost::Timer *stk_timer_get_instance(stk_timer_t *tmr)
+Timer *stk_timer_get_instance(stk_timer_t *tmr)
 {
     STK_ASSERT(tmr != nullptr);
 
-    return &tmr->handle;
+    return tmr;
 }
 
 PeriodicTrigger *stk_periodic_trigger_get_instance(stk_periodic_trigger_t *trig)

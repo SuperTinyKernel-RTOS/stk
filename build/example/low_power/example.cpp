@@ -657,7 +657,7 @@ private:
 //   complete quickly and must not block.
 // ============================================================================
 
-class AdcTimer final : public stk::time::TimerHost::Timer
+class AdcTimer final : public stk::time::Timer
 {
 public:
     void OnExpired(stk::time::TimerHost * /*host*/) override
@@ -723,11 +723,21 @@ private:
                 // Convert raw ADC counts to degrees Celsius.
                 const float deg_c = Board::TEMP_ValueToDeg(sample.raw);
 
+                // Scale by 100 to preserve 2 decimal places.
+                int temp_scaled = (int)(deg_c * 100.0f);
+                int temp_int = temp_scaled / 100;
+                int temp_frac = temp_scaled % 100;
+                if (temp_frac < 0)
+                {
+                    temp_frac = -temp_frac; // ensure fractional part is positive
+                }
+
                 // Log: tick timestamp, raw counts, and temperature.
-                printf("[log] t=%d s  raw=%-4d  temp=%.2f C\n",
-                       static_cast<int>(sample.timestamp / 1000),
-                       static_cast<int>(sample.raw),
-                       static_cast<float>(deg_c));
+                printf("[log] t=%d s  raw=%-4d  temp=%d.%02d C\n",
+                       (int)(sample.timestamp / 1000),
+                       (int)sample.raw,
+                       temp_int,
+                       temp_frac);
             }
         }
     }
@@ -748,12 +758,6 @@ private:
 
 extern "C" void EXTI0_IRQHandler()
 {
-    // Note: You would need a debouncing logic to handle the button press
-    // reliably, it is outside the scope of this example though.
-
-    // Clear the EXTI pending bit first to acknowledge the interrupt.
-    EXTI->PR = (1U << 0);
-
     stk::IKernelService *kernel = stk::IKernelService::GetInstance();
 
     if (!g_KernelSuspended)
@@ -779,6 +783,12 @@ extern "C" void EXTI0_IRQHandler()
         // Extinguish the suspended-state indicator.
         Board::LedInit();
     }
+
+    // Debounce button press
+    for (volatile int i = 0; i < 1000000; ++i);
+
+    // Clear the EXTI pending bit first to acknowledge the interrupt.
+    EXTI->PR = (1U << 0);
 }
 
 // ============================================================================

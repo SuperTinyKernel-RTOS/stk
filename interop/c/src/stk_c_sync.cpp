@@ -7,13 +7,10 @@
  * License: MIT License, see LICENSE for a full text.
  */
 
-#include <cstddef> // for std::size_t
-
-#include "stk.h"
-#include "sync/stk_sync.h"
-#include "memory/stk_memory.h"
-
-#include "stk_c.h"
+#include <stk.h>
+#include "stk_c.h"              // must be included AFTER stk.h
+#include <sync/stk_sync.h>
+#include <memory/stk_memory.h>  // for placement new
 
 using namespace stk;
 using namespace stk::sync;
@@ -497,14 +494,14 @@ SemaphoreT<stk_sem_val_t> *stk_sem_get_instance(stk_sem_t *sem)
 // -----------------------------------------------------------------------------
 struct stk_ef_t
 {
-    stk_ef_t(uint32_t initial_flags) : handle(initial_flags)
+    stk_ef_t(stk_ef_val_t initial_flags) : handle(initial_flags)
     {}
 
-    EventFlags handle;
+    EventFlagsT<stk_ef_val_t> handle;
 };
 
 stk_ef_t *stk_ef_create(stk_ef_mem_t *const membuf,
-                        uint32_t initial_flags)
+                        stk_ef_val_t initial_flags)
 {
     STK_ASSERT(membuf != nullptr);
 
@@ -525,54 +522,54 @@ void stk_ef_destroy(stk_ef_t *ef)
     }
 }
 
-uint32_t stk_ef_set(stk_ef_t *ef, uint32_t flags)
+stk_ef_val_t stk_ef_set(stk_ef_t *ef, stk_ef_val_t flags)
 {
     STK_ASSERT(ef != nullptr);
 
     return ef->handle.Set(flags);
 }
 
-uint32_t stk_ef_clear(stk_ef_t *ef, uint32_t flags)
+stk_ef_val_t stk_ef_clear(stk_ef_t *ef, stk_ef_val_t flags)
 {
     STK_ASSERT(ef != nullptr);
 
     return ef->handle.Clear(flags);
 }
 
-uint32_t stk_ef_and(stk_ef_t *ef, uint32_t mask)
+stk_ef_val_t stk_ef_and(stk_ef_t *ef, stk_ef_val_t mask)
 {
     STK_ASSERT(ef != nullptr);
 
     return ef->handle.And(mask);
 }
 
-uint32_t stk_ef_get(stk_ef_t *ef)
+stk_ef_val_t stk_ef_get(stk_ef_t *ef)
 {
     STK_ASSERT(ef != nullptr);
 
     return ef->handle.Get();
 }
 
-uint32_t stk_ef_wait(stk_ef_t *ef, uint32_t flags, uint32_t options, stk_timeout_t timeout)
+stk_ef_val_t stk_ef_wait(stk_ef_t *ef, stk_ef_val_t flags, uint32_t options, stk_timeout_t timeout)
 {
     STK_ASSERT(ef != nullptr);
 
     return ef->handle.Wait(flags, options, timeout);
 }
 
-uint32_t stk_ef_trywait(stk_ef_t *ef, uint32_t flags, uint32_t options)
+stk_ef_val_t stk_ef_trywait(stk_ef_t *ef, stk_ef_val_t flags, uint32_t options)
 {
     STK_ASSERT(ef != nullptr);
 
     return ef->handle.TryWait(flags, options);
 }
 
-stk_wait_result_t stk_ef_wait_ex(stk_ef_t *ef, uint32_t flags, uint32_t options, stk_timeout_t timeout,
-                                 uint32_t *actual_flags)
+stk_wait_result_t stk_ef_wait_ex(stk_ef_t *ef, stk_ef_val_t flags, uint32_t options, stk_timeout_t timeout,
+                                 stk_ef_val_t *actual_flags)
 {
     STK_ASSERT(ef != nullptr);
 
-    uint32_t actual = 0U;
+    stk_ef_val_t actual = 0U;
     const stk_wait_result_t result = ToCWaitResult(ef->handle.WaitEx(flags, options, timeout, actual));
 
     if (actual_flags != nullptr)
@@ -583,14 +580,14 @@ stk_wait_result_t stk_ef_wait_ex(stk_ef_t *ef, uint32_t flags, uint32_t options,
     return result;
 }
 
-stk_wait_result_t stk_ef_trywait_ex(stk_ef_t *ef, uint32_t flags, uint32_t options, uint32_t *actual_flags)
+stk_wait_result_t stk_ef_trywait_ex(stk_ef_t *ef, stk_ef_val_t flags, uint32_t options, stk_ef_val_t *actual_flags)
 {
     return stk_ef_wait_ex(ef, flags, options, STK_NO_WAIT, actual_flags);
 }
 
 struct stk_ef_sync_ctx_t
 {
-    EventFlags::SyncContext handle;
+    EventFlagsT<stk_ef_val_t>::SyncContext handle;
 };
 
 stk_ef_sync_ctx_t *stk_ef_sync_ctx_create(stk_ef_sync_ctx_mem_t *const membuf)
@@ -614,13 +611,13 @@ void stk_ef_sync_ctx_destroy(stk_ef_sync_ctx_t *ctx)
     }
 }
 
-stk_wait_result_t stk_ef_sync(stk_ef_t *ef, stk_ef_sync_ctx_t *ctx, uint32_t set_flags, uint32_t wait_flags,
-                              stk_timeout_t timeout, uint32_t *actual_flags)
+stk_wait_result_t stk_ef_sync(stk_ef_t *ef, stk_ef_sync_ctx_t *ctx, stk_ef_val_t set_flags, stk_ef_val_t wait_flags,
+                              stk_timeout_t timeout, stk_ef_val_t *actual_flags)
 {
     STK_ASSERT(ef != nullptr);
     STK_ASSERT(ctx != nullptr);
 
-    uint32_t actual = 0U;
+    stk_ef_val_t actual = 0U;
     const stk_wait_result_t result = ToCWaitResult(ef->handle.Sync(ctx->handle, set_flags, wait_flags, timeout, actual));
 
     if (actual_flags != nullptr)
@@ -631,7 +628,7 @@ stk_wait_result_t stk_ef_sync(stk_ef_t *ef, stk_ef_sync_ctx_t *ctx, uint32_t set
     return result;
 }
 
-EventFlags *stk_ef_get_instance(stk_ef_t *ef)
+EventFlagsT<stk_ef_val_t> *stk_ef_get_instance(stk_ef_t *ef)
 {
     STK_ASSERT(ef != nullptr);
 

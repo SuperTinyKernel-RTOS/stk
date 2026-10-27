@@ -88,13 +88,16 @@ A fixed-capacity, fixed-message-size FIFO queue for inter-task communication ove
 - **Reset support**: `Reset()` discards all messages and wakes blocked producers.
 - **Low-Power Aware**: Waiting tasks are suspended by the kernel.
 
-### 10. Event Flags (`sync::EventFlags`)
-A 32-bit multi-flag synchronization primitive for coordinating multiple independent events within a single object.
+### 10. Event Flags (`sync::EventFlags` / `sync::EventFlagsT<T>`)
+A multi-flag synchronization primitive for coordinating multiple independent events within a single object.
+- **Selectable Flags Type**: `sync::EventFlagsT<T>` is a template over an unsigned flags word type `T` (`uint8_t`, `uint16_t`, `uint32_t`, `uint64_t`); signed types are rejected at compile time. `sync::EventFlags` is a `typedef` for `EventFlagsT<uint32_t>` (31 usable flags), so existing code keeps working unchanged. `EventFlagsT<T>::FlagsValueType` exposes the flags type, `FLAGS_MAX` is the maximum value of `T` and `FLAGS_MASK` the mask of all usable bits. Note that `uint8_t` does not necessarily reduce the object size because of alignment padding, verify with `sizeof()` on your target.
+- **Reserved Error Bit**: The most significant bit of `T` (`ERROR_MASK`: bit 7, 15, 31 or 63) is reserved as the error indicator of the legacy `Wait()`/`Set()`/`Clear()` API and must never be set by the caller, leaving `8 * sizeof(T) - 1` usable flags (7, 15, 31 or 63). The `ERROR_*` sentinels are of type `T`. `options` (`OPT_*`) is always `uint32_t` regardless of `T`.
+- **Wide Flags**: A flags word wider than a pointer (e.g. `uint64_t` on a 32-bit MCU) is supported: all updates are done under a critical section, and `Get()` takes it too, so the value can never be read torn. Flags words up to the native word size are read with a single aligned load.
 - **OR semantics** (`OPT_WAIT_ANY`): Unblocks when any one of the requested flag bits is set (default).
 - **AND semantics** (`OPT_WAIT_ALL`): Unblocks only when all requested flag bits are simultaneously set.
 - **Non-destructive read**: `Get()` returns a snapshot of the flags word without consuming any bit.
 - **Mask-style clear**: `And(mask)` atomically performs `flags &= mask` (the inverse of `Clear()`, equivalent of ThreadX `tx_event_flags_set(TX_AND)`) and returns the value before masking; it never wakes waiters since it can only remove flags.
-- **Rendezvous**: `Sync(ctx, set_flags, wait_flags, timeout, actual_flags)` sets flags and waits for a group of flags atomically (equivalent of FreeRTOS `xEventGroupSync()`). The task which completes the condition clears the group once and releases **all** participants blocked on the same caller-supplied `EventFlags::SyncContext`, so it works as a multi-task barrier; independent groups on one object use separate contexts and `EventFlags` itself carries no extra state.
+- **Rendezvous**: `Sync(ctx, set_flags, wait_flags, timeout, actual_flags)` sets flags and waits for a group of flags atomically (equivalent of FreeRTOS `xEventGroupSync()`). The task which completes the condition clears the group once and releases **all** participants blocked on the same caller-supplied `EventFlags::SyncContext`, so it works as a multi-task barrier; independent groups on one object use separate contexts and `EventFlagsT` itself carries no extra state.
 - **Selective clear**: By default matched bits are atomically cleared on a successful `Wait()`; pass `OPT_NO_CLEAR` to suppress this, allowing multiple concurrent waiters to each satisfy on the same `Set()`.
 - **Cancellable Waits**: `Wait()` returns `ERROR_CANCELED` (distinct from `ERROR_TIMEOUT`) if the wait was interrupted via `IKernel::CancelTaskWait()` before the requested flag condition was met.
 - **Status/flags separation**: `WaitEx(flags, options, timeout, actual_flags)` and `TryWaitEx(flags, options, actual_flags)` return a full `EWaitResult` (`WAIT_RESULT_SIGNAL`, `WAIT_RESULT_TIMEOUT`, `WAIT_RESULT_CANCELED`, `WAIT_RESULT_FAIL`) and report the entire flags word (taken before auto-clear) via `actual_flags`, so no bit is overloaded as an error indicator (equivalent of ThreadX `tx_event_flags_get()`). Invalid arguments and a blocking wait from an ISR are reported as `WAIT_RESULT_FAIL`.
@@ -128,7 +131,7 @@ STK primitives follow strict rules for **Interrupt Service Routine (ISR)** conte
 
 The following operations are ISR-safe:
 * **sync::Event**: `Set()`, `Pulse()`, `Reset()`, `TryWait()`
-* **sync::EventFlags**: `Set()`, `Clear()`, `And()`, `Get()`, `TryWait()`, `Wait(NO_WAIT)`, `TryWaitEx()`, `WaitEx(NO_WAIT)`, `Sync(NO_WAIT)`
+* **sync::EventFlags** / **sync::EventFlagsT\<T\>**: `Set()`, `Clear()`, `And()`, `Get()`, `TryWait()`, `Wait(NO_WAIT)`, `TryWaitEx()`, `WaitEx(NO_WAIT)`, `Sync(NO_WAIT)`
 * **sync::Semaphore** / **sync::SemaphoreT\<T\>**: `TrySignal()`, `TrySignal(ceiling)`, `Signal()`, `TryWait()`, `Wait(NO_WAIT)`, `WaitEx(NO_WAIT)`, `GetCount()`
 * **sync::ConditionVariable**: `NotifyOne()`, `NotifyOne_CS()`, `NotifyAll()`, `NotifyAll_CS()`, `Wait(NO_WAIT)` (the `_CS` variants require the caller to already hold a critical section)
 * **sync::Pipe**: `Write(NO_WAIT)`, `WriteBulk(NO_WAIT)`, `TryWrite()`, `TryWriteBulk()`, `Read(NO_WAIT)`, `ReadBulk(NO_WAIT)`, `TryRead()`, `TryReadBulk()`, `ReadBulkTriggered(NO_WAIT)`, `TryReadBulkTriggered()`, `Reset()`
@@ -214,6 +217,18 @@ void TaskSensorA() {
 
 void ResetImuOnly() {
     g_SensorFlags.And(~FLAG_IMU); // keep everything except FLAG_IMU (flags &= mask)
+}
+
+// 64-bit flags group: up to 63 independent events (bit 63 is reserved)
+stk::sync::EventFlagsT<uint64_t> g_Channels;
+
+static const uint64_t CH_40 = (static_cast<uint64_t>(1U) << 40);
+
+void TaskChannels() {
+    uint64_t raised = g_Channels.Wait(CH_40, stk::sync::EventFlagsT<uint64_t>::OPT_WAIT_ANY, 1000);
+    if (!stk::sync::EventFlagsT<uint64_t>::IsError(raised)) {
+        // ... channel 40 fired ...
+    }
 }
 ```
 

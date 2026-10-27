@@ -73,9 +73,9 @@ class SemaphoreT final : public SyncObjectBase, public ITraceable
     STK_STATIC_ASSERT_DESC(static_cast<T>(-1) > static_cast<T>(0), "SemaphoreT: T must be an unsigned integer type");
 
 public:
-    /*! \brief     Counter type.
+    /*! \brief     Counter value type.
     */
-    typedef T ValueType;
+    typedef T CounterValueType;
 
     /*! \brief     Max count value supported (maximum value of T).
     */

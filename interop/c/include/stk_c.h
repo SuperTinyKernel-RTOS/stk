@@ -47,7 +47,7 @@ namespace stk {
         class ConditionVariable;
         template <typename T> class SemaphoreT;
         class Event;
-        class EventFlags;
+		template <typename T> class EventFlagsT;
         class Pipe;
         class MessageQueue;
         class RWMutex;
@@ -63,7 +63,7 @@ extern "C" {
 /*! \def       STK_C_VERSION
     \brief     Interface version.
 */
-#define STK_C_VERSION (0x20261024)
+#define STK_C_VERSION 0x20261027
 
 // =============================================================================
 // Configuration macros (can be overridden before including this file)
@@ -1661,38 +1661,65 @@ extern "C" stk::sync::SemaphoreT<stk_sem_val_t> *stk_sem_get_instance(stk_sem_t 
 
 // ----- EventFlags ------------------------------------------------------------
 
+/*! \brief     EventFlags flags word type (unsigned integer type, default uint32_t).
+    \note      Maps to the template argument of stk::sync::EventFlagsT. Override STK_C_EF_VALUE_TYPE
+               (uint8_t, uint16_t, uint32_t or uint64_t) before including this file to select a
+               different flags word width. The most significant bit of the type is reserved as the
+               error indicator (see STK_EF_ERROR_MASK), which leaves 8 * sizeof(stk_ef_val_t) - 1
+               usable flags (7, 15, 31 or 63). A flags word wider than a pointer (e.g. uint64_t on a
+               32-bit MCU) is supported, see stk_ef_get().
+*/
+#ifndef STK_C_EF_VALUE_TYPE
+    #define STK_C_EF_VALUE_TYPE uint32_t
+#endif
+typedef STK_C_EF_VALUE_TYPE stk_ef_val_t;
+
 /*! \brief     Options bitmask constants for stk_ef_wait() / stk_ef_trywait().
+    \note      Options are always uint32_t regardless of \a stk_ef_val_t.
 */
 #define STK_EF_OPT_WAIT_ANY (0x00000000U) /*!< Unblock when ANY requested bit is set (OR semantics, default) */
 #define STK_EF_OPT_WAIT_ALL (0x00000001U) /*!< Unblock when ALL requested bits are simultaneously set (AND semantics) */
 #define STK_EF_OPT_NO_CLEAR (0x00000002U) /*!< Do not clear matched bits on a successful return */
 
-/*! \brief     Return-value error sentinels (bit 31 set indicates an error).
+/*! \brief     Word constants derived from \a stk_ef_val_t.
 */
-#define STK_EF_ERROR_PARAMETER (0x80000001U) /*!< flags argument is 0 or has bit 31 set */
-#define STK_EF_ERROR_TIMEOUT   (0x80000002U) /*!< Timeout expired before the flag condition was met */
-#define STK_EF_ERROR_ISR       (0x80000004U) /*!< Wait called from an ISR with a blocking timeout */
-#define STK_EF_ERROR_CANCELED  (0x80000008U) /*!< Wait was cancelled before the flag condition was met */
-#define STK_EF_ERROR_MASK      (0x80000000U) /*!< Mask for testing any error; bit 31 set means error */
+#define STK_EF_FLAGS_MAX (STK_STATIC_CAST(stk_ef_val_t, ~STK_STATIC_CAST(stk_ef_val_t, 0U))) /*!< Maximum value of the flags word (all bits set) */
+#define STK_EF_ERROR_MASK (STK_STATIC_CAST(stk_ef_val_t, ~STK_STATIC_CAST(stk_ef_val_t, STK_EF_FLAGS_MAX >> 1U))) /*!< Reserved error bit: the most significant bit of the flags word */
+#define STK_EF_FLAGS_MASK (STK_STATIC_CAST(stk_ef_val_t, ~STK_EF_ERROR_MASK)) /*!< Mask of all bits usable as flags (every bit except STK_EF_ERROR_MASK) */
+
+/*! \brief     Return-value error sentinels (the most significant bit of \a stk_ef_val_t indicates an error).
+*/
+#define STK_EF_ERROR_PARAMETER (STK_STATIC_CAST(stk_ef_val_t, STK_EF_ERROR_MASK | STK_STATIC_CAST(stk_ef_val_t, 0x01U))) /*!< flags argument is 0 or has the error bit set */
+#define STK_EF_ERROR_TIMEOUT   (STK_STATIC_CAST(stk_ef_val_t, STK_EF_ERROR_MASK | STK_STATIC_CAST(stk_ef_val_t, 0x02U))) /*!< Timeout expired before the flag condition was met */
+#define STK_EF_ERROR_ISR       (STK_STATIC_CAST(stk_ef_val_t, STK_EF_ERROR_MASK | STK_STATIC_CAST(stk_ef_val_t, 0x04U))) /*!< Wait called from an ISR with a blocking timeout */
+#define STK_EF_ERROR_CANCELED  (STK_STATIC_CAST(stk_ef_val_t, STK_EF_ERROR_MASK | STK_STATIC_CAST(stk_ef_val_t, 0x08U))) /*!< Wait was cancelled before the flag condition was met */
+#define STK_EF_ERROR_FAIL      (STK_STATIC_CAST(stk_ef_val_t, STK_EF_ERROR_MASK | STK_STATIC_CAST(stk_ef_val_t, 0x10U))) /*!< The kernel rejected the wait (e.g. KERNEL_SYNC mode is not enabled) */
 
 /*! \brief     Returns true if a value returned by stk_ef_set(), stk_ef_clear(),
-               stk_ef_wait(), or stk_ef_trywait() is an error sentinel (bit 31 set).
+               stk_ef_wait(), or stk_ef_trywait() is an error sentinel (error bit set).
 */
-static inline bool stk_ef_is_error(uint32_t result) 
-{ 
-    return ((result & STK_EF_ERROR_MASK) != 0U); 
+static inline bool stk_ef_is_error(stk_ef_val_t result)
+{
+    return ((result & STK_EF_ERROR_MASK) != 0U);
 }
 
 /*! \brief     A memory size (multiples of stk_word_t) required for EventFlags instance.
-    \note      EventFlags contains one ConditionVariable (STK_CV_IMPL_SIZE words)
-               plus one 32-bit flags word and alignment padding.
+    \note      EventFlags contains an optional debug-name word, one flags word of type stk_ef_val_t and
+               one ConditionVariable (STK_CV_IMPL_SIZE words). The formula includes the alignment padding in
+               front of the flags word, in front of the ConditionVariable and at the tail of the object, which
+               matters when stk_ef_val_t is wider than stk_word_t (e.g. uint64_t on a 32-bit MCU).
 */
-#define STK_EF_IMPL_SIZE (STK_CV_IMPL_SIZE + 1U + (STK_SYNC_DEBUG_NAMES ? 1U : 0U))
+#define STK_EF_BASE_BYTES ((STK_SYNC_DEBUG_NAMES ? 1U : 0U) * sizeof(stk_word_t))
+#define STK_EF_CV_OFFSET_BYTES STK_ROUND_UP(STK_ROUND_UP(STK_EF_BASE_BYTES, sizeof(stk_ef_val_t)) + sizeof(stk_ef_val_t), sizeof(stk_word_t))
+#define STK_EF_IMPL_SIZE STK_C_CEIL_DIV( \
+    STK_ROUND_UP(STK_EF_CV_OFFSET_BYTES + (STK_CV_IMPL_SIZE * sizeof(stk_word_t)), STK_MAX(sizeof(stk_word_t), sizeof(stk_ef_val_t))), \
+    sizeof(stk_word_t))
 
 /*! \brief     Opaque memory container for an EventFlags instance.
+    \note      Alignment guarantees compatibility with underlying C++ representation.
 */
 typedef struct stk_ef_mem_t {
-    stk_word_t data[STK_EF_IMPL_SIZE] __stk_c_aligned;
+    stk_word_t data[STK_EF_IMPL_SIZE] __stk_c_align(STK_MAX(sizeof(stk_word_t), sizeof(stk_ef_val_t)));
 } stk_ef_mem_t;
 
 /*! \brief     Opaque handle to an EventFlags instance.
@@ -1701,12 +1728,13 @@ typedef struct stk_ef_t stk_ef_t;
 
 /*! \brief     Create an EventFlags object (using provided memory).
     \param[in] membuf: Pointer to static memory container.
-    \param[in] initial_flags: Initial value of the 32-bit flags word (bits 0..30 only;
-               bit 31 is reserved and must not be set).
+    \param[in] initial_flags: Initial value of the flags word (only bits covered by
+               \c STK_EF_FLAGS_MASK are meaningful; the most significant bit is reserved
+               and must not be set).
     \return    EventFlags handle.
 */
 stk_ef_t *stk_ef_create(stk_ef_mem_t *const membuf,
-                        uint32_t      initial_flags);
+                        stk_ef_val_t  initial_flags);
 
 /*! \brief     Destroy an EventFlags object.
     \param[in] ef: EventFlags handle.
@@ -1717,48 +1745,50 @@ void stk_ef_destroy(stk_ef_t *ef);
     \details   Atomically OR-sets the specified bits and wakes all current waiters
                so each can re-evaluate its own predicate.
     \param[in] ef: EventFlags handle.
-    \param[in] flags: Bitmask of bits to set. Must not be 0 and must not have bit 31 set.
+    \param[in] flags: Bitmask of bits to set. Must not be 0 and must not have the error bit set.
     \return    Flags word value after setting, or \c STK_EF_ERROR_PARAMETER on invalid input.
     \note      ISR-safe.
 */
-uint32_t stk_ef_set(stk_ef_t *ef, uint32_t flags);
+stk_ef_val_t stk_ef_set(stk_ef_t *ef, stk_ef_val_t flags);
 
 /*! \brief     Clear one or more flags.
     \details   Atomically clears the specified bits.
     \param[in] ef: EventFlags handle.
-    \param[in] flags: Bitmask of bits to clear. Must not be 0 and must not have bit 31 set.
+    \param[in] flags: Bitmask of bits to clear. Must not be 0 and must not have the error bit set.
     \return    Flags word value before clearing, or \c STK_EF_ERROR_PARAMETER on invalid input.
     \note      ISR-safe.
 */
-uint32_t stk_ef_clear(stk_ef_t *ef, uint32_t flags);
+stk_ef_val_t stk_ef_clear(stk_ef_t *ef, stk_ef_val_t flags);
 
 /*! \brief     AND the flags word with a mask (equivalent of ThreadX tx_event_flags_set(TX_AND)).
     \details   Atomically performs <tt>flags &= mask</tt>: every flag bit that is 0 in \a mask is
                cleared, every flag bit that is 1 in \a mask is preserved. This is the inverse of
                stk_ef_clear(), which clears the bits that are 1 in its argument. Any \a mask value
-               is valid, including 0 (clears all flags) and 0xFFFFFFFF (no change).
+               is valid, including 0 (clears all flags) and \c STK_EF_FLAGS_MAX (no change).
     \param[in] ef: EventFlags handle.
     \param[in] mask: Bitmask of flags to \b keep.
-    \return    Flags word value \b before masking.
+    \return    Flags word value before masking.
     \note      Does not wake waiters: this operation can only remove flags, so it can never
                satisfy a pending wait condition.
     \note      ISR-safe.
 */
-uint32_t stk_ef_and(stk_ef_t *ef, uint32_t mask);
+stk_ef_val_t stk_ef_and(stk_ef_t *ef, stk_ef_val_t mask);
 
 /*! \brief     Read the current flags word without modifying it.
     \param[in] ef: EventFlags handle.
-    \return    Point-in-time snapshot of the 32-bit flags word.
-    \note      ISR-safe. Never blocks or modifies state.
+    \return    Point-in-time snapshot of the flags word.
+    \note      ISR-safe. Never blocks or modifies state. If \a stk_ef_val_t is not wider than a pointer
+               the value is read with a single aligned load, otherwise (e.g. uint64_t on a 32-bit MCU)
+               it is read under a critical section so it can not be torn by a concurrent update.
 */
-uint32_t stk_ef_get(stk_ef_t *ef);
+stk_ef_val_t stk_ef_get(stk_ef_t *ef);
 
 /*! \brief     Wait for one or more flags to be set.
     \details   Suspends the calling task until the requested flag condition is satisfied
                or the timeout expires. On success, matched bits are atomically cleared
                unless \c STK_EF_OPT_NO_CLEAR is set in options.
     \param[in] ef: EventFlags handle.
-    \param[in] flags: Bitmask of flag bits to watch. Must not be 0 and must not have bit 31 set.
+    \param[in] flags: Bitmask of flag bits to watch. Must not be 0 and must not have the error bit set.
     \param[in] options: Combination of \c STK_EF_OPT_WAIT_ANY / \c STK_EF_OPT_WAIT_ALL
                and optionally \c STK_EF_OPT_NO_CLEAR.
     \param[in] timeout: Maximum time to wait in OS ticks or \a STK_WAIT_INFINITE.
@@ -1775,7 +1805,7 @@ uint32_t stk_ef_get(stk_ef_t *ef);
                different tick rates.
     \warning   ISR-safe only with timeout = \c STK_NO_WAIT, ISR-unsafe otherwise.
 */
-uint32_t stk_ef_wait(stk_ef_t *ef, uint32_t flags, uint32_t options, stk_timeout_t timeout);
+stk_ef_val_t stk_ef_wait(stk_ef_t *ef, stk_ef_val_t flags, uint32_t options, stk_timeout_t timeout);
 
 /*! \brief     Non-blocking flag poll.
     \details   Checks immediately whether the flag condition is satisfied.
@@ -1788,27 +1818,27 @@ uint32_t stk_ef_wait(stk_ef_t *ef, uint32_t flags, uint32_t options, stk_timeout
                if the condition is not met.
     \note      ISR-safe.
 */
-uint32_t stk_ef_trywait(stk_ef_t *ef, uint32_t flags, uint32_t options);
+stk_ef_val_t stk_ef_trywait(stk_ef_t *ef, stk_ef_val_t flags, uint32_t options);
 
 /*! \brief     Wait for one or more flags to be set, reporting the outcome as stk_wait_result_t.
     \details   Same wait semantics as stk_ef_wait(), but the status and the flags word are reported
                separately, so no bit of the flags word is overloaded as an error indicator
                (equivalent of ThreadX tx_event_flags_get() with \c actual_flags).
     \param[in]  ef: EventFlags handle.
-    \param[in]  flags: Bitmask of flag bits to watch. Must not be 0 and must not have bit 31 set.
+    \param[in]  flags: Bitmask of flag bits to watch. Must not be 0 and must not have the error bit set.
     \param[in]  options: Combination of \c STK_EF_OPT_WAIT_ANY / \c STK_EF_OPT_WAIT_ALL
                 and optionally \c STK_EF_OPT_NO_CLEAR.
     \param[in]  timeout: Maximum time to wait in OS ticks or \a STK_WAIT_INFINITE.
                 Use \c STK_NO_WAIT for a non-blocking poll.
     \param[out] actual_flags: Snapshot of the \b entire flags word taken when the call completed,
                 \b before any auto-clear is applied. On \c STK_WAIT_RESULT_SIGNAL the matched subset
-                is <tt>*actual_flags & flags</tt> (WAIT_ANY) or \a flags (WAIT_ALL). On timeout,
+                is <tt>actual_flags & flags</tt> (WAIT_ANY) or \a flags (WAIT_ALL). On timeout,
                 cancellation or failure it is the current flags word at that moment. May be \c NULL
                 if the snapshot is not needed.
     \return    \c STK_WAIT_RESULT_SIGNAL if the condition was met (matched flags cleared unless
                \c STK_EF_OPT_NO_CLEAR), otherwise \c STK_WAIT_RESULT_TIMEOUT,
                \c STK_WAIT_RESULT_CANCELED or \c STK_WAIT_RESULT_FAIL.
-    \note      Invalid arguments (\a flags is 0 or has bit 31 set) and a blocking wait from an ISR
+    \note      Invalid arguments (\a flags is 0 or has the error bit set) and a blocking wait from an ISR
                are reported as \c STK_WAIT_RESULT_FAIL, and the wait is not performed. Use
                stk_ef_wait() if the distinct \c STK_EF_ERROR_PARAMETER / \c STK_EF_ERROR_ISR codes
                are needed.
@@ -1817,8 +1847,8 @@ uint32_t stk_ef_trywait(stk_ef_t *ef, uint32_t flags, uint32_t options);
                different tick rates.
     \warning   ISR-safe only with timeout = \c STK_NO_WAIT, ISR-unsafe otherwise.
 */
-stk_wait_result_t stk_ef_wait_ex(stk_ef_t *ef, uint32_t flags, uint32_t options, stk_timeout_t timeout,
-                                 uint32_t *actual_flags);
+stk_wait_result_t stk_ef_wait_ex(stk_ef_t *ef, stk_ef_val_t flags, uint32_t options, stk_timeout_t timeout,
+                                 stk_ef_val_t *actual_flags);
 
 /*! \brief      Non-blocking flag poll with stk_wait_result_t and full flags snapshot.
     \param[in]  ef: EventFlags handle.
@@ -1829,16 +1859,18 @@ stk_wait_result_t stk_ef_wait_ex(stk_ef_t *ef, uint32_t flags, uint32_t options,
     \return     \c STK_WAIT_RESULT_SIGNAL if satisfied, otherwise a non-signal result.
     \note       ISR-safe.
 */
-stk_wait_result_t stk_ef_trywait_ex(stk_ef_t *ef, uint32_t flags, uint32_t options, uint32_t *actual_flags);
+stk_wait_result_t stk_ef_trywait_ex(stk_ef_t *ef, stk_ef_val_t flags, uint32_t options, stk_ef_val_t *actual_flags);
 
 /*! \brief     A memory size (multiples of stk_word_t) required for a rendezvous context of stk_ef_sync().
+    \note      The context holds a uint32_t generation counter followed by a flags snapshot of type
+               stk_ef_val_t, the formula includes the alignment padding between them and at the tail.
 */
-#define STK_EF_SYNC_CTX_IMPL_SIZE (2U)
+#define STK_EF_SYNC_CTX_IMPL_SIZE STK_CALC_ALIGNED_BLOCKS(sizeof(uint32_t), sizeof(stk_ef_val_t), 1U)
 
 /*! \brief     Opaque memory container for a rendezvous context.
 */
 typedef struct stk_ef_sync_ctx_mem_t {
-    stk_word_t data[STK_EF_SYNC_CTX_IMPL_SIZE] __stk_c_aligned;
+    stk_word_t data[STK_EF_SYNC_CTX_IMPL_SIZE] __stk_c_align(STK_MAX(sizeof(stk_word_t), sizeof(stk_ef_val_t)));
 } stk_ef_sync_ctx_mem_t;
 
 /*! \brief     Opaque handle to a rendezvous context.
@@ -1865,9 +1897,9 @@ void stk_ef_sync_ctx_destroy(stk_ef_sync_ctx_t *ctx);
                condition clears \a wait_flags once and \b every task blocked on the same \a ctx is released.
     \param[in]  ef: EventFlags handle.
     \param[in]  ctx: Rendezvous context shared by all participants of the group.
-    \param[in]  set_flags: Flags to set on entry. May be 0. Must not have bit 31 set.
+    \param[in]  set_flags: Flags to set on entry. May be 0. Must not have the error bit set.
     \param[in]  wait_flags: Flags which must all be set to release the group. Must not be 0 and must
-                not have bit 31 set. All participants sharing one \a ctx must pass the same value.
+                not have the error bit set. All participants sharing one \a ctx must pass the same value.
     \param[in]  timeout: Maximum time to wait in OS ticks or \a STK_WAIT_INFINITE.
                 Use \c STK_NO_WAIT for a non-blocking attempt.
     \param[out] actual_flags: Snapshot of the entire flags word when the rendezvous completed, before
@@ -1877,18 +1909,17 @@ void stk_ef_sync_ctx_destroy(stk_ef_sync_ctx_t *ctx);
                \c STK_WAIT_RESULT_TIMEOUT, \c STK_WAIT_RESULT_CANCELED or \c STK_WAIT_RESULT_FAIL.
     \warning   ISR-safe only with timeout = \c STK_NO_WAIT, ISR-unsafe otherwise.
 */
-stk_wait_result_t stk_ef_sync(stk_ef_t *ef, stk_ef_sync_ctx_t *ctx, uint32_t set_flags, uint32_t wait_flags,
-                              stk_timeout_t timeout, uint32_t *actual_flags);
+stk_wait_result_t stk_ef_sync(stk_ef_t *ef, stk_ef_sync_ctx_t *ctx, stk_ef_val_t set_flags, stk_ef_val_t wait_flags,
+                              stk_timeout_t timeout, stk_ef_val_t *actual_flags);
 
 #ifdef __cplusplus
-/*! \brief     Get the underlying C++ \c stk::sync::EventFlags object wrapped by a \c stk_ef_t handle.
+/*! \brief     Get the underlying C++ \c stk::sync::EventFlagsT<stk_ef_val_t> object wrapped by a \c stk_ef_t handle.
     \param[in] ef: EventFlags handle obtained via \c stk_ef_create().
-    \return    Pointer to the wrapped \c stk::sync::EventFlags instance. Never \c NULL for a valid handle.
+    \return    Pointer to the wrapped \c stk::sync::EventFlagsT<stk_ef_val_t> instance. Never \c NULL for a valid handle.
     \note      C++ callers only (guarded by \c __cplusplus); not part of the C ABI.
 */
-extern "C" stk::sync::EventFlags *stk_ef_get_instance(stk_ef_t *ef);
+extern "C" stk::sync::EventFlagsT<stk_ef_val_t> *stk_ef_get_instance(stk_ef_t *ef);
 #endif // __cplusplus
-
 // ----- Pipe (FIFO) -----------------------------------------------------------
 
 /*! \brief     A memory size (multiples of stk_word_t) required for a Pipe control-block.

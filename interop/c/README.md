@@ -92,10 +92,11 @@ or more typically in your project's `stk_config.h`.
 | `STK_C_CPU_COUNT` | `1` | Number of CPU cores / kernel instances |
 | `STK_C_BLOCKPOOL_MAX` | `8` | Max concurrent block pools |
 | `STK_C_BYTEPOOL_MAX` | `8` | Max concurrent byte pools |
-| `STK_C_TIMER_MAX` | `32` | Max concurrent software timers per core |
+| `STK_C_TIMER_COMMAND_QUEUE_MAX` | `32` | Capacity of each timer host's command queue (does **not** limit the number of timers; must be identical in every translation unit). The deprecated `STK_C_TIMER_MAX` is still honored if this macro is not defined |
 | `STK_C_TIMER_HANDLER_STACK_SIZE` | `256` | Stack words for the timer handler task |
 | `STK_C_TIMER_THREADS_COUNT` | `1` | Number of handler tasks serving expired timers in task mode (must be identical in every translation unit) |
 | `STK_C_SEM_VALUE_TYPE` | `uint16_t` | Semaphore counter type: `uint8_t`, `uint16_t`, `uint32_t` or `uint64_t` (see [Semaphore](#semaphore)) |
+| `STK_C_EF_VALUE_TYPE` | `uint32_t` | EventFlags word type: `uint8_t`, `uint16_t`, `uint32_t` or `uint64_t` (see [EventFlags](#eventflags)) |
 
 The most important configuration step is declaring the kernel type. See
 [Step 1](#1-configure-the-kernel-type) below.
@@ -613,9 +614,15 @@ stk_critical_section_enter();
 stk_critical_section_exit();
 ```
 
-Use the `_ex()` variants when the calling context's privilege level cannot be
-auto-detected (e.g. code that may run from either a privileged or user-mode
-task) or when threading a session value through manually:
+The plain `stk_critical_section_enter()` / `stk_critical_section_exit()` pair may be used from
+a **Privileged** thread only. From a User thread the section cannot be left properly (the exit
+has no session to restore, and User privilege may not clear the interrupt masking set on entry).
+Misuse is caught by an assertion when assertions are enabled; otherwise the behavior is undefined.
+
+Use the `_ex()` variants (the preferred API) in any code that may run in a User thread, such as
+shared library or middleware code. They work from both privilege levels: the returned session
+carries the state that the matching exit must restore. Pass the session returned by *that* call
+to its exit, and leave nested sections in reverse (LIFO) order:
 
 ```c
 stk_cs_session_t ses = stk_critical_section_enter_ex(STK_DEFAULT_CS_SESSION);
@@ -792,7 +799,14 @@ stk_event_destroy(ev);
 
 ### EventFlags
 
-A 32-bit flags word. Tasks can wait for any subset (OR) or all bits (AND).
+A flags word of type `stk_ef_val_t`, selected at build time by `STK_C_EF_VALUE_TYPE` (default
+`uint32_t`; `uint8_t`, `uint16_t` or `uint64_t` are also supported. Define it before including
+`stk_c.h`, and use the same value in every translation unit). The most significant bit is reserved
+as the error indicator (`STK_EF_ERROR_MASK`), leaving `8 * sizeof(stk_ef_val_t) - 1` usable flags
+(7, 15, 31 or 63); `STK_EF_FLAGS_MASK` covers the usable bits. The size and alignment of
+`stk_ef_mem_t` adapt automatically, and a word wider than a pointer (e.g. `uint64_t` on a 32-bit
+MCU) is read under a critical section by `stk_ef_get()`. Tasks can wait for any subset (OR) or all
+bits (AND). The examples below use the default `uint32_t`.
 
 ```c
 static stk_ef_mem_t ef_mem;
@@ -826,8 +840,11 @@ before = stk_ef_and(ef, EVT_BUTTON);
 stk_ef_destroy(ef);
 ```
 
-`stk_ef_wait()` reports errors as sentinels in bit 31 of the returned word, so a status and the flags share
-one value. `stk_ef_wait_ex()` and `stk_ef_trywait_ex()` return a `stk_wait_result_t` and give the flags
+`stk_ef_wait()` reports errors as sentinels in the most significant bit of the returned word (bit 31 for
+the default type), so a status and the flags share one value. Sentinels: `STK_EF_ERROR_PARAMETER`
+(flags is 0 or has the error bit set), `STK_EF_ERROR_TIMEOUT`, `STK_EF_ERROR_ISR` (blocking wait from an
+ISR), `STK_EF_ERROR_CANCELED` and `STK_EF_ERROR_FAIL` (kernel rejected the wait, e.g. `KERNEL_SYNC` is not
+enabled). `stk_ef_wait_ex()` and `stk_ef_trywait_ex()` return a `stk_wait_result_t` and give the flags
 separately through an out parameter (pass `NULL` if the snapshot is not needed):
 
 ```c
@@ -1204,6 +1221,36 @@ and can run in one of two modes:
 
 The two modes are mutually exclusive: call exactly one init function, before any other timer API.
 
+Timers (`stk_timer_t`) are standalone objects constructed in caller-supplied memory
+(`stk_timer_mem_t`), exactly like the synchronization primitives. There is no internal timer pool,
+so the number of timers is limited only by the memory you provide. A timer is linked into the host
+only while it is active.
+
+Control calls (`stk_timer_start()`, `stk_timer_stop()`, ...) are **asynchronous**: they place a
+command in the host's command queue (capacity `STK_C_TIMER_COMMAND_QUEUE_MAX`), and the tick task
+executes it later. They return a `stk_timer_result_t`, where `STK_TIMER_RES_OK` means only that the
+command was *accepted*. Note that `STK_TIMER_RES_OK` is `0`, so `if (stk_timer_start(...))` means
+"failed": compare against `STK_TIMER_RES_OK` explicitly. See [Synchronous API](#synchronous-api) for
+calls that report the exact outcome.
+
+| `stk_timer_result_t` | Meaning |
+|---|---|
+| `STK_TIMER_RES_OK` | Command accepted into the command queue |
+| `STK_TIMER_RES_ACTIVE` | Timer is active but the command requires it to be inactive |
+| `STK_TIMER_RES_INACTIVE` | Timer is not active but the command requires it to be |
+| `STK_TIMER_RES_NOT_PERIODIC` | Timer is not periodic but the command requires it to be |
+| `STK_TIMER_RES_QUEUED` | Synchronous API only: the caller cannot wait, the command was queued asynchronously and its outcome is unknown |
+| `STK_TIMER_RES_FAIL` | Unspecified failure |
+| `STK_TIMER_RES_NOT_READY` | Host is not initialized (or its initialization failed), or it has been shut down |
+| `STK_TIMER_RES_QUEUE_FULL` | Command queue is full and the caller cannot wait (ISR, kernel not started, polled mode, tick task) |
+| `STK_TIMER_RES_INVALID_PARAM` | An argument is out of range (e.g. zero period for `stk_timer_set_period()`) |
+| `STK_TIMER_RES_CANCELLED` | The wait for a free command queue slot was cancelled; nothing is queued |
+
+The `ACTIVE` / `INACTIVE` / `NOT_PERIODIC` checks of the asynchronous calls are advisory: they are
+evaluated from the state applied by the tick task so far. When the queue is full, a caller that can
+wait (task context, task mode) blocks until a slot is free; any other caller gets
+`STK_TIMER_RES_QUEUE_FULL`.
+
 ```c
 #include <stk_c_time.h>
 
@@ -1219,22 +1266,24 @@ void on_timer(stk_timerhost_t *host, stk_timer_t *timer, void *user_data) {
        unless you increased STK_C_TIMER_HANDLER_STACK_SIZE accordingly */
 }
 
-stk_timer_t *tmr = stk_timer_create(on_timer, NULL);
+static stk_timer_mem_t tmr_mem;                      /* must outlive the timer: static or stack, not heap */
+stk_timer_t *tmr = stk_timer_create(&tmr_mem, on_timer, NULL);   /* NULL only if membuf is NULL */
 
 /* --- Start: delay=10 ticks before first fire, period=50 ticks (repeating) ---
-   Every control call below returns bool: true on success, false if the
-   timer's preconditions weren't met or the internal command queue is full. */
-bool ok = stk_timer_start(host, tmr, 10, 50);
+   Every control call below returns stk_timer_result_t: STK_TIMER_RES_OK if the
+   command was accepted, otherwise the reason (ACTIVE, NOT_READY, QUEUE_FULL, ...). */
+stk_timer_result_t res = stk_timer_start(host, tmr, 10, 50);
+if (res != STK_TIMER_RES_OK) { /* handle */ }
 
 /* --- One-shot: period=0 means fire once --- */
-ok = stk_timer_start(host, tmr, 100, 0);
+res = stk_timer_start(host, tmr, 100, 0);
 
 /* --- Control --- */
-ok = stk_timer_stop(host, tmr);
-ok = stk_timer_reset(host, tmr);                     /* restart the current delay */
-ok = stk_timer_restart(host, tmr, 20, 50);           /* atomic stop+start with new params */
-ok = stk_timer_start_or_reset(host, tmr, 20, 50);    /* start if idle, reset if active */
-ok = stk_timer_set_period(host, tmr, 100);           /* new period takes effect next reload;
+res = stk_timer_stop(host, tmr);
+res = stk_timer_reset(host, tmr);                    /* restart the current delay */
+res = stk_timer_restart(host, tmr, 20, 50);          /* atomic stop+start with new params */
+res = stk_timer_start_or_reset(host, tmr, 20, 50);   /* start if idle, reset if active */
+res = stk_timer_set_period(host, tmr, 100);          /* new period takes effect next reload;
                                                           follow with stk_timer_reset() to
                                                           apply it immediately */
 
@@ -1245,10 +1294,46 @@ stk_timer_get_deadline(tmr);           /* absolute expiration tick of the next f
 stk_timer_get_timestamp(tmr);          /* tick count at which it last expired */
 stk_timer_get_remaining_ticks(tmr);
 
-/* --- Cleanup --- */
-stk_timer_stop(host, tmr);
-stk_timer_destroy(tmr);
+/* --- Cleanup: stop synchronously first, then destroy --- */
+stk_timer_stop_sync(host, tmr);   /* returns when the host holds no reference to the timer
+                                     and no callback of it is running */
+stk_timer_destroy(tmr);           /* NULL-safe; tmr_mem may be reused afterwards */
 ```
+
+### Synchronous API
+
+The asynchronous functions only report whether a request was accepted. The `_sync` functions queue
+the same command together with a completion point and block the caller until the tick task has
+executed it, so the result is the exact outcome (e.g. `STK_TIMER_RES_ACTIVE` for a timer that was
+already active).
+
+```c
+stk_timer_result_t r;
+r = stk_timer_start_sync(host, tmr, 10, 50);      /* OK, or ACTIVE (nothing changed) */
+r = stk_timer_activate_sync(host, tmr);           /* start with the delay/period stored in the timer */
+r = stk_timer_stop_sync(host, tmr);               /* OK if it was active, INACTIVE if not */
+r = stk_timer_restart_sync(host, tmr, 20, 50);    /* atomic stop+start */
+r = stk_timer_reset_sync(host, tmr);              /* OK, INACTIVE or NOT_PERIODIC */
+r = stk_timer_set_period_sync(host, tmr, 100);    /* OK, INACTIVE, NOT_PERIODIC or INVALID_PARAM */
+r = stk_timer_change_sync(host, tmr, 20, 50);     /* change delay/period of an INACTIVE timer, does not start it */
+
+stk_timer_info_t info;
+r = stk_timer_query_sync(host, tmr, &info);       /* consistent snapshot: active, remaining, delay, period */
+```
+
+Rules:
+
+- A call waits only where waiting is possible: task context, kernel running, task mode. From an ISR,
+  before `stk_kernel_start()`, or in polled mode the command is queued asynchronously and
+  `STK_TIMER_RES_QUEUED` is returned (`STK_TIMER_RES_QUEUE_FULL` if the queue is full).
+- A sync call blocks while the command queue is full instead of failing.
+- The tick task must be at least as urgent as every task that uses this API (see the weights in
+  `stk_timerhost_config_t`).
+- Callbacks may use this API in task mode (they run in handler tasks).
+- `stk_timer_stop_sync()` also waits until a callback of this timer that a handler task has already
+  started has returned, so after `OK` / `INACTIVE` the timer memory may be released. Called from a
+  timer callback it does not wait (deadlock guard): it only guarantees that no further callback of
+  the timer starts. Do not release a timer from a callback of another timer.
 
 ### Custom Weights and Stacks
 
@@ -1287,7 +1372,8 @@ Notes:
 ```c
 stk_timerhost_init_polled(host);   /* cannot fail; needs no kernel, task slots, weights or stacks */
 
-stk_timer_t *tmr = stk_timer_create(on_timer, NULL);
+static stk_timer_mem_t tmr_mem;
+stk_timer_t *tmr = stk_timer_create(&tmr_mem, on_timer, NULL);
 stk_timer_start(host, tmr, 10, 50);
 
 /* In one periodic context (e.g. an HRT job): */
@@ -1313,7 +1399,9 @@ stk_timerhost_is_empty(host);        /* true if no timers are currently active *
 stk_timerhost_get_size(host);        /* number of currently active timers */
 stk_timerhost_get_time_now(host);    /* host's last tick-count snapshot */
 
-bool ok = stk_timerhost_shutdown(host);  /* stops all active timers */
+stk_timer_result_t res = stk_timerhost_shutdown(host);  /* stops all active timers; OK if the request was
+                                                            accepted, else QUEUE_FULL / NOT_READY (not
+                                                            initialized or already shut down) */
 ```
 
 After `stk_timerhost_shutdown()` in task mode, the host must not be used until it is initialized
@@ -1412,8 +1500,8 @@ caller of `stk_timerhost_process()`, so it uses that task's stack and time budge
 `stk_timerhost_init()` / `stk_timerhost_init_ex()` are mutually exclusive. A host in task
 mode on an HRT kernel is rejected (`STK_ADD_FAIL_INVALID`): use polled mode there.
 
-**Mismatched `STK_C_SEM_VALUE_TYPE` / `STK_C_TIMER_THREADS_COUNT`** — Both change the layout of
-types in the public headers. Define them identically in every translation unit (and in the
+**Mismatched `STK_C_SEM_VALUE_TYPE` / `STK_C_EF_VALUE_TYPE` / `STK_C_TIMER_THREADS_COUNT` /
+`STK_C_TIMER_COMMAND_QUEUE_MAX`** — These change the layout or sizing of types in the public headers. Define them identically in every translation unit (and in the
 `.cpp` files of the binding), otherwise structure sizes will disagree.
 
 **Forgetting `KERNEL_SYNC`** — Mutex, semaphore, event, and message queue are
@@ -1422,7 +1510,21 @@ the sync API will link but the kernel has no scheduler hooks, leading to
 undefined behaviour.
 
 **Destroying an active timer** — `stk_timer_destroy()` asserts that the timer
-is not active. Always call `stk_timer_stop()` first.
+is not active. Call `stk_timer_stop_sync()` first: it returns only when the host holds no
+reference to the timer and no callback of it is running, so the timer memory can be reused safely.
+The asynchronous `stk_timer_stop()` only queues the request and gives no such guarantee.
+
+**Treating `STK_TIMER_RES_OK` as "true"** — Timer control calls return `stk_timer_result_t`, and
+`STK_TIMER_RES_OK` is `0`. `if (stk_timer_start(...))` therefore means *failed*. Compare with
+`STK_TIMER_RES_OK` explicitly. Also remember that `OK` from an asynchronous call only means the
+command was queued; use the `_sync` variants for the exact outcome.
+
+**Releasing timer memory too early** — The `stk_timer_mem_t` container must stay valid (not reused,
+not freed, not a dead stack frame) from `stk_timer_create()` until the timer is stopped and destroyed.
+
+**Using the plain critical section from a User thread** — `stk_critical_section_enter()` /
+`stk_critical_section_exit()` are for Privileged threads only. Use the `_ex()` variants in code that
+may run in a User thread.
 
 **Suspending self while holding a critical section** — Calling
 `stk_kernel_suspend_task()` on the currently running task blocks until the
@@ -1461,8 +1563,10 @@ Place these in `stk_config.h` before including any STK header.
 /* Maximum concurrent byte pools */
 #define STK_C_BYTEPOOL_MAX       4
 
-/* Maximum concurrent software timers per core */
-#define STK_C_TIMER_MAX          16
+/* Capacity of each timer host's command queue (timers themselves live in
+   caller-supplied memory and are not limited by this value).
+   The deprecated STK_C_TIMER_MAX is still honored if this is not defined. */
+#define STK_C_TIMER_COMMAND_QUEUE_MAX   16
 
 /* Stack size (words) for the timer handler task */
 #define STK_C_TIMER_HANDLER_STACK_SIZE  512
@@ -1472,6 +1576,9 @@ Place these in `stk_config.h` before including any STK header.
 
 /* Semaphore counter type: uint8_t, uint16_t, uint32_t or uint64_t */
 #define STK_C_SEM_VALUE_TYPE            uint32_t
+
+/* EventFlags word type: uint8_t, uint16_t, uint32_t or uint64_t (MSB is reserved as error bit) */
+#define STK_C_EF_VALUE_TYPE             uint32_t
 
 /* Kernel type for core 0 — required */
 #define STK_C_KERNEL_TYPE_CPU_0 \

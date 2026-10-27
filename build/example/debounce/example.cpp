@@ -93,7 +93,7 @@ namespace Board
 // the last rising edge on PA0 with no further edges in between.
 // ----------------------------------------------------------------------------
 
-struct DebounceTimer : public stk::time::TimerHost::Timer
+struct DebounceTimer : public stk::time::Timer
 {
     uint8_t m_led;
 

@@ -83,6 +83,7 @@ static stk_tick_t g_Timeline = 0;
 static stk_pipe_mem_t  s_AdcPipeMem;
 static uint8_t         s_AdcPipeBuf[8 * sizeof(AdcSample)];
 static stk_pipe_t     *g_AdcPipe;
+static stk_timer_mem_t s_AdcTimerMem;
 
 /* Kernel-suspended flag: set/cleared in the EXTI ISR. */
 static volatile bool g_KernelSuspended = false;
@@ -459,10 +460,22 @@ static void LogTaskEntry(void *arg)
         else
         {
             float deg_c = TEMP_ValueToDeg(sample.raw);
-            printf("[log] t=%d s  raw=%-4d  temp=%.2f C\n",
+
+            /* Scale by 100 to preserve 2 decimal places. */
+            int temp_scaled = (int)(deg_c * 100.0f);
+            int temp_int = temp_scaled / 100;
+            int temp_frac = temp_scaled % 100;
+            if (temp_frac < 0)
+            {
+                temp_frac = -temp_frac; /* ensure fractional part is positive */
+            }
+
+            /* Log: tick timestamp, raw counts, and temperature. */
+            printf("[log] t=%d s  raw=%-4d  temp=%d.%02d C\n",
                    (int)(sample.timestamp / 1000),
                    (int)sample.raw,
-                   (double)deg_c);
+                   temp_int,
+                   temp_frac);
         }
     }
 }
@@ -477,8 +490,6 @@ static void LogTaskEntry(void *arg)
 
 void EXTI0_IRQHandler(void)
 {
-    EXTI->PR = (1U << 0); /* acknowledge */
-
     if (!g_KernelSuspended)
     {
         stk_kernel_suspend(g_Kernel);
@@ -493,6 +504,12 @@ void EXTI0_IRQHandler(void)
         g_KernelSuspended = false;
         LedInit();
     }
+
+    /* Debounce button press */
+    for (volatile int i = 0; i < 1000000; ++i);
+
+    /* Clear the EXTI pending bit first to acknowledge the interrupt. */
+    EXTI->PR = (1U << 0);
 }
 
 /* ============================================================================
@@ -565,7 +582,7 @@ void RunExample(void)
     stk_timerhost_t *timer_host = stk_timerhost_get(0);
     stk_timerhost_init(timer_host, g_Kernel, /*privileged=*/true);
 
-    stk_timer_t *adc_timer = stk_timer_create(AdcTimerCallback, NULL);
+    stk_timer_t *adc_timer = stk_timer_create(&s_AdcTimerMem, AdcTimerCallback, NULL);
     uint32_t adc_period    = (uint32_t)stk_ticks_from_ms(2000);
     stk_timer_start(timer_host, adc_timer, adc_period, adc_period);
 
