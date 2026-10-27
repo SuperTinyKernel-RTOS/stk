@@ -2794,7 +2794,8 @@ protected:
                 // note: only currently scheduled task can be pending to sleep
                 if ((task->m_state & KernelTask::STATE_SLEEP_PENDING) != 0U)
                 {
-                    STK_ASSERT(elapsed_ticks == 1); // entry tick must be a single, uncoalesced tick
+                    // entry tick must be a single, uncoalesced tick, 0 is allowed - see Suspend()
+                    STK_ASSERT((elapsed_ticks == 0) || (elapsed_ticks == 1));
 
                     // if Wake() raced in before this entry tick ran, STATE_WAKE_PENDING is set:
                     // deliver OnTaskSleep() below as usual, then fall through to the advance block
