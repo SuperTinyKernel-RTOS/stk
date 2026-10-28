@@ -10,6 +10,7 @@ pure C API with no C++ headers required in your source files.
 
 - [Headers and Sources](#headers-and-sources)
 - [Configuration](#configuration)
+- [Version Information](#version-information)
 - [Quick Start](#quick-start)
 - [Step-by-Step Setup](#step-by-step-setup)
   - [1. Configure the Kernel Type](#1-configure-the-kernel-type)
@@ -66,7 +67,7 @@ pure C API with no C++ headers required in your source files.
 
 | File | Purpose |
 |---|---|
-| `stk_c.h` | Kernel, tasks, timing, and synchronization |
+| `stk_c.h` | Kernel, tasks, timing, synchronization, and version information |
 | `stk_c_memory.h` | Block memory pool and byte (variable-size) memory pool |
 | `stk_c_time.h` | Software timers and periodic triggers |
 
@@ -100,6 +101,46 @@ or more typically in your project's `stk_config.h`.
 
 The most important configuration step is declaring the kernel type. See
 [Step 1](#1-configure-the-kernel-type) below.
+
+---
+
+## Version Information
+
+`stk_get_version()` returns the version of the STK kernel this C binding was built with:
+
+```c
+#include "stk_c.h"
+
+stk_version_info_t v = stk_get_version();
+printf("STK %s (code 0x%08lX, rev %lu, %s)\n",
+       v.string, (unsigned long)v.code, (unsigned long)v.revision, v.git_hash);
+```
+
+| Field | Description |
+|---|---|
+| `major`, `minor`, `patch` | Numeric version parts |
+| `string` | Version string, e.g. `1.08.0`, or `1.08.0-rc1` for a pre-release |
+| `code` | Packed version `0x00MMmmpp` (same as `STK_VERSION_CODE`), for numeric comparison |
+| `revision` | Build metadata: git commit count, `0` if unknown |
+| `git_hash` | Build metadata: short git hash, `<hash>-dirty` if the working tree was modified, `"unknown"` if unavailable |
+
+`stk_get_version()` is ISR-safe: it returns compile-time constants and makes no kernel call.
+`stk_version_info_t` is layout-compatible with `stk::VersionInfo`.
+
+For compile-time checks use the `STK_VERSION_*` macros from `stk_version.h`, which can be
+included from C:
+
+```c
+#include "stk_version.h"
+
+#if !STK_VERSION_AT_LEAST(1, 8, 0)
+    #error "STK 1.8.0 or newer is required"
+#endif
+```
+
+> `STK_C_VERSION` (a date-based number such as `0x20261028`) is the version of the C interface
+> itself, not of the kernel. The revision and hash are generated at build time by CMake and fall
+> back to `0` / `"unknown"` without git history (see `stk_version.h`).
 
 ---
 

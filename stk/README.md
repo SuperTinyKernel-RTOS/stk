@@ -13,6 +13,7 @@ It covers the layout and purpose of every header and source file under `stk/`, t
 - [Directory Overview](#directory-overview)
 - [Top-Level Include Headers](#top-level-include-headers)
   - [stk_defs.h — Compiler & Configuration Foundations](#stk_defsh--compiler--configuration-foundations)
+  - [stk_version.h — Version Information](#stk_versionh--version-information)
   - [stk_linked_list.h — Intrusive List](#stk_linked_listh--intrusive-list)
   - [stk_common.h — Core Interfaces & Types](#stk_commonh--core-interfaces--types)
   - [stk_arch.h — Hardware Abstraction Layer](#stk_archh--hardware-abstraction-layer)
@@ -49,6 +50,7 @@ stk/
 │   ├── stk_defs.h                ← Compiler macros, config defaults
 │   ├── stk_helper.h              ← Task<>, TaskW<>, free-function helpers
 │   ├── stk_linked_list.h         ← Intrusive doubly-linked list (internal)
+│   ├── stk_version.h             ← Version macros, stk::GetVersion()
 │   ├── arch/
 │   │   ├── stk_arch_common.h     ← PlatformContext base class
 │   │   ├── arm/cortex-m/         ← ARM Cortex-M port header
@@ -96,13 +98,13 @@ The `include/` tree is the public API. The `src/` tree contains the architecture
 
 ## Top-Level Include Headers
 
-The six headers directly inside `include/` form the kernel's foundation layer. They are included in dependency order by `stk.h`.
+The seven headers directly inside `include/` form the kernel's foundation layer. They are included in dependency order by `stk.h` (`stk_version.h` is pulled in by `stk_defs.h`).
 
 ### stk_defs.h — Compiler & Configuration Foundations
 
 **Included by:** everything (transitively via `stk_common.h`)
 
-This is the lowest-level header. It includes `stk_config.h` first, making all user-supplied configuration visible before any STK definition is processed. It then defines:
+This is the lowest-level header. It includes `stk_config.h` first, making all user-supplied configuration visible before any STK definition is processed, then `stk_version.h` (see [below](#stk_versionh--version-information)). It then defines:
 
 - **Compiler portability macros** — `__stk_forceinline`, `__stk_aligned(x)`, `__stk_attr_naked`, `__stk_attr_noreturn`, `__stk_attr_unused`, `__stk_attr_used`, `__stk_attr_noinline`, `__stk_attr_deprecated`, `__stk_weak`, `__stk_constexpr_cpp17` for GCC, Clang/LLVM, IAR, and MSVC.
 - **Assertion macros** — `STK_ASSERT(cond)` (debug), `STK_STATIC_ASSERT(cond)`, `STK_STATIC_ASSERT_DESC(cond, msg)`.
@@ -113,6 +115,39 @@ This is the lowest-level header. It includes `stk_config.h` first, making all us
 - **`stk::Min`/`Max`/`Align`/`AlignPow2`** — constexpr compile-time helpers, plus `stk::CountLeadingZeros()`.
 
 All user configuration belongs in `stk_config.h`, which is picked up automatically by `stk_defs.h`.
+
+---
+
+### `stk_version.h` — Version Information
+
+**Included by:** `stk_defs.h` (available everywhere via `stk.h`)
+
+Single source of truth for the STK version (Semantic Versioning 2.0.0 numbering). `STK_VERSION_MAJOR`, `STK_VERSION_MINOR` and `STK_VERSION_PATCH` (each 0..255) are edited only in this header and are not overridable: defining them elsewhere, e.g. with `-D`, is a compile error. The `STK_VERSION_*` macros work from both C and C++, while `stk::VersionInfo` and `stk::GetVersion()` are C++ only (C code uses `stk_get_version()` from `stk_c.h`).
+
+| Symbol                           | Description                                                                                                              |
+|----------------------------------|--------------------------------------------------------------------------------------------------------------------------|
+| `STK_VERSION_MAJOR/MINOR/PATCH`  | Numeric version parts                                                                                                    |
+| `STK_VERSION_PRERELEASE`         | Pre-release tag, e.g. `"-rc1"`; empty for a release. Overridable by the build system                                     |
+| `STK_VERSION_STRING`             | Version string literal (the minor part is zero-padded to two digits, e.g. `1.08.0`) followed by `STK_VERSION_PRERELEASE` |
+| `STK_VERSION_CODE`               | Packed `0x00MMmmpp`, CMSIS-Core style (major in the upper halfword), usable in `#if`. The packing format is stable       |
+| `STK_VERSION_ENCODE(M, m, p)`    | Packs a version the same way as `STK_VERSION_CODE`                                                                       |
+| `STK_VERSION_AT_LEAST(M, m, p)`  | `true` if the STK version is equal to or newer than the given one, usable in `#if`                                       |
+| `STK_VERSION_CMSIS_RTOS2`        | CMSIS-RTOS2 `osVersion_t` style: `major*10,000,000 + minor*10,000 + patch` (reported by the CMSIS-RTOS2 wrapper)         |
+| `STK_VERSION_REVISION`           | Build metadata: git commit count, `0` if unknown                                                                         |
+| `STK_VERSION_GIT_HASH`           | Build metadata: short git hash, with a `-dirty` suffix if tracked files are modified, `"unknown"` if unavailable         |
+| `stk::GetVersion()`              | `constexpr` function returning `stk::VersionInfo` (`major`, `minor`, `patch`, `string`, `code`, `revision`, `git_hash`)  |
+
+**Build metadata.** `STK_VERSION_REVISION` and `STK_VERSION_GIT_HASH` do not take part in version ordering. CMake generates them into `stk_revision.h` at build time (`ENABLE_REVISION=ON`, the default; see `build/cmake/GenerateRevision.cmake` and `gen_revision.py`) and defines `STK_REVISION_HEADER` so that `stk_version.h` includes it. Without git, Python or history (source archive, shallow clone, other build systems, `-DENABLE_REVISION=OFF`) they fall back to `0` and `"unknown"`. CI jobs should check out the full history (`fetch-depth: 0` in `actions/checkout`), otherwise the commit count is wrong.
+
+```cpp
+#include <stk.h>
+
+#if !STK_VERSION_AT_LEAST(1, 8, 0)
+    #error "STK 1.8.0 or newer is required"
+#endif
+
+const stk::VersionInfo v = stk::GetVersion(); // v.string, v.code, v.revision, v.git_hash
+```
 
 ---
 
@@ -789,6 +824,7 @@ User application code
         │       └── stk_arch.h  (hw:: namespace, arch selection)    │
         │               └── stk_common.h  (IKernel, ITask, etc.)    │
         │                       └── stk_defs.h  (macros, stk_config.h)
+        │                               └── stk_version.h  (version macros, optional stk_revision.h)
         │
         ├── strategy/stk_strategy_*.h  (compile-time strategy selection)
         │
