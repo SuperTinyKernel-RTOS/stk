@@ -26,7 +26,9 @@
            STK_TICKLESS_IDLE, STK_SEGGER_SYSVIEW) are visible to all definitions below.
            Refer to stk_config.h and project examples for configuration details.
 */
+
 #include "stk_config.h"
+#include "stk_version.h"
 
 /*! \def   STK_TICKLESS_IDLE
     \brief Enables tickless (dynamic-tick) low-power operation during idle periods.
@@ -741,10 +743,23 @@ struct STK_ALLOCATE_COUNT
 */
 #define STK_STATIC_ARRAY_SIZE(ARRAY) static_cast<size_t>(sizeof(ARRAY) / sizeof(ARRAY[0]))
 
-/*! \namespace stk
-    \brief     Namespace of STK package.
- */
+/*! \brief     A wrapper for a built-in memcpy, redefine to your own if required.
+    \note      Can be overridden by defining _STK_CUSTOM_MEMCPY in system configuration.
+*/
+#ifndef _STK_CUSTOM_MEMCPY
+static void STK_MEMCPY(void *const dest, const void *const src, const size_t size);
+#endif
+
+/*! \brief     A wrapper for a built-in memset, redefine to your own if required.
+    \note      Can be overridden by defining _STK_CUSTOM_MEMSET in system configuration.
+*/
+#ifndef _STK_CUSTOM_MEMSET
+static void STK_MEMSET(void *const dest, const uint8_t value, const size_t size);
+#endif
+
+// ----------------------------------------------------------------------------
 namespace stk {
+// ----------------------------------------------------------------------------
 
 /*! \brief Compile-time minimum of two values.
     \note  Arguments are evaluated exactly once, safe for any expression type.
@@ -808,23 +823,11 @@ static __stk_forceinline uint32_t CountLeadingZeros(const uint32_t value) noexce
 /*! \namespace stk::util
     \brief     Internal utility namespace containing data structure helpers (linked lists, etc.)
                used by the kernel implementation. Not part of the public user API.
- */
+*/
 namespace util {}
 
+// ----------------------------------------------------------------------------
 } // namespace stk
-
-/*! \brief     A wrapper for a built-in memcpy, redefine to your own if required.
-    \note      Can be overridden by defining _STK_CUSTOM_MEMCPY in system configuration.
-*/
-#ifndef _STK_CUSTOM_MEMCPY
-static void STK_MEMCPY(void *const dest, const void *const src, const size_t size);
-#endif
-
-/*! \brief     A wrapper for a built-in memset, redefine to your own if required.
-    \note      Can be overridden by defining _STK_CUSTOM_MEMSET in system configuration.
-*/
-#ifndef _STK_CUSTOM_MEMSET
-static void STK_MEMSET(void *const dest, const uint8_t value, const size_t size);
-#endif
+// ----------------------------------------------------------------------------
 
 #endif /* STK_DEFS_H_ */

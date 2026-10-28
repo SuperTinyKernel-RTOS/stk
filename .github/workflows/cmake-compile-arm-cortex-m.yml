@@ -34,6 +34,8 @@ jobs:
     
     - name: Checkout
       uses: actions/checkout@v6
+      with:
+        fetch-depth: 0
 
     - name: ${{matrix.name}}
       run: cmake -G "Unix Makefiles" -B ${{github.workspace}}/build -DCMAKE_TOOLCHAIN_FILE=build/cmake/toolchain/arm-none-eabi-gcc.cmake -DVENDOR_STM32=ON ${{matrix.cmake_flags}} -DBUILD_LIB=ON -DBUILD_C_IFACE=ON

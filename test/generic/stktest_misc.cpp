@@ -62,6 +62,25 @@ TEST(Basic, MinMax)
     }
 }
 
+TEST(Basic, GetVersion)
+{
+    const VersionInfo v = stk::GetVersion();
+
+    // numeric fields match the definitions
+    CHECK_EQUAL(STK_VERSION_MAJOR, v.major);
+    CHECK_EQUAL(STK_VERSION_MINOR, v.minor);
+    CHECK_EQUAL(STK_VERSION_PATCH, v.patch);
+
+    // version string and build metadata match the definitions
+    STRCMP_EQUAL(STK_VERSION_STRING, v.string);
+    STRCMP_EQUAL(STK_VERSION_GIT_HASH, v.git_hash);
+    CHECK_EQUAL(static_cast<uint32_t>(STK_VERSION_REVISION), v.revision);
+
+    // packed code matches the definition and is consistent with the returned fields (0x00MMmmpp)
+    CHECK_EQUAL(static_cast<uint32_t>(STK_VERSION_CODE), v.code);
+    CHECK_EQUAL(static_cast<uint32_t>(STK_VERSION_ENCODE(v.major, v.minor, v.patch)), v.code);
+}
+
 TEST(Basic, ISwitchStrategyStub)
 {
     SwitchStrategyRR ss;

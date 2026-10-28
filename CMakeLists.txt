@@ -15,11 +15,11 @@ project(global)
 option(VENDOR_STM32   "Target STM32 devices" OFF)
 
 # Add static lib option
-option(BUILD_LIB      "build Library"        OFF)
-option(BUILD_C_IFACE  "build C interface"    OFF)
-#option(BUILD_EXAMPLES "build Examples"       OFF)
-option(BUILD_TESTS    "build Tests"          OFF)
-option(BUILD_DOC      "build Documentation"  OFF)
+option(BUILD_LIB      "Build Library"        OFF)
+option(BUILD_C_IFACE  "Build C interface"    OFF)
+#option(BUILD_EXAMPLES "Build Examples"       OFF)
+option(BUILD_TESTS    "Build Tests"          OFF)
+option(BUILD_DOC      "Build Documentation"  OFF)
 
 # Include CTest for running tests
 if (BUILD_TESTS)
@@ -96,7 +96,7 @@ if (ENABLE_TLS)
     set(STK_TLS 1)
 endif()
 
-# Create stk_config.h (note: must be defined after inclusion of the projects to catch value of _STK_DEVICE_INC)
+# Create stk_config.h (note: must be defined after inclusion of the projects to catch the value of _STK_DEVICE_INC)
 if (WIN32)
     set(_STK_ARCH_X86_WIN32 TRUE)
     message(STATUS "Platform define: _STK_ARCH_X86_WIN32")

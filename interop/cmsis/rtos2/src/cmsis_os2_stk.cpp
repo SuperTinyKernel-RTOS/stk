@@ -21,8 +21,8 @@
 // -----------------------------------------------------------------------------
 
 #define STK_WRAPPER_API_VERSION     20030000UL // 2.3.0
-#define STK_WRAPPER_KERNEL_VERSION  20030000UL
-#define STK_WRAPPER_KERNEL_ID       "STK RTOS2 Wrapper v1.1"
+#define STK_WRAPPER_KERNEL_VERSION  STK_VERSION_CMSIS_RTOS2
+#define STK_WRAPPER_KERNEL_ID       "STK " STK_VERSION_STRING
 
 // -----------------------------------------------------------------------------
 // Kernel configuration
