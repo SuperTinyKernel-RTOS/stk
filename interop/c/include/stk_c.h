@@ -63,7 +63,7 @@ extern "C" {
 /*! \def       STK_C_VERSION
     \brief     Interface version.
 */
-#define STK_C_VERSION 0x20261027
+#define STK_C_VERSION 0x20261028
 
 // =============================================================================
 // Configuration macros (can be overridden before including this file)
@@ -338,6 +338,34 @@ typedef enum stk_resume_result_t {
 #else
     #define __stk_c_aligned
 #endif
+
+// =============================================================================
+// Version
+// =============================================================================
+
+/*! \brief     Version information descriptor.
+    \note      Layout-compatible with stk::VersionInfo (see stk_version.h).
+    \see       stk_get_version()
+*/
+typedef struct stk_version_info_t
+{
+    uint8_t     major;     //!< Major version number.
+    uint8_t     minor;     //!< Minor version number.
+    uint8_t     patch;     //!< Patch version number.
+    const char *string;    //!< Version string: "xx.xx.xx" or "xx.xx.xx-rc1".
+    uint32_t    code;      //!< Packed version, STK_VERSION_CODE (0x00MMmmpp).
+    uint32_t    revision;  //!< Build metadata: git commit count, 0 if unknown.
+    const char *git_hash;  //!< Build metadata: short git hash, "<hash>-dirty" if modified, "unknown" if unavailable.
+} stk_version_info_t;
+
+/*! \brief     Get version information of the STK kernel this C binding was built with.
+    \return    stk_version_info_t structure containing major, minor, patch, version string, packed code,
+               revision and git hash.
+    \note      ISR-safe (returns compile-time constants, no kernel call).
+    \note      Compile-time checks can use the STK_VERSION_* macros from stk_version.h,
+               e.g. \c #if STK_VERSION_AT_LEAST(1, 8, 0).
+*/
+stk_version_info_t stk_get_version(void);
 
 // =============================================================================
 // Kernel factory functions

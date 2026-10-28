@@ -309,6 +309,25 @@ void FreeTask(const stk_task_t *tsk)
 extern "C" {
  
 // -----------------------------------------------------------------------------
+// Version
+// -----------------------------------------------------------------------------
+stk_version_info_t stk_get_version(void)
+{
+    const stk::VersionInfo vi = stk::GetVersion();
+
+    stk_version_info_t ret;
+    ret.major    = vi.major;
+    ret.minor    = vi.minor;
+    ret.patch    = vi.patch;
+    ret.string   = vi.string;
+    ret.code     = vi.code;
+    ret.revision = vi.revision;
+    ret.git_hash = vi.git_hash;
+
+    return ret;
+}
+
+// -----------------------------------------------------------------------------
 // Kernel create/destroy wrappers
 // -----------------------------------------------------------------------------
 #define STK_PP_CAT(A, B)        A##B

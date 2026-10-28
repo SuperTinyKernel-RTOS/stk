@@ -11,8 +11,8 @@ set(TARGET_NAME stk)
 project(${TARGET_NAME})
 message(STATUS "- " ${TARGET_NAME})
 
-option(ENABLE_TICKLESS "enable Tickless mode usage" OFF)
-option(ENABLE_TLS      "enable TLS"                 OFF)
+option(ENABLE_TICKLESS "Enable Tickless mode usage" OFF)
+option(ENABLE_TLS      "Enable TLS"                 OFF)
 
 # Includes
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -42,6 +42,10 @@ set(STK_LIB_SRC ${STK_LIB_SRC} ${STK_LIB_SRC_ARM_CORTEX_M} ${STK_LIB_SRC_RISC_V}
 
 # Target
 add_library(${TARGET_NAME} STATIC ${STK_LIB_SRC})
+
+# Generate stk_revision.h (if enabled)
+include(${CMAKE_CURRENT_SOURCE_DIR}/../build/cmake/GenerateRevision.cmake)
+stk_generate_revision(${TARGET_NAME} ROOT ${CMAKE_CURRENT_SOURCE_DIR}/..)
 
 # Tests
 if (BUILD_TESTS)
