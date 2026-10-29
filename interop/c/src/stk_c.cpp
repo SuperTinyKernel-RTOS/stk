@@ -7,6 +7,33 @@
  * License: MIT License, see LICENSE for a full text.
  */
 
+/*
+ * MISRA C++ notes for this translation unit:
+ *  - Every function has a single point of exit (Rule 6-6-5). Error paths are expressed with
+ *    a 'result' variable and nested if/else, never early return.
+ *  - 'continue' is not used and no loop has more than one 'break' (Rules 6-6-3, 6-6-4);
+ *    where a loop must stop on a found element, the exit condition is expressed in the loop
+ *    condition itself ('found' flag) or by a single 'break'. The 'break' statements in
+ *    stk_kernel_create() terminate switch cases (Rule 6-4-5), not loops.
+ *  - Every 'switch' has a 'default' clause (Rule 6-4-6).
+ *  - Objects and functions private to this file have internal linkage (Rule 3-3-1): helper
+ *    functions, s_Tasks and s_KernelMap are 'static'.
+ *  - Remaining, intentional deviations:
+ *      Rule 3-9-2     : 'int32_t' is used in static_cast<int32_t>() of the C/C++ enum consistency checks.
+ *      Rule 5-2-5     : const_cast in stk_kernel_is_schedulable() (IKernel::GetSwitchStrategy() is non-const).
+ *      Rule 5-2-7/8/9 : reinterpret_cast (via void *) in the Cast*() helpers converting between
+ *                       the opaque C handles (stk_kernel_t, stk_task_t) and their C++ objects.
+ *      Rule 7-3-1     : TaskWrapper, EventOverrider, KernelRegistryEntry, TaskSlot and stk_task_t
+ *                       are declared in the global namespace; the C API handles must be visible
+ *                       to the C header (stk_task_t) and the rest is only referenced in this file.
+ *      Rule 7-3-4     : using-directive (namespace stk).
+ *      Rule 10-3-2    : explicit virtual destructor of TaskWrapper / EventOverrider, see [STK-DEV-005].
+ *      Rule 16-0-4    : function-like macros (STK_PP_CAT*, STK_KERNEL_*) generate the per-core kernel
+ *                       storage and its construction; the number of cores is configured at build time.
+ *      Rule 18-4-1    : placement new in stk_kernel_create(), objects are constructed in static
+ *                       storage, no dynamic memory is allocated.
+ */
+
 #include <stk.h>
 #include "stk_c.h"              // must be included AFTER stk.h
 #include "stk_c_time.h"
@@ -432,10 +459,10 @@ void stk_kernel_start(stk_kernel_t *k)
 stk_kernel_state_t stk_kernel_get_state(const stk_kernel_t *k)
 {
     // C state enum must stay in sync with its C++ counterpart (value is cast directly)
-    STK_STATIC_ASSERT_DESC(static_cast<int>(STK_KERNEL_STATE_INACTIVE)  == static_cast<int>(stk::IKernel::KSTATE_INACTIVE),  "stk_kernel_state_t mismatch");
-    STK_STATIC_ASSERT_DESC(static_cast<int>(STK_KERNEL_STATE_READY)     == static_cast<int>(stk::IKernel::KSTATE_READY),     "stk_kernel_state_t mismatch");
-    STK_STATIC_ASSERT_DESC(static_cast<int>(STK_KERNEL_STATE_RUNNING)   == static_cast<int>(stk::IKernel::KSTATE_RUNNING),   "stk_kernel_state_t mismatch");
-    STK_STATIC_ASSERT_DESC(static_cast<int>(STK_KERNEL_STATE_SUSPENDED) == static_cast<int>(stk::IKernel::KSTATE_SUSPENDED), "stk_kernel_state_t mismatch");
+    STK_STATIC_ASSERT_DESC(static_cast<int32_t>(STK_KERNEL_STATE_INACTIVE)  == static_cast<int32_t>(stk::IKernel::KSTATE_INACTIVE),  "stk_kernel_state_t mismatch");
+    STK_STATIC_ASSERT_DESC(static_cast<int32_t>(STK_KERNEL_STATE_READY)     == static_cast<int32_t>(stk::IKernel::KSTATE_READY),     "stk_kernel_state_t mismatch");
+    STK_STATIC_ASSERT_DESC(static_cast<int32_t>(STK_KERNEL_STATE_RUNNING)   == static_cast<int32_t>(stk::IKernel::KSTATE_RUNNING),   "stk_kernel_state_t mismatch");
+    STK_STATIC_ASSERT_DESC(static_cast<int32_t>(STK_KERNEL_STATE_SUSPENDED) == static_cast<int32_t>(stk::IKernel::KSTATE_SUSPENDED), "stk_kernel_state_t mismatch");
 
     STK_ASSERT(k != nullptr);
 
@@ -453,10 +480,10 @@ bool stk_kernel_is_schedulable(const stk_kernel_t *k)
 stk_add_result_t stk_kernel_add_task(stk_kernel_t *k, stk_task_t *tsk)
 {
     // C result enum must stay in sync with its C++ counterpart (values are cast directly)
-    STK_STATIC_ASSERT_DESC(static_cast<int>(STK_ADD_FAIL_INVALID)   == static_cast<int>(stk::ADD_FAIL_INVALID),   "stk_add_result_t mismatch");
-    STK_STATIC_ASSERT_DESC(static_cast<int>(STK_ADD_FAIL_DUPLICATE) == static_cast<int>(stk::ADD_FAIL_DUPLICATE), "stk_add_result_t mismatch");
-    STK_STATIC_ASSERT_DESC(static_cast<int>(STK_ADD_FAIL_POOL_FULL) == static_cast<int>(stk::ADD_FAIL_POOL_FULL), "stk_add_result_t mismatch");
-    STK_STATIC_ASSERT_DESC(static_cast<int>(STK_ADD_OK)             == static_cast<int>(stk::ADD_OK),             "stk_add_result_t mismatch");
+    STK_STATIC_ASSERT_DESC(static_cast<int32_t>(STK_ADD_FAIL_INVALID)   == static_cast<int32_t>(stk::ADD_FAIL_INVALID),   "stk_add_result_t mismatch");
+    STK_STATIC_ASSERT_DESC(static_cast<int32_t>(STK_ADD_FAIL_DUPLICATE) == static_cast<int32_t>(stk::ADD_FAIL_DUPLICATE), "stk_add_result_t mismatch");
+    STK_STATIC_ASSERT_DESC(static_cast<int32_t>(STK_ADD_FAIL_POOL_FULL) == static_cast<int32_t>(stk::ADD_FAIL_POOL_FULL), "stk_add_result_t mismatch");
+    STK_STATIC_ASSERT_DESC(static_cast<int32_t>(STK_ADD_OK)             == static_cast<int32_t>(stk::ADD_OK),             "stk_add_result_t mismatch");
 
     STK_ASSERT(k != nullptr);
     STK_ASSERT(tsk != nullptr);
@@ -491,10 +518,10 @@ void stk_kernel_schedule_task_removal(stk_kernel_t *k, stk_task_t *tsk)
 stk_suspend_result_t stk_kernel_suspend_task(stk_kernel_t *k, stk_task_t *tsk)
 {
     // C result enums must stay in sync with their C++ counterparts (values are cast directly)
-    STK_STATIC_ASSERT_DESC(static_cast<int>(STK_SUSPEND_FAIL)     == static_cast<int>(stk::SUSPEND_FAIL),     "stk_suspend_result_t mismatch");
-    STK_STATIC_ASSERT_DESC(static_cast<int>(STK_SUSPEND_DONE)     == static_cast<int>(stk::SUSPEND_DONE),     "stk_suspend_result_t mismatch");
-    STK_STATIC_ASSERT_DESC(static_cast<int>(STK_SUSPEND_DEFERRED) == static_cast<int>(stk::SUSPEND_DEFERRED), "stk_suspend_result_t mismatch");
-    STK_STATIC_ASSERT_DESC(static_cast<int>(STK_SUSPEND_ALREADY)  == static_cast<int>(stk::SUSPEND_ALREADY),  "stk_suspend_result_t mismatch");
+    STK_STATIC_ASSERT_DESC(static_cast<int32_t>(STK_SUSPEND_FAIL)     == static_cast<int32_t>(stk::SUSPEND_FAIL),     "stk_suspend_result_t mismatch");
+    STK_STATIC_ASSERT_DESC(static_cast<int32_t>(STK_SUSPEND_DONE)     == static_cast<int32_t>(stk::SUSPEND_DONE),     "stk_suspend_result_t mismatch");
+    STK_STATIC_ASSERT_DESC(static_cast<int32_t>(STK_SUSPEND_DEFERRED) == static_cast<int32_t>(stk::SUSPEND_DEFERRED), "stk_suspend_result_t mismatch");
+    STK_STATIC_ASSERT_DESC(static_cast<int32_t>(STK_SUSPEND_ALREADY)  == static_cast<int32_t>(stk::SUSPEND_ALREADY),  "stk_suspend_result_t mismatch");
     
     STK_ASSERT(k != nullptr);
     STK_ASSERT(tsk != nullptr);
@@ -505,10 +532,10 @@ stk_suspend_result_t stk_kernel_suspend_task(stk_kernel_t *k, stk_task_t *tsk)
 stk_resume_result_t stk_kernel_resume_task(stk_kernel_t *k, stk_task_t *tsk)
 {
     // C result enums must stay in sync with their C++ counterparts (values are cast directly)
-    STK_STATIC_ASSERT_DESC(static_cast<int>(STK_RESUME_FAIL)          == static_cast<int>(stk::RESUME_FAIL),          "stk_resume_result_t mismatch");
-    STK_STATIC_ASSERT_DESC(static_cast<int>(STK_RESUME_NOT_SUSPENDED) == static_cast<int>(stk::RESUME_NOT_SUSPENDED), "stk_resume_result_t mismatch");
-    STK_STATIC_ASSERT_DESC(static_cast<int>(STK_RESUME_DONE)          == static_cast<int>(stk::RESUME_DONE),          "stk_resume_result_t mismatch");
-    STK_STATIC_ASSERT_DESC(static_cast<int>(STK_RESUME_LIFTED)        == static_cast<int>(stk::RESUME_LIFTED),        "stk_resume_result_t mismatch");
+    STK_STATIC_ASSERT_DESC(static_cast<int32_t>(STK_RESUME_FAIL)          == static_cast<int32_t>(stk::RESUME_FAIL),          "stk_resume_result_t mismatch");
+    STK_STATIC_ASSERT_DESC(static_cast<int32_t>(STK_RESUME_NOT_SUSPENDED) == static_cast<int32_t>(stk::RESUME_NOT_SUSPENDED), "stk_resume_result_t mismatch");
+    STK_STATIC_ASSERT_DESC(static_cast<int32_t>(STK_RESUME_DONE)          == static_cast<int32_t>(stk::RESUME_DONE),          "stk_resume_result_t mismatch");
+    STK_STATIC_ASSERT_DESC(static_cast<int32_t>(STK_RESUME_LIFTED)        == static_cast<int32_t>(stk::RESUME_LIFTED),        "stk_resume_result_t mismatch");
     
     STK_ASSERT(k != nullptr);
     STK_ASSERT(tsk != nullptr);

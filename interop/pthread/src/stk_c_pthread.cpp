@@ -15,8 +15,10 @@
 #include "stk.h"           // C++ API: ITask / IKernel / hw::* / Sleep / Yield / GetTimeNowMs
 #include "sync/stk_sync.h" // C++ API: sync::Mutex / ConditionVariable / RWMutex / SpinLock / Barrier / Event / Semaphore
 
-#include "stk_c.h"
-#include "stk_c_memory.h"
+#include <memory/stk_memory.h> // C++ API: memory::BlockMemoryPool (stack pool)
+
+// Independent of the C API: neither stk_c.h nor any stk_* C function is used, everything below talks to the
+// kernel through the C++ API directly (the ABI types come from stk_c_pthread.h itself).
 #include "stk_c_pthread.h"
 
 #if !STK_TLS
@@ -34,15 +36,15 @@
  *  - Remaining, intentional deviations:
  *      Rule 3-9-2   : pthread API signatures mandate the use of 'int' / 'unsigned int'.
  *      Rule 5-2-5   : const_cast in pthread_setspecific() (POSIX takes 'const void *').
- *      Rule 5-2-7/8/9 : reinterpret_cast in ToKernel() and the stack pool bootstrap.
+ *      Rule 5-2-7/8/9 : reinterpret_cast of the stack pool storage and of the bound kernel pointer.
  *      Rule 7-3-4   : using-directives (namespace stk / stk::pthread).
  *      Rule 18-4-1  : malloc()/free() for non-default stack sizes, placement new for sync objects.
  */
 
-// RAII critical section (same session semantics as stk_critical_section_enter_ex(DEFAULT)).
+// RAII critical section (default session semantics).
 typedef stk::hw::CriticalSection::ScopedLock CsLock;
 
-// Private malloc/free declarations (mirrors stk_c_memory.cpp): overcomes absence of
+// Private malloc/free declarations (same as in stk_c_memory.cpp): overcomes absence of
 // declarations under a -ffreestanding compiler flag. Only used for the "unusual"
 // stack-size fallback path; the common-size path is served entirely from a static
 // BlockMemoryPool with zero heap use.
@@ -64,6 +66,20 @@ using namespace stk;
 namespace stk {
 namespace pthread {
 
+// Constructs T in-place inside an opaque storage container (anything exposing a 'data' member, e.g. the
+// pthread_stk_*_mem_t of stk_c_pthread.h). Compile-time checks that the container is large and aligned enough
+// for T (a mismatch with the C++ object sizes is a build error, not memory corruption).
+template <typename T, typename Mem, typename... Args>
+static inline T *ConstructIn(Mem &mem, Args &&... args)
+{
+    static_assert(sizeof(T) <= sizeof(Mem), "opaque storage is too small for the C++ object");
+    static_assert(alignof(T) <= alignof(Mem), "opaque storage is not sufficiently aligned for the C++ object");
+
+    STK_ASSERT((reinterpret_cast<uintptr_t>(mem.data) % alignof(T)) == 0U);
+
+    return new (static_cast<void *>(mem.data)) T(static_cast<Args &&>(args)...);
+}
+
 // -----------------------------------------------------------------------------
 // PthreadTask: the kernel-facing task object embedded in every thread control block.
 // -----------------------------------------------------------------------------
@@ -78,7 +94,7 @@ public:
     */
     STK_VIRT_DTOR ~PthreadTask() = default;
 
-    void Initialize(pthread_stk_ctrl_t *ctrl, stk_word_t *stack, size_t stack_size, EAccessMode mode)
+    void Initialize(pthread_stk_ctrl_t *ctrl, pthread_stk_word_t *stack, size_t stack_size, EAccessMode mode)
     {
         m_ctrl       = ctrl;
         m_stack      = stack;
@@ -99,10 +115,10 @@ private:
     STK_NONCOPYABLE_CLASS(PthreadTask);
 
     void Run() override;    // thread trampoline, see below
-    void OnExit() override; // sets pthread_stk_ctrl_t::exited
+    void OnExit() override; // signals pthread_stk_ctrl_t::done_event (kernel context, ISR-safe primitive only)
 
     pthread_stk_ctrl_t *m_ctrl;
-    stk_word_t         *m_stack;
+    pthread_stk_word_t         *m_stack;
     size_t              m_stack_size;
     EAccessMode         m_mode;
 };
@@ -126,7 +142,6 @@ struct pthread_stk_ctrl_t
         detached        = false;
         joined          = false;
         reclaimed       = false;
-        exited          = false;
         adopted         = false;
         start_routine   = nullptr;
         arg             = nullptr;
@@ -143,11 +158,10 @@ struct pthread_stk_ctrl_t
     }
 
     bool             busy;
-    bool             finished;   // start_routine returned / pthread_exit() called
+    bool             finished;   // start_routine returned / pthread_exit() called (retval is valid)
     bool             detached;
     bool             joined;
     bool             reclaimed;  // resources already freed or handed to the reaper
-    bool             exited;     // kernel invoked PthreadTask::OnExit(): task is gone, stack no longer in use
     bool             adopted;    // control block wraps a foreign task (e.g. bootstrap task), see CurrentCtrlOrAdopt()
 
     stk::pthread::PthreadTask task;
@@ -155,7 +169,7 @@ struct pthread_stk_ctrl_t
     void            *arg;
     void            *retval;
 
-    stk_word_t      *stack;
+    pthread_stk_word_t      *stack;
     bool             stack_owned;     // false => caller-supplied via pthread_attr_setstack()
     bool             stack_from_pool; // true  => came from s_StackPool, else malloc()
 
@@ -173,7 +187,7 @@ namespace pthread {
 using ThreadCtrl = pthread_stk_ctrl_t;
 
 constexpr std::size_t kDefaultStackBytes =
-    static_cast<std::size_t>(STK_C_PTHREAD_DEFAULT_STACK_WORDS) * sizeof(stk_word_t);
+    static_cast<std::size_t>(STK_C_PTHREAD_DEFAULT_STACK_WORDS) * sizeof(pthread_stk_word_t);
 
 // pthread_once_t::__state values
 constexpr int kOnceRunning = 1;
@@ -185,16 +199,10 @@ static ThreadCtrl s_Threads[STK_C_PTHREAD_MAX_THREADS];
 // Small helpers
 // -----------------------------------------------------------------------------
 
-// Same cast the C layer (stk_c.cpp) uses: an stk_kernel_t* *is* the IKernel object.
-static inline IKernel *ToKernel(stk_kernel_t *k)
-{
-    return reinterpret_cast<IKernel *>(reinterpret_cast<void *>(k));
-}
-
 // Acquire/release accessors used by every lazy-init fast path below. The unlocked
 // "is it initialized yet?" check of a double-checked pattern must be an *acquire*
 // load, and the publishing store a *release* store; otherwise on a multi-core
-// configuration (STK_C_CPU_COUNT > 1) another core can observe the non-NULL handle
+// configuration (multi-core kernel) another core can observe the non-NULL handle
 // before it observes the object the handle points to.
 #if defined(__GNUC__) || defined(__clang__)
 template <typename T> static inline T LoadAcquire(T *p)          { return __atomic_load_n(p, __ATOMIC_ACQUIRE); }
@@ -257,17 +265,25 @@ static void RunKeyDestructors(ThreadCtrl *ctrl);
 // -----------------------------------------------------------------------------
 // Bound kernel
 // -----------------------------------------------------------------------------
-static stk_kernel_t *s_BoundKernel = nullptr;
+static IKernel *s_BoundKernel = nullptr;
 
 // -----------------------------------------------------------------------------
-// Static stack pool (zero heap) for default-size stacks
+// Static stack pool (zero heap) for default-size stacks: a plain C++ BlockMemoryPool over static storage
 // -----------------------------------------------------------------------------
-STK_BLOCKPOOL_STORAGE_DECL(s_PthreadStackStorage, STK_C_PTHREAD_MAX_THREADS, kDefaultStackBytes);
-static stk_blockpool_t *s_StackPool = nullptr;
+typedef stk::memory::BlockMemoryPool StackPool;
 
-static stk_blockpool_t *EnsureStackPool()
+static constexpr std::size_t kStackPoolBytes = STK_C_PTHREAD_MAX_THREADS * StackPool::AlignBlockSize(kDefaultStackBytes);
+static_assert((kStackPoolBytes % sizeof(pthread_stk_word_t)) == 0U, "stack pool block size must be a multiple of the stack word size");
+
+alignas(STK_STACK_MEMORY_ALIGN) static pthread_stk_word_t s_PthreadStackStorage[kStackPoolBytes / sizeof(pthread_stk_word_t)];
+static StackPool *s_StackPool = nullptr;
+static struct {
+    alignas(StackPool) uint8_t data[sizeof(StackPool)];
+} s_StackPoolBuf;
+
+static StackPool *EnsureStackPool()
 {
-    stk_blockpool_t *pool = LoadAcquire(&s_StackPool);
+    StackPool *pool = LoadAcquire(&s_StackPool);
     if (pool == nullptr)
     {
         const CsLock cs_;
@@ -275,12 +291,12 @@ static stk_blockpool_t *EnsureStackPool()
         pool = s_StackPool;
         if (pool == nullptr)
         {
-            pool = stk_blockpool_create_static(
-                STK_C_PTHREAD_MAX_THREADS,
-                kDefaultStackBytes,
-                reinterpret_cast<uint8_t *>(s_PthreadStackStorage),
-                sizeof(s_PthreadStackStorage),
-                "pthread_stacks");
+            pool = ConstructIn<StackPool>(s_StackPoolBuf,
+                                          STK_C_PTHREAD_MAX_THREADS,
+                                          kDefaultStackBytes,
+                                          reinterpret_cast<uint8_t *>(s_PthreadStackStorage),
+                                          sizeof(s_PthreadStackStorage),
+                                          "pthread_stacks");
             StoreRelease(&s_StackPool, pool);
         }
     }
@@ -297,6 +313,8 @@ static std::size_t  s_ReapCount = 0U;
 
 // Counts the entries of s_ReapQueue: bounded by the queue capacity, so a signal beyond it (a defect) is caught
 // by the semaphore's own contract (Signal() asserts) instead of silently over-counting.
+static_assert(sizeof(pthread_stk_word_t) == sizeof(Word), "pthread_stk_word_t must match stk::Word");
+
 typedef sync::SemaphoreT<uint16_t> ReapSemaphore;
 static_assert(STK_C_PTHREAD_MAX_THREADS <= ReapSemaphore::COUNT_MAX, "ReapSemaphore counter is too narrow for STK_C_PTHREAD_MAX_THREADS");
 
@@ -304,61 +322,80 @@ static ReapSemaphore *s_ReapSem = nullptr;
 static struct {
     alignas(ReapSemaphore) uint8_t data[sizeof(ReapSemaphore)];
 } s_ReapSemBuf;
-static stk_task_t  *s_ReaperTask = nullptr;
-static stk_word_t   s_ReaperStack[STK_C_PTHREAD_REAPER_STACK_WORDS];
+
+// Internal reaper task: a statically allocated ITask (no C task handle, no heap), added to the kernel on first use.
+class ReaperTask final : public ITask
+{
+public:
+    explicit ReaperTask() : m_stack()
+    {}
+
+    STK_VIRT_DTOR ~ReaperTask() = default;
+
+    EAccessMode GetAccessMode() const override { return ACCESS_USER; }
+    int32_t     GetWeight()     const override { return DEFAULT_WEIGHT; }
+    const char *GetTraceName()  const override { return "pthread_reaper"; }
+    const Word *GetStack()      const override { return m_stack; }
+    size_t      GetStackSize()  const override { return STK_C_PTHREAD_REAPER_STACK_WORDS; }
+
+private:
+    STK_NONCOPYABLE_CLASS(ReaperTask);
+
+    void Run() override; // reaper loop, see below
+
+    alignas(STK_STACK_MEMORY_ALIGN) pthread_stk_word_t m_stack[STK_C_PTHREAD_REAPER_STACK_WORDS];
+};
+
+static ReaperTask s_Reaper;
+static bool       s_ReaperAdded = false;
 
 static void ReleaseThreadResources(ThreadCtrl *ctrl);
-static void WaitForTaskExit(ThreadCtrl *ctrl);
-static void ReaperEntry(void *arg);
 
-// Creates the reaper task on first use. Returns true if the reaper is running afterwards. A failure (the
-// kernel has no free task slot) is not final: the next call retries, so the callers which need the reaper
+// Adds the reaper task to the kernel on first use. Returns true if the reaper is running afterwards. A failure
+// (the kernel has no free task slot) is not final: the next call retries, so the callers which need the reaper
 // (detached threads) report it instead of leaking the thread. Safe to call concurrently.
 static bool EnsureReaper()
 {
-    if (LoadAcquire(&s_ReaperTask) == nullptr)
+    if (!LoadAcquire(&s_ReaperAdded))
     {
-        STK_C_ASSERT(s_BoundKernel != nullptr);
+        STK_ASSERT(s_BoundKernel != nullptr);
 
-        const CsLock cs_; // serializes concurrent retries: only one reaper task may be created
+        const CsLock cs_; // serializes concurrent retries: the reaper task may be added only once
 
-        if (s_ReaperTask == nullptr)
+        if (!s_ReaperAdded)
         {
             if (s_ReapSem == nullptr)
             {
-                s_ReapSem = ConstructIn<ReapSemaphore>(s_ReapSemBuf, 0U, static_cast<uint16_t>(STK_C_PTHREAD_MAX_THREADS));
+                s_ReapSem = ConstructIn<ReapSemaphore>(s_ReapSemBuf,
+                                                       0U,
+                                                       static_cast<uint16_t>(STK_C_PTHREAD_MAX_THREADS));
             }
 
-            stk_task_t *const task = stk_task_create_user(ReaperEntry, nullptr, s_ReaperStack,
-                                                          STK_C_PTHREAD_REAPER_STACK_WORDS);
-            if (task != nullptr)
+            // KERNEL_DYNAMIC: a failure leaves the kernel untouched, so the same task object can be added again later
+            const EAddResult ar = s_BoundKernel->AddTask(&s_Reaper);
+            if (ar == ADD_OK)
             {
-                stk_task_set_name(task, "pthread_reaper");
-
-                // stk_kernel_add_task() returns the failure for a dynamic kernel (e.g. out of kernel task slots)
-                if (stk_kernel_add_task(s_BoundKernel, task) == STK_ADD_OK)
-                {
-                    StoreRelease(&s_ReaperTask, task); // published only once the kernel has accepted it
-                }
-                else
-                {
-                    // the kernel never referenced the task: release its handle, a later call retries
-                    stk_task_destroy(task);
-                }
+                StoreRelease(&s_ReaperAdded, true); // published only once the kernel has accepted the task
+            }
+            else
+            {
+                // out of kernel task slots is retryable, anything else (invalid/duplicate) is a design error
+                STK_ASSERT(ar == ADD_FAIL_POOL_FULL);
+                STK_UNUSED(ar);
             }
         }
     }
 
-    return (LoadAcquire(&s_ReaperTask) != nullptr);
+    return LoadAcquire(&s_ReaperAdded);
 }
 
 static void EnqueueReap(ThreadCtrl *ctrl)
 {
-    STK_C_ASSERT(s_ReaperTask != nullptr);
+    STK_ASSERT(s_ReaperAdded);
 
     const CsLock cs_;
 
-    STK_C_ASSERT(s_ReapCount < STK_C_PTHREAD_MAX_THREADS);
+    STK_ASSERT(s_ReapCount < STK_C_PTHREAD_MAX_THREADS);
     if (s_ReapCount < STK_C_PTHREAD_MAX_THREADS)
     {
         const std::size_t tail = (s_ReapHead + s_ReapCount) % STK_C_PTHREAD_MAX_THREADS;
@@ -406,17 +443,18 @@ static void WaitSignaled(TObj &obj)
     }
 }
 
-static void ReaperEntry(void * /*arg*/)
+void ReaperTask::Run()
 {
     for (;;)
     {
-        STK_C_ASSERT(s_ReapSem != nullptr);
+        STK_ASSERT(s_ReapSem != nullptr);
         WaitSignaled(*s_ReapSem);
 
         ThreadCtrl *const ctrl = DequeueReap();
         if (ctrl != nullptr)
         {
-            WaitForTaskExit(ctrl);
+            // done_event is set by PthreadTask::OnExit(): the task is torn down and its stack is free to reuse
+            WaitSignaled(*ctrl->done_event);
             ReleaseThreadResources(ctrl);
         }
     }
@@ -470,32 +508,6 @@ static ThreadCtrl *AcquireThreadSlot()
     return result;
 }
 
-// Wait until the kernel has invoked PthreadTask::OnExit() for this thread, i.e. the task
-// has been fully torn down and its stack is no longer in use, so it is safe to free
-// the stack and recycle the control block. The flag is exact: no task-list scan, no
-// large on-stack buffer, and no ABA hazard from recycled task slots.
-//
-// Waiting is a 1 ms sleep-poll on purpose: OnExit() runs in kernel context where
-// blocking/signalling primitives must not be used, and the wait is normally a few ticks.
-static void WaitForTaskExit(ThreadCtrl *ctrl)
-{
-    bool exited = false;
-
-    while (!exited)
-    {
-        {
-            const CsLock cs_;
-
-            exited = ctrl->exited;
-        }
-
-        if (!exited)
-        {
-            SleepMs(1);
-        }
-    }
-}
-
 static void ReleaseThreadResources(ThreadCtrl *ctrl)
 {
     if (ctrl->done_event != nullptr)
@@ -508,7 +520,7 @@ static void ReleaseThreadResources(ThreadCtrl *ctrl)
     {
         if (ctrl->stack_from_pool)
         {
-            (void)stk_blockpool_free(s_StackPool, ctrl->stack);
+            (void)s_StackPool->Free(ctrl->stack);
         }
         else
         {
@@ -540,22 +552,22 @@ static bool AllocateStack(ThreadCtrl *ctrl, const pthread_attr_t *attr, std::siz
 
         if (stack_bytes == kDefaultStackBytes)
         {
-            stk_blockpool_t *const pool = EnsureStackPool();
+            StackPool *const pool = EnsureStackPool();
             if (pool != nullptr)
             {
-                blk = stk_blockpool_try_alloc(pool);
+                blk = pool->TryAlloc();
             }
         }
 
         if (blk != nullptr)
         {
-            ctrl->stack           = static_cast<stk_word_t *>(blk);
+            ctrl->stack           = static_cast<pthread_stk_word_t *>(blk);
             ctrl->stack_owned     = true;
             ctrl->stack_from_pool = true;
         }
         else
         {
-            ctrl->stack           = static_cast<stk_word_t *>(malloc(stack_bytes));
+            ctrl->stack           = static_cast<pthread_stk_word_t *>(malloc(stack_bytes));
             ctrl->stack_owned     = true;
             ctrl->stack_from_pool = false;
         }
@@ -584,20 +596,19 @@ void PthreadTask::Run()
         ctrl->finished = true;
     }
 
-    (void)ctrl->done_event->Set();
     MaybeReap(ctrl);
 
-    // Natural return: STK tears the task down and calls OnExit(). A joiner (or the
-    // reaper, for detached threads) reclaims *our* resources (stack, control block)
-    // only after OnExit() has set ctrl->exited.
+    // Natural return: STK tears the task down and calls OnExit(), which signals done_event. A joiner (or the
+    // reaper, for detached threads) reclaims *our* resources (stack, control block) only after that signal.
 }
 
 void PthreadTask::OnExit()
 {
-    // Kernel context: no blocking calls. This is the last time the kernel touches
-    // this task object; after the flag is set the control block may be recycled.
-    const CsLock cs_;
-    m_ctrl->exited = true;
+    // Kernel context: only ISR-safe primitives may be used here (ITask::OnExit() contract), Event::Set() is one.
+    // This is the last time the kernel touches this task: once done_event is signaled the thread is finished
+    // (retval is valid, written before the task ended) and its stack is no longer in use, so the control block
+    // may be recycled. Replaces the former flag + 1 ms sleep-poll.
+    (void)m_ctrl->done_event->Set();
 }
 
 // -----------------------------------------------------------------------------
@@ -608,22 +619,37 @@ void PthreadTask::OnExit()
 // -----------------------------------------------------------------------------
 static Timeout TimespecToRelativeTimeout(const struct timespec *abstime)
 {
-    const stk_time_t now_ms    = static_cast<stk_time_t>(GetTimeNowMs());
-    const stk_time_t target_ms = (static_cast<stk_time_t>(abstime->tv_sec) * 1000LL) +
-                                 (static_cast<stk_time_t>(abstime->tv_nsec) / 1000000LL);
+    const Time now_ms    = GetTimeNowMs();
+    // ceil: a deadline must never be reported as passed before abstime
+    const Time target_ms = (static_cast<Time>(abstime->tv_sec) * 1000LL) +
+                           ((static_cast<Time>(abstime->tv_nsec) + 999999LL) / 1000000LL);
 
-    stk_time_t rel_ms = target_ms - now_ms;
-    if (rel_ms < 0LL)
+    Time rel_ms = target_ms - now_ms;
+    Timeout result = NO_WAIT; // deadline already in the past: non-blocking attempt
+
+    if (rel_ms > 0LL)
     {
-        rel_ms = 0LL;
-    }
-    else
-    if (rel_ms > static_cast<stk_time_t>(INT32_MAX))
-    {
-        rel_ms = static_cast<stk_time_t>(INT32_MAX);
+        if (rel_ms > static_cast<Time>(INT32_MAX))
+        {
+            rel_ms = static_cast<Time>(INT32_MAX);
+        }
+
+        // round UP to whole ticks: truncation could turn a deadline shorter than one tick into NO_WAIT
+        // (an early ETIMEDOUT), or wake up to one tick before abstime
+        const Time res_us = static_cast<Time>(GetTickResolution());
+        Time ticks = (res_us > 0LL) ? (((rel_ms * 1000LL) + res_us - 1LL) / res_us) : rel_ms;
+
+        // stay below WAIT_INFINITE: a very distant deadline must remain a timed wait
+        const Time ticks_max = static_cast<Time>(WAIT_INFINITE) - 1LL;
+        if (ticks > ticks_max)
+        {
+            ticks = ticks_max;
+        }
+
+        result = static_cast<Timeout>(ticks);
     }
 
-    return GetTicksFromMsClampedToTimeout(static_cast<Timeout>(rel_ms));
+    return result;
 }
 
 // Map the outcome of a timed lock attempt to errno. CANCELED must be handled by the caller first
@@ -806,6 +832,23 @@ static void RunKeyDestructors(ThreadCtrl *ctrl)
     }
 }
 
+// C++ entry point: binds the kernel threads are created on and adds the internal reaper task to it. Declare it in
+// stk_c_pthread.h (inside __cplusplus) to call it directly from C++ code, stk_pthread_bind_kernel() wraps it.
+void BindKernel(IKernel *kernel);
+
+void BindKernel(IKernel *kernel)
+{
+    STK_ASSERT(kernel != nullptr);
+
+    s_BoundKernel = kernel;
+
+    // no reaper means detached threads can not be reclaimed: increase the kernel task count. Not final, as
+    // pthread_create(DETACHED) and pthread_detach() retry and report EAGAIN while the reaper is missing
+    const bool reaper_ok = EnsureReaper();
+    STK_ASSERT(reaper_ok);
+    STK_UNUSED(reaper_ok);
+}
+
 } // namespace pthread
 } // namespace stk
 
@@ -819,17 +862,12 @@ extern "C" {
 // -----------------------------------------------------------------------------
 // Bootstrap
 // -----------------------------------------------------------------------------
-void stk_pthread_bind_kernel(stk_kernel_t *kernel)
+void stk_pthread_bind_kernel(void *kernel)
 {
-    STK_C_ASSERT(kernel != nullptr);
+    STK_ASSERT(kernel != nullptr);
 
-    s_BoundKernel = kernel;
-
-    // no reaper means detached threads can not be reclaimed: increase the kernel task count. Not final, as
-    // pthread_create(DETACHED) and pthread_detach() retry and report EAGAIN while the reaper is missing
-    const bool reaper_ok = EnsureReaper();
-    STK_C_ASSERT(reaper_ok);
-    STK_UNUSED(reaper_ok);
+    // the pointer is the stk::IKernel object itself (a stk_kernel_t* of the C API is the same object)
+    BindKernel(static_cast<IKernel *>(kernel));
 }
 
 // -----------------------------------------------------------------------------
@@ -886,11 +924,11 @@ int pthread_attr_setstack(pthread_attr_t *attr, void *stackaddr, size_t stacksiz
 {
     int result = EINVAL;
 
-    if ((attr != nullptr) && (stackaddr != nullptr) && (stacksize >= sizeof(stk_word_t)))
+    if ((attr != nullptr) && (stackaddr != nullptr) && (stacksize >= sizeof(pthread_stk_word_t)))
     {
-        if ((reinterpret_cast<uintptr_t>(stackaddr) & STK_ALIGN_MASK) == 0U)
+        if ((reinterpret_cast<uintptr_t>(stackaddr) & (sizeof(pthread_stk_word_t) - 1U)) == 0U)
         {
-            attr->__ext_stack   = static_cast<stk_word_t *>(stackaddr);
+            attr->__ext_stack   = static_cast<pthread_stk_word_t *>(stackaddr);
             attr->__stack_bytes = stacksize;
             result = 0;
         }
@@ -973,9 +1011,9 @@ int pthread_attr_getprivileged_np(const pthread_attr_t *attr, int *mode)
 int pthread_create(pthread_t *thread, const pthread_attr_t *attr,
                    void *(*start_routine)(void *), void *arg)
 {
-    STK_C_ASSERT(s_BoundKernel != nullptr);
-    STK_C_ASSERT(thread != nullptr);
-    STK_C_ASSERT(start_routine != nullptr);
+    STK_ASSERT(s_BoundKernel != nullptr);
+    STK_ASSERT(thread != nullptr);
+    STK_ASSERT(start_routine != nullptr);
 
     int result = 0;
 
@@ -999,7 +1037,7 @@ int pthread_create(pthread_t *thread, const pthread_attr_t *attr,
             const size_t stack_bytes = ((attr != nullptr) && (attr->__stack_bytes != 0U)) ?
                 attr->__stack_bytes : kDefaultStackBytes;
             const uint32_t stack_words =
-                static_cast<uint32_t>((stack_bytes + sizeof(stk_word_t) - 1U) / sizeof(stk_word_t));
+                static_cast<uint32_t>((stack_bytes + sizeof(pthread_stk_word_t) - 1U) / sizeof(pthread_stk_word_t));
 
             if (!AllocateStack(ctrl, attr, stack_bytes))
             {
@@ -1024,7 +1062,8 @@ int pthread_create(pthread_t *thread, const pthread_attr_t *attr,
                                       privileged ? stk::ACCESS_PRIVILEGED : stk::ACCESS_USER);
 
                 // KERNEL_DYNAMIC: a failure (out of kernel task slots) is returned, not asserted
-                if (ToKernel(s_BoundKernel)->AddTask(&ctrl->task) == ADD_OK)
+                const EAddResult ar = s_BoundKernel->AddTask(&ctrl->task);
+                if (ar == ADD_OK)
                 {
                     *thread = ctrl;
                 }
@@ -1033,7 +1072,10 @@ int pthread_create(pthread_t *thread, const pthread_attr_t *attr,
                     // the kernel never referenced the task: it is safe to release everything at once
                     // (the event, the stack and the control block), no thread was created
                     ReleaseThreadResources(ctrl);
-                    result = EAGAIN;
+
+                    // POSIX EAGAIN means "retry later": only a full kernel task pool qualifies, a kernel which
+                    // rejects the task (invalid state / duplicate) can not succeed on a retry
+                    result = (ar == ADD_FAIL_POOL_FULL) ? EAGAIN : EINVAL;
                 }
             }
         }
@@ -1074,6 +1116,7 @@ int pthread_join(pthread_t thread, void **retval)
         }
         else
         {
+            // signaled by PthreadTask::OnExit(): the thread is finished and its task is torn down
             WaitSignaled(*ctrl->done_event);
 
             if (retval != nullptr)
@@ -1081,7 +1124,6 @@ int pthread_join(pthread_t thread, void **retval)
                 *retval = ctrl->retval;
             }
 
-            WaitForTaskExit(ctrl);
             ReleaseThreadResources(ctrl);
         }
     }
@@ -1151,8 +1193,7 @@ void pthread_exit(void *retval)
                 ctrl->finished = true;
             }
 
-            (void)ctrl->done_event->Set();
-            MaybeReap(ctrl); // reaper/joiner will wait for ctrl->exited before freeing anything
+            MaybeReap(ctrl); // joiner/reaper wait for done_event (signaled by OnExit()) before freeing anything
 
             // switches the thread out and removes it (same as returning from the start routine), does not return
             stk::ExitTask();

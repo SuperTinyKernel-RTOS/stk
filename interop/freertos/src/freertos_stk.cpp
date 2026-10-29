@@ -7,6 +7,41 @@
  * License: MIT License, see LICENSE for a full text.
  */
 
+/*
+ * MISRA C++ notes for this translation unit:
+ *  - Objects and functions private to this file have internal linkage (Rule 3-3-1). The only
+ *    external-linkage functions are the FreeRTOS API entry points declared in FreeRTOS.h and the
+ *    weak pvPortMalloc()/vPortFree() hooks, whose names and signatures are mandated by FreeRTOS.
+ *  - Every 'switch' clause is terminated by 'break' (Rule 6-4-3); no 'continue' and no 'goto' is
+ *    used, and 'break' is not used to leave loops (Rules 6-6-1, 6-6-3, 6-6-4).
+ *  - Every 'else if' chain is terminated by an 'else' (Rule 6-4-2).
+ *  - STK types and namespaces are always fully qualified, there are no using-directives (Rule 7-3-4).
+ *  - Remaining, intentional deviations:
+ *      Rule 6-6-5     : the FreeRTOS API is written in the guard-clause style (invalid handle, ISR
+ *                       context and timeout checks return early with pdFAIL / pdFALSE / NULL)
+ *                       instead of a single point of exit. Applies to most API functions.
+ *      Rule 3-9-2     : FreeRTOS API signatures mandate the use of 'int', 'char', 'long' and their
+ *                       typedefs (BaseType_t, UBaseType_t, TickType_t, StackType_t); snprintf()
+ *                       returns 'int'.
+ *      Rule 5-2-5     : const_cast in vTaskGetInfo() (the task handle type is non-const).
+ *      Rule 5-2-7/8/9 : FreeRTOS handles are opaque 'void *': static_cast from 'void *' to the
+ *                       object type in every API function, reinterpret_cast of the task stack
+ *                       pointer to StackType_t * in vTaskGetInfo(), and the static object storage
+ *                       of the Static*_t structures.
+ *      Rule 18-4-1    : malloc()/free() back the default pvPortMalloc()/vPortFree() (weak, may be
+ *                       overridden by the application) and placement new is used to construct the
+ *                       kernel objects (ObjAlloc / ObjAllocArray) in both dynamic and static
+ *                       (xTaskCreateStatic, xQueueCreateStatic, ...) variants.
+ *      Rule 18-0-1,
+ *      27-0-1         : <stdio.h> / snprintf() are used by vTaskList() and vTaskGetRunTimeStats().
+ *      Rule 16-0-x    : conditional compilation on the configUSE_* / FREERTOS_STK_* macros is the
+ *                       FreeRTOS configuration model and cannot be avoided.
+ *      Rule 1-0-2     : the weak symbol attribute (__stk_weak) is a compiler extension.
+ *      Out of scope   : C++11 constructs (lambdas passed to Kernel::EnumerateTasksT(), variadic
+ *                       templates in ObjAlloc, 'alignof', scoped enumerations) are not covered by
+ *                       MISRA C++:2008.
+ */
+
 #include <stdio.h>  // snprintf (vTaskList)
 
 #include "stk.h"
@@ -519,6 +554,23 @@ struct FrtosTask : public stk::ITask
 // Monotonic task serial counter; incremented once per FrtosTask construction.
 uint32_t FrtosTask::s_task_counter = 0U;
 
+// TId <-> FrtosTask conversion. stk::TId is derived from the address of the bound ITask (see
+// stk::GetTidFromUserTask / stk::GetUserTaskFromTid), FrtosTask has ITask as its only base. The reverse
+// conversion is NOT valid where the TId is not a plain pointer (TrustZone non-secure build), reject it at build time.
+#if defined(_STK_CORTEX_M_TRUSTZONE_NON_SECURE)
+#   error "freertos_stk.cpp: TId -> task pointer conversion is not available on the TrustZone non-secure port"
+#endif
+
+static inline FrtosTask *FrtosTaskFromTid(stk::TId tid)
+{
+    return static_cast<FrtosTask *>(stk::GetUserTaskFromTid(tid));
+}
+
+static inline stk::TId FrtosTidFromTask(const FrtosTask *t)
+{
+    return stk::GetTidFromUserTask(t);
+}
+
 // ===========================================================================
 // Queue control block
 //
@@ -694,7 +746,7 @@ struct FrtosFastMutex final : FrtosMutexBase
 // Counter of binary / counting semaphores. It has the width of UBaseType_t (as the counts of the FreeRTOS API),
 // so initial / maximum counts are neither truncated nor limited to 16 bits (stk::sync::Semaphore), whatever the
 // width of UBaseType_t on the port (16, 32 or 64 bits). The maximum representable count is
-// FrtosSemCounter::COUNT_MAX, i.e. the maximum value of UBaseType_t minus one.
+// FrtosSemCounter::COUNT_MAX, i.e. the maximum value of UBaseType_t.
 typedef stk::sync::SemaphoreT<UBaseType_t> FrtosSemCounter;
 
 struct FrtosSemaphore
@@ -842,6 +894,8 @@ static inline void QueueSetNotify(void *member_handle, THost *host)
 
 #if configUSE_TIMERS
 
+static void EnsureKernelInitialized(); // defined below
+
 static stk::time::TimerHost *g_TimerHost = nullptr;
 
 // Static storage for the TimerHost (avoids heap for the host object itself).
@@ -869,10 +923,20 @@ struct FrtosTimer : public stk::time::Timer
     {
         if (g_TimerHost == nullptr)
         {
-            g_TimerHost = new (g_TimerHostBuf) stk::time::TimerHost();
-            g_TimerHost->Initialize(&g_StkKernel, stk::ACCESS_PRIVILEGED);
+            // TimerHost::Initialize() requires an initialized kernel
+            EnsureKernelInitialized();
+
+            stk::time::TimerHost *host = new (g_TimerHostBuf) stk::time::TimerHost();
+
+            if (host->Initialize(&g_StkKernel, stk::ACCESS_PRIVILEGED) != stk::ADD_OK)
+            {
+                host->~TimerHost();
+                return false;
+            }
+
+            g_TimerHost = host;
         }
-        return (g_TimerHost != nullptr);
+        return true;
     }
 
     const char             *m_name;
@@ -882,6 +946,18 @@ struct FrtosTimer : public stk::time::Timer
     bool                    m_cb_owned;
     bool                    m_auto_reload;
 };
+
+// Map TimerHost::EResult (RES_OK == 0, errors < 0) to FreeRTOS pdPASS / pdFAIL.
+// RES_OK and RES_QUEUED (command queued from a context which can not wait) mean "accepted".
+// \a inactive_ok: RES_INACTIVE is also success (stopping a dormant timer is not an error in FreeRTOS).
+static inline BaseType_t TimerResToFrtos(stk::time::TimerHost::EResult res, bool inactive_ok = false)
+{
+    const bool ok = (res == stk::time::TimerHost::RES_OK) ||
+                    (res == stk::time::TimerHost::RES_QUEUED) ||
+                    (inactive_ok && (res == stk::time::TimerHost::RES_INACTIVE));
+
+    return ok ? pdPASS : pdFAIL;
+}
 
 // ===========================================================================
 // PendCall / g_PendCallPipe / FrtosPendDrainer
@@ -937,19 +1013,21 @@ static stk::time::Timer *g_PendDrainer = nullptr;
 
 // Singleton drainer: drains g_PendCallPipe each time it fires, then stops
 // itself when the pipe is empty to avoid unnecessary timer ticks.
+//
+// The drainer is a ONE-SHOT timer re-armed (Restart, delay 1) by every enqueue, it is never stopped. This is
+// race-free: a call enqueued after the drain loop found the pipe empty has its own Restart() which re-arms the
+// (already expired) timer, and one enqueued while the callback is running is caught by the re-check below.
 struct FrtosPendDrainer : public stk::time::Timer
 {
     void OnExpired(stk::time::TimerHost *host) override
     {
-        PendCall call;
+        PendCall call = { nullptr, nullptr, 0U };
         while (g_PendCallPipe.TryRead(call))
             call.func(call.param1, call.param2);
 
-        // Pipe is empty: stop the auto-reload drainer until the next enqueue.
-        // host->Stop() is safe to call from OnExpired() because the TimerHost
-        // removes the timer from the active list before dispatching OnExpired.
-        if (host != nullptr)
-            host->Stop(*this);
+        // something was enqueued while draining and its Restart() may have been coalesced: re-arm
+        if ((host != nullptr) && !g_PendCallPipe.IsEmpty())
+            (void)host->Restart(*this, 1U, 0U);
     }
 };
 
@@ -960,19 +1038,21 @@ static bool EnsurePendDrainer()
     if (g_PendDrainer == nullptr)
         g_PendDrainer = new (g_PendDrainerBuf) FrtosPendDrainer();
 
-    // Re-start as a 1-tick auto-reload timer each time we have new work.
-    // Restart() is idempotent if already active.
-    return g_TimerHost->Restart(*g_PendDrainer, 1U, 1U);
+    // Arm as a 1-tick one-shot timer each time we have new work, Restart() is valid whether active or not.
+    return (TimerResToFrtos(g_TimerHost->Restart(*g_PendDrainer, 1U, 0U)) == pdPASS);
 }
 
 // Kick the drainer from ISR context after a TryWrite succeeds.
 // Uses Start() with NO_WAIT which is ISR-safe via PipeT / ScopedCriticalSection.
 // If the drainer is already active this is a no-op (Restart would re-arm it,
 // which is fine; the extra tick is harmless).
-static void KickPendDrainerFromISR()
+// Returns false if the drainer could not be armed (not created yet, host not ready, command queue full).
+static bool KickPendDrainerFromISR()
 {
-    if ((g_PendDrainer != nullptr) && (g_TimerHost != nullptr))
-        g_TimerHost->Restart(*g_PendDrainer, 1U, 1U);
+    if ((g_PendDrainer == nullptr) || (g_TimerHost == nullptr))
+        return false;
+
+    return (TimerResToFrtos(g_TimerHost->Restart(*g_PendDrainer, 1U, 0U)) == pdPASS);
 }
 
 #endif // configUSE_TIMERS
@@ -1337,13 +1417,13 @@ void vTaskDelete(TaskHandle_t xTaskToDelete)
     ReapDeletedTasks();
 
     FrtosTask *t = (xTaskToDelete == nullptr) ? static_cast<FrtosTask *>(
-        reinterpret_cast<FrtosTask *>(static_cast<uintptr_t>(stk::GetTid()))) :
+        FrtosTaskFromTid(stk::GetTid())) :
             static_cast<FrtosTask *>(xTaskToDelete);
 
     if (t == nullptr)
         return;
 
-    if (static_cast<uintptr_t>(stk::GetTid()) == reinterpret_cast<uintptr_t>(t))
+    if (stk::GetTid() == FrtosTidFromTask(t))
     {
         // vTaskDelete(NULL) / self-delete does not return: the calling task is switched out and removed by the kernel
         stk::ExitTask();
@@ -1362,15 +1442,22 @@ void vTaskDelete(TaskHandle_t xTaskToDelete)
 void vTaskSuspend(TaskHandle_t xTaskToSuspend)
 {
     FrtosTask *t = (xTaskToSuspend == nullptr) ? static_cast<FrtosTask *>(
-        reinterpret_cast<FrtosTask *>(static_cast<uintptr_t>(stk::GetTid()))) :
+        FrtosTaskFromTid(stk::GetTid())) :
             static_cast<FrtosTask *>(xTaskToSuspend);
 
     if (t == nullptr)
         return;
 
-    bool already = false;
-    g_StkKernel.SuspendTask(t, already);
+    // Publish the state BEFORE calling the kernel: suspending the calling task does not return until the task
+    // is resumed, setting the state afterwards would leave vTaskResume() seeing State::Ready and skipping
+    // ResumeTask() forever. Must not be called inside a critical section (self-suspend would deadlock).
+    const FrtosTask::State prev = t->m_state;
     t->m_state = FrtosTask::State::Suspended;
+
+    // SUSPEND_DONE: suspended now. SUSPEND_DEFERRED: sleeping/blocked, suspended when the wait ends.
+    // SUSPEND_ALREADY: nothing to do, the state is already correct. SUSPEND_FAIL: roll back.
+    if (g_StkKernel.SuspendTask(t) == stk::SUSPEND_FAIL)
+        t->m_state = prev;
 }
 
 void vTaskResume(TaskHandle_t xTaskToResume)
@@ -1385,8 +1472,9 @@ void vTaskResume(TaskHandle_t xTaskToResume)
     if (t->m_state != FrtosTask::State::Suspended)
         return;
 
-    g_StkKernel.ResumeTask(t);
-    t->m_state = FrtosTask::State::Ready;
+    const stk::EResumeResult res = g_StkKernel.ResumeTask(t);
+    if ((res == stk::RESUME_DONE) || (res == stk::RESUME_LIFTED))
+        t->m_state = FrtosTask::State::Ready;
 }
 
 BaseType_t xTaskResumeFromISR(TaskHandle_t xTaskToResume)
@@ -1401,9 +1489,11 @@ BaseType_t xTaskResumeFromISR(TaskHandle_t xTaskToResume)
     if (t->m_state != FrtosTask::State::Suspended)
         return pdFALSE;
 
-    g_StkKernel.ResumeTask(t);
-    t->m_state = FrtosTask::State::Ready;
+    const stk::EResumeResult res = g_StkKernel.ResumeTask(t);
+    if ((res != stk::RESUME_DONE) && (res != stk::RESUME_LIFTED))
+        return pdFALSE;
 
+    t->m_state = FrtosTask::State::Ready;
     return pdTRUE;
 }
 
@@ -1413,7 +1503,7 @@ BaseType_t xTaskAbortDelay(TaskHandle_t xTask)
         return pdFALSE;
 
     // Resolve NULL -> calling task (same convention used throughout the wrapper).
-    const stk::TId tid = static_cast<stk::TId>(reinterpret_cast<uintptr_t>(xTask));
+    const stk::TId tid = FrtosTidFromTask(static_cast<const FrtosTask *>(xTask));
 
     const FrtosTask *t = static_cast<const FrtosTask *>(xTask);
     if (t->m_state != FrtosTask::State::Ready)
@@ -1460,19 +1550,29 @@ BaseType_t xTaskDelayUntil(TickType_t *pxPreviousWakeTime, TickType_t xTimeIncre
 
 void vTaskPrioritySet(TaskHandle_t xTask, UBaseType_t uxNewPriority)
 {
-    FrtosTask *t = (xTask == nullptr) ? reinterpret_cast<FrtosTask *>(
-            static_cast<uintptr_t>(stk::GetTid())) : static_cast<FrtosTask *>(xTask);
+    FrtosTask *t = (xTask == nullptr) ? FrtosTaskFromTid(stk::GetTid()) : static_cast<FrtosTask *>(xTask);
 
     if (t == nullptr)
         return;
 
-    t->m_weight = FrtosPrioToStkWeight(uxNewPriority);
+    const int32_t weight = FrtosPrioToStkWeight(uxNewPriority);
+
+    if (t->m_state != FrtosTask::State::Deleted)
+    {
+        // SwitchStrategyFixedPriority keeps its ready lists keyed by the task's (base) weight and the kernel reads
+        // the weight from its own record, so only IKernelService::SetWeight() moves the task to the new priority
+        // level (and keeps priority inheritance consistent). It must run BEFORE m_weight is updated: the kernel
+        // derives the old level from the weight which is still in effect. Writing m_weight alone would leave the
+        // task in the old list and trip the strategy's list assertions later.
+        (void)stk::IKernelService::GetInstance()->SetWeight(FrtosTidFromTask(t), weight);
+    }
+
+    t->m_weight = weight; // ITask::GetWeight() / uxTaskPriorityGet() view of the base priority
 }
 
 UBaseType_t uxTaskPriorityGet(TaskHandle_t xTask)
 {
-    const FrtosTask *t = (xTask == nullptr) ? reinterpret_cast<const FrtosTask *>(
-        static_cast<uintptr_t>(stk::GetTid())) : static_cast<const FrtosTask *>(xTask);
+    const FrtosTask *t = (xTask == nullptr) ? FrtosTaskFromTid(stk::GetTid()) : static_cast<const FrtosTask *>(xTask);
 
     if (t == nullptr)
         return 0U;
@@ -1499,7 +1599,7 @@ eTaskState eTaskGetState(TaskHandle_t xTask)
         return eSuspended;
 
     // Check whether this is the currently running task.
-    if (static_cast<uintptr_t>(stk::GetTid()) == reinterpret_cast<uintptr_t>(t))
+    if (stk::GetTid() == FrtosTidFromTask(t))
         return eRunning;
 
     return eReady;
@@ -1510,7 +1610,7 @@ TaskHandle_t xTaskGetCurrentTaskHandle(void)
     if (IsIrqContext())
         return nullptr;
 
-    return reinterpret_cast<TaskHandle_t>(static_cast<uintptr_t>(stk::GetTid()));
+    return static_cast<TaskHandle_t>(FrtosTaskFromTid(stk::GetTid()));
 }
 
 TaskHandle_t xTaskGetHandle(const char *pcNameToQuery)
@@ -1545,8 +1645,7 @@ const char *pcTaskGetName(TaskHandle_t xTaskToQuery)
 
 UBaseType_t uxTaskGetStackHighWaterMark(TaskHandle_t xTask)
 {
-    const FrtosTask *t = (xTask == nullptr) ? reinterpret_cast<const FrtosTask *>(
-        static_cast<uintptr_t>(stk::GetTid())) : static_cast<const FrtosTask *>(xTask);
+    const FrtosTask *t = (xTask == nullptr) ? FrtosTaskFromTid(stk::GetTid()) : static_cast<const FrtosTask *>(xTask);
 
     if (t == nullptr)
         return 0U;
@@ -1556,8 +1655,7 @@ UBaseType_t uxTaskGetStackHighWaterMark(TaskHandle_t xTask)
 
 configSTACK_DEPTH_TYPE uxTaskGetStackHighWaterMark2(TaskHandle_t xTask)
 {
-    const FrtosTask *t = (xTask == nullptr) ? reinterpret_cast<const FrtosTask *>(
-        static_cast<uintptr_t>(stk::GetTid())) : static_cast<const FrtosTask *>(xTask);
+    const FrtosTask *t = (xTask == nullptr) ? FrtosTaskFromTid(stk::GetTid()) : static_cast<const FrtosTask *>(xTask);
 
     if (t == nullptr)
         return 0U;
@@ -1581,7 +1679,7 @@ UBaseType_t uxTaskGetSystemState(TaskStatus_t *pxTaskStatusArray,
 
     // Identify the currently running task once, outside the enumeration
     // loop, so the eRunning check is consistent across all entries.
-    const uintptr_t running_tid = static_cast<uintptr_t>(stk::GetTid());
+    const stk::TId running_tid = stk::GetTid();
 
     g_StkKernel.EnumerateTasksT<FREERTOS_STK_MAX_TASKS>([&](stk::ITask *itask) -> bool
     {
@@ -1604,13 +1702,14 @@ UBaseType_t uxTaskGetSystemState(TaskStatus_t *pxTaskStatusArray,
         if (t->m_state == FrtosTask::State::Suspended)
             s.eCurrentState = eSuspended;
         else
-        if (reinterpret_cast<uintptr_t>(t) == running_tid)
+        if (FrtosTidFromTask(t) == running_tid)
             s.eCurrentState = eRunning;
         else
             s.eCurrentState = eReady;
 
-        // uxCurrentPriority / uxBasePriority — same value: STK has no
-        // priority inheritance so the current and base priority are identical.
+        // uxCurrentPriority / uxBasePriority — same value: a temporary priority-inheritance boost is
+        // tracked inside the kernel and is not visible through ITask::GetWeight(), so the base
+        // priority is reported for both.
         s.uxCurrentPriority = StkWeightToFrtosPrio(t->m_weight);
         s.uxBasePriority    = s.uxCurrentPriority;
 
@@ -1720,7 +1819,7 @@ void vTaskList(char *pcWriteBuffer)
         if (t->m_state == FrtosTask::State::Suspended)
             state_letter = 'S';
         else
-        if (static_cast<uintptr_t>(stk::GetTid()) == reinterpret_cast<uintptr_t>(t))
+        if (stk::GetTid() == FrtosTidFromTask(t))
             state_letter = 'X';
         else
             state_letter = 'R';
@@ -2001,8 +2100,12 @@ BaseType_t xQueueOverwrite(QueueHandle_t xQueue, const void *pvItemToQueue)
         return pdFAIL;
 
     FrtosQueue *q = static_cast<FrtosQueue *>(xQueue);
-    q->m_mq.Reset();
-    q->m_mq.TryPut(pvItemToQueue);
+    {
+        // Reset + TryPut must be one atomic step, otherwise a concurrent producer can take the slot in between
+        const stk::sync::ScopedCriticalSection cs_;
+        q->m_mq.Reset();
+        (void)q->m_mq.TryPut(pvItemToQueue);
+    }
     QueueSetNotify(xQueue, q);
 
     return pdPASS;
@@ -2018,8 +2121,12 @@ BaseType_t xQueueOverwriteFromISR(QueueHandle_t  xQueue,
         return pdFAIL;
 
     FrtosQueue *q = static_cast<FrtosQueue *>(xQueue);
-    q->m_mq.Reset();
-    q->m_mq.TryPut(pvItemToQueue);
+    {
+        // Reset + TryPut must be one atomic step, otherwise a concurrent producer can take the slot in between
+        const stk::sync::ScopedCriticalSection cs_;
+        q->m_mq.Reset();
+        (void)q->m_mq.TryPut(pvItemToQueue);
+    }
     QueueSetNotify(xQueue, q);
 
     if (pxHigherPriorityTaskWoken != nullptr)
@@ -2750,9 +2857,9 @@ TaskHandle_t xSemaphoreGetMutexHolder(SemaphoreHandle_t xMutex)
     // pointer.
     //
     // TId -> TaskHandle_t: STK stores task pointers as TId values via
-    //   TId = static_cast<TId>(reinterpret_cast<uintptr_t>(task_ptr))
+    //   TId = stk::GetTidFromUserTask(task_ptr)
     // so the inverse is:
-    //   task_ptr = reinterpret_cast<FrtosTask *>(static_cast<uintptr_t>(tid))
+    //   task_ptr = FrtosTaskFromTid(tid)
     // TID_NONE maps to nullptr (TaskHandle_t == nullptr means "no owner").
     if (xMutex == nullptr)
         return nullptr;
@@ -2769,7 +2876,7 @@ TaskHandle_t xSemaphoreGetMutexHolder(SemaphoreHandle_t xMutex)
     if (owner == stk::TID_NONE)
         return nullptr; // mutex is currently unlocked
 
-    return reinterpret_cast<TaskHandle_t>(static_cast<uintptr_t>(owner));
+    return static_cast<TaskHandle_t>(FrtosTaskFromTid(owner));
 }
 
 TaskHandle_t xSemaphoreGetMutexHolderFromISR(SemaphoreHandle_t xMutex)
@@ -2792,7 +2899,7 @@ TaskHandle_t xSemaphoreGetMutexHolderFromISR(SemaphoreHandle_t xMutex)
     if (owner == stk::TID_NONE)
         return nullptr;
 
-    return reinterpret_cast<TaskHandle_t>(static_cast<uintptr_t>(owner));
+    return static_cast<TaskHandle_t>(FrtosTaskFromTid(owner));
 }
 
 #endif // configUSE_MUTEXES
@@ -2863,10 +2970,23 @@ BaseType_t xTimerDelete(TimerHandle_t xTimer, TickType_t /*xTicksToWait*/)
     if (xTimer == nullptr)
         return pdFAIL;
 
+    if (IsIrqContext())
+        return pdFAIL; // API contract: not available from an ISR
+
     FrtosTimer *t = static_cast<FrtosTimer *>(xTimer);
 
-    if ((g_TimerHost != nullptr) && t->IsActive())
-        g_TimerHost->Stop(*t);
+    if (g_TimerHost != nullptr)
+    {
+        // StopSync() waits until the tick task executed the command, no queued reference to the timer is left
+        // in the host and no callback of it is running (a callback of this very timer is not waited for).
+        // The storage may only be released after that, the asynchronous Stop() would leave a window where the
+        // host still holds the timer. Anything else (RES_QUEUED: kernel not running yet, RES_NOT_READY, ...)
+        // means the timer may still be referenced, do not free it (FreeRTOS: delete failed).
+        const stk::time::TimerHost::EResult res = g_TimerHost->StopSync(*t);
+
+        if ((res != stk::time::TimerHost::RES_OK) && (res != stk::time::TimerHost::RES_INACTIVE))
+            return pdFAIL;
+    }
 
     ObjFree(t);
     return pdPASS;
@@ -2883,8 +3003,8 @@ BaseType_t xTimerStart(TimerHandle_t xTimer, TickType_t /*xTicksToWait*/)
                       ? static_cast<uint32_t>(t->m_period)
                       : 0U; // 0 = one-shot (no reload period)
 
-    return g_TimerHost->Restart(*t, static_cast<uint32_t>(t->m_period), period)
-           ? pdPASS : pdFAIL;
+    // synchronous variant: the exact outcome is known when it returns (task context)
+    return TimerResToFrtos(g_TimerHost->RestartSync(*t, static_cast<uint32_t>(t->m_period), period));
 }
 
 BaseType_t xTimerStop(TimerHandle_t xTimer, TickType_t /*xTicksToWait*/)
@@ -2894,10 +3014,9 @@ BaseType_t xTimerStop(TimerHandle_t xTimer, TickType_t /*xTicksToWait*/)
 
     FrtosTimer *t = static_cast<FrtosTimer *>(xTimer);
 
-    if (!t->IsActive())
-        return pdFAIL;
-
-    return g_TimerHost->Stop(*t) ? pdPASS : pdFAIL;
+    // no IsActive() pre-check: the flag is advisory and lags behind a just issued Start. Stopping a dormant timer
+    // is not an error in FreeRTOS.
+    return TimerResToFrtos(g_TimerHost->StopSync(*t), true);
 }
 
 BaseType_t xTimerReset(TimerHandle_t xTimer, TickType_t xTicksToWait)
@@ -2951,8 +3070,7 @@ BaseType_t xTimerStartFromISR(TimerHandle_t xTimer,
     FrtosTimer *t  = static_cast<FrtosTimer *>(xTimer);
     uint32_t period = t->m_auto_reload ? static_cast<uint32_t>(t->m_period) : 0U;
 
-    return g_TimerHost->Restart(*t, static_cast<uint32_t>(t->m_period), period)
-           ? pdPASS : pdFAIL;
+    return TimerResToFrtos(g_TimerHost->Restart(*t, static_cast<uint32_t>(t->m_period), period));
 }
 
 BaseType_t xTimerStopFromISR(TimerHandle_t xTimer,
@@ -2966,10 +3084,7 @@ BaseType_t xTimerStopFromISR(TimerHandle_t xTimer,
 
     FrtosTimer *t = static_cast<FrtosTimer *>(xTimer);
 
-    if (!t->IsActive())
-        return pdFAIL;
-
-    return g_TimerHost->Stop(*t) ? pdPASS : pdFAIL;
+    return TimerResToFrtos(g_TimerHost->Stop(*t), true); // RES_INACTIVE: already dormant, nothing queued
 }
 
 BaseType_t xTimerResetFromISR(TimerHandle_t xTimer,
@@ -2995,7 +3110,7 @@ BaseType_t xTimerChangePeriodFromISR(TimerHandle_t xTimer,
     // Restart with the new period, taking effect immediately.
     uint32_t period = t->m_auto_reload ? static_cast<uint32_t>(xNewPeriod) : 0U;
 
-    return g_TimerHost->Restart(*t, static_cast<uint32_t>(xNewPeriod), period) ? pdPASS : pdFAIL;
+    return TimerResToFrtos(g_TimerHost->Restart(*t, static_cast<uint32_t>(xNewPeriod), period));
 }
 
 // ===========================================================================
@@ -3056,10 +3171,11 @@ BaseType_t xTimerPendFunctionCall(PendedFunction_t xFunctionToPend,
     if (!g_PendCallPipe.Write(call, FrtosTimeoutToStk(xTicksToWait)))
         return pdFAIL;
 
-    // (Re-)start the singleton drainer so it wakes within 1 tick.
-    // EnsurePendDrainer() constructs the drainer on first call and
-    // calls TimerHost::Restart() which is task-safe.
-    EnsurePendDrainer();
+    // (Re-)arm the singleton drainer so it wakes within 1 tick: enqueue FIRST, arm afterwards (the other order
+    // would let the drainer run before the record is visible). If arming fails (host not ready) the record
+    // stays queued and is executed with the next successful arm, the call is reported as failed.
+    if (!EnsurePendDrainer())
+        return pdFAIL;
 
     return pdPASS;
 }
@@ -3081,14 +3197,16 @@ BaseType_t xTimerPendFunctionCallFromISR(PendedFunction_t  xFunctionToPend,
     if (g_TimerHost == nullptr)
         return pdFAIL;
 
-    // Non-blocking enqueue: TryWrite() holds a ScopedCriticalSection internally
-    // — unconditionally ISR-safe, no allocator call, no blocking.
+    // Arm the drainer FIRST: it can not run before this ISR returns, so the record written below is visible when
+    // it fires. This way a failed arm (command queue full, drainer not created yet) fails the call without
+    // leaving an undrained record behind. If the write fails the one-shot drainer just finds an empty pipe.
+    if (!KickPendDrainerFromISR())
+        return pdFAIL;
+
+    // Non-blocking enqueue: TryWrite() holds a ScopedCriticalSection internally, ISR-safe, no blocking.
     const PendCall call = { xFunctionToPend, pvParameter1, ulParameter2 };
     if (!g_PendCallPipe.TryWrite(call))
         return pdFAIL;
-
-    // Kick the drainer via ISR-safe TimerHost::Restart().
-    KickPendDrainerFromISR();
 
     return pdPASS;
 }
@@ -3434,7 +3552,16 @@ BaseType_t xTaskNotifyGiveIndexed(TaskHandle_t xTaskToNotify,
     if (t == nullptr)
         return pdFAIL;
 
-    t->m_notify[uxIndexToNotify].sem.Signal(); // ISR-safe
+    FrtosTask::NotifySlot &slot = t->m_notify[uxIndexToNotify];
+
+    {
+        // counting semantics: every give increments the notification value, the semaphore is only a binary
+        // wake-up flag (TrySignal() is idempotent, Signal() would assert once the flag is already set)
+        stk::sync::ScopedCriticalSection cs_;
+        slot.value++;
+        (void)slot.sem.TrySignal(); // ISR-safe
+    }
+
     return pdPASS;
 }
 
@@ -3459,15 +3586,24 @@ uint32_t ulTaskNotifyTakeIndexed(UBaseType_t uxIndexToWait,
     {
         stk::sync::ScopedCriticalSection cs_;
         val = slot.value;
+        slot.pending = false;
 
         if (ulClearCountOnExit == pdTRUE)
+        {
             slot.value = 0U;
+        }
         else
+        {
+            if (slot.value > 0U)
+                slot.value--;
+        }
+
+        // counting semaphore behavior: while notifications remain, keep the wake flag raised
         if (slot.value > 0U)
-            slot.value--;
+            (void)slot.sem.TrySignal();
     }
 
-    return val + 1U; // +1: the semaphore signal itself counts
+    return val; // notification value before it was cleared / decremented (FreeRTOS contract)
 }
 
 BaseType_t xTaskNotifyIndexed(TaskHandle_t  xTaskToNotify,
@@ -3488,7 +3624,7 @@ BaseType_t xTaskNotifyIndexed(TaskHandle_t  xTaskToNotify,
     }
 
     if (result == pdPASS)
-        slot.sem.Signal();
+        (void)slot.sem.TrySignal(); // binary wake flag, a repeated notification is not an error
 
     return result;
 }
@@ -3639,7 +3775,7 @@ BaseType_t xTaskNotifyAndQueryIndexed(TaskHandle_t  xTaskToNotify,
     }
 
     if (result == pdPASS)
-        slot.sem.Signal();
+        (void)slot.sem.TrySignal(); // binary wake flag, a repeated notification is not an error
 
     return result;
 }

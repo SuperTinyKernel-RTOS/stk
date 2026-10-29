@@ -70,18 +70,18 @@ extern EAddResult InitializeTimerHostEx(stk_kernel_t *kernel, stk::time::TimerHo
 static __stk_forceinline stk_timer_result_t ToCTimerResult(TimerHost::EResult r)
 {
     // C result enum must stay in sync with its C++ counterpart (values are cast directly)
-    STK_STATIC_ASSERT_DESC(static_cast<int>(STK_TIMER_RES_CANCELLED)     == static_cast<int>(TimerHost::RES_CANCELLED),     "stk_timer_result_t mismatch");
-    STK_STATIC_ASSERT_DESC(static_cast<int>(STK_TIMER_RES_INVALID_PARAM) == static_cast<int>(TimerHost::RES_INVALID_PARAM), "stk_timer_result_t mismatch");
-    STK_STATIC_ASSERT_DESC(static_cast<int>(STK_TIMER_RES_QUEUE_FULL)    == static_cast<int>(TimerHost::RES_QUEUE_FULL),    "stk_timer_result_t mismatch");
-    STK_STATIC_ASSERT_DESC(static_cast<int>(STK_TIMER_RES_NOT_READY)     == static_cast<int>(TimerHost::RES_NOT_READY),     "stk_timer_result_t mismatch");
-    STK_STATIC_ASSERT_DESC(static_cast<int>(STK_TIMER_RES_FAIL)          == static_cast<int>(TimerHost::RES_FAIL),          "stk_timer_result_t mismatch");
-    STK_STATIC_ASSERT_DESC(static_cast<int>(STK_TIMER_RES_OK)            == static_cast<int>(TimerHost::RES_OK),            "stk_timer_result_t mismatch");
-    STK_STATIC_ASSERT_DESC(static_cast<int>(STK_TIMER_RES_ACTIVE)        == static_cast<int>(TimerHost::RES_ACTIVE),        "stk_timer_result_t mismatch");
-    STK_STATIC_ASSERT_DESC(static_cast<int>(STK_TIMER_RES_INACTIVE)      == static_cast<int>(TimerHost::RES_INACTIVE),      "stk_timer_result_t mismatch");
-    STK_STATIC_ASSERT_DESC(static_cast<int>(STK_TIMER_RES_NOT_PERIODIC)  == static_cast<int>(TimerHost::RES_NOT_PERIODIC),  "stk_timer_result_t mismatch");
-    STK_STATIC_ASSERT_DESC(static_cast<int>(STK_TIMER_RES_QUEUED)        == static_cast<int>(TimerHost::RES_QUEUED),        "stk_timer_result_t mismatch");
+    STK_STATIC_ASSERT_DESC(static_cast<int32_t>(STK_TIMER_RES_CANCELLED)     == static_cast<int32_t>(TimerHost::RES_CANCELLED),     "stk_timer_result_t mismatch");
+    STK_STATIC_ASSERT_DESC(static_cast<int32_t>(STK_TIMER_RES_INVALID_PARAM) == static_cast<int32_t>(TimerHost::RES_INVALID_PARAM), "stk_timer_result_t mismatch");
+    STK_STATIC_ASSERT_DESC(static_cast<int32_t>(STK_TIMER_RES_QUEUE_FULL)    == static_cast<int32_t>(TimerHost::RES_QUEUE_FULL),    "stk_timer_result_t mismatch");
+    STK_STATIC_ASSERT_DESC(static_cast<int32_t>(STK_TIMER_RES_NOT_READY)     == static_cast<int32_t>(TimerHost::RES_NOT_READY),     "stk_timer_result_t mismatch");
+    STK_STATIC_ASSERT_DESC(static_cast<int32_t>(STK_TIMER_RES_FAIL)          == static_cast<int32_t>(TimerHost::RES_FAIL),          "stk_timer_result_t mismatch");
+    STK_STATIC_ASSERT_DESC(static_cast<int32_t>(STK_TIMER_RES_OK)            == static_cast<int32_t>(TimerHost::RES_OK),            "stk_timer_result_t mismatch");
+    STK_STATIC_ASSERT_DESC(static_cast<int32_t>(STK_TIMER_RES_ACTIVE)        == static_cast<int32_t>(TimerHost::RES_ACTIVE),        "stk_timer_result_t mismatch");
+    STK_STATIC_ASSERT_DESC(static_cast<int32_t>(STK_TIMER_RES_INACTIVE)      == static_cast<int32_t>(TimerHost::RES_INACTIVE),      "stk_timer_result_t mismatch");
+    STK_STATIC_ASSERT_DESC(static_cast<int32_t>(STK_TIMER_RES_NOT_PERIODIC)  == static_cast<int32_t>(TimerHost::RES_NOT_PERIODIC),  "stk_timer_result_t mismatch");
+    STK_STATIC_ASSERT_DESC(static_cast<int32_t>(STK_TIMER_RES_QUEUED)        == static_cast<int32_t>(TimerHost::RES_QUEUED),        "stk_timer_result_t mismatch");
 
-    return static_cast<stk_timer_result_t>(static_cast<int>(r));
+    return static_cast<stk_timer_result_t>(static_cast<int32_t>(r));
 }
 
 // -----------------------------------------------------------------------------
@@ -153,10 +153,10 @@ stk_add_result_t stk_timerhost_init_ex(stk_timerhost_t              *host,
                                        const stk_timerhost_config_t *cfg)
 {
     // C result enum must stay in sync with its C++ counterpart (values are cast directly)
-    STK_STATIC_ASSERT_DESC(static_cast<int>(STK_ADD_FAIL_INVALID)   == static_cast<int>(stk::ADD_FAIL_INVALID),   "stk_add_result_t mismatch");
-    STK_STATIC_ASSERT_DESC(static_cast<int>(STK_ADD_FAIL_DUPLICATE) == static_cast<int>(stk::ADD_FAIL_DUPLICATE), "stk_add_result_t mismatch");
-    STK_STATIC_ASSERT_DESC(static_cast<int>(STK_ADD_FAIL_POOL_FULL) == static_cast<int>(stk::ADD_FAIL_POOL_FULL), "stk_add_result_t mismatch");
-    STK_STATIC_ASSERT_DESC(static_cast<int>(STK_ADD_OK)             == static_cast<int>(stk::ADD_OK),             "stk_add_result_t mismatch");
+    STK_STATIC_ASSERT_DESC(static_cast<int32_t>(STK_ADD_FAIL_INVALID)   == static_cast<int32_t>(stk::ADD_FAIL_INVALID),   "stk_add_result_t mismatch");
+    STK_STATIC_ASSERT_DESC(static_cast<int32_t>(STK_ADD_FAIL_DUPLICATE) == static_cast<int32_t>(stk::ADD_FAIL_DUPLICATE), "stk_add_result_t mismatch");
+    STK_STATIC_ASSERT_DESC(static_cast<int32_t>(STK_ADD_FAIL_POOL_FULL) == static_cast<int32_t>(stk::ADD_FAIL_POOL_FULL), "stk_add_result_t mismatch");
+    STK_STATIC_ASSERT_DESC(static_cast<int32_t>(STK_ADD_OK)             == static_cast<int32_t>(stk::ADD_OK),             "stk_add_result_t mismatch");
 
     STK_ASSERT(host   != nullptr);
     STK_ASSERT(kernel != nullptr);
