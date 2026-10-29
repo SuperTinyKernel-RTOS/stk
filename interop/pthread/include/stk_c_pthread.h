@@ -14,20 +14,37 @@
 #undef _POSIX_THREADS
 #define _SYS__PTHREADTYPES_H_
 
-#include "stk_c.h"
-
+// Self-contained: does not depend on the C API (stk_c.h). Only the kernel configuration is needed to size the
+// opaque storage of the C++ objects the shim constructs in place.
 #ifdef __cplusplus
+    #include <cstdint>
+    #include <cstddef>
     #include <ctime>
 #else
+    #include <stdint.h>
+    #include <stddef.h>
+    #include <stdbool.h>
     #include <time.h>
+#endif
+
+#include <stk_config.h>
+
+// must match the definition used by the C++ kernel API (stk_c.h and stk.h derive it the same way)
+#ifndef STK_SYNC_DEBUG_NAMES
+    #if STK_SEGGER_SYSVIEW
+        #define STK_SYNC_DEBUG_NAMES (1)
+    #else
+        #define STK_SYNC_DEBUG_NAMES (0)
+    #endif
 #endif
 
 /*! \file     stk_c_pthread.h
     \brief    A minimal, POSIX-named pthreads-style API for STK. The public interface
-              needs only stk_c.h / stk_c_memory.h (no C++ headers), so it can be used
-              from C. The implementation (stk_c_pthread.cpp) calls the STK C++ API
-              directly for thread/task control, TLS, critical sections, sleep/yield/time
-              and the synchronization primitives; the stk_*_mem_t blobs embedded in the
+              is self-contained (it needs neither stk_c.h nor any other STK header besides
+              stk_config.h, and no C++ headers), so it can be used from C. The
+              implementation (stk_c_pthread.cpp) calls the STK C++ API directly for
+              thread/task control, TLS, critical sections, sleep/yield/time and the
+              synchronization primitives; the pthread_stk_*_mem_t blobs embedded in the
               pthread_* types are used as in-place storage for those C++ objects.
 
     \details  Covers thread lifecycle and attributes, mutexes, condition variables,
@@ -140,7 +157,8 @@
     \a abstime is converted to a relative timeout in milliseconds (and then to kernel
     ticks). A deadline that is already in the past yields a zero timeout, so the call
     behaves like a non-blocking attempt, and very distant deadlines are clamped to
-    \c INT32_MAX ms. The same interpretation applies to
+    \c INT32_MAX ms. The remaining time is rounded UP to whole kernel ticks, so a call
+    never reports \c ETIMEDOUT before \a abstime has passed. The same interpretation applies to
     \c pthread_rwlock_timedrdlock() and \c pthread_rwlock_timedwrlock().
 
     \par pthread_rwlock_unlock() disambiguation
@@ -196,6 +214,33 @@
 extern "C" {
 #endif
 
+/*! \typedef   pthread_stk_word_t
+    \brief     Native machine word used for stacks and opaque object storage (same as stk::Word).
+*/
+typedef uintptr_t pthread_stk_word_t;
+
+/*! \def       __stk_pthread_aligned
+    \brief     Alignment attribute of the opaque object storage (one machine word).
+*/
+#if defined(__GNUC__) || defined(__clang__) || defined(__ICCARM__)
+    #define __stk_pthread_aligned __attribute__((aligned(sizeof(pthread_stk_word_t))))
+#else
+    #define __stk_pthread_aligned
+#endif
+
+/*! \brief     Sizes (in pthread_stk_word_t units) of the opaque storage for the C++ sync objects.
+    \note      Verified at compile time against sizeof() of the real objects by stk_c_pthread.cpp.
+*/
+#define STK_C_PTHREAD_MUTEX_WORDS   (10U + (STK_SYNC_DEBUG_NAMES ? 1U : 0U))
+#define STK_C_PTHREAD_CV_WORDS      (7U + (STK_SYNC_DEBUG_NAMES ? 1U : 0U))
+#define STK_C_PTHREAD_RWMUTEX_WORDS (17U + (STK_SYNC_DEBUG_NAMES ? 3U : 0U))
+#define STK_C_PTHREAD_BARRIER_WORDS (STK_C_PTHREAD_MUTEX_WORDS + STK_C_PTHREAD_CV_WORDS + 4U + (STK_SYNC_DEBUG_NAMES ? 1U : 0U))
+
+typedef struct pthread_stk_mutex_mem_t   { pthread_stk_word_t data[STK_C_PTHREAD_MUTEX_WORDS]   __stk_pthread_aligned; } pthread_stk_mutex_mem_t;
+typedef struct pthread_stk_cv_mem_t      { pthread_stk_word_t data[STK_C_PTHREAD_CV_WORDS]      __stk_pthread_aligned; } pthread_stk_cv_mem_t;
+typedef struct pthread_stk_rwmutex_mem_t { pthread_stk_word_t data[STK_C_PTHREAD_RWMUTEX_WORDS] __stk_pthread_aligned; } pthread_stk_rwmutex_mem_t;
+typedef struct pthread_stk_barrier_mem_t { pthread_stk_word_t data[STK_C_PTHREAD_BARRIER_WORDS] __stk_pthread_aligned; } pthread_stk_barrier_mem_t;
+
 /*! \def       STK_C_PTHREAD_VERSION
     \brief     Interface version.
 */
@@ -217,7 +262,7 @@ extern "C" {
 #endif
 
 /*! \def       STK_C_PTHREAD_DEFAULT_STACK_WORDS
-    \brief     Default per-thread stack size in stk_word_t units, used when
+    \brief     Default per-thread stack size in pthread_stk_word_t units, used when
                pthread_attr_t does not specify a stack size or an external stack
                (default: 1024 words).
     \note      Threads created with this exact size are served from a static
@@ -229,7 +274,7 @@ extern "C" {
 #endif
 
 /*! \def       STK_C_PTHREAD_REAPER_STACK_WORDS
-    \brief     Stack size (in stk_word_t units) for the internal reaper task that
+    \brief     Stack size (in pthread_stk_word_t units) for the internal reaper task that
                reclaims detached-thread resources (default: 256 words).
 */
 #ifndef STK_C_PTHREAD_REAPER_STACK_WORDS
@@ -251,18 +296,20 @@ extern "C" {
 /*! \brief     Bind the STK kernel instance that pthread_create() will add new
                threads to.
     \details   Must be called exactly once, before the first pthread_create() call.
-               The kernel must already be created (stk_kernel_create()) and
-               initialized (stk_kernel_init()); it does not need to be started yet,
-               but in practice pthread_create() will only usefully run new threads
-               once stk_kernel_start() has been called on it.
+               The kernel must already be created and initialized (IKernel::Initialize()
+               or stk_kernel_init()); it does not need to be started yet, but in practice
+               pthread_create() will only usefully run new threads once the kernel has been
+               started.
     \note      Also adds the internal reaper task to the kernel, so
                STK_C_KERNEL_MAX_TASKS must have room for it. Binding a second,
                different kernel is not supported (the reaper stays with the first).
-    \param[in] kernel: Kernel handle obtained from stk_kernel_create(). Its configured
-               type (STK_C_KERNEL_TYPE_CPU_X) must include KERNEL_DYNAMIC (threads need
-               to be able to finish/return) and KERNEL_SYNC.
+    \param[in] kernel: Pointer to the kernel object, an stk::IKernel (from C++ pass \c &kernel,
+               from the C API pass the stk_kernel_t* returned by stk_kernel_create(), it is the
+               same object). Typed \c void * to keep this header independent of stk_c.h.
+               The kernel type must include KERNEL_DYNAMIC (threads need to be able to
+               finish/return) and KERNEL_SYNC.
 */
-void stk_pthread_bind_kernel(stk_kernel_t *kernel);
+void stk_pthread_bind_kernel(void *kernel);
 
 // =============================================================================
 // Types
@@ -278,7 +325,7 @@ typedef struct pthread_stk_ctrl_t *pthread_t;
 typedef struct pthread_attr_t
 {
     size_t      __stack_bytes;  //!< 0 = use STK_C_PTHREAD_DEFAULT_STACK_WORDS.
-    stk_word_t *__ext_stack;    //!< Caller-supplied stack, or NULL.
+    pthread_stk_word_t *__ext_stack;    //!< Caller-supplied stack, or NULL.
     int         __detachstate;  //!< PTHREAD_CREATE_JOINABLE / _DETACHED.
     int         __privileged;   //!< PTHREAD_CREATE_USER_NP (default) / _PRIVILEGED_NP.
 } pthread_attr_t;
@@ -322,7 +369,7 @@ typedef struct pthread_mutexattr_t
 */
 typedef struct pthread_mutex_t
 {
-    stk_mutex_mem_t __mem;    //!< In-place storage for the STK mutex object.
+    pthread_stk_mutex_mem_t __mem;    //!< In-place storage for the STK mutex object.
     void           *__handle; //!< Object constructed in __mem, or NULL if not yet constructed.
     int             __type;   //!< PTHREAD_MUTEX_* type; 0 (NORMAL) when statically initialized.
 } pthread_mutex_t;
@@ -343,7 +390,7 @@ typedef struct pthread_condattr_t
 */
 typedef struct pthread_cond_t
 {
-    stk_cv_mem_t __mem;    //!< In-place storage for the STK condition variable object.
+    pthread_stk_cv_mem_t __mem;    //!< In-place storage for the STK condition variable object.
     void        *__handle; //!< Object constructed in __mem, or NULL if not yet constructed.
 } pthread_cond_t;
 
@@ -368,7 +415,7 @@ typedef struct pthread_rwlockattr_t
 */
 typedef struct pthread_rwlock_t
 {
-    stk_rwmutex_mem_t __mem;      //!< In-place storage for the STK rwmutex object.
+    pthread_stk_rwmutex_mem_t __mem;      //!< In-place storage for the STK rwmutex object.
     void             *__handle;   //!< Object constructed in __mem, or NULL if not yet constructed.
     volatile bool     __wrlocked; //!< True while held for writing; selects Unlock() vs ReadUnlock() on release.
 } pthread_rwlock_t;
@@ -387,7 +434,7 @@ typedef struct pthread_rwlock_t
 typedef struct pthread_spinlock_t
 {
     struct {
-        stk_word_t data[1] __stk_c_aligned; //!< Storage for the non-recursive fast hw::SpinLock.
+        pthread_stk_word_t data[1] __stk_pthread_aligned; //!< Storage for the non-recursive fast hw::SpinLock.
     } __mem;                                //!< In-place storage for the STK spinlock object.
     void *__handle;                         //!< Object constructed in __mem, or NULL if not yet constructed.
 } pthread_spinlock_t;
@@ -406,7 +453,7 @@ typedef struct pthread_barrierattr_t
 */
 typedef struct pthread_barrier_t
 {
-    stk_barrier_mem_t __mem;    //!< In-place storage for the STK barrier object.
+    pthread_stk_barrier_mem_t __mem;    //!< In-place storage for the STK barrier object.
     void             *__handle; //!< Object constructed in __mem, or NULL if not yet constructed.
 } pthread_barrier_t;
 
@@ -426,7 +473,7 @@ typedef struct pthread_barrier_t
 typedef struct pthread_once_t
 {
     int             __state;  //!< 0 = not started, 1 = running, 2 = done.
-    stk_mutex_mem_t __mem;    //!< In-place storage for the guard mutex.
+    pthread_stk_mutex_mem_t __mem;    //!< In-place storage for the guard mutex.
     void           *__handle; //!< Guard mutex constructed in __mem, or NULL if not yet constructed.
 } pthread_once_t;
 
@@ -469,7 +516,7 @@ int pthread_attr_destroy(pthread_attr_t *attr);
 /*! \brief     Set the requested stack size in bytes.
     \param[in,out] attr: Attributes object to modify.
     \param[in] stacksize: Requested stack size in bytes. Must not be 0.
-    \note      Only exactly STK_C_PTHREAD_DEFAULT_STACK_WORDS * sizeof(stk_word_t)
+    \note      Only exactly STK_C_PTHREAD_DEFAULT_STACK_WORDS * sizeof(pthread_stk_word_t)
                bytes is served from the static pool; any other value falls back to
                malloc() at pthread_create() time.
 */
@@ -477,7 +524,7 @@ int pthread_attr_setstacksize(pthread_attr_t *attr, size_t stacksize);
 
 /*! \brief     Get the stack size in bytes that threads created with \a attr will use.
     \details   If no size was set, reports STK_C_PTHREAD_DEFAULT_STACK_WORDS *
-               sizeof(stk_word_t).
+               sizeof(pthread_stk_word_t).
     \param[in] attr: Attributes object to query.
     \param[out] stacksize: Receives the stack size in bytes (the default size if none
                was set).
@@ -488,7 +535,7 @@ int pthread_attr_getstacksize(const pthread_attr_t *attr, size_t *stacksize);
     \details   The buffer is never freed by this shim; the caller must keep it
                valid for the entire lifetime of the thread.
     \param[in,out] attr: Attributes object to modify.
-    \param[in] stackaddr: Pointer to a stk_word_t-aligned buffer.
+    \param[in] stackaddr: Pointer to a pthread_stk_word_t-aligned buffer.
     \param[in] stacksize: Size of the buffer in bytes.
 */
 int pthread_attr_setstack(pthread_attr_t *attr, void *stackaddr, size_t stacksize);
@@ -541,9 +588,10 @@ int pthread_attr_getprivileged_np(const pthread_attr_t *attr, int *mode);
     \param[in] start_routine: Thread entry function.
     \param[in] arg: Argument passed to start_routine.
     \return    0 on success, or an errno-style error code:
-               EINVAL  - no kernel bound (see stk_pthread_bind_kernel()).
+               EINVAL  - no kernel bound (see stk_pthread_bind_kernel()), or the kernel
+                         rejected the task (invalid state / duplicate): not retryable.
                EAGAIN  - STK_C_PTHREAD_MAX_THREADS slots exhausted, stack allocation
-                         failed, or the underlying STK task could not be created.
+                         failed, or the kernel has no free task slot (retryable).
     \note      Requires a bound kernel whose type includes KERNEL_DYNAMIC and KERNEL_SYNC
                (see the file-level docs).
 */
@@ -688,7 +736,7 @@ int pthread_mutex_unlock(pthread_mutex_t *mutex);
 
 /*! \brief     Lock with an absolute deadline.
     \details   If \a abstime is already in the past the call degenerates into a
-               non-blocking attempt. Timeouts are rounded to STK kernel ticks.
+               non-blocking attempt. Timeouts are rounded up to STK kernel ticks.
     \param[in,out] mutex: Mutex to lock.
     \param[in] abstime: Absolute deadline on the stk_time_now_ms() timeline (not
                CLOCK_REALTIME); see the file-level docs.

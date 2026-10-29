@@ -7,6 +7,29 @@
  * License: MIT License, see LICENSE for a full text.
  */
 
+/*
+ * MISRA C++ notes for this translation unit:
+ *  - Every function has a single point of exit (Rule 6-6-5). Error paths are expressed with
+ *    a 'result' variable and nested if/else, never early return.
+ *  - No 'continue' is used and 'break' only terminates 'switch' cases (Rules 6-6-3, 6-6-4):
+ *    loop exit conditions are expressed in the loop condition itself.
+ *  - Every 'else if' chain is terminated by an 'else' (Rule 6-4-2).
+ *  - Objects and functions private to this file have internal linkage (Rule 3-3-1). The CMSIS API
+ *    functions, the weak user handlers (osWatchdogAlarm_Handler(), osZoneSetup_Callback()) and
+ *    the stk::memory::MemoryAllocator hooks are the only externally visible symbols.
+ *  - Remaining, intentional deviations:
+ *      Rule 1-0-1   : weak linkage attribute (STK_CMSIS_WEAK) and __NO_RETURN are compiler extensions.
+ *      Rule 5-2-7/8/9 : reinterpret_cast in StkThread::ConvertTIdToThreadId() (the STK task id is the
+ *                     task address), in the stack alignment check of osThreadNew() and in
+ *                     osThreadEnumerate() (thread ids are returned as ITask pointers).
+ *      Rule 18-4-1  : malloc()/free() for the memory allocator hooks, heap/placement new for control
+ *                     blocks and stacks (the CMSIS API mandates both user-provided and
+ *                     kernel-allocated objects).
+ *      Rule 7-3-1   : the control block classes live in the global namespace of this file.
+ *      Rule 0-1-1   : the loop after stk::ExitTask() in osThreadExit() is unreachable by design
+ *                     (the function is __NO_RETURN).
+ */
+
 #include "stk.h"
 #include "sync/stk_sync.h"
 #include "time/stk_time.h"
@@ -194,10 +217,37 @@ using StkKernel = stk::Kernel<stk::KERNEL_DYNAMIC | stk::KERNEL_SYNC
 #if STK_TICKLESS_IDLE
     | stk::KERNEL_TICKLESS
 #endif
-    , CMSIS_STK_MAX_THREADS, stk::SwitchStrategyFP32, stk::PlatformDefault>;
+    , CMSIS_STK_MAX_THREADS, stk::SwitchStrategyFP32_NSY, stk::PlatformDefault>;
 
 static StkKernel g_StkKernel;
-static uint32_t  g_StkKernelLocked = 0U;
+
+// Weak linkage for user-overridable handlers (osWatchdogAlarm_Handler, osZoneSetup_Callback)
+#ifndef STK_CMSIS_WEAK
+#if defined(__ICCARM__)
+#define STK_CMSIS_WEAK __weak
+#elif defined(__GNUC__) || defined(__clang__) || defined(__ARMCC_VERSION)
+#define STK_CMSIS_WEAK __attribute__((weak))
+#else
+#define STK_CMSIS_WEAK
+#endif
+#endif
+
+// Safety class / privileged protection state (no MPU is used: the state is recorded and the class based
+// operations are implemented on top of the thread list)
+static uint32_t g_KernelProtectClass       = 0U;     // class passed to osKernelProtect()
+static bool     g_KernelProtected          = false;
+static bool     g_PrivilegedThreadsBlocked = false;  // osThreadProtectPrivileged() was called
+
+// CMSIS kernel lock is a binary state (not a counter): osKernelLock() returns the PREVIOUS state.
+static bool                          g_StkKernelLocked     = false;
+static stk::hw::CriticalSection::Session g_StkKernelLockSes = stk::hw::CriticalSection::DEFAULT_SESSION;
+
+// True only while the scheduler is running (not before osKernelStart(), where kernel services such as
+// GetTicks(), Sleep() or GetTid() are not available). Unlike osKernelGetState() it is not affected by the lock.
+static __stk_forceinline bool IsKernelRunning()
+{
+    return (g_StkKernel.GetState() == stk::IKernel::KSTATE_RUNNING);
+}
 
 // -----------------------------------------------------------------------------
 // Thread control block
@@ -224,6 +274,7 @@ static uint32_t  g_StkKernelLocked = 0U;
 // osThreadEnumerate(), which narrows the window but does not close it.
 class StkThread;
 static StkThread *g_ZombieThreads = nullptr;
+static void StkWatchdogRelease(StkThread *th); // defined after the timer host support
 
 class StkThread final : public stk::ITask
 {
@@ -241,7 +292,8 @@ public:
 
     explicit StkThread()
         : m_func(nullptr), m_argument(nullptr), m_name(nullptr),
-          m_stk_priority(CmsisPrioToStk(osPriorityNormal)),
+          m_stk_priority(CmsisPrioToStk(osPriorityNormal)), m_cmsis_priority(osPriorityNormal),
+          m_safety_class(0U), m_zone(0U), m_wd_slot(-1),
           m_stack(nullptr), m_stack_size(0U), m_join_state(JoinState::Detached),
           m_stack_owned(false), m_suspended(false), m_cb_owned(true)
     {}
@@ -265,6 +317,8 @@ public:
     void OnExit() override
     {
         // Called by the kernel from the tick ISR when the task is removed.
+        StkWatchdogRelease(this);
+
         if (m_join_state == JoinState::Detached)
         {
             // Nobody will join: do not free here (heap is not ISR-safe), queue for StkReapZombieThreads().
@@ -304,6 +358,10 @@ public:
     void                        *m_argument;
     const char                  *m_name;
     volatile int32_t             m_stk_priority; // STK priority level 0..31
+    volatile osPriority_t        m_cmsis_priority; // original CMSIS priority (the STK mapping is lossy)
+    uint8_t                      m_safety_class; // osSafetyClass() from attr_bits (0 if none)
+    uint8_t                      m_zone;         // osThreadZone() from attr_bits (0 if none)
+    volatile int8_t              m_wd_slot;      // index of the watchdog slot, -1 if the watchdog is not used
     stk::Word                   *m_stack;        // pointer to stack memory (may be owned)
     size_t                       m_stack_size;   // stack size in Words
     volatile JoinState           m_join_state;   // guarded by m_join_mutex between other tasks
@@ -455,7 +513,7 @@ class StkTimer final : public stk::time::TimerHost::Timer
   
 public:
     explicit StkTimer(osTimerFunc_t const func, osTimerType_t tt, void *arg, const char *name)
-        : m_func(func), m_argument(arg), m_type(tt), m_name(name), m_period_ticks(0U), m_cb_owned(true)
+        : m_func(func), m_argument(arg), m_type(tt), m_name(name), m_period_ticks(0U), m_started(false), m_cb_owned(true)
     {}
     virtual ~StkTimer() = default;
 
@@ -464,13 +522,39 @@ public:
         m_func(m_argument);
     }
 
-    static void EnsureTimerHostCreated()
+    // Returns true if the shared TimerHost is ready. Creation is guarded by a critical section so that two
+    // threads creating the first timer can not race. On failure (e.g. no free kernel task slots, note that the
+    // host occupies TimerHost::TASK_COUNT slots of CMSIS_STK_MAX_THREADS) the host stays unavailable.
+    static bool EnsureTimerHostCreated()
     {
-        if (g_TimerHost == nullptr)
+        const stk::sync::ScopedCriticalSection cs_;
+
+        // a failed Initialize() may leave tasks registered with the kernel which reference the host buffer,
+        // so a failure is final: the buffer must not be reused
+        static bool s_init_failed = false;
+
+        if ((g_TimerHost == nullptr) && !s_init_failed)
         {
-            g_TimerHost = new (g_TimerHostBuf) stk::time::TimerHost();
-            g_TimerHost->Initialize(&g_StkKernel, stk::ACCESS_PRIVILEGED);
+            stk::time::TimerHost *const host = new (g_TimerHostBuf) stk::time::TimerHost();
+
+            // Weights are strategy-specific: the default (1) maps to the lowest FP32 priority and would starve
+            // timers whenever a thread is busy. The tick task must be at least as urgent as the handler tasks.
+            stk::time::TimerHost::Config cfg;
+            cfg.tick_weight    = CmsisPrioToStk(osPriorityHigh);
+            cfg.handler_weight = CmsisPrioToStk(osPriorityAboveNormal);
+            cfg.tick_mode      = stk::ACCESS_PRIVILEGED;
+
+            if (host->Initialize(&g_StkKernel, stk::ACCESS_PRIVILEGED, cfg) == stk::ADD_OK)
+            {
+                g_TimerHost = host;
+            }
+            else
+            {
+                s_init_failed = true; // do not destroy: registered tasks may still reference it
+            }
         }
+
+        return (g_TimerHost != nullptr);
     }
 
     // ---- Members ----
@@ -479,8 +563,72 @@ public:
     osTimerType_t  m_type;
     const char    *m_name;
     uint32_t       m_period_ticks; // stored period for restart
+    bool           m_started;      // true once osTimerStart() queued a command for this timer (host may reference it)
     bool           m_cb_owned;     // true -> heap-allocated, false -> placement-new in caller memory
 };
+
+// True if the task id belongs to a task of the shared TimerHost (tick or handler task, i.e. a timer callback runs
+// in it). Such tasks are not StkThread objects and must never be cast to StkThread.
+static bool StkIsTimerHostTid(const stk::TId tid)
+{
+    return ((g_TimerHost != nullptr) && g_TimerHost->IsHostTid(tid));
+}
+
+// -----------------------------------------------------------------------------
+// Thread watchdog (osThreadFeedWatchdog / osWatchdogAlarm_Handler)
+//
+// Each armed watchdog occupies one slot of a static table, the slot is a TimerHost timer. Slots are static so
+// that the host never references freed memory when a thread exits: StkWatchdogRelease() (called from
+// StkThread::OnExit()) only detaches the thread from the slot and queues an asynchronous Stop().
+// -----------------------------------------------------------------------------
+
+uint32_t osWatchdogAlarm_Handler(osThreadId_t thread_id);
+
+class StkWatchdog final : public stk::time::Timer
+{
+public:
+    explicit StkWatchdog() : m_thread(nullptr) {}
+
+    void OnExpired(stk::time::TimerHost *host) override
+    {
+        StkThread *const th = m_thread;
+
+        if (th != nullptr)
+        {
+            const uint32_t reload = osWatchdogAlarm_Handler(static_cast<osThreadId_t>(th));
+
+            if ((reload != 0U) && (m_thread == th) && (reload <= stk::WAIT_INFINITE))
+            {
+                (void)host->Restart(*this, reload, 0U);
+            }
+            else
+            {
+                m_thread = nullptr; // watchdog stopped (slot is released)
+            }
+        }
+    }
+
+    StkThread *volatile m_thread;
+};
+
+static StkWatchdog g_Watchdogs[CMSIS_STK_MAX_THREADS];
+
+static void StkWatchdogRelease(StkThread *const th)
+{
+    // may run from the kernel tick: no blocking calls
+    const int32_t slot = th->m_wd_slot;
+
+    if (slot >= 0)
+    {
+        th->m_wd_slot = -1;
+        g_Watchdogs[slot].m_thread = nullptr;
+
+        if (g_TimerHost != nullptr)
+        {
+            (void)g_TimerHost->Stop(g_Watchdogs[slot]);
+        }
+    }
+}
 
 // -----------------------------------------------------------------------------
 // Memory pool control block
@@ -797,7 +945,7 @@ osKernelState_t osKernelGetState(void)
 {
     osKernelState_t state;
 
-    if (g_StkKernelLocked != 0U)
+    if (g_StkKernelLocked)
     {
         state = osKernelLocked;
     }
@@ -857,11 +1005,19 @@ int32_t osKernelLock(void)
     {
         result = static_cast<int32_t>(osErrorISR);
     }
+    else if (g_StkKernelLocked)
+    {
+        result = 1; // already locked: previous state is "locked", nothing to do
+    }
+    else if (!IsKernelRunning())
+    {
+        result = static_cast<int32_t>(osError);
+    }
     else
     {
-        stk::hw::CriticalSection::Enter();
-        ++g_StkKernelLocked;
-        result = 0;
+        g_StkKernelLockSes = stk::hw::CriticalSection::Enter();
+        g_StkKernelLocked  = true;
+        result = 0; // previous state: not locked
     }
 
     return result;
@@ -875,15 +1031,19 @@ int32_t osKernelUnlock(void)
     {
         result = static_cast<int32_t>(osErrorISR);
     }
-    else if (g_StkKernelLocked == 0U)
+    else if (g_StkKernelLocked)
     {
-        result = static_cast<int32_t>(osErrorResource);
+        g_StkKernelLocked = false;
+        stk::hw::CriticalSection::Exit(g_StkKernelLockSes);
+        result = 1; // previous state: locked
+    }
+    else if (!IsKernelRunning())
+    {
+        result = static_cast<int32_t>(osError);
     }
     else
     {
-        --g_StkKernelLocked;
-        stk::hw::CriticalSection::Exit();
-        result = 0;
+        result = 0; // previous state: not locked
     }
 
     return result;
@@ -897,21 +1057,29 @@ int32_t osKernelRestoreLock(int32_t lock)
     {
         result = static_cast<int32_t>(osErrorISR);
     }
-    else if (lock == 1)
+    else if (!IsKernelRunning() && !g_StkKernelLocked)
     {
-        stk::hw::CriticalSection::Enter();
-        ++g_StkKernelLocked;
-        result = lock;
-    }
-    else if (g_StkKernelLocked == 0U)
-    {
-        result = static_cast<int32_t>(osErrorResource);
+        result = static_cast<int32_t>(osError);
     }
     else
     {
-        --g_StkKernelLocked;
-        stk::hw::CriticalSection::Exit();
-        result = lock;
+        // bring the kernel to the requested state, return the NEW state (0/1)
+        if ((lock == 1) && !g_StkKernelLocked)
+        {
+            g_StkKernelLockSes = stk::hw::CriticalSection::Enter();
+            g_StkKernelLocked  = true;
+        }
+        else if ((lock == 0) && g_StkKernelLocked)
+        {
+            g_StkKernelLocked = false;
+            stk::hw::CriticalSection::Exit(g_StkKernelLockSes);
+        }
+        else
+        {
+            // already in the requested state (any other value is treated as "unchanged")
+        }
+
+        result = (g_StkKernelLocked ? 1 : 0);
     }
 
     return result;
@@ -955,7 +1123,7 @@ uint32_t osKernelGetTickCount(void)
 {
     uint32_t result;
 
-    if (osKernelGetState() == osKernelInactive)
+    if (!IsKernelRunning())
     {
         result = 0U;
     }
@@ -971,7 +1139,7 @@ uint32_t osKernelGetTickFreq(void)
 {
     uint32_t result;
 
-    if (osKernelGetState() == osKernelInactive)
+    if (!IsKernelRunning())
     {
         result = 1000U; // default 1 kHz
     }
@@ -1078,9 +1246,25 @@ osThreadId_t osThreadNew(osThreadFunc_t func, void *argument, const osThreadAttr
         void *const   cb_mem      = ((attr != nullptr) ? attr->cb_mem  : nullptr);
         const uint32_t cb_size    = ((attr != nullptr) ? attr->cb_size : 0U);
 
-        StkThread *th = PlacementNewOrHeap<StkThread>(cb_mem, cb_size);
+        // osThreadProtectPrivileged(): creation of privileged threads is no longer allowed
+        const bool priv_blocked = g_PrivilegedThreadsBlocked && (attr != nullptr) &&
+                                  ((attr->attr_bits & osThreadPrivileged) != 0U);
+
+        StkThread *th = (priv_blocked ? nullptr : PlacementNewOrHeap<StkThread>(cb_mem, cb_size));
         if (th != nullptr)
         {
+            if (attr != nullptr)
+            {
+                if ((attr->attr_bits & osSafetyClass_Valid) != 0U)
+                {
+                    th->m_safety_class = static_cast<uint8_t>((attr->attr_bits & osSafetyClass_Msk) >> osSafetyClass_Pos);
+                }
+                if ((attr->attr_bits & osThreadZone_Valid) != 0U)
+                {
+                    th->m_zone = static_cast<uint8_t>((attr->attr_bits & osThreadZone_Msk) >> osThreadZone_Pos);
+                }
+            }
+
             th->m_func       = func;
             th->m_argument   = argument;
             th->m_name       = (attr != nullptr) ? attr->name : nullptr;
@@ -1114,7 +1298,8 @@ osThreadId_t osThreadNew(osThreadFunc_t func, void *argument, const osThreadAttr
             // finalize and register the thread
             if (th != nullptr)
             {
-                th->m_stk_priority = CmsisPrioToStk(cmsis_prio);
+                th->m_stk_priority   = CmsisPrioToStk(cmsis_prio);
+                th->m_cmsis_priority = cmsis_prio;
 
                 // KERNEL_DYNAMIC: a failure (e.g. out of kernel task slots: increase CMSIS_STK_MAX_THREADS)
                 // is returned and not asserted, CMSIS requires NULL to be returned in this case
@@ -1155,13 +1340,16 @@ osThreadId_t osThreadGetId(void)
 {
     osThreadId_t threadId = nullptr;
 
-    const osKernelState_t kernel_state = osKernelGetState();
-    const bool            is_irq       = IsIrqContext();
-
-    if ((kernel_state != osKernelInactive) && !is_irq)
+    if (IsKernelRunning() && !IsIrqContext())
     {
         // STK's GetTid() returns the ITask pointer cast to Word.
-        threadId = StkThread::ConvertTIdToThreadId(stk::GetTid());
+        const stk::TId tid = stk::GetTid();
+
+        // a timer callback runs in a TimerHost task which is not a CMSIS thread: report "no thread"
+        if (!StkIsTimerHostTid(tid))
+        {
+            threadId = StkThread::ConvertTIdToThreadId(tid);
+        }
     }
 
     return threadId;
@@ -1245,8 +1433,36 @@ osStatus_t osThreadSetPriority(osThreadId_t thread_id, osPriority_t priority)
     else
     {
         StkThread *const th = static_cast<StkThread *>(thread_id);
-        th->m_stk_priority = CmsisPrioToStk(priority);
-        result = osOK;
+        const int32_t new_weight = CmsisPrioToStk(priority);
+
+        if (IsKernelRunning())
+        {
+            // applies at run-time (requires a strategy with WEIGHT_API and PRIORITY_INHERITANCE_API)
+            stk::SetWeight(stk::GetTidFromUserTask(th), static_cast<stk::Weight>(new_weight));
+            th->m_stk_priority   = new_weight;
+            th->m_cmsis_priority = priority;
+            result = osOK;
+        }
+        else
+        {
+            // kernel is not running: re-register the task so that the strategy picks up the new weight
+            const int32_t old_weight = th->m_stk_priority;
+
+            g_StkKernel.RemoveTask(th);
+            th->m_stk_priority = new_weight;
+
+            if (g_StkKernel.AddTask(th) == stk::ADD_OK)
+            {
+                th->m_cmsis_priority = priority;
+                result = osOK;
+            }
+            else
+            {
+                th->m_stk_priority = old_weight;
+                (void)g_StkKernel.AddTask(th); // restore, a slot has just been freed
+                result = osError;
+            }
+        }
     }
 
     return result;
@@ -1263,7 +1479,7 @@ osPriority_t osThreadGetPriority(osThreadId_t thread_id)
     else
     {
         StkThread *const th = static_cast<StkThread *>(thread_id);
-        result = StkPrioToCmsis(th->m_stk_priority);
+        result = th->m_cmsis_priority;
     }
 
     return result;
@@ -1277,7 +1493,7 @@ osStatus_t osThreadYield(void)
     {
         result = osErrorISR;
     }
-    else if (osKernelGetState() == osKernelInactive)
+    else if (!IsKernelRunning())
     {
         result = osError;
     }
@@ -1302,15 +1518,31 @@ osStatus_t osThreadSuspend(osThreadId_t thread_id)
     {
         result = osErrorParameter;
     }
-    else if (osKernelGetState() == osKernelInactive)
+    else if (!IsKernelRunning())
     {
         result = osErrorParameter;
     }
     else
     {
         StkThread *const th = static_cast<StkThread *>(thread_id);
-        g_StkKernel.SuspendTask(th, th->m_suspended);
-        result = osOK;
+
+        // Set the flag first: a self-suspend does not return until resumed (and must not be called inside
+        // of a critical section), so it can not be set afterwards.
+        const bool was_suspended = th->m_suspended;
+        th->m_suspended = true;
+
+        const stk::ESuspendResult sr = g_StkKernel.SuspendTask(th);
+
+        if (sr == stk::SUSPEND_FAIL)
+        {
+            th->m_suspended = was_suspended;
+            result = osError;
+        }
+        else
+        {
+            // DONE, DEFERRED (sleeping/waiting: parked when the wait ends) and ALREADY are all fine
+            result = osOK;
+        }
     }
 
     return result;
@@ -1328,7 +1560,7 @@ osStatus_t osThreadResume(osThreadId_t thread_id)
     {
         result = osErrorParameter;
     }
-    else if (osKernelGetState() == osKernelInactive)
+    else if (!IsKernelRunning())
     {
         result = osErrorParameter;
     }
@@ -1336,17 +1568,19 @@ osStatus_t osThreadResume(osThreadId_t thread_id)
     {
         StkThread *const th = static_cast<StkThread *>(thread_id);
 
-        const stk::sync::ScopedCriticalSection cs_;
+        const bool was_suspended = th->m_suspended;
+        th->m_suspended = false;
 
-        if (!th->m_suspended)
+        const stk::EResumeResult rr = g_StkKernel.ResumeTask(th);
+
+        if ((rr == stk::RESUME_DONE) || (rr == stk::RESUME_LIFTED))
         {
-            result = osOK; // not suspended, nothing to do
+            result = osOK;
         }
         else
         {
-            g_StkKernel.ResumeTask(th);
-            th->m_suspended = false;
-            result = osOK;
+            th->m_suspended = was_suspended;
+            result = osErrorResource; // not suspended, or the thread is not bound to the kernel
         }
     }
 
@@ -1368,7 +1602,9 @@ osStatus_t osThreadDetach(osThreadId_t thread_id)
     else
     {
         StkThread *const th = static_cast<StkThread *>(thread_id);
+        bool destroy = false;
 
+        {
         const stk::sync::ScopedCriticalSection cs_;
 
         switch (th->m_join_state)
@@ -1387,7 +1623,7 @@ osStatus_t osThreadDetach(osThreadId_t thread_id)
             // thread finished but nobody joined yet, transition to Detached
             // and free the control block now, since no joiner will ever do it
             th->m_join_state = StkThread::JoinState::Detached;
-            ObjDestroy(th); // safe: task slot already freed by the kernel
+            destroy = true; // safe: task slot already freed by the kernel, freed below outside of the critical section
             result = osOK;
             break;
 
@@ -1400,6 +1636,12 @@ osStatus_t osThreadDetach(osThreadId_t thread_id)
         default:
             result = osError;
             break;
+        }
+        }
+
+        if (destroy)
+        {
+            ObjDestroy(th);
         }
     }
 
@@ -1451,16 +1693,15 @@ osStatus_t osThreadJoin(osThreadId_t thread_id)
 
                     // Block until OnExit() fires (transitions state to Exited).
                     // m_join_cv.Wait() atomically releases the critical section and suspends.
-                    while (th->m_join_state == StkThread::JoinState::Joined)
+                    bool wait_ok = true;
+
+                    while (wait_ok && (th->m_join_state == StkThread::JoinState::Joined))
                     {
                         // WAIT_INFINITE - CMSIS osThreadJoin has no timeout parameter.
                         // A cancelled wait is harmless (the predicate is re-checked), but a rejected one
                         // (WAIT_RESULT_FAIL) returns at once without releasing cs_: bail out instead of
                         // spinning with interrupts disabled. The state check below turns it into osError.
-                        if (th->m_join_cv.WaitEx(cs_, stk::WAIT_INFINITE) == stk::WAIT_RESULT_FAIL)
-                        {
-                            break;
-                        }
+                        wait_ok = (th->m_join_cv.WaitEx(cs_, stk::WAIT_INFINITE) != stk::WAIT_RESULT_FAIL);
                     }
                 }
                 // else Exited: OnExit() already fired, nothing to wait for
@@ -1484,14 +1725,8 @@ osStatus_t osThreadJoin(osThreadId_t thread_id)
 
         if (destroy)
         {
-            // OnExit() notifies m_join_cv from the kernel tick, which empties its wait list, but the kernel unlinks
-            // the (now idle) condition variable from its active sync list only on the NEXT tick. If the joiner is
-            // woken within the same tick it must not destroy the control block yet, otherwise that sync list would
-            // reference freed memory. Sleeping one tick guarantees the kernel has processed it. Done outside of the
-            // critical section, as sleeping inside of it would block the tick.
-            stk::Sleep(1);
-
-            // Free the control block - the kernel has already freed the slot.
+            // Free the control block - the kernel has already freed the slot (the destructor of the condition
+            // variable unlinks it from the kernel sync list, so no extra tick delay is needed).
             ObjDestroy(th);
         }
     }
@@ -1513,9 +1748,12 @@ __NO_RETURN void osThreadExit(void)
 osStatus_t osThreadTerminate(osThreadId_t thread_id)
 {
     osStatus_t status = osErrorParameter;
-    const bool is_active = (osKernelGetState() != osKernelInactive);
 
-    if ((thread_id != nullptr) && is_active)
+    if (IsIrqContext())
+    {
+        status = osErrorISR;
+    }
+    else if ((thread_id != nullptr) && IsKernelRunning())
     {
         // Terminating the calling thread: ScheduleTaskRemoval() only marks it, and the thread would keep
         // running until the next tick, so route it through the exit path instead.
@@ -1525,10 +1763,7 @@ osStatus_t osThreadTerminate(osThreadId_t thread_id)
         }
 
         // release resources of detached threads that have already been removed by the kernel
-        if (!IsIrqContext())
-        {
-            StkReapZombieThreads();
-        }
+        StkReapZombieThreads();
 
         StkThread *const th = static_cast<StkThread *>(thread_id);
 
@@ -1545,8 +1780,334 @@ osStatus_t osThreadTerminate(osThreadId_t thread_id)
         // for joinable threads OnExit() wakes the joiner, which calls ObjDestroy().
         status = osOK;
     }
+    else
+    {
+        // osErrorParameter: invalid thread id or the kernel is not running
+    }
 
     return status;
+}
+
+// ===========================================================================
+// ==== Safety / watchdog / zone / affinity extensions (CMSIS-RTOS2 v2.3) ====
+// ===========================================================================
+
+osStatus_t osThreadFeedWatchdog(uint32_t ticks)
+{
+    osStatus_t result;
+
+    if (IsIrqContext())
+    {
+        result = osErrorISR;
+    }
+    else if (!IsKernelRunning() || (ticks > stk::WAIT_INFINITE))
+    {
+        result = osError;
+    }
+    else if (!StkTimer::EnsureTimerHostCreated())
+    {
+        result = osError;
+    }
+    else
+    {
+        StkThread *const th = static_cast<StkThread *>(osThreadGetId());
+
+        if (th == nullptr)
+        {
+            result = osError;
+        }
+        else
+        {
+            int32_t slot;
+
+            {
+                const stk::sync::ScopedCriticalSection cs_;
+
+                slot = th->m_wd_slot;
+
+                if ((slot < 0) && (ticks != 0U))
+                {
+                    for (uint32_t i = 0U; (i < CMSIS_STK_MAX_THREADS) && (slot < 0); ++i)
+                    {
+                        if (g_Watchdogs[i].m_thread == nullptr)
+                        {
+                            g_Watchdogs[i].m_thread = th;
+                            th->m_wd_slot = static_cast<int8_t>(i);
+                            slot = static_cast<int32_t>(i);
+                        }
+                    }
+                }
+            }
+
+            if (ticks == 0U)
+            {
+                if (slot >= 0)
+                {
+                    th->m_wd_slot = -1;
+                    g_Watchdogs[slot].m_thread = nullptr;
+
+                    const stk::time::TimerHost::EResult r = g_TimerHost->StopSync(g_Watchdogs[slot]);
+                    result = ((r == stk::time::TimerHost::RES_OK) || (r == stk::time::TimerHost::RES_INACTIVE) ||
+                              (r == stk::time::TimerHost::RES_QUEUED)) ? osOK : osError;
+                }
+                else
+                {
+                    result = osOK; // not armed, nothing to stop
+                }
+            }
+            else if (slot < 0)
+            {
+                result = osErrorResource; // no free watchdog slot
+            }
+            else
+            {
+                const stk::time::TimerHost::EResult r = g_TimerHost->RestartSync(g_Watchdogs[slot], ticks, 0U);
+                result = ((r == stk::time::TimerHost::RES_OK) || (r == stk::time::TimerHost::RES_QUEUED)) ? osOK : osError;
+            }
+        }
+    }
+
+    return result;
+}
+
+// Default handler: stop the watchdog. Applications override it to take a recovery action.
+STK_CMSIS_WEAK uint32_t osWatchdogAlarm_Handler(osThreadId_t thread_id)
+{
+    (void)thread_id;
+    return 0U;
+}
+
+STK_CMSIS_WEAK void osZoneSetup_Callback(uint32_t zone)
+{
+    (void)zone; // no MPU support: zones are only recorded
+}
+
+void osFaultResume(void)
+{
+    // no MPU / exception fault handling in the wrapper: nothing to resume
+}
+
+osStatus_t osKernelProtect(uint32_t safety_class)
+{
+    osStatus_t result;
+
+    if (IsIrqContext())
+    {
+        result = osErrorISR;
+    }
+    else if (safety_class > 0x0FU)
+    {
+        result = osErrorParameter;
+    }
+    else
+    {
+        // recorded only: there is no MPU to restrict kernel access with
+        const stk::sync::ScopedCriticalSection cs_;
+        g_KernelProtectClass = safety_class;
+        g_KernelProtected    = true;
+        result = osOK;
+    }
+
+    return result;
+}
+
+osStatus_t osThreadProtectPrivileged(void)
+{
+    osStatus_t result;
+
+    if (IsIrqContext())
+    {
+        result = osErrorISR;
+    }
+    else
+    {
+        g_PrivilegedThreadsBlocked = true;
+        result = osOK;
+    }
+
+    return result;
+}
+
+uint32_t osThreadGetClass(osThreadId_t thread_id)
+{
+    return ((IsIrqContext() || (thread_id == nullptr)) ? osErrorId :
+            static_cast<uint32_t>(static_cast<StkThread *>(thread_id)->m_safety_class));
+}
+
+uint32_t osThreadGetZone(osThreadId_t thread_id)
+{
+    return ((IsIrqContext() || (thread_id == nullptr)) ? osErrorId :
+            static_cast<uint32_t>(static_cast<StkThread *>(thread_id)->m_zone));
+}
+
+// Visits every thread selected by a predicate. The calling thread is visited last because the action on it
+// (suspend / terminate) does not return to the loop.
+enum StkThreadAction : uint8_t { ACT_SUSPEND, ACT_RESUME, ACT_TERMINATE };
+
+static osStatus_t StkApplyToThreads(StkThreadAction action, bool by_zone, uint32_t key, uint32_t mode)
+{
+    osThreadId_t ids[CMSIS_STK_MAX_THREADS];
+    osStatus_t   result = osOK;
+
+    if (!IsKernelRunning())
+    {
+        result = osError;
+    }
+    else
+    {
+        const uint32_t count = osThreadEnumerate(ids, CMSIS_STK_MAX_THREADS);
+        const osThreadId_t self = osThreadGetId();
+        bool self_selected = false;
+
+        for (uint32_t i = 0U; i < count; ++i)
+        {
+            const StkThread *const th = static_cast<StkThread *>(ids[i]);
+            bool selected;
+
+            if (by_zone)
+            {
+                selected = (th->m_zone == key);
+            }
+            else
+            {
+                const uint32_t cls = th->m_safety_class;
+                selected = ((((mode & osSafetyWithSameClass)  != 0U) && (cls == key)) ||
+                            (((mode & osSafetyWithLowerClass) != 0U) && (cls <  key)));
+            }
+
+            if (selected)
+            {
+                if (ids[i] == self)
+                {
+                    self_selected = true;
+                }
+                else
+                {
+                    osStatus_t r;
+
+                    switch (action)
+                    {
+                    case ACT_SUSPEND:   r = osThreadSuspend(ids[i]);   break;
+                    case ACT_RESUME:    r = osThreadResume(ids[i]);    break;
+                    default:            r = osThreadTerminate(ids[i]); break;
+                    }
+
+                    // resuming a thread that is not suspended is not an error here
+                    if ((r != osOK) && !((action == ACT_RESUME) && (r == osErrorResource)))
+                    {
+                        result = osError;
+                    }
+                }
+            }
+        }
+
+        if (self_selected)
+        {
+            if (action == ACT_SUSPEND)
+            {
+                if (osThreadSuspend(self) != osOK)
+                {
+                    result = osError;
+                }
+            }
+            else if (action == ACT_TERMINATE)
+            {
+                (void)osThreadTerminate(self); // does not return
+            }
+            else
+            {
+                // a running thread is not suspended, nothing to resume
+            }
+        }
+    }
+
+    return result;
+}
+
+static osStatus_t StkCheckClassArgs(uint32_t safety_class, uint32_t mode)
+{
+    osStatus_t result = osOK;
+
+    if (IsIrqContext())
+    {
+        result = osErrorISR;
+    }
+    else if ((safety_class > 0x0FU) || (mode == 0U) ||
+             ((mode & ~(osSafetyWithSameClass | osSafetyWithLowerClass)) != 0U))
+    {
+        result = osErrorParameter;
+    }
+    else
+    {
+        // OK
+    }
+
+    return result;
+}
+
+osStatus_t osThreadSuspendClass(uint32_t safety_class, uint32_t mode)
+{
+    const osStatus_t chk = StkCheckClassArgs(safety_class, mode);
+    return ((chk != osOK) ? chk : StkApplyToThreads(ACT_SUSPEND, false, safety_class, mode));
+}
+
+osStatus_t osThreadResumeClass(uint32_t safety_class, uint32_t mode)
+{
+    const osStatus_t chk = StkCheckClassArgs(safety_class, mode);
+    return ((chk != osOK) ? chk : StkApplyToThreads(ACT_RESUME, false, safety_class, mode));
+}
+
+// Only threads are destroyed: the other kernel objects are not tracked per safety class by the wrapper.
+osStatus_t osKernelDestroyClass(uint32_t safety_class, uint32_t mode)
+{
+    const osStatus_t chk = StkCheckClassArgs(safety_class, mode);
+    return ((chk != osOK) ? chk : StkApplyToThreads(ACT_TERMINATE, false, safety_class, mode));
+}
+
+osStatus_t osThreadTerminateZone(uint32_t zone)
+{
+    osStatus_t result;
+
+    if (IsIrqContext())
+    {
+        result = osErrorISR;
+    }
+    else if (zone > 0x3FU)
+    {
+        result = osErrorParameter;
+    }
+    else
+    {
+        result = StkApplyToThreads(ACT_TERMINATE, true, zone, 0U);
+    }
+
+    return result;
+}
+
+// STK runs on a single processor: only processor 0 can be selected (a zero mask means "any").
+osStatus_t osThreadSetAffinityMask(osThreadId_t thread_id, uint32_t affinity_mask)
+{
+    osStatus_t result;
+
+    if (IsIrqContext())
+    {
+        result = osErrorISR;
+    }
+    else if ((thread_id == nullptr) || ((affinity_mask != 0U) && ((affinity_mask & osThreadProcessor(0)) == 0U)))
+    {
+        result = osErrorParameter;
+    }
+    else
+    {
+        result = osOK;
+    }
+
+    return result;
+}
+
+uint32_t osThreadGetAffinityMask(osThreadId_t thread_id)
+{
+    return ((IsIrqContext() || (thread_id == nullptr)) ? 0U : osThreadProcessor(0));
 }
 
 uint32_t osThreadGetCount(void)
@@ -1566,6 +2127,13 @@ uint32_t osThreadGetCount(void)
         const stk::sync::ScopedCriticalSection cs_;
 
         count = static_cast<uint32_t>(g_StkKernel.GetSwitchStrategy()->GetSize());
+
+        // the TimerHost tasks are kernel tasks but not CMSIS threads
+        if (g_TimerHost != nullptr)
+        {
+            const uint32_t host_tasks = static_cast<uint32_t>(stk::time::TimerHost::TASK_COUNT);
+            count = ((count > host_tasks) ? (count - host_tasks) : 0U);
+        }
     }
 
     return count;
@@ -1593,7 +2161,15 @@ uint32_t osThreadEnumerate(osThreadId_t *thread_array, uint32_t array_items)
         const size_t count = g_StkKernel.EnumerateTasks(
             stk::ArrayView<stk::ITask *>(tasks_destination, static_cast<size_t>(array_items)));
 
-        result_count = static_cast<uint32_t>(count);
+        // compact the array in place: drop the TimerHost tasks, they are not CMSIS threads
+        for (size_t i = 0U; i < count; ++i)
+        {
+            if (!StkIsTimerHostTid(stk::GetTidFromUserTask(tasks_destination[i])))
+            {
+                thread_array[result_count] = thread_array[i];
+                ++result_count;
+            }
+        }
     }
 
     return result_count;
@@ -1693,7 +2269,7 @@ osStatus_t osDelay(uint32_t ticks)
     {
         result = osErrorISR;
     }
-    else if (osKernelGetState() == osKernelInactive)
+    else if (!IsKernelRunning())
     {
         result = osError;
     }
@@ -1714,13 +2290,24 @@ osStatus_t osDelayUntil(uint32_t ticks)
     {
         result = osErrorISR;
     }
-    else if (osKernelGetState() == osKernelInactive)
+    else if (!IsKernelRunning())
     {
         result = osError;
     }
     else
     {
-        result = (stk::SleepUntil(static_cast<stk::Ticks>(ticks)) ? osOK : osError);
+        // 32-bit tick arithmetic: wrap-safe, a target in the past (or now) is a parameter error
+        const uint32_t delta = ticks - static_cast<uint32_t>(stk::GetTicks());
+
+        if ((delta == 0U) || (delta >= 0x80000000UL))
+        {
+            result = osErrorParameter;
+        }
+        else
+        {
+            stk::Sleep(static_cast<stk::Ticks>(delta));
+            result = osOK;
+        }
     }
 
     return result;
@@ -1750,10 +2337,15 @@ osTimerId_t osTimerNew(osTimerFunc_t func, osTimerType_t type, void *argument,
         void       *const cb_mem = ((attr != nullptr) ? attr->cb_mem  : nullptr);
         const uint32_t    cb_sz  = ((attr != nullptr) ? attr->cb_size : 0U);
         
-        StkTimer::EnsureTimerHostCreated();
-
-        StkTimer *const tmr = PlacementNewOrHeap<StkTimer>(cb_mem, cb_sz, func, type, argument, name);
-        result = static_cast<osTimerId_t>(tmr);
+        if (!StkTimer::EnsureTimerHostCreated())
+        {
+            result = nullptr; // host could not be created (e.g. no free kernel task slots)
+        }
+        else
+        {
+            StkTimer *const tmr = PlacementNewOrHeap<StkTimer>(cb_mem, cb_sz, func, type, argument, name);
+            result = static_cast<osTimerId_t>(tmr);
+        }
     }
 
     return result;
@@ -1789,13 +2381,26 @@ osStatus_t osTimerStart(osTimerId_t timer_id, uint32_t ticks)
     }
     else
     {
-        StkTimer *const tmr = static_cast<StkTimer *>(timer_id);
+        // 0 ticks would turn a periodic timer into a one-shot one, osWaitForever (and anything above
+        // WAIT_INFINITE) is not a valid timer interval
+        if ((ticks == 0U) || (ticks > static_cast<uint32_t>(stk::WAIT_INFINITE)))
+        {
+            result = osErrorParameter;
+        }
+        else
+        {
+            StkTimer *const tmr = static_cast<StkTimer *>(timer_id);
 
-        const uint32_t period_ticks = ((tmr->m_type == osTimerPeriodic) ? ticks : 0U);
-        tmr->m_period_ticks = period_ticks;
+            const uint32_t period_ticks = ((tmr->m_type == osTimerPeriodic) ? ticks : 0U);
+            tmr->m_period_ticks = period_ticks;
+            tmr->m_started      = true;
 
-        const bool ok = g_TimerHost->Restart(*tmr, ticks, period_ticks);
-        result = (ok ? osOK : osError);
+            // RestartSync(): atomic stop + start, the outcome is exact. RES_QUEUED: the caller can not wait (kernel
+            // not started yet), the command is queued and executed once the tick task runs.
+            const stk::time::TimerHost::EResult res = g_TimerHost->RestartSync(*tmr, ticks, period_ticks);
+            result = ((res == stk::time::TimerHost::RES_OK) || (res == stk::time::TimerHost::RES_QUEUED)) ?
+                osOK : osError;
+        }
     }
 
     return result;
@@ -1817,13 +2422,22 @@ osStatus_t osTimerStop(osTimerId_t timer_id)
     {
         StkTimer *const tmr = static_cast<StkTimer *>(timer_id);
 
-        if (!tmr->IsActive())
+        // StopSync() judges the state in the tick task (no race with an expiring one-shot): RES_INACTIVE means
+        // the timer was not running, which CMSIS reports as osErrorResource
+        switch (g_TimerHost->StopSync(*tmr))
         {
+        case stk::time::TimerHost::RES_OK:
+        case stk::time::TimerHost::RES_QUEUED:
+            result = osOK;
+            break;
+
+        case stk::time::TimerHost::RES_INACTIVE:
             result = osErrorResource;
-        }
-        else
-        {
-            result = (g_TimerHost->Stop(*tmr) ? osOK : osError);
+            break;
+
+        default:
+            result = osError;
+            break;
         }
     }
 
@@ -1860,13 +2474,19 @@ osStatus_t osTimerDelete(osTimerId_t timer_id)
     }
     else
     {
-        result = osOK;
-      
         StkTimer *const tmr = static_cast<StkTimer *>(timer_id);
 
-        if (tmr->IsActive())
+        result = osOK;
+
+        // A timer which was never started is unknown to the host and can be destroyed right away. Otherwise
+        // StopSync() guarantees that no command, ready-list node or running callback references the timer
+        // after it returned RES_OK / RES_INACTIVE. RES_QUEUED (the caller can not wait) gives no such
+        // guarantee, so the timer must not be destroyed in that case.
+        if (tmr->m_started)
         {
-            if (!g_TimerHost->Stop(*tmr))
+            const stk::time::TimerHost::EResult res = g_TimerHost->StopSync(*tmr);
+
+            if ((res != stk::time::TimerHost::RES_OK) && (res != stk::time::TimerHost::RES_INACTIVE))
             {
                 result = osError;
             }
@@ -2136,7 +2756,11 @@ osThreadId_t osMutexGetOwner(osMutexId_t mutex_id)
     }
     else
     {
-        result = StkThread::ConvertTIdToThreadId(static_cast<const StkMutexBase *>(mutex_id)->GetOwner());
+        const stk::TId owner = static_cast<const StkMutexBase *>(mutex_id)->GetOwner();
+
+        // the owner can be a timer callback (TimerHost task), which is not a CMSIS thread
+        result = ((owner == stk::TID_NONE) || StkIsTimerHostTid(owner)) ?
+            nullptr : StkThread::ConvertTIdToThreadId(owner);
     }
 
     return result;
@@ -2238,8 +2862,8 @@ osStatus_t osSemaphoreRelease(osSemaphoreId_t semaphore_id)
     }
     else
     {
-        static_cast<StkSemaphore *>(semaphore_id)->m_semaphore.Signal();
-        result = osOK;
+        // TrySignal() reports a saturated semaphore (count == max) instead of asserting
+        result = (static_cast<StkSemaphore *>(semaphore_id)->m_semaphore.TrySignal() ? osOK : osErrorResource);
     }
 
     return result;

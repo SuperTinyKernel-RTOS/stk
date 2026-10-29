@@ -23,6 +23,7 @@
  */
 
 #include <pthread.h>
+#include <stk_c.h>
 #include "example.h"
 
 enum { MAIN_STACK_SIZE = 256, THREAD_STACK_SIZE = 256 }; // in stk_word_t units

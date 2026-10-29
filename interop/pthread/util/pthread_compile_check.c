@@ -74,7 +74,7 @@ int stk_pthread_compile_check(void)
 
     /* thread attributes and lifecycle */
     rc |= pthread_attr_init(&attr);
-    rc |= pthread_attr_setstacksize(&attr, (size_t)(STK_C_PTHREAD_DEFAULT_STACK_WORDS * sizeof(stk_word_t)));
+    rc |= pthread_attr_setstacksize(&attr, (size_t)(STK_C_PTHREAD_DEFAULT_STACK_WORDS * sizeof(pthread_stk_word_t)));
     rc |= pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_JOINABLE);
     rc |= pthread_attr_setprivileged_np(&attr, PTHREAD_CREATE_USER_NP);
     rc |= pthread_attr_getprivileged_np(&attr, &mode);
