@@ -25,7 +25,9 @@
     Include this single header in user application code. It transitively pulls in:
      - stk_helper.h             - Task, TaskW, StackMemoryWrapper; and free-function helpers:
                                   GetTid, GetTicks, GetTickResolution, GetTicksFromMs,
-                                  GetMsecFromTicks, GetTimeNowMsec, Delay, Sleep, SleepUntil, Yield.
+                                  GetMsFromTicks, GetTimeNowMs, Delay, Sleep, SleepUntil, Yield,
+                                  LockScheduler, UnlockScheduler, RestoreSchedulerLock, and the
+                                  ScopedSchedulerLock RAII alias.
      - stk_strategy_rrobin.h    - SwitchStrategyRoundRobin.
      - stk_strategy_swrrobin.h  - SwitchStrategySmoothWeightedRoundRobin.
      - stk_strategy_monotonic.h - SwitchStrategyMonotonic (SRT rate-monotonic).
@@ -1055,7 +1057,15 @@ protected:
 
             if __stk_constexpr_cpp17 (!IsHrtMode())
             {
-                m_kernel->m_platform.Sleep(ticks);
+                if (!m_kernel->IsLocked())
+                {
+                    m_kernel->m_platform.Sleep(ticks);
+                }
+                else
+                {
+                    // contract violation: the lock holder must not give up the CPU (no-op in release), see IKernelService::LockScheduler
+                    STK_ASSERT(false);
+                }
             }
             else
             {
@@ -1068,16 +1078,27 @@ protected:
         {
             STK_ASSERT(!hw::IsInsideISR());
 
+            bool result = false;
+
             if __stk_constexpr_cpp17 (!IsHrtMode())
             {
-                return m_kernel->m_platform.SleepUntil(timestamp);
+                if (!m_kernel->IsLocked())
+                {
+                    result = m_kernel->m_platform.SleepUntil(timestamp);
+                }
+                else
+                {
+                    // contract violation, see IKernelService::LockScheduler: no-op in release, reported as "did not sleep"
+                    STK_ASSERT(false);
+                }
             }
             else
             {
                 // sleeping is not supported in HRT mode, task will sleep according to its periodicity and workload
                 STK_ASSERT(false);
-                return false;
             }
+
+            return result;
         }
 
         void SleepCancel(TId task_id) override
@@ -1092,7 +1113,15 @@ protected:
         {
             STK_ASSERT(!hw::IsInsideISR());
 
-            m_kernel->m_platform.SwitchToNext();
+            if (!m_kernel->IsLocked())
+            {
+                m_kernel->m_platform.SwitchToNext();
+            }
+            else
+            {
+                // contract violation, see IKernelService::LockScheduler: no-op in release
+                STK_ASSERT(false);
+            }
         }
 
         void ExitTask() override
@@ -1123,15 +1152,26 @@ protected:
 
         EWaitResult Wait(ISyncObject *sobj, IMutex *mutex, Timeout ticks) override
         {
+            EWaitResult result = WAIT_RESULT_FAIL;
+
             if __stk_constexpr_cpp17 (IsSyncMode())
             {
-                return m_kernel->m_platform.Wait(sobj, mutex, ticks);
+                if (!m_kernel->IsLocked())
+                {
+                    result = m_kernel->m_platform.Wait(sobj, mutex, ticks);
+                }
+                else
+                {
+                    // contract violation, see IKernelService::LockScheduler: blocking would never be woken, result stays WAIT_RESULT_FAIL in release
+                    STK_ASSERT(false);
+                }
             }
             else
             {
                 STK_ASSERT(false);
-                return WAIT_RESULT_FAIL;
             }
+
+            return result;
         }
 
         void Wake(ISyncObject *sobj, bool all) override
@@ -1238,6 +1278,36 @@ protected:
                 STK_ASSERT(false);
 
                 result = NO_TIME_SLICE;
+            }
+
+            return result;
+        }
+
+        /*! \brief  Disable task switching (CMSIS-RTOS2 osKernelLock equivalent).
+            \return Previous lock state, or LOCK_FAIL / LOCK_FAIL_ISR.
+            \see    IKernel::SetSchedulerLock
+        */
+        ELockResult LockScheduler() override { return m_kernel->SetSchedulerLock(true); }
+
+        /*! \brief  Enable task switching (CMSIS-RTOS2 osKernelUnlock equivalent).
+            \return Previous lock state, or LOCK_FAIL / LOCK_FAIL_ISR.
+            \see    IKernel::SetSchedulerLock
+        */
+        ELockResult UnlockScheduler() override { return m_kernel->SetSchedulerLock(false); }
+
+        /*! \brief     Set the lock state (CMSIS-RTOS2 osKernelRestoreLock equivalent).
+            \param[in] locked: \c true to lock, \c false to unlock.
+            \return    New lock state, or LOCK_FAIL / LOCK_FAIL_ISR.
+            \see       IKernel::SetSchedulerLock
+        */
+        ELockResult RestoreSchedulerLock(bool locked) override
+        {
+            ELockResult result = m_kernel->SetSchedulerLock(locked);
+
+            // SetSchedulerLock() reports the previous state, RestoreSchedulerLock() reports the new one
+            if (result >= LOCK_WAS_UNLOCKED)
+            {
+                result = (locked ? LOCK_WAS_LOCKED : LOCK_WAS_UNLOCKED);
             }
 
             return result;
@@ -1539,6 +1609,8 @@ public:
                     a forced context switch (SVC) is not legal in handler mode and is not requested.
         \note       hw::CriticalSection must not be active otherwise a deadlock will
                     happen if task is suspending self.
+        \warning    A task which holds the kernel lock (see IKernelService::LockScheduler) must not suspend itself: asserts in debug
+                    builds, in release builds does nothing and returns SUSPEND_FAIL.
     */
     ESuspendResult SuspendTask(ITask *user_task) override
     {
@@ -1573,36 +1645,46 @@ public:
                 }
                 else
                 {
-                    task->ScheduleSleep(WAIT_INFINITE);
+                    const bool locked = IsLocked();
 
-                    // set state
-                    task->m_state |= KernelTask::STATE_SUSPENDED;
-                    result = SUSPEND_DONE;
-
-                    if (task == m_task_now)
+                    if (locked && (task == m_task_now))
                     {
-                        // trace blocked via Suspend
-                    #if STK_SEGGER_SYSVIEW
-                        SEGGER_SYSVIEW_OnTaskStopReady(task->GetUserStackPtr()->tid, TRACE_EVENT_SUSPEND);
-                    #endif
-
-                        // suspending self (task context): keep the pointer as m_task_now may change as soon
-                        // as the critical section is released; from an ISR m_task_now is the interrupted
-                        // task, it is switched out by the next tick and nobody must spin here
-                        if (!in_isr)
-                        {
-                            self_task = task;
-                        }
-                    }
-                    else if (IsStarted() && ((task->m_state & KernelTask::STATE_SLEEP_PENDING) != 0U))
-                    {
-                        // not the scheduled task: report the sleep to the strategy right away, otherwise a
-                        // forced context switch could still pick it from GetNext() (see ScheduleRemoval)
-                        ProcessTaskPendingSleep(task);
+                        // contract violation: the lock holder must not give up the CPU (no-op in release), see IKernelService::LockScheduler
+                        STK_ASSERT(false);
                     }
                     else
                     {
-                        // noop
+                        task->ScheduleSleep(WAIT_INFINITE);
+
+                        // set state
+                        task->m_state |= KernelTask::STATE_SUSPENDED;
+                        result = SUSPEND_DONE;
+
+                        if (task == m_task_now)
+                        {
+                            // trace blocked via Suspend
+                        #if STK_SEGGER_SYSVIEW
+                            SEGGER_SYSVIEW_OnTaskStopReady(task->GetUserStackPtr()->tid, TRACE_EVENT_SUSPEND);
+                        #endif
+
+                            // suspending self (task context): keep the pointer as m_task_now may change as soon
+                            // as the critical section is released; from an ISR m_task_now is the interrupted
+                            // task, it is switched out by the next tick and nobody must spin here
+                            if (!in_isr)
+                            {
+                                self_task = task;
+                            }
+                        }
+                        else if (IsStarted() && ((task->m_state & KernelTask::STATE_SLEEP_PENDING) != 0U))
+                        {
+                            // not the scheduled task: report the sleep to the strategy right away, otherwise a
+                            // forced context switch could still pick it from GetNext() (see ScheduleRemoval)
+                            ProcessTaskPendingSleep(task);
+                        }
+                        else
+                        {
+                            // noop
+                        }
                     }
                 }
             }
@@ -1844,6 +1926,45 @@ public:
         return count;
     }
 
+    /*! \brief     Lock or unlock task switching.
+        \param[in] lock: \c true to lock, \c false to unlock.
+        \return    Previous lock state, or LOCK_FAIL / LOCK_FAIL_ISR.
+        \see       IKernel::SetSchedulerLock for the contract of the lock holder
+    */
+    ELockResult SetSchedulerLock(bool lock) override
+    {
+        ELockResult result = LOCK_FAIL;
+
+        if (hw::IsInsideISR())
+        {
+            result = LOCK_FAIL_ISR;
+        }
+        else
+        if __stk_constexpr_cpp17 (!IsHrtMode())
+        {
+            // critical section: avoid race with OnTick and the forced context switch path
+            const hw::CriticalSection::ScopedLock cs_;
+
+            if (m_kstate == KSTATE_RUNNING)
+            {
+                result   = LOCK_WAS_UNLOCKED;
+                m_kstate = (lock ? KSTATE_LOCKED : KSTATE_RUNNING);
+            }
+            else
+            if (m_kstate == KSTATE_LOCKED)
+            {
+                result   = LOCK_WAS_LOCKED;
+                m_kstate = (lock ? KSTATE_LOCKED : KSTATE_RUNNING);
+            }
+            else
+            {
+                // KSTATE_INACTIVE, KSTATE_READY, KSTATE_SUSPENDED: LOCK_FAIL
+            }
+        }
+
+        return result;
+    }
+
     /*! \brief     Start the scheduler. This call does not return until all tasks have exited
                    (KERNEL_DYNAMIC mode) or indefinitely (KERNEL_STATIC mode).
         \note      Re-initializes trap stacks on every call so Start() can be called again
@@ -1941,6 +2062,11 @@ protected:
          it as a sleeping test.
     */
     static constexpr Timeout YIELD_TICKS = 1;
+
+    /*! \brief  Check whether task switching is disabled with Lock().
+        \note   While locked the lock holder is the only task which can run (task context).
+    */
+    bool IsLocked() const { return (m_kstate == KSTATE_LOCKED); }
 
     /*! \brief     Check if FSM state is valid.
     */
@@ -2277,11 +2403,11 @@ protected:
     {
     #if !STK_TICKLESS_IDLE
         // in non-tickless mode kernel is advancing strictly by 1 tick on every OnTick call
-        enum { ticks = 1 };
-    #endif
-
+        static constexpr Timeout elapsed_ticks = 1;
+    #else
         // elapsed ticks must be captured here: in tickless mode "ticks" is overwritten below
         const Timeout elapsed_ticks = ticks;
+    #endif
 
         // advance internal timestamp
         m_service.IncrementTicks(elapsed_ticks);
@@ -2296,13 +2422,26 @@ protected:
         UpdateTasks(elapsed_ticks));
 
         // time-slice accounting for the task that just ran (after sleep/wake updates, before the FSM picks next)
+        // (skipped while locked: a rotation without a context switch would cause a spurious early preemption after Unlock)
         if __stk_constexpr_cpp17 (IsTimesliceMode())
         {
             UpdateTimeslice(elapsed_ticks);
         }
 
-        // decide on a context switch
-        return UpdateFsmState(idle, active);
+        // scheduler locked by IKernelService::LockScheduler(): the running task keeps the CPU, ticks and sleep timers still advance
+        bool switch_context;
+        if (!IsLocked())
+        {
+            // decide on a context switch
+            switch_context = UpdateFsmState(idle, active);
+        }
+        else
+        {
+            // kernel-level lock is active, no context switching can happen
+            switch_context = false;
+        }
+
+        return switch_context;
     }
 
     bool OnForceContextSwitch(TId id, Stack *&idle, Stack *&active)
@@ -2321,6 +2460,12 @@ protected:
             {
                 if ((task->m_state & KernelTask::STATE_SLEEP_PENDING) != 0U)
                 {
+                    // the lock holder is leaving the CPU (exit, the only way: see OnTaskExit): release the lock, it must not leak
+                    if (m_kstate == KSTATE_LOCKED)
+                    {
+                        m_kstate = KSTATE_RUNNING;
+                    }
+
                     ProcessTaskPendingSleep(task);
 
                     switch_context = UpdateFsmState(idle, active);
@@ -2467,6 +2612,12 @@ protected:
             KernelTask *const task = FindTaskByStack(stack);
             STK_ASSERT(task != nullptr);
 
+            // contract violation: the lock holder must not exit while holding the lock, see IKernelService::LockScheduler.
+            // Unlike Sleep/Yield/Wait the exit can not be refused (ExitTask() does not return, returning from
+            // ITask::Run() lands in the exit trap), so in release the exit proceeds and the lock is released
+            // when the task leaves the CPU (see OnForceContextSwitch)
+            STK_ASSERT(!(IsLocked() && (task == m_task_now)));
+
             // task is being stopped and will terminate
         #if STK_SEGGER_SYSVIEW
             SEGGER_SYSVIEW_OnTaskStopExec();
@@ -2563,7 +2714,7 @@ protected:
         // toggle kernel state
         if (suspended)
         {
-            if (m_kstate == KSTATE_RUNNING) 
+            if ((m_kstate == KSTATE_RUNNING) || (m_kstate == KSTATE_LOCKED))
             {
                 m_kstate = KSTATE_SUSPENDED;
             }
@@ -2667,13 +2818,17 @@ protected:
             {
                 ts.left -= elapsed_ticks;
 
-                if (ts.left <= 0)
+                // if locked on kernel level, do not rotate tasks until locking task releases the lock
+                if (!IsLocked())
                 {
-                    ts.Reload();
+                    if (ts.left <= 0)
+                    {
+                        ts.Reload();
 
-                    // strategy rotates to a same-priority peer if there is one, otherwise (or if the
-                    // task is not eligible) the task keeps running with a fresh slice
-                    STK_UNUSED(m_strategy.OnTaskTimeSlice(task));
+                        // strategy rotates to a same-priority peer if there is one, otherwise (or if the
+                        // task is not eligible) the task keeps running with a fresh slice
+                        STK_UNUSED(m_strategy.OnTaskTimeSlice(task));
+                    }
                 }
             }
         }

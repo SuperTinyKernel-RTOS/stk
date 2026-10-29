@@ -152,6 +152,18 @@ enum EAddResult : int8_t
     ADD_OK             = 0   //!< Task was added.
 };
 
+/*! \enum  ELockResult
+    \brief Result of IKernel::SetSchedulerLock(), IKernelService::LockScheduler(), UnlockScheduler() and
+           RestoreSchedulerLock(): the scheduler lock state.
+*/
+enum ELockResult : int8_t
+{
+    LOCK_FAIL_ISR     = -2, //!< Called from an ISR.
+    LOCK_FAIL         = -1, //!< Kernel is not running, is suspended, or is in KERNEL_HRT mode.
+    LOCK_WAS_UNLOCKED = 0,  //!< LockScheduler/UnlockScheduler: previous state was unlocked. RestoreSchedulerLock: now unlocked.
+    LOCK_WAS_LOCKED   = 1   //!< LockScheduler/UnlockScheduler: previous state was locked. RestoreSchedulerLock: now locked.
+};
+
 /*! \enum  ESuspendResult
     \brief Result of IKernel::SuspendTask().
 */
@@ -806,8 +818,14 @@ public:
     class ScopedLock
     {
     public:
-        explicit ScopedLock(IMutex &mutex) : m_mutex(mutex) { m_mutex.Lock(); }
-        ~ScopedLock() { m_mutex.Unlock(); }
+        explicit ScopedLock(IMutex &mutex) : m_mutex(mutex)
+        {
+            m_mutex.Lock();
+        }
+        ~ScopedLock()
+        {
+            m_mutex.Unlock();
+        }
 
     private:
         STK_NONCOPYABLE_CLASS(ScopedLock);
@@ -1571,7 +1589,8 @@ public:
         KSTATE_INACTIVE = 0, //!< Not ready, IKernel::Initialize() must be called.
         KSTATE_READY,        //!< Ready to start, IKernel::Start() must be called.
         KSTATE_RUNNING,      //!< Initialized and running, IKernel::Start() was called successfully.
-        KSTATE_SUSPENDED     //!< Scheduling is suspended with IKernelService::Suspend().
+        KSTATE_SUSPENDED,    //!< Scheduling is suspended with IKernelService::Suspend().
+        KSTATE_LOCKED        //!< Running, but task switching is disabled with IKernelService::LockScheduler(). Ticks, timeouts and ISRs keep running.
     };
 
     /*! \brief     Initialize kernel.
@@ -1675,6 +1694,8 @@ public:
         \note       When a task suspends itself (task context) the call returns after it has been resumed.
         \note       hw::CriticalSection must not be active otherwise a deadlock will
                     happen if task is suspending self.
+        \warning    A task which holds the scheduler lock (see IKernelService::LockScheduler) must not suspend itself: asserts in debug builds,
+                    in release builds does nothing and returns SUSPEND_FAIL. Suspending another task is allowed.
     */
     virtual ESuspendResult SuspendTask(ITask *user_task) = 0;
 
@@ -1787,6 +1808,32 @@ public:
         return i;
     }
 
+    /*! \brief     Lock or unlock task switching. Ticks, timeouts and ISRs keep running.
+        \param[in] lock: \c true to lock, \c false to unlock.
+        \return    Previous lock state (LOCK_WAS_UNLOCKED / LOCK_WAS_LOCKED), or LOCK_FAIL / LOCK_FAIL_ISR.
+        \note      Single kernel-level primitive: IKernelService::LockScheduler(), UnlockScheduler() and
+                   RestoreSchedulerLock() (and their stk:: helpers) are built on it. Application code should
+                   use those. Always reports the PREVIOUS state, RestoreSchedulerLock() converts it to the new one.
+        \note      Not nested.
+        \note      Task context only. Not available in KERNEL_HRT mode (LOCK_FAIL).
+        \note      While locked the kernel state is KSTATE_LOCKED.
+        \warning   The lock holder must keep the CPU. While locked, Sleep(), SleepUntil(), Yield(), IKernelService::Wait()
+                   and SuspendTask() of the calling task must not be called: they assert in debug builds. In release
+                   builds they are no-ops (SleepUntil() returns false, Wait() returns WAIT_RESULT_FAIL,
+                   SuspendTask() returns SUSPEND_FAIL). Delay() is allowed. Suspending another task is allowed.
+        \warning   Blocking on a synchronization object that is owned by another task would never complete,
+                   because no other task can run while locked. A synchronization object which is free can be used.
+        \note      Exiting (IKernelService::ExitTask() or returning from ITask::Run()) can not be refused: it asserts
+                   in debug builds, in release builds the task exits and the lock is released when it leaves the CPU,
+                   so the lock never passes on to another task.
+        \note      Time-slice accounting (KERNEL_TIMESLICE) continues while locked, rotation of an expired slice is
+                   deferred until the lock is released.
+        \note      Entering tickless suspend (IKernelService::Suspend()) drops the lock, the kernel state becomes
+                   KSTATE_SUSPENDED.
+        \see       ELockResult, IKernelService::LockScheduler, IKernelService::UnlockScheduler, IKernelService::RestoreSchedulerLock
+    */
+    virtual ELockResult SetSchedulerLock(bool lock) = 0;
+
     /*! \brief     Start kernel scheduling.
         \note      This function never returns. Must be called after Initialize() and AddTask().
         \note      Kernel must be in \a KSTATE_READY state.
@@ -1877,6 +1924,8 @@ public:
         \note      Unsupported in HRT mode (see stk::KERNEL_HRT); in HRT mode tasks sleep automatically according to their periodicity and workload.
         \param[in] ticks: Sleep time (ticks).
         \warning   ISR-unsafe. Calling from an ISR context is not permitted and will trigger an assertion.
+        \warning   Must not be called while the scheduler is locked (see LockScheduler): asserts in debug builds,
+                   no-op in release builds.
     */
     virtual void Sleep(Timeout ticks) = 0;
 
@@ -1885,6 +1934,8 @@ public:
         \note      Unsupported in HRT mode (see stk::KERNEL_HRT); in HRT mode tasks sleep automatically according to their periodicity and workload.
         \param[in] timestamp: Absolute timestamp (ticks).
         \warning   ISR-unsafe. Calling from an ISR context is not permitted and will trigger an assertion.
+        \warning   Must not be called while the scheduler is locked (see LockScheduler): asserts in debug builds,
+                   no-op in release builds (returns false).
         \return    True if sleep succeeded, false otherwise.
     */
     virtual bool SleepUntil(Ticks timestamp) = 0;
@@ -1905,6 +1956,8 @@ public:
     /*! \brief     Notify scheduler to switch to the next task (yield).
         \note      A cooperation mechanism in HRT mode (see stk::KERNEL_HRT).
         \warning   ISR-unsafe.
+        \warning   Must not be called while the scheduler is locked (see LockScheduler): asserts in debug builds,
+                   no-op in release builds.
     */
     virtual void SwitchToNext() = 0;
 
@@ -1916,6 +1969,8 @@ public:
                    ITask::OnExit() has been called, see ITask::OnExit() for re-adding the task.
         \warning   KERNEL_DYNAMIC mode only: panics with KERNEL_PANIC_BAD_MODE otherwise.
         \warning   ISR-unsafe. Calling from an ISR context is not permitted and will trigger an assertion.
+        \warning   Should not be called while the scheduler is locked (see LockScheduler): asserts in debug builds.
+                   The exit can not be refused, in release builds the task exits and the lock is released.
         \see       IKernel::ScheduleTaskRemoval, ITask::OnExit
     */
     virtual void ExitTask() = 0;
@@ -1932,6 +1987,8 @@ public:
                    use \c NO_WAIT to poll without blocking.
         \return    Wait result (see \c EWaitResult).
         \warning   ISR-unsafe.
+        \warning   Must not be called while the scheduler is locked (see LockScheduler), whatever the timeout:
+                   asserts in debug builds, in release builds returns \c WAIT_RESULT_FAIL without waiting.
     */
     virtual EWaitResult Wait(ISyncObject *sobj, IMutex *mutex, Timeout timeout) = 0;
 
@@ -2008,6 +2065,81 @@ public:
     */
     virtual Timeout SetTimeSlice(TId tid, Timeout ticks) = 0;
     
+    /*! \brief     Disable task switching (equivalent of CMSIS-RTOS2 osKernelLock). Ticks, timeouts and ISRs keep running.
+        \return    Previous lock state (LOCK_WAS_UNLOCKED / LOCK_WAS_LOCKED), or LOCK_FAIL / LOCK_FAIL_ISR.
+        \note      Not nested: pass the returned value to RestoreSchedulerLock() to emulate nesting.
+        \note      Task context only. Not available in KERNEL_HRT mode (LOCK_FAIL).
+        \note      While locked the kernel state is KSTATE_LOCKED.
+        \warning   The lock holder must keep the CPU. While locked, Sleep(), SleepUntil(), Yield(), IKernelService::Wait()
+                   and SuspendTask() of the calling task must not be called: they assert in debug builds. In release
+                   builds they are no-ops (SleepUntil() returns false, Wait() returns WAIT_RESULT_FAIL,
+                   SuspendTask() returns SUSPEND_FAIL). Delay() is allowed. Suspending another task is allowed.
+        \warning   Blocking on a synchronization object that is owned by another task would never complete,
+                   because no other task can run while locked. A synchronization object which is free can be used.
+        \warning   Synchronization primitives (stk::sync): only non-blocking use is valid while locked, i.e. calls with
+                   NO_WAIT / Try*() variants and acquisitions which succeed immediately (free Mutex, signaled Event,
+                   available Semaphore token, ...). A call which would have to block asserts in debug builds; in release
+                   builds the timed / bool / EWaitResult variants fail with WAIT_RESULT_FAIL, while the void Lock() /
+                   ReadLock() of Mutex, FastMutex and RWMutex can not report a failure and panic
+                   (KERNEL_PANIC_ASSERT) instead of no-op, because a contended lock under a scheduler lock is a deadlock.
+        \note      Exiting (IKernelService::ExitTask() or returning from ITask::Run()) can not be refused: it asserts
+                   in debug builds, in release builds the task exits and the lock is released when it leaves the CPU,
+                   so the lock never passes on to another task.
+        \note      Time-slice accounting (KERNEL_TIMESLICE) continues while locked, rotation of an expired slice is
+                   deferred until the lock is released.
+        \note      Entering tickless suspend (IKernelService::Suspend()) drops the lock, the kernel state becomes
+                   KSTATE_SUSPENDED.
+        \see       UnlockScheduler, RestoreSchedulerLock, IKernel::SetSchedulerLock
+    */
+    virtual ELockResult LockScheduler() = 0;
+
+    /*! \brief     Enable task switching (equivalent of CMSIS-RTOS2 osKernelUnlock).
+        \return    Previous lock state (LOCK_WAS_UNLOCKED / LOCK_WAS_LOCKED), or LOCK_FAIL / LOCK_FAIL_ISR.
+        \note      A ready task is switched in on the next tick (not immediately).
+        \note      Task context only. Not available in KERNEL_HRT mode (LOCK_FAIL).
+        \see       LockScheduler, RestoreSchedulerLock, IKernel::SetSchedulerLock
+    */
+    virtual ELockResult UnlockScheduler() = 0;
+
+    /*! \brief     Set the lock state (equivalent of CMSIS-RTOS2 osKernelRestoreLock).
+        \param[in] locked: \c true to lock, \c false to unlock.
+        \return    New lock state (LOCK_WAS_LOCKED if now locked, LOCK_WAS_UNLOCKED if now unlocked), or LOCK_FAIL / LOCK_FAIL_ISR.
+        \note      Unlike LockScheduler() and UnlockScheduler() it reports the NEW state, not the previous one.
+        \note      Use with the value returned by LockScheduler() to emulate nesting.
+        \note      Task context only. Not available in KERNEL_HRT mode (LOCK_FAIL).
+        \see       LockScheduler, UnlockScheduler, IKernel::SetSchedulerLock
+    */
+    virtual ELockResult RestoreSchedulerLock(bool locked) = 0;
+
+    /*! \class ScopedSchedulerLock
+        \brief Disable task switching (equivalent of CMSIS-RTOS2 osKernelLock). Ticks, timeouts and ISRs keep
+               running. Ensures the lock is always unlocked when leaving the scope, even when exceptions
+               are thrown.
+        \note  RAII
+        \note  Restores the lock state which was before construction on scope exit, i.e. scopes can be nested:
+               the scheduler is unlocked only when the outermost scope (which found it unlocked) is left.
+        \note  If the lock could not be taken (LOCK_FAIL / LOCK_FAIL_ISR) the destructor does nothing useful: it
+               tries to restore the "unlocked" state, which fails the same way.
+        \note  See LockScheduler() for the restrictions that apply to the lock holder.
+        \see   LockScheduler, UnlockScheduler, RestoreSchedulerLock
+    */
+    class ScopedSchedulerLock
+    {
+    public:
+        explicit ScopedSchedulerLock() : m_result(GetInstance()->LockScheduler())
+        {}
+        ~ScopedSchedulerLock()
+        {
+            // restore the state which was before construction: keeps an outer lock held (nesting)
+            STK_UNUSED(GetInstance()->RestoreSchedulerLock(m_result == LOCK_WAS_LOCKED));
+        }
+
+    private:
+        STK_NONCOPYABLE_CLASS(ScopedSchedulerLock);
+
+        const ELockResult m_result;
+    };
+
 protected:
     /*! \brief Destructor.
         \note  Protected by design. Prevents unsafe polymorphic delete.
