@@ -63,7 +63,7 @@ extern "C" void vApplicationIdleHook(void)
 
 static void BenchTask(void *pvParameter)
 {
-    uint32_t index = (uint32_t)pvParameter;
+    const uint32_t index = (uint32_t)pvParameter;
 
     // do processing
     g_Enable = true;

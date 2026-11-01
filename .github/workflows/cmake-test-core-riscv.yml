@@ -78,6 +78,11 @@ jobs:
             elf: test-hrt.elf
             dir: hrt
 
+          - name: Kernel
+            cmake_flag: TEST_KERNEL=ON
+            elf: test-kernel.elf
+            dir: kernel
+
         board:
           - name: "Generic"
             cmake_flags: -DTARGET_RV32I=ON

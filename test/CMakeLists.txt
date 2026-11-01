@@ -15,6 +15,7 @@ option(TEST_CHAIN      "build test: Chain (platform-dependent)"                 
 option(TEST_SLEEP      "build test: Sleep (platform-dependent)"                   OFF)
 option(TEST_YIELD      "build test: Yield (platform-dependent)"                   OFF)
 option(TEST_HRT        "build test: HRT (platform-dependent)"                     OFF)
+option(TEST_KERNEL     "build test: Kernel (platform-dependent)"                  OFF)
 option(TEST_MUTEX      "build test: sync::Mutex (platform-dependent)"             OFF)
 option(TEST_FASTMUTEX  "build test: sync::FastMutex (platform-dependent)"         OFF)
 option(TEST_SEMAPHORE  "build test: sync::Semaphore (platform-dependent)"         OFF)
@@ -52,6 +53,10 @@ endif()
 
 if (TEST_HRT)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/hrt)
+endif()
+
+if (TEST_KERNEL)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/kernel)
 endif()
 
 if (TEST_MUTEX)

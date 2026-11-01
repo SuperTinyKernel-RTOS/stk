@@ -133,6 +133,17 @@
       - Priority inheritance (osMutexPrioInherit): ignored, always supported.
       - Robust mutex (osMutexRobust): will assert as unsafe code.
       - Recursive mutex (osMutexRecursive): ignored, always recursive by default.
+      - Kernel lock (osKernelLock / osKernelUnlock / osKernelRestoreLock): only task switching is
+        disabled, the kernel tick, timeouts and ISRs keep running (osKernelGetState() reports
+        osKernelLocked). The lock is not nested, use osKernelRestoreLock() with the value returned
+        by osKernelLock() to emulate nesting. The lock holder must keep the CPU: osDelay,
+        osDelayUntil, osThreadYield, any call which would have to block (e.g. a contended mutex or
+        an empty semaphore, queue, flags with a timeout), osThreadSuspend(self), osThreadExit,
+        osThreadTerminate(self) and returning from the thread function are invalid while locked:
+        they assert in debug builds. In release builds the sleeping, yielding and blocking calls do
+        nothing (a call which would block fails) and an exit releases the lock. A call which does
+        not block (e.g. a free mutex, osThreadFlagsSet, a poll with timeout 0) is fine.
+        Not available in the Hard Real-Time mode, osKernelSuspend() drops the lock.
 
     @{
 */
@@ -424,10 +435,13 @@ osKernelState_t osKernelGetState (void);
 osStatus_t osKernelStart (void);
  
 /// Lock the RTOS Kernel scheduler.
+/// \details Disables task switching only, the kernel tick, timeouts and ISRs keep running.
+///          The lock holder must not block, sleep, yield or exit while the scheduler is locked.
 /// \return previous lock state (1 - locked, 0 - not locked, error code if negative).
 int32_t osKernelLock (void);
  
 /// Unlock the RTOS Kernel scheduler.
+/// \details A thread made ready during the lock is switched in on the next kernel tick.
 /// \return previous lock state (1 - locked, 0 - not locked, error code if negative).
 int32_t osKernelUnlock (void);
  

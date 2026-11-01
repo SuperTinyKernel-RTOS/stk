@@ -238,15 +238,35 @@ static uint32_t g_KernelProtectClass       = 0U;     // class passed to osKernel
 static bool     g_KernelProtected          = false;
 static bool     g_PrivilegedThreadsBlocked = false;  // osThreadProtectPrivileged() was called
 
-// CMSIS kernel lock is a binary state (not a counter): osKernelLock() returns the PREVIOUS state.
-static bool                          g_StkKernelLocked     = false;
-static stk::hw::CriticalSection::Session g_StkKernelLockSes = stk::hw::CriticalSection::DEFAULT_SESSION;
-
 // True only while the scheduler is running (not before osKernelStart(), where kernel services such as
-// GetTicks(), Sleep() or GetTid() are not available). Unlike osKernelGetState() it is not affected by the lock.
+// GetTicks(), Sleep() or GetTid() are not available). A locked scheduler (osKernelLock) is running too.
 static __stk_forceinline bool IsKernelRunning()
 {
-    return (g_StkKernel.GetState() == stk::IKernel::KSTATE_RUNNING);
+    const stk::IKernel::EKernelState state = g_StkKernel.GetState();
+
+    return ((state == stk::IKernel::KSTATE_RUNNING) || (state == stk::IKernel::KSTATE_LOCKED));
+}
+
+// CMSIS kernel lock is a binary state (not a counter): osKernelLock() returns the PREVIOUS state, nesting is
+// emulated by the caller with osKernelRestoreLock(). Maps the STK result to the CMSIS return value.
+static __stk_forceinline int32_t StkLockResultToCmsis(stk::ELockResult result)
+{
+    int32_t value;
+
+    if (result >= stk::LOCK_WAS_UNLOCKED)
+    {
+        value = static_cast<int32_t>(result); // 0 - was not locked, 1 - was locked
+    }
+    else if (result == stk::LOCK_FAIL_ISR)
+    {
+        value = static_cast<int32_t>(osErrorISR);
+    }
+    else
+    {
+        value = static_cast<int32_t>(osError); // kernel is not running, suspended or in HRT mode
+    }
+
+    return value;
 }
 
 // -----------------------------------------------------------------------------
@@ -945,30 +965,26 @@ osKernelState_t osKernelGetState(void)
 {
     osKernelState_t state;
 
-    if (g_StkKernelLocked)
+    switch (g_StkKernel.GetState())
     {
+    case stk::IKernel::KSTATE_INACTIVE:
+        state = osKernelInactive;
+        break;
+    case stk::IKernel::KSTATE_READY:
+        state = osKernelReady;
+        break;
+    case stk::IKernel::KSTATE_RUNNING:
+        state = osKernelRunning;
+        break;
+    case stk::IKernel::KSTATE_LOCKED:
         state = osKernelLocked;
-    }
-    else
-    {
-        switch (g_StkKernel.GetState())
-        {
-        case stk::IKernel::KSTATE_INACTIVE:
-            state = osKernelInactive;
-            break;
-        case stk::IKernel::KSTATE_READY:
-            state = osKernelReady;
-            break;
-        case stk::IKernel::KSTATE_RUNNING:
-            state = osKernelRunning;
-            break;
-        case stk::IKernel::KSTATE_SUSPENDED:
-            state = osKernelSuspended;
-            break;
-        default:
-            state = osKernelError;
-            break;
-        }
+        break;
+    case stk::IKernel::KSTATE_SUSPENDED:
+        state = osKernelSuspended;
+        break;
+    default:
+        state = osKernelError;
+        break;
     }
 
     return state;
@@ -997,89 +1013,53 @@ osStatus_t osKernelStart(void)
     return result;
 }
 
+// Only task switching is disabled by the lock: the tick, timeouts and ISRs keep running. The lock holder must not
+// block, yield or exit (see stk::IKernelService::LockScheduler()).
 int32_t osKernelLock(void)
 {
-    int32_t result;
-
-    if (IsIrqContext())
-    {
-        result = static_cast<int32_t>(osErrorISR);
-    }
-    else if (g_StkKernelLocked)
-    {
-        result = 1; // already locked: previous state is "locked", nothing to do
-    }
-    else if (!IsKernelRunning())
-    {
-        result = static_cast<int32_t>(osError);
-    }
-    else
-    {
-        g_StkKernelLockSes = stk::hw::CriticalSection::Enter();
-        g_StkKernelLocked  = true;
-        result = 0; // previous state: not locked
-    }
-
-    return result;
+    // returns the previous state (0/1) or a negative error code
+    return StkLockResultToCmsis(g_StkKernel.SetSchedulerLock(true));
 }
 
 int32_t osKernelUnlock(void)
 {
-    int32_t result;
-
-    if (IsIrqContext())
-    {
-        result = static_cast<int32_t>(osErrorISR);
-    }
-    else if (g_StkKernelLocked)
-    {
-        g_StkKernelLocked = false;
-        stk::hw::CriticalSection::Exit(g_StkKernelLockSes);
-        result = 1; // previous state: locked
-    }
-    else if (!IsKernelRunning())
-    {
-        result = static_cast<int32_t>(osError);
-    }
-    else
-    {
-        result = 0; // previous state: not locked
-    }
-
-    return result;
+    // returns the previous state (0/1) or a negative error code
+    return StkLockResultToCmsis(g_StkKernel.SetSchedulerLock(false));
 }
 
 int32_t osKernelRestoreLock(int32_t lock)
 {
     int32_t result;
 
-    if (IsIrqContext())
+    if ((lock == 0) || (lock == 1))
+    {
+        // bring the kernel to the requested state, return the NEW state (0/1)
+        result = StkLockResultToCmsis(g_StkKernel.SetSchedulerLock(lock == 1));
+
+        if (result >= 0)
+        {
+            result = lock;
+        }
+    }
+    else if (IsIrqContext())
     {
         result = static_cast<int32_t>(osErrorISR);
     }
-    else if (!IsKernelRunning() && !g_StkKernelLocked)
-    {
-        result = static_cast<int32_t>(osError);
-    }
     else
     {
-        // bring the kernel to the requested state, return the NEW state (0/1)
-        if ((lock == 1) && !g_StkKernelLocked)
+        // any other value is treated as "unchanged": report the current state
+        switch (g_StkKernel.GetState())
         {
-            g_StkKernelLockSes = stk::hw::CriticalSection::Enter();
-            g_StkKernelLocked  = true;
+        case stk::IKernel::KSTATE_LOCKED:
+            result = 1;
+            break;
+        case stk::IKernel::KSTATE_RUNNING:
+            result = 0;
+            break;
+        default:
+            result = static_cast<int32_t>(osError);
+            break;
         }
-        else if ((lock == 0) && g_StkKernelLocked)
-        {
-            g_StkKernelLocked = false;
-            stk::hw::CriticalSection::Exit(g_StkKernelLockSes);
-        }
-        else
-        {
-            // already in the requested state (any other value is treated as "unchanged")
-        }
-
-        result = (g_StkKernelLocked ? 1 : 0);
     }
 
     return result;

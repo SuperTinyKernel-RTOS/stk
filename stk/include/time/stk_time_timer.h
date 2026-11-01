@@ -404,7 +404,9 @@ private:
     STK_TIMER_COMMAND_QUEUE_SIZE (see "Command queue"). If the host is not initialized, every call
     returns RES_NOT_READY.
     - A sync call waits only where waiting is possible: task context, kernel running, task mode. From an ISR, before
-      the kernel is started, or in polled mode, the command is queued
+      the kernel is started, while the scheduler is locked (IKernelService::LockScheduler(): the tick task can not run,
+      and a StopSync() issued then does not wait for a running callback, so its "Timer may be released" guarantee does
+      not apply), or in polled mode, the command is queued
       asynchronously and RES_QUEUED is returned (RES_QUEUE_FULL if the queue is full), QuerySync() returns an advisory
       snapshot instead. Callbacks may use the sync API in task mode (they run in handler tasks, the tick task never
       waits for them), in polled mode they get RES_QUEUED.
@@ -932,8 +934,8 @@ private:
     EResult PushCommand(TimerCommand cmd, Timeout wait = NO_WAIT);
 
     /*! \brief     Check whether the calling context can wait for the completion of a command.
-        \return    True in task mode, from a task (not ISR, not the tick task), with the kernel running and
-                   the host initialized.
+        \return    True in task mode, from a task (not ISR, not the tick task), with the kernel running (not
+                   locked: KSTATE_LOCKED reads as "can not wait") and the host initialized.
     */
     bool CanWait() const;
 

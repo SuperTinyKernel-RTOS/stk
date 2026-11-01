@@ -64,6 +64,13 @@ namespace stk
             return NO_TIME_SLICE;
         }
         void ExitTask() override {}
+        ELockResult LockScheduler() override { return LOCK_FAIL; }
+        ELockResult UnlockScheduler() override { return LOCK_FAIL; }
+        ELockResult RestoreSchedulerLock(bool locked) override
+        {
+            STK_UNUSED(locked);
+            return LOCK_FAIL;
+        }
     }
     s_KernelServiceMock;
 

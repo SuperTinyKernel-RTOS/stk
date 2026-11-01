@@ -76,6 +76,11 @@ jobs:
             cmake_flag: TEST_HRT=ON
             elf: test-hrt.elf
             dir: hrt
+            
+          - name: Kernel
+            cmake_flag: TEST_KERNEL=ON
+            elf: test-kernel.elf
+            dir: kernel
 
         board:
           - name: "STM32F0DISCOVERY"

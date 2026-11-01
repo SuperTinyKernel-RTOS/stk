@@ -61,11 +61,16 @@ public:
     {
         BARRIER_RELEASED,     //!< Released because the barrier tripped; this task was not the last arrival.
         BARRIER_LAST_ARRIVAL, //!< This task was the last arrival and tripped the barrier.
-        BARRIER_CANCELED      //!< Wait was cancelled via IKernel::CancelTaskWait() before the barrier
+
+        BARRIER_CANCELED,     //!< Wait was cancelled via IKernel::CancelTaskWait() before the barrier
                               //!< tripped. This task's arrival is rolled back (does not count toward
                               //!< the generation it was waiting on) so bookkeeping stays consistent for
                               //!< the remaining parties - it does not, and cannot, make the barrier trip
                               //!< without a replacement arrival.
+
+        BARRIER_FAILED        //!< The kernel rejected the wait (WAIT_RESULT_FAIL, e.g. the scheduler is locked,
+                              //!< KERNEL_SYNC is not enabled or the kernel is not running). The arrival is rolled
+                              //!< back the same way as for BARRIER_CANCELED.
     };
 
     /*! \brief     Constructor.
@@ -100,7 +105,10 @@ public:
         \details   Identical to \c Wait(), except the caller can distinguish a normal release,
                    being the last arrival, and a cancellation via \c IKernel::CancelTaskWait().
         \warning   ISR-unsafe.
-        \return    \c BARRIER_LAST_ARRIVAL, \c BARRIER_RELEASED, or \c BARRIER_CANCELED.
+        \return    \c BARRIER_LAST_ARRIVAL, \c BARRIER_RELEASED, \c BARRIER_CANCELED, or \c BARRIER_FAILED.
+        \note      Blocks, therefore it must not be called while the scheduler is locked
+                   (see IKernelService::LockScheduler): it asserts in debug builds and returns \c BARRIER_FAILED
+                   in release builds (unless the caller is the last arrival, which does not block).
     */
     EResult WaitEx();
 
@@ -149,18 +157,21 @@ inline Barrier::EResult Barrier::WaitEx()
         // we are still in the same generation we entered with
         while (gen == m_generation)
         {
-            if (m_cond.WaitEx(m_mutex, WAIT_INFINITE) == WAIT_RESULT_CANCELED)
+            const EWaitResult wr = m_cond.WaitEx(m_mutex, WAIT_INFINITE);
+
+            if (wr != WAIT_RESULT_SIGNAL)
             {
-                // the cancel wakes this task before m_mutex is re-acquired, so the barrier may have
-                // tripped in between (the trip has then already consumed our arrival and reset
-                // m_count): signal wins, report a normal release and leave the count alone
+                // cancellation or kernel failure (e.g. scheduler locked): the wait did not block, so the loop
+                // must not retry (it would spin forever). The cancel wakes this task before m_mutex is
+                // re-acquired, so the barrier may have tripped in between (the trip has then already consumed
+                // our arrival and reset m_count): signal wins, report a normal release and leave the count alone
                 if (gen == m_generation)
                 {
                     // bail out before the barrier tripped: undo our own arrival so the count
                     // stays consistent for whichever tasks remain in this generation - do NOT
                     // let the barrier trip short-handed on our behalf
                     ++m_count;
-                    result = BARRIER_CANCELED;
+                    result = ((wr == WAIT_RESULT_CANCELED) ? BARRIER_CANCELED : BARRIER_FAILED);
                 }
 
                 break;

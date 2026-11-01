@@ -424,6 +424,14 @@ public:
         return NO_TIME_SLICE;
     }
 
+    ELockResult LockScheduler() override { return LOCK_FAIL; }
+    ELockResult UnlockScheduler() override { return LOCK_FAIL; }
+    ELockResult RestoreSchedulerLock(bool locked) override
+    {
+        STK_UNUSED(locked);
+        return LOCK_FAIL;
+    }
+
     bool     m_inc_ticks;
     bool     m_switch_to_next;
     bool     m_exit_task;

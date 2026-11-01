@@ -4631,5 +4631,792 @@ TEST(Kernel, SuspendResume)
     stk::IKernelService::GetInstance()->Resume(ticks);
 }
 
+// ---------------------------------------------------------------------------- //
+// IKernel::SetSchedulerLock(), IKernelService::LockScheduler() / UnlockScheduler() //
+// / RestoreSchedulerLock() (CMSIS-RTOS2 osKernelLock family)                       //
+// ---------------------------------------------------------------------------- //
+
+// returns true if the call raised an assertion (debug-build contract violation)
+template <typename TCall>
+static bool LockCallAsserts(TCall call)
+{
+    bool asserted = false;
+
+    try
+    {
+        g_TestContext.ExpectAssert(true);
+        call();
+    }
+    catch (TestAssertPassed &pass)
+    {
+        asserted = true;
+    }
+
+    g_TestContext.ExpectAssert(false);
+
+    return asserted;
+}
+
+// runs the call the way a release build does: the assertion is swallowed and the call returns
+template <typename TCall>
+static void LockCallNoRethrow(TCall call)
+{
+    g_TestContext.ExpectAssert(true);
+    g_TestContext.RethrowAssertException(false);
+
+    call();
+
+    g_TestContext.RethrowAssertException(true);
+    g_TestContext.ExpectAssert(false);
+}
+
+TEST(Kernel, LockUnlockResultAndState)
+{
+    Kernel<KERNEL_STATIC, 2, SwitchStrategyRR, PlatformTestMock> kernel;
+    TaskMock<ACCESS_USER> task1, task2;
+
+    kernel.Initialize();
+    kernel.AddTask(&task1);
+    kernel.AddTask(&task2);
+    kernel.Start();
+
+    CHECK_EQUAL(IKernel::KSTATE_RUNNING, kernel.GetState());
+
+    // unlocked -> locked
+    CHECK_EQUAL(LOCK_WAS_UNLOCKED, IKernelService::GetInstance()->LockScheduler());
+    CHECK_EQUAL(IKernel::KSTATE_LOCKED, kernel.GetState());
+
+    // not nested: locking again reports the previous (locked) state and changes nothing
+    CHECK_EQUAL(LOCK_WAS_LOCKED, IKernelService::GetInstance()->LockScheduler());
+    CHECK_EQUAL(IKernel::KSTATE_LOCKED, kernel.GetState());
+
+    // a single Unlock() releases the lock
+    CHECK_EQUAL(LOCK_WAS_LOCKED, IKernelService::GetInstance()->UnlockScheduler());
+    CHECK_EQUAL(IKernel::KSTATE_RUNNING, kernel.GetState());
+
+    // unlocking an unlocked kernel is harmless and reports the previous (unlocked) state
+    CHECK_EQUAL(LOCK_WAS_UNLOCKED, IKernelService::GetInstance()->UnlockScheduler());
+    CHECK_EQUAL(IKernel::KSTATE_RUNNING, kernel.GetState());
+
+    CHECK_EQUAL_TEXT(0, g_CriticalSectionState, "critical section must be released");
+}
+
+TEST(Kernel, LockUnlockScoped)
+{
+    Kernel<KERNEL_STATIC, 2, SwitchStrategyRR, PlatformTestMock> kernel;
+    TaskMock<ACCESS_USER> task1, task2;
+
+    kernel.Initialize();
+    kernel.AddTask(&task1);
+    kernel.AddTask(&task2);
+    kernel.Start();
+
+    CHECK_EQUAL(IKernel::KSTATE_RUNNING, kernel.GetState());
+
+    // scope
+    {
+        const stk::ScopedSchedulerLock lock;
+
+        // unlocked -> locked on construction
+        CHECK_EQUAL(IKernel::KSTATE_LOCKED, kernel.GetState());
+
+        // do critical stuff on memory shared between tasks
+    }
+
+    // became unlocked on scope leave
+    CHECK_EQUAL(IKernel::KSTATE_RUNNING, kernel.GetState());
+
+    CHECK_EQUAL_TEXT(0, g_CriticalSectionState, "critical section must be released");
+}
+
+// scopes nest: the outer lock stays held when an inner scope is left
+TEST(Kernel, LockUnlockScopedNested)
+{
+    Kernel<KERNEL_STATIC, 2, SwitchStrategyRR, PlatformTestMock> kernel;
+    TaskMock<ACCESS_USER> task1, task2;
+
+    kernel.Initialize();
+    kernel.AddTask(&task1);
+    kernel.AddTask(&task2);
+    kernel.Start();
+
+    {
+        const stk::ScopedSchedulerLock outer;
+        CHECK_EQUAL(IKernel::KSTATE_LOCKED, kernel.GetState());
+
+        {
+            const stk::ScopedSchedulerLock inner; // found the scheduler locked
+            CHECK_EQUAL(IKernel::KSTATE_LOCKED, kernel.GetState());
+        }
+
+        // inner scope left: the outer lock is still held
+        CHECK_EQUAL(IKernel::KSTATE_LOCKED, kernel.GetState());
+    }
+
+    // outermost scope left: unlocked
+    CHECK_EQUAL(IKernel::KSTATE_RUNNING, kernel.GetState());
+    CHECK_EQUAL_TEXT(0, g_CriticalSectionState, "critical section must be released");
+}
+
+// a scope inside a manually taken lock (LockScheduler) must not release that lock
+TEST(Kernel, LockUnlockScopedInsideManualLock)
+{
+    Kernel<KERNEL_STATIC, 1, SwitchStrategyRR, PlatformTestMock> kernel;
+    TaskMock<ACCESS_USER> task;
+
+    kernel.Initialize();
+    kernel.AddTask(&task);
+    kernel.Start();
+
+    IKernelService *const svc = IKernelService::GetInstance();
+
+    const ELockResult prev = svc->LockScheduler();
+    CHECK_EQUAL(LOCK_WAS_UNLOCKED, prev);
+
+    {
+        const stk::ScopedSchedulerLock scope;
+        CHECK_EQUAL(IKernel::KSTATE_LOCKED, kernel.GetState());
+    }
+
+    CHECK_EQUAL_TEXT(IKernel::KSTATE_LOCKED, kernel.GetState(), "scope must not release the outer manual lock");
+
+    CHECK_EQUAL(LOCK_WAS_UNLOCKED, svc->RestoreSchedulerLock(prev == LOCK_WAS_LOCKED));
+    CHECK_EQUAL(IKernel::KSTATE_RUNNING, kernel.GetState());
+}
+
+// a scope which could not take the lock (kernel not running) must not break the state afterwards
+TEST(Kernel, LockUnlockScopedLockFailed)
+{
+    Kernel<KERNEL_STATIC, 1, SwitchStrategyRR, PlatformTestMock> kernel;
+    TaskMock<ACCESS_USER> task;
+
+    kernel.Initialize();
+    kernel.AddTask(&task);
+
+    // KSTATE_READY: the lock can not be taken, the destructor restores "unlocked" which fails the same way
+    {
+        const stk::ScopedSchedulerLock scope;
+        CHECK_EQUAL(IKernel::KSTATE_READY, kernel.GetState());
+    }
+
+    CHECK_EQUAL(IKernel::KSTATE_READY, kernel.GetState());
+    CHECK_EQUAL_TEXT(0, g_CriticalSectionState, "critical section must be released");
+}
+
+TEST(Kernel, LockFailsWhenKernelNotRunning)
+{
+    Kernel<KERNEL_STATIC, 1, SwitchStrategyRR, PlatformTestMock> kernel;
+    TaskMock<ACCESS_USER> task;
+
+    // KSTATE_INACTIVE
+    CHECK_EQUAL(LOCK_FAIL, kernel.SetSchedulerLock(true));
+    CHECK_EQUAL(LOCK_FAIL, kernel.SetSchedulerLock(false));
+    CHECK_EQUAL(IKernel::KSTATE_INACTIVE, kernel.GetState());
+
+    kernel.Initialize();
+    kernel.AddTask(&task);
+
+    IKernelService *const svc = IKernelService::GetInstance();
+
+    // KSTATE_READY (not started)
+    CHECK_EQUAL(LOCK_FAIL, svc->LockScheduler());
+    CHECK_EQUAL(LOCK_FAIL, svc->UnlockScheduler());
+    CHECK_EQUAL(LOCK_FAIL, svc->RestoreSchedulerLock(false));
+    CHECK_EQUAL(IKernel::KSTATE_READY, kernel.GetState());
+}
+
+TEST(Kernel, LockFailsFromIsr)
+{
+    Kernel<KERNEL_STATIC, 1, SwitchStrategyRR, PlatformTestMock> kernel;
+    TaskMock<ACCESS_USER> task;
+
+    kernel.Initialize();
+    kernel.AddTask(&task);
+    kernel.Start();
+
+    IKernelService *const svc = IKernelService::GetInstance();
+
+    // g_InsideISR is reset before any check: a failing CHECK throws and must not leave the flag set
+    g_InsideISR = true;
+
+    const ELockResult lock    = svc->LockScheduler();
+    const ELockResult unlock  = svc->UnlockScheduler();
+    const ELockResult restore = svc->RestoreSchedulerLock(true);
+
+    g_InsideISR = false;
+
+    CHECK_EQUAL(LOCK_FAIL_ISR, lock);
+    CHECK_EQUAL(LOCK_FAIL_ISR, unlock);
+    CHECK_EQUAL(LOCK_FAIL_ISR, restore);
+    CHECK_EQUAL_TEXT(IKernel::KSTATE_RUNNING, kernel.GetState(), "ISR must not change the lock state");
+
+    // a lock taken in task context cannot be released from an ISR
+    CHECK_EQUAL(LOCK_WAS_UNLOCKED, IKernelService::GetInstance()->LockScheduler());
+
+    g_InsideISR = true;
+    const ELockResult isr_unlock = IKernelService::GetInstance()->UnlockScheduler();
+    g_InsideISR = false;
+
+    CHECK_EQUAL(LOCK_FAIL_ISR, isr_unlock);
+    CHECK_EQUAL(IKernel::KSTATE_LOCKED, kernel.GetState());
+    CHECK_EQUAL_TEXT(0, g_CriticalSectionState, "critical section must be released");
+}
+
+TEST(Kernel, LockFailsInHrtMode)
+{
+    Kernel<KERNEL_STATIC | KERNEL_HRT, 1, SwitchStrategyRR, PlatformTestMock> kernel;
+    TaskMock<ACCESS_USER> task;
+
+    kernel.Initialize();
+    kernel.AddTask(&task, 1, 1, 0);
+    kernel.Start();
+
+    IKernelService *const svc = IKernelService::GetInstance();
+
+    // holding the CPU would break periodic deadlines
+    CHECK_EQUAL(LOCK_FAIL, svc->LockScheduler());
+    CHECK_EQUAL(LOCK_FAIL, svc->UnlockScheduler());
+    CHECK_EQUAL(LOCK_FAIL, svc->RestoreSchedulerLock(true));
+    CHECK_EQUAL(IKernel::KSTATE_RUNNING, kernel.GetState());
+}
+
+TEST(Kernel, RestoreLock)
+{
+    Kernel<KERNEL_STATIC, 1, SwitchStrategyRR, PlatformTestMock> kernel;
+    TaskMock<ACCESS_USER> task;
+
+    kernel.Initialize();
+    kernel.AddTask(&task);
+    kernel.Start();
+
+    IKernelService *const svc = IKernelService::GetInstance();
+
+    // RestoreSchedulerLock() reports the NEW state (unlike LockScheduler/UnlockScheduler which report the previous one)
+    CHECK_EQUAL(LOCK_WAS_LOCKED, svc->RestoreSchedulerLock(true));
+    CHECK_EQUAL(IKernel::KSTATE_LOCKED, kernel.GetState());
+
+    CHECK_EQUAL(LOCK_WAS_LOCKED, svc->RestoreSchedulerLock(true)); // idempotent
+    CHECK_EQUAL(IKernel::KSTATE_LOCKED, kernel.GetState());
+
+    CHECK_EQUAL(LOCK_WAS_UNLOCKED, svc->RestoreSchedulerLock(false));
+    CHECK_EQUAL(IKernel::KSTATE_RUNNING, kernel.GetState());
+
+    CHECK_EQUAL(LOCK_WAS_UNLOCKED, svc->RestoreSchedulerLock(false)); // idempotent
+    CHECK_EQUAL(IKernel::KSTATE_RUNNING, kernel.GetState());
+}
+
+// nesting emulation as done with CMSIS osKernelLock()/osKernelRestoreLock()
+TEST(Kernel, RestoreLockNesting)
+{
+    Kernel<KERNEL_STATIC, 1, SwitchStrategyRR, PlatformTestMock> kernel;
+    TaskMock<ACCESS_USER> task;
+
+    kernel.Initialize();
+    kernel.AddTask(&task);
+    kernel.Start();
+
+    IKernelService *const svc = IKernelService::GetInstance();
+
+    // outer section: kernel was unlocked
+    const ELockResult outer = svc->LockScheduler();
+    CHECK_EQUAL(LOCK_WAS_UNLOCKED, outer);
+
+    // inner section (e.g. a callee): kernel was already locked
+    const ELockResult inner = svc->LockScheduler();
+    CHECK_EQUAL(LOCK_WAS_LOCKED, inner);
+
+    // leaving the inner section restores "locked": the outer section stays protected
+    CHECK_EQUAL(LOCK_WAS_LOCKED, svc->RestoreSchedulerLock(inner == LOCK_WAS_LOCKED));
+    CHECK_EQUAL(IKernel::KSTATE_LOCKED, kernel.GetState());
+
+    // leaving the outer section restores "unlocked"
+    CHECK_EQUAL(LOCK_WAS_UNLOCKED, svc->RestoreSchedulerLock(outer == LOCK_WAS_LOCKED));
+    CHECK_EQUAL(IKernel::KSTATE_RUNNING, kernel.GetState());
+}
+
+TEST(Kernel, LockedTickDoesNotSwitchContext)
+{
+    Kernel<KERNEL_STATIC, 2, SwitchStrategyRR, PlatformTestMock> kernel;
+    TaskMock<ACCESS_USER> task1, task2;
+    PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
+    Stack *&active = platform->m_stack_active;
+
+    kernel.Initialize();
+    kernel.AddTask(&task1);
+    kernel.AddTask(&task2);
+    kernel.Start();
+
+    CHECK_EQUAL((Word)task1.GetStack(), active->SP);
+
+    const Ticks ticks_before = IKernelService::GetInstance()->GetTicks();
+    const uint32_t switches_before = platform->m_context_switch_nr;
+
+    CHECK_EQUAL(LOCK_WAS_UNLOCKED, IKernelService::GetInstance()->LockScheduler());
+
+    // RR would rotate on every tick: while locked task1 keeps the CPU
+    platform->ProcessTick();
+    platform->ProcessTick();
+    platform->ProcessTick();
+
+    CHECK_EQUAL((Word)task1.GetStack(), active->SP);
+    CHECK_EQUAL(switches_before, platform->m_context_switch_nr);
+
+    // time is not stopped by the lock
+    CHECK_TRUE(IKernelService::GetInstance()->GetTicks() >= (ticks_before + 3));
+
+    // released: the very next tick switches to the peer
+    CHECK_EQUAL(LOCK_WAS_LOCKED, IKernelService::GetInstance()->UnlockScheduler());
+
+    platform->ProcessTick();
+
+    CHECK_EQUAL((Word)task2.GetStack(), active->SP);
+    CHECK_EQUAL(switches_before + 1, platform->m_context_switch_nr);
+}
+
+static PlatformTestMock *g_LockDelayPlatform = NULL;
+
+static void LockDelayRelaxCpu()
+{
+    g_LockDelayPlatform->ProcessTick();
+}
+
+// Delay() is a busy-wait: it is allowed under the lock, ticks keep running and the holder keeps the CPU
+TEST(Kernel, LockedDelayAllowed)
+{
+    Kernel<KERNEL_STATIC, 2, SwitchStrategyRR, PlatformTestMock> kernel;
+    TaskMock<ACCESS_USER> task1, task2;
+    PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
+
+    kernel.Initialize();
+    kernel.AddTask(&task1);
+    kernel.AddTask(&task2);
+    kernel.Start();
+
+    CHECK_EQUAL(LOCK_WAS_UNLOCKED, IKernelService::GetInstance()->LockScheduler());
+
+    g_LockDelayPlatform = platform;
+    g_RelaxCpuHandler   = LockDelayRelaxCpu;
+
+    const Ticks ticks_before = IKernelService::GetInstance()->GetTicks();
+
+    stk::Delay(3);
+
+    g_RelaxCpuHandler   = NULL;
+    g_LockDelayPlatform = NULL;
+
+    CHECK_TRUE(IKernelService::GetInstance()->GetTicks() >= (ticks_before + 3));
+    CHECK_EQUAL(IKernel::KSTATE_LOCKED, kernel.GetState());
+    CHECK_EQUAL((Word)task1.GetStack(), platform->m_stack_active->SP);
+}
+
+TEST(Kernel, LockedSleepIsNoop)
+{
+    Kernel<KERNEL_STATIC, 2, SwitchStrategyRR, PlatformTestMock> kernel;
+    TaskMock<ACCESS_USER> task1, task2;
+    PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
+    IKernelTask *ktask1;
+
+    kernel.Initialize();
+    kernel.AddTask(&task1);
+    kernel.AddTask(&task2);
+    kernel.Start();
+
+    ktask1 = kernel.GetSwitchStrategy()->GetFirst();
+    CHECK_TRUE(ktask1 != NULL);
+    CHECK_EQUAL(&task1, ktask1->GetUserTask());
+
+    CHECK_EQUAL(LOCK_WAS_UNLOCKED, IKernelService::GetInstance()->LockScheduler());
+
+    // debug build: contract violation asserts
+    CHECK_TRUE(LockCallAsserts([]() { stk::Sleep(5); }));
+    CHECK_TRUE(LockCallAsserts([]() { stk::SleepMs(5); }));
+
+    // release build: no-op, the holder is not put to sleep and keeps the lock
+    LockCallNoRethrow([]() { stk::Sleep(5); });
+    LockCallNoRethrow([]() { stk::SleepMs(5); });
+
+    CHECK_FALSE(ktask1->IsSleeping());
+    CHECK_EQUAL(IKernel::KSTATE_LOCKED, kernel.GetState());
+    CHECK_EQUAL((Word)task1.GetStack(), platform->m_stack_active->SP);
+}
+
+TEST(Kernel, HolderShallNotSelfSuspendWhenKernelLocked)
+{
+    KernelMock<KERNEL_STATIC, 2, SwitchStrategyRR, PlatformTestMock> kernel;
+    TaskMock<ACCESS_USER> task1, task2;
+    PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
+    Stack *idle = nullptr, *active = nullptr;
+    const TId task1_id = task1.GetTid();
+
+    kernel.Initialize();
+    kernel.AddTask(&task1);
+    kernel.AddTask(&task2);
+    kernel.Start();
+
+    CHECK_EQUAL((Word)task1.GetStack(), platform->m_stack_active->SP);
+    CHECK_EQUAL(LOCK_WAS_UNLOCKED, IKernelService::GetInstance()->LockScheduler());
+    CHECK_EQUAL(IKernel::KSTATE_LOCKED, kernel.GetState());
+
+    // task1 (lock holder) is going away: pending sleep, busy-waiting for the ISR to de-schedule it
+    try
+    {
+        g_TestContext.ExpectAssert(true);
+        kernel.SuspendTask(&task1);
+        CHECK(false);
+    }
+    catch (TestAssertPassed &pass)
+    {
+        CHECK(true);
+        g_TestContext.ExpectAssert(false);
+    }
+
+    const bool result = kernel.CallForceContextSwitch(task1_id, idle, active);
+
+    CHECK_FALSE(result);
+    CHECK_EQUAL_TEXT(IKernel::KSTATE_LOCKED, kernel.GetState(), "lock must remain locked");
+    CHECK_TRUE(idle == NULL);
+    CHECK_TRUE(active == NULL);
+
+    CHECK_EQUAL(LOCK_WAS_LOCKED, IKernelService::GetInstance()->UnlockScheduler());
+
+    platform->ProcessTick();
+    CHECK_EQUAL((Word)task2.GetStack(), platform->m_stack_active->SP);
+}
+
+TEST(Kernel, LockedSleepUntilIsNoop)
+{
+    Kernel<KERNEL_STATIC, 2, SwitchStrategyRR, PlatformTestMock> kernel;
+    TaskMock<ACCESS_USER> task1, task2;
+    IKernelTask *ktask1;
+
+    kernel.Initialize();
+    kernel.AddTask(&task1);
+    kernel.AddTask(&task2);
+    kernel.Start();
+
+    ktask1 = kernel.GetSwitchStrategy()->GetFirst();
+    CHECK_TRUE(ktask1 != NULL);
+
+    CHECK_EQUAL(LOCK_WAS_UNLOCKED, IKernelService::GetInstance()->LockScheduler());
+
+    CHECK_TRUE(LockCallAsserts([]() { stk::SleepUntil(stk::GetTicks() + 5); }));
+
+    // release build: reported as "did not sleep"
+    bool slept = true;
+    LockCallNoRethrow([&]() { slept = stk::SleepUntil(stk::GetTicks() + 5); });
+
+    CHECK_FALSE(slept);
+    CHECK_FALSE(ktask1->IsSleeping());
+    CHECK_EQUAL(IKernel::KSTATE_LOCKED, kernel.GetState());
+}
+
+TEST(Kernel, LockedYieldIsNoop)
+{
+    Kernel<KERNEL_STATIC, 2, SwitchStrategyRR, PlatformTestMock> kernel;
+    TaskMock<ACCESS_USER> task1, task2;
+    PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
+    IKernelTask *ktask1;
+
+    kernel.Initialize();
+    kernel.AddTask(&task1);
+    kernel.AddTask(&task2);
+    kernel.Start();
+
+    ktask1 = kernel.GetSwitchStrategy()->GetFirst();
+    CHECK_TRUE(ktask1 != NULL);
+
+    CHECK_EQUAL(LOCK_WAS_UNLOCKED, IKernelService::GetInstance()->LockScheduler());
+
+    CHECK_TRUE(LockCallAsserts([]() { stk::Yield(); }));
+
+    // release build: the platform is never asked to switch, task is not put to sleep
+    LockCallNoRethrow([]() { stk::Yield(); });
+
+    CHECK_EQUAL_TEXT(0, platform->m_switch_to_next_nr, "Yield must not reach the platform while locked");
+    CHECK_FALSE(ktask1->IsSleeping());
+    CHECK_EQUAL(IKernel::KSTATE_LOCKED, kernel.GetState());
+}
+
+TEST(Kernel, LockedWaitFails)
+{
+    Kernel<KERNEL_STATIC | KERNEL_SYNC, 1, SwitchStrategyRR, PlatformTestMock> kernel;
+    TaskMock<ACCESS_USER> task;
+    MutexMock mutex;
+    SyncObjectMock sobj;
+    IKernelTask *ktask;
+
+    kernel.Initialize();
+    kernel.AddTask(&task);
+    kernel.Start();
+
+    ktask = kernel.GetSwitchStrategy()->GetFirst();
+    CHECK_TRUE(ktask != NULL);
+
+    CHECK_EQUAL(LOCK_WAS_UNLOCKED, IKernelService::GetInstance()->LockScheduler());
+
+    CHECK_TRUE(LockCallAsserts([&]() { IKernelService::GetInstance()->Wait(&sobj, &mutex, 5); }));
+
+    // release build: fails without blocking (nobody else could ever wake the holder)
+    EWaitResult wresult = WAIT_RESULT_SIGNAL;
+    LockCallNoRethrow([&]() { wresult = IKernelService::GetInstance()->Wait(&sobj, &mutex, 5); });
+
+    CHECK_EQUAL(WAIT_RESULT_FAIL, wresult);
+    CHECK_FALSE(ktask->IsSleeping());
+    CHECK_FALSE(mutex.m_locked); // mutex untouched: not unlocked/re-locked by a wait
+    CHECK_EQUAL(IKernel::KSTATE_LOCKED, kernel.GetState());
+}
+
+TEST(Kernel, LockedWaitAllowedAfterUnlock)
+{
+    Kernel<KERNEL_STATIC | KERNEL_SYNC, 1, SwitchStrategyRR, PlatformTestMock> kernel;
+    PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
+    TaskMock<ACCESS_USER> task;
+    MutexMock mutex;
+    SyncObjectMock sobj;
+
+    g_SyncWaitRelaxCpuContext.Reset();
+    g_SyncWaitRelaxCpuContext.platform = platform;
+    g_RelaxCpuHandler = SyncWaitRelaxCpu;
+
+    kernel.Initialize();
+    kernel.AddTask(&task);
+    kernel.Start();
+
+    // lock/unlock pair leaves no trace: blocking works again
+    CHECK_EQUAL(LOCK_WAS_UNLOCKED, IKernelService::GetInstance()->LockScheduler());
+    CHECK_EQUAL(LOCK_WAS_LOCKED, IKernelService::GetInstance()->UnlockScheduler());
+
+    MutexMock::ScopedLock guard(mutex);
+
+    const EWaitResult wresult = IKernelService::GetInstance()->Wait(&sobj, &mutex, 2);
+
+    g_RelaxCpuHandler = NULL;
+
+    CHECK_EQUAL(WAIT_RESULT_TIMEOUT, wresult);
+}
+
+// The only way the lock holder can leave the CPU is to exit (ExitTask() or returning from Run()): Sleep(), SleepUntil(),
+// Yield(), Wait() and SuspendTask(self) are refused while locked. The exit must release the lock, not leak it.
+TEST(Kernel, LockReleasedWhenHolderExits)
+{
+    KernelMock<KERNEL_DYNAMIC, 2, SwitchStrategyRR, PlatformTestMock> kernel;
+    TaskMock<ACCESS_USER> task1, task2;
+    PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
+    Stack *idle = nullptr, *active = nullptr;
+    const TId task1_id = task1.GetTid();
+
+    kernel.Initialize();
+    kernel.AddTask(&task1);
+    kernel.AddTask(&task2);
+    kernel.Start();
+
+    CHECK_EQUAL(LOCK_WAS_UNLOCKED, IKernelService::GetInstance()->LockScheduler());
+    CHECK_EQUAL(IKernel::KSTATE_LOCKED, kernel.GetState());
+
+    // task1 (lock holder) exits: it is marked sleeping + pending for removal and then busy-waits for the ISR
+    // to de-schedule it (same path as ExitTask() / returning from ITask::Run())
+    Stack *const holder_stack = platform->m_stack_active;
+
+    // debug build: exiting while holding the lock is a contract violation. Unlike Sleep/Yield/Wait it can not be
+    // refused (ExitTask() does not return), the assertion fires before the exit is recorded
+    CHECK_TRUE(LockCallAsserts([&]() { platform->EventTaskExit(holder_stack); }));
+
+    // release build: the exit proceeds
+    LockCallNoRethrow([&]() { platform->EventTaskExit(holder_stack); });
+
+    CHECK_EQUAL_TEXT(IKernel::KSTATE_LOCKED, kernel.GetState(), "lock is released only when the task leaves the CPU");
+
+    const bool result = kernel.CallForceContextSwitch(task1_id, idle, active);
+
+    CHECK_TRUE(result);
+    CHECK_EQUAL_TEXT(IKernel::KSTATE_RUNNING, kernel.GetState(), "lock must not leak to other tasks");
+    CHECK_TRUE(idle != NULL);
+    CHECK_TRUE(active != NULL);
+    CHECK_EQUAL((Word)task1.GetStack(), idle->SP);
+    CHECK_EQUAL((Word)task2.GetStack(), active->SP);
+
+    // scheduling is alive again (not stuck behind a stale lock): the tick completes the removal of task1
+    // (note: its Stack slot is unbound by the removal, so platform->m_stack_active must not be dereferenced here)
+    platform->ProcessTick();
+    CHECK_EQUAL_TEXT(1, kernel.GetSwitchStrategy()->GetSize(), "exited holder must be removed");
+    CHECK_EQUAL(&task2, kernel.GetSwitchStrategy()->GetFirst()->GetUserTask());
+
+    // the leaked state is gone, the lock can be taken again by the new running task
+    CHECK_EQUAL(LOCK_WAS_UNLOCKED, IKernelService::GetInstance()->LockScheduler());
+}
+
+// a forced switch request of the lock holder which is NOT leaving the CPU keeps the lock
+TEST(Kernel, ForceContextSwitchNotSleepingKeepsLock)
+{
+    KernelMock<KERNEL_STATIC, 2, SwitchStrategyRR, PlatformTestMock> kernel;
+    TaskMock<ACCESS_USER> task1, task2;
+    Stack *idle = nullptr, *active = nullptr;
+
+    kernel.Initialize();
+    kernel.AddTask(&task1);
+    kernel.AddTask(&task2);
+    kernel.Start();
+
+    CHECK_EQUAL(LOCK_WAS_UNLOCKED, IKernelService::GetInstance()->LockScheduler());
+
+    CHECK_FALSE(kernel.CallForceContextSwitch(task1.GetTid(), idle, active));
+    CHECK_EQUAL(IKernel::KSTATE_LOCKED, kernel.GetState());
+}
+
+// the lock holder must not suspend itself: asserts in debug, no-op in release (the task keeps the CPU and the lock)
+TEST(Kernel, LockedSuspendSelfIsNoop)
+{
+    Kernel<KERNEL_STATIC, 2, SwitchStrategyRR, PlatformTestMock> kernel;
+    TaskMock<ACCESS_USER> task1, task2;
+    PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
+    IKernelTask *ktask1;
+
+    kernel.Initialize();
+    kernel.AddTask(&task1);
+    kernel.AddTask(&task2);
+    kernel.Start();
+
+    ktask1 = kernel.GetSwitchStrategy()->GetFirst();
+    CHECK_TRUE(ktask1 != NULL);
+    CHECK_EQUAL(&task1, ktask1->GetUserTask());
+
+    CHECK_EQUAL(LOCK_WAS_UNLOCKED, IKernelService::GetInstance()->LockScheduler());
+
+    // task1 is the running task and the lock holder
+    CHECK_TRUE(LockCallAsserts([&]() { kernel.SuspendTask(&task1); }));
+
+    // release build: nothing happens and the call does not spin waiting to be switched out
+    ESuspendResult result = SUSPEND_DONE;
+    LockCallNoRethrow([&]() { result = kernel.SuspendTask(&task1); });
+
+    CHECK_EQUAL(SUSPEND_FAIL, result);
+    CHECK_FALSE(ktask1->IsSleeping());
+    CHECK_EQUAL(IKernel::KSTATE_LOCKED, kernel.GetState());
+    CHECK_EQUAL((Word)task1.GetStack(), platform->m_stack_active->SP);
+    CHECK_EQUAL_TEXT(0, g_CriticalSectionState, "critical section must be released");
+
+    // the task was not left half-suspended: after Unlock() it is an ordinary runnable task
+    CHECK_EQUAL(LOCK_WAS_LOCKED, IKernelService::GetInstance()->UnlockScheduler());
+    CHECK_EQUAL(SUSPEND_DONE, kernel.SuspendTask(&task2)); // task2 can still be suspended, i.e. the kernel state is sane
+}
+
+// the holder may suspend ANOTHER task: the lock stays, the suspension takes effect once task switching is possible
+TEST(Kernel, LockedSuspendOtherTaskAllowed)
+{
+    Kernel<KERNEL_STATIC, 2, SwitchStrategyRR, PlatformTestMock> kernel;
+    TaskMock<ACCESS_USER> task1, task2;
+    PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
+    Stack *&active = platform->m_stack_active;
+
+    kernel.Initialize();
+    kernel.AddTask(&task1);
+    kernel.AddTask(&task2);
+    kernel.Start();
+
+    CHECK_EQUAL(LOCK_WAS_UNLOCKED, IKernelService::GetInstance()->LockScheduler());
+
+    CHECK_EQUAL(SUSPEND_DONE, kernel.SuspendTask(&task2));
+    CHECK_EQUAL_TEXT(IKernel::KSTATE_LOCKED, kernel.GetState(), "suspending another task must not drop the lock");
+    CHECK_EQUAL((Word)task1.GetStack(), active->SP);
+
+    CHECK_EQUAL(LOCK_WAS_LOCKED, IKernelService::GetInstance()->UnlockScheduler());
+
+    // task2 is suspended: task1 stays the only runnable task
+    platform->ProcessTick();
+    platform->ProcessTick();
+    CHECK_EQUAL((Word)task1.GetStack(), active->SP);
+
+    CHECK_EQUAL(RESUME_DONE, kernel.ResumeTask(&task2));
+}
+
+#if STK_TICKLESS_IDLE
+// tickless Suspend() while locked: scheduling suspension takes over, lock can not be taken while suspended
+TEST(Kernel, LockSuspendedKernel)
+{
+    Kernel<KERNEL_STATIC | KERNEL_TICKLESS, 1, SwitchStrategyRR, PlatformTestMock> kernel;
+    PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
+    TaskMock<ACCESS_PRIVILEGED> task1;
+
+    kernel.Initialize();
+    kernel.AddTask(&task1);
+    kernel.Start();
+
+    CHECK_EQUAL(LOCK_WAS_UNLOCKED, IKernelService::GetInstance()->LockScheduler());
+
+    platform->m_sleep_ticks = 9;
+
+    const Timeout ticks = stk::IKernelService::GetInstance()->Suspend();
+
+    CHECK_EQUAL(IKernel::KSTATE_SUSPENDED, kernel.GetState());
+
+    // KSTATE_SUSPENDED: Lock/Unlock are not available
+    CHECK_EQUAL(LOCK_FAIL, IKernelService::GetInstance()->LockScheduler());
+    CHECK_EQUAL(LOCK_FAIL, IKernelService::GetInstance()->UnlockScheduler());
+
+    stk::IKernelService::GetInstance()->Resume(ticks);
+}
+#endif
+
+TEST(Kernel, LockedTimeSliceIsChargedButNotRotated)
+{
+    KernelTsType kernel;
+    TaskMockTS<2> task1;
+    TaskMockTS<NO_TIME_SLICE> task2;
+    PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
+    Stack *&active = platform->m_stack_active;
+
+    kernel.Initialize();
+    kernel.AddTask(&task1);
+    kernel.AddTask(&task2);
+    kernel.Start();
+
+    CHECK_EQUAL((Word)task1.GetStack(), active->SP);
+
+    CHECK_EQUAL(LOCK_WAS_UNLOCKED, IKernelService::GetInstance()->LockScheduler());
+
+    // 3 ticks > 2 tick quantum: the slice is expired but rotation is deferred while locked
+    platform->ProcessTick();
+    platform->ProcessTick();
+    platform->ProcessTick();
+
+    CHECK_EQUAL((Word)task1.GetStack(), active->SP);
+
+    // elapsed ticks were not lost: on the first tick after Unlock() the expired slice rotates the task
+    CHECK_EQUAL(LOCK_WAS_LOCKED, IKernelService::GetInstance()->UnlockScheduler());
+
+    platform->ProcessTick();
+
+    CHECK_EQUAL((Word)task2.GetStack(), active->SP);
+}
+
+TEST(Kernel, LockedTimeSliceNotExpiredKeepsRunningAfterUnlock)
+{
+    KernelTsType kernel;
+    TaskMockTS<4> task1;
+    TaskMockTS<NO_TIME_SLICE> task2;
+    PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
+    Stack *&active = platform->m_stack_active;
+
+    kernel.Initialize();
+    kernel.AddTask(&task1);
+    kernel.AddTask(&task2);
+    kernel.Start();
+
+    CHECK_EQUAL(LOCK_WAS_UNLOCKED, IKernelService::GetInstance()->LockScheduler());
+
+    platform->ProcessTick();
+    platform->ProcessTick();
+
+    CHECK_EQUAL(LOCK_WAS_LOCKED, IKernelService::GetInstance()->UnlockScheduler());
+
+    // 2 of 4 ticks were consumed under the lock: 1 tick left after the next one, no rotation yet
+    platform->ProcessTick();
+    CHECK_EQUAL((Word)task1.GetStack(), active->SP);
+
+    // slice (4) expires on the 4-th charged tick in total
+    platform->ProcessTick();
+    CHECK_EQUAL((Word)task2.GetStack(), active->SP);
+}
+
 } // namespace stk
 } // namespace test

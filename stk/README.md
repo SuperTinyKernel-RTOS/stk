@@ -21,6 +21,8 @@ It covers the layout and purpose of every header and source file under `stk/`, t
   - [stk.h — Top-Level Single Include](#stkh--top-level-single-include)
   - [Adding and removing tasks at runtime (`KERNEL_DYNAMIC`)](#adding-and-removing-tasks-at-runtime-kernel_dynamic)
   - [Time-slicing (`KERNEL_TIMESLICE`)](#time-slicing-kernel_timeslice)
+  - [Scheduler lock](#scheduler-lock)
+  - [Critical section vs. scheduler lock](#critical-section-vs-scheduler-lock)
 - [include/arch — Architecture Back-Ends](#includearch--architecture-back-ends)
   - [stk_arch_common.h — Shared Platform Context](#stk_arch_commonh--shared-platform-context)
   - [ARM Cortex-M Port](#arm-cortex-m-port)
@@ -187,6 +189,7 @@ Defines every kernel interface, type alias, and enumeration. Key contents:
 | `EKernelMode`    | `KERNEL_STATIC`, `KERNEL_DYNAMIC`, `KERNEL_HRT`, `KERNEL_SYNC`, `KERNEL_TICKLESS`, `KERNEL_TIMESLICE`                                                                                                |
 | `EKernelPanicId` | 13 panic codes (`KERNEL_PANIC_NONE` plus 12 fault reasons: spin-lock deadlock, stack corruption, assert, HRT hard fault, CPU exception, CS-nesting overflow, unknown SVC, bad state, bad mode, bad stack type, non-secure access, bad memory region) |
 | `EStackType`     | `STACK_USER_TASK`, `STACK_SLEEP_TRAP`, `STACK_EXIT_TRAP`                                                                                                                                              |
+| `ELockResult`    | `LOCK_FAIL_ISR` (-2), `LOCK_FAIL` (-1), `LOCK_WAS_UNLOCKED` (0), `LOCK_WAS_LOCKED` (1) — result of the scheduler lock calls, see [Scheduler lock](#scheduler-lock)                                    |
 | `EAddResult`     | `ADD_OK`, `ADD_FAIL_POOL_FULL`, `ADD_FAIL_DUPLICATE`, `ADD_FAIL_INVALID` — result of `IKernel::AddTask()` (both the soft real-time and the hard real-time overloads), see [Adding and removing tasks at runtime](#adding-and-removing-tasks-at-runtime-kernel_dynamic)|
 | `EConsts`        | `PERIODICITY_MAX` (99 000 µs), `PERIODICITY_DEFAULT` (1 000 µs), `STACK_SIZE_MIN`                                                                                                                     |
 
@@ -198,8 +201,8 @@ Defines every kernel interface, type alias, and enumeration. Key contents:
 - `ITaskSwitchStrategy` — scheduling strategy interface (`AddTask`, `RemoveTask`, `GetNext`, `GetFirst`, `GetSize`, `OnTaskSleep`, `OnTaskWake`, `OnTaskYield`, `OnTaskTimeSlice`, `OnTaskDeadlineMissed`, `OnTaskWeightChange`).
 - `IPlatform` — platform driver interface (`Initialize`, `Start`, `Stop`, `InitStack`, `SwitchToNext`, `Sleep`, `SleepUntil`, `Wait`, `ProcessTick`, `ProcessHardFault`, `SetEventOverrider`, `GetTid`, `Suspend`, `Resume`, `GetCallerSP`, `SetCpuFrequency(core_id, frequency)` (notifies the scheduler of a core's operating frequency for tick/tickless timing accuracy; pass `0xFF` as `core_id` to set the frequency for all cores at once — call it whenever a core's clock speed changes), etc.).
 - `IPlatform::IEventOverrider` — optional hook interface for extending the platform driver from user-space, registered via `IPlatform::SetEventOverrider(overrider, non_secure = false)` (the `non_secure` slot is TrustZone-only, for a separate Non-Secure-side overrider). Covers `OnSleep`, `OnHardFault`, `OnException` (per-exception fault reporting), and `OnConfigureMpu()` — returns a `const MpuConfig *` of global/background MPU regions applied underneath every task's own regions (see [MPU Configuration API](#mpu-configuration-api)).
-- `IKernel` — kernel control interface (`Initialize`, `AddTask` (two overloads, both returning `EAddResult`: plain, and with HRT periodicity/deadline/start-delay), `RemoveTask`, `ScheduleTaskRemoval`, `SuspendTask`, `ResumeTask`, `EnumerateKernelTasks`, `EnumerateTasks`, `EnumerateTasksT<N>`, `Start`, `GetState`, `GetPlatform`, `GetSwitchStrategy`).
-- `IKernelService` — runtime service interface available to running tasks (`GetTid`, `GetTicks`, `GetTickResolution`, `GetSysTimerCount`, `GetSysTimerFrequency`, `Delay`, `Sleep`, `SleepUntil`, `SleepCancel`, `SwitchToNext`, `ExitTask`, `Wait`, `Wake`, `Suspend`, `Resume`, `InheritWeight`, `RestoreWeight`, `SetTimeSlice`).
+- `IKernel` — kernel control interface (`Initialize`, `AddTask` (two overloads, both returning `EAddResult`: plain, and with HRT periodicity/deadline/start-delay), `RemoveTask`, `ScheduleTaskRemoval`, `SuspendTask`, `ResumeTask`, `EnumerateKernelTasks`, `EnumerateTasks`, `EnumerateTasksT<N>`, `SetSchedulerLock` (single entry point of the [scheduler lock](#scheduler-lock)), `Start`, `GetState` (`EKernelState`: `KSTATE_INACTIVE`, `KSTATE_READY`, `KSTATE_RUNNING`, `KSTATE_SUSPENDED`, `KSTATE_LOCKED`), `GetPlatform`, `GetSwitchStrategy`).
+- `IKernelService` — runtime service interface available to running tasks (`GetTid`, `GetTicks`, `GetTickResolution`, `GetSysTimerCount`, `GetSysTimerFrequency`, `Delay`, `Sleep`, `SleepUntil`, `SleepCancel`, `SwitchToNext`, `ExitTask`, `Wait`, `Wake`, `Suspend`, `Resume`, `InheritWeight`, `RestoreWeight`, `SetTimeSlice`, `LockScheduler`, `UnlockScheduler`, `RestoreSchedulerLock`, plus the `ScopedSchedulerLock` RAII guard, see [Scheduler lock](#scheduler-lock)).
 - `ISyncObject`, `IWaitObject`, `IMutex`, `ITraceable` — synchronization building blocks.
 - `StackMemoryDef<N>` — stack memory array type helper.
 
@@ -262,6 +265,8 @@ class MyTask : public stk::Task<256, Mode>
 
 **`TaskW<Weight, StackSize, AccessMode>`** — Variant of `Task` with a compile-time scheduling weight for use with `SwitchStrategySWRR`. Incompatible with `KERNEL_HRT`.
 
+**`ScopedSchedulerLock`** — RAII guard for the [scheduler lock](#scheduler-lock) (`typedef IKernelService::ScopedSchedulerLock ScopedSchedulerLock` in `stk::`): locks on construction and restores the state that was in effect before on destruction, so guards nest safely.
+
 **`StackMemoryWrapper<StackSize>`** — Adapter that wraps an externally-owned stack array (e.g. placed in a specific linker section) as an `IStackMemory` for passing to the kernel.
 
 **`SyncObjectBase`** — Default, storage-owning base implementation of `ISyncObject` used by all built-in `stk::sync` primitives (`Mutex`, `FastMutex`, `Event`, `Semaphore`, `ConditionVariable`, ...). Owns the intrusive wait list and provides the standard add/remove/wake bookkeeping; a synchronization object with a different storage strategy (e.g. a cross-domain TrustZone wrapper) may implement `ISyncObject` directly instead.
@@ -287,6 +292,9 @@ class MyTask : public stk::Task<256, Mode>
 | `ExitTask()`                 | No        | Terminate the calling task (`KERNEL_DYNAMIC` only), does not return                        |
 | `SetTimeSlice(tid, ticks)`   | No        | Change a task's time-slice quantum (`KERNEL_TIMESLICE` only); returns the previous quantum |
 | `SetTimeSlice(ticks)`        | No        | Same for the calling task                                                                  |
+| `LockScheduler()`            | No        | Disable task switching, returns the previous state (`ELockResult`), see [Scheduler lock](#scheduler-lock) |
+| `UnlockScheduler()`          | No        | Re-enable task switching, returns the previous state (`ELockResult`)                       |
+| `RestoreSchedulerLock(locked)` | No      | Set the lock to a state saved earlier (nesting), returns the new state (`ELockResult`)     |
 | `Delay(ticks)`               | No        | Busy-wait for N ticks (spins, no sleep)                                                    |
 | `DelayMs(ms)`                | No        | Busy-wait for N milliseconds                                                               |
 
@@ -413,6 +421,105 @@ static stk::Kernel<stk::KERNEL_STATIC | stk::KERNEL_TIMESLICE, 3,
 // later, from a task:
 const stk::Timeout prev = stk::SetTimeSlice(20); // calling task: 20 ticks from now on
 stk::SetTimeSlice(prev);                         // restore
+```
+
+---
+
+### Scheduler lock
+
+Disables task switching while ticks, sleep timers, timeouts and ISRs keep running (the equivalent of CMSIS-RTOS2 `osKernelLock()` / `osKernelUnlock()` / `osKernelRestoreLock()`). While locked, `IKernel::GetState()` reports `KSTATE_LOCKED`. It is a soft critical section among tasks only: it does **not** protect data shared with ISRs (use `ScopedCriticalSection` for that).
+
+| API                                                       | Description                                                                                                                  |
+|-----------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------|
+| `IKernel::SetSchedulerLock(bool lock)`                    | The single kernel entry point (keeps the binary small); returns the **previous** state                                       |
+| `IKernelService::LockScheduler()` / `stk::LockScheduler()` | Lock; returns `LOCK_WAS_UNLOCKED` / `LOCK_WAS_LOCKED`                                                                        |
+| `IKernelService::UnlockScheduler()` / `stk::UnlockScheduler()` | Unlock; returns the previous state                                                                                       |
+| `IKernelService::RestoreSchedulerLock(locked)` / `stk::RestoreSchedulerLock(locked)` | Set the lock to a saved state; returns the **new** state                                       |
+| `stk::ScopedSchedulerLock`                                | RAII guard, restores the previous state on destruction                                                                       |
+
+**Rules:**
+
+- **Not nested.** The lock is binary. To nest, save the value returned by `LockScheduler()` and pass `(prev == LOCK_WAS_LOCKED)` to `RestoreSchedulerLock()`; `ScopedSchedulerLock` does this for you.
+- **Failure results.** `LOCK_FAIL_ISR` when called from an ISR; `LOCK_FAIL` in `KERNEL_HRT` mode and when the kernel is not running (not started, or suspended).
+- **The holder must keep the CPU.** While locked, `Sleep()`, `SleepUntil()`, `Yield()`, `Wait()` and suspending the calling task must not be called: they `STK_ASSERT` in debug builds and are no-ops in release builds (`SleepUntil()` returns `false`, `Wait()` returns `WAIT_RESULT_FAIL`, `SuspendTask()` returns `SUSPEND_FAIL`). `Delay()` and suspending *another* task are allowed.
+- **Exit.** A task exit (`ExitTask()` or returning from `Run()`) cannot be refused: it asserts in debug builds; in release builds the task exits and the lock is released when it leaves the CPU, so it never passes on to another task.
+- **`stk::sync` primitives.** Only non-blocking use is valid: `NO_WAIT` / `Try*()` variants and acquisitions that succeed immediately. A call that would have to block asserts in debug builds; in release builds the timed / `bool` / `EWaitResult` variants return `WAIT_RESULT_FAIL`, while the void `Lock()` / `ReadLock()` of `Mutex`, `FastMutex` and `RWMutex` panic with `KERNEL_PANIC_ASSERT` (a contended lock under a scheduler lock is a deadlock). `sync::Barrier::WaitEx()` returns `BARRIER_FAILED`.
+- **Time-slicing continues.** With `KERNEL_TIMESLICE` the running task is still charged while locked; rotation of an expired slice is deferred until unlock.
+- **Unlock latency.** A switch that became due while locked happens on the next tick after unlock.
+- **Tickless.** `IKernelService::Suspend()` (tickless idle) drops the lock; the state becomes `KSTATE_SUSPENDED`.
+- **`time::TimerHost`.** Commands are still accepted, but the `*Sync()` calls cannot wait and behave as in an ISR (`RES_QUEUED`); handlers and the tick task run after unlock.
+
+```cpp
+// RAII: nests and restores the previous state
+{
+    const stk::ScopedSchedulerLock lock;
+    // ... touch state shared among tasks (not ISRs) without being preempted ...
+}
+
+// manual, nesting-safe
+const stk::ELockResult prev = stk::LockScheduler();
+// ... short, non-blocking work ...
+stk::RestoreSchedulerLock(prev == stk::LOCK_WAS_LOCKED);
+```
+
+The CMSIS-RTOS2 wrapper maps `osKernelLock()` / `osKernelUnlock()` / `osKernelRestoreLock()` onto these calls and reports `KSTATE_LOCKED` as `osKernelLocked`.
+
+---
+
+### Critical section vs. scheduler lock
+
+STK offers two different ways to protect shared data. They are **not interchangeable**: they protect against different things and have a very different cost.
+
+| | `sync::ScopedCriticalSection` / `hw::CriticalSection` | `stk::ScopedSchedulerLock` |
+|---|---|---|
+| **Level** | Hardware: masks interrupts on the calling core (and, on SMP, takes a global cross-core spinlock) | Kernel: disables task switching only |
+| **ISRs** | Blocked for the whole duration | Keep running (no ISR latency added) |
+| **Other tasks on this core** | Cannot run (no interrupt, no tick, no switch) | Cannot run (no task switch) |
+| **Other CPU cores** | Excluded (cross-core spinlock) | **Not excluded**: it is a per-kernel (per-core) lock |
+| **Ticks, sleep timers, timeouts** | Delayed while interrupts are masked | Keep advancing |
+| **Jitter / latency** | Adds interrupt latency for every cycle spent inside; can cause missed deadlines | None on ISRs; a task switch due while locked is performed on the next tick after unlock |
+| **Callable from an ISR** | Yes | No (`LOCK_FAIL_ISR`) |
+| **Nesting** | Yes (counted) | Binary; nest with the returned state / `ScopedSchedulerLock` |
+| **Available in `KERNEL_HRT`** | Yes | No (`LOCK_FAIL`) |
+| **Cost** | Very short sections only | Cheap; the section may be longer, but must stay non-blocking (see the rules above) |
+
+> **WARNING: use `sync::ScopedCriticalSection` / `hw::CriticalSection` whenever the shared data is read or modified by an ISR, or is shared between multiple CPU cores.** `ScopedSchedulerLock` does **not** stop interrupts, so an ISR can run in the middle of your update and observe or corrupt a half-written state; and it does not stop tasks running on another core. Only a critical section protects against both.
+
+**Rule of thumb**
+
+- Data shared between **tasks on the same core only** (no ISR ever touches it): use the lightweight `stk::ScopedSchedulerLock`. It does not interfere with ISRs and therefore does not add interrupt latency or jitter, which a critical section would.
+- Data touched by an **ISR**, or shared across **cores** (`STK_ARCH_CPU_COUNT > 1`): use `sync::ScopedCriticalSection` (or `hw::CriticalSection::ScopedLock`) and keep the section as short as possible.
+- `KERNEL_HRT` kernels, or code that may run before the kernel is started or while it is suspended: the scheduler lock is unavailable (the call fails and the guard then gives **no protection**, the failure is not reported by `ScopedSchedulerLock`), use a critical section.
+- Need to sleep, wait or take a contended lock inside the protected region? The scheduler lock forbids blocking (see the rules above) and a critical section must stay very short. Use a `sync::Mutex` (or another `stk::sync` primitive) instead.
+- `hw::SpinLock` is a bare cross-core lock without interrupt masking, it is not a substitute for either of the two.
+
+```cpp
+#include <stk.h>
+
+// shared between the ISR and a task: a critical section is required
+static volatile uint32_t g_RxCount;
+
+void UART_IRQHandler()
+{
+    ++g_RxCount; // ISR side
+}
+
+uint32_t TakeRxCount()
+{
+    const stk::sync::ScopedCriticalSection cs; // masks the UART ISR: read-and-clear must be atomic
+    const uint32_t n = g_RxCount;
+    g_RxCount = 0U;
+    return n;
+}
+
+// shared between tasks of one core only: the lightweight scheduler lock is enough
+static Node g_List; // never touched by an ISR
+
+void AddNode(Node *n)
+{
+    const stk::ScopedSchedulerLock lock; // ISRs keep running, no added jitter
+    g_List.Append(n);
+}
 ```
 
 ---
@@ -583,7 +690,7 @@ Requires `KERNEL_SYNC` in the kernel mode bitmask for most primitives. `ScopedCr
 
 | Class                         | Header                  | Description                                                                                                                        |
 |-------------------------------|-------------------------|------------------------------------------------------------------------------------------------------------------------------------|
-| `sync::ScopedCriticalSection` | `stk_sync_cs.h`         | RAII interrupt-disable critical section. Always available, ISR-safe                                                                |
+| `sync::ScopedCriticalSection` | `stk_sync_cs.h`         | RAII interrupt-disable critical section. Always available, ISR-safe. For data shared with ISRs or other cores, see [Critical section vs. scheduler lock](#critical-section-vs-scheduler-lock) |
 | `sync::ConditionVariable`     | `stk_sync_cv.h`         | Monitor-style wait/notify. Foundation for Pipe, MessageQueue, EventFlags, BlockMemoryPool, BytePool                                |
 | `sync::Mutex`                 | `stk_sync_mutex.h`      | Recursive mutex. `Lock`, `TryLock`, `TimedLock`, `Unlock`. FIFO direct handover on unlock                                          |
 | `sync::FastMutex`             | `stk_sync_fastmutex.h`  | Non-recursive (binary) mutex, smaller and faster than `Mutex`. Self-lock fails/asserts. FIFO handover                              |
@@ -596,7 +703,7 @@ Requires `KERNEL_SYNC` in the kernel mode bitmask for most primitives. `ScopedCr
 | `sync::EventFlags`            | `stk_sync_eventflags.h` | `typedef EventFlagsT<uint32_t> EventFlags`: default 32-bit group (31 usable flags), source-compatible with earlier releases        |
 | `sync::Pipe<T, N>`            | `stk_sync_pipe.h`       | Typed FIFO ring-buffer. Single-element and bulk read/write. `memcpy` fast-path for scalars                                         |
 | `sync::MessageQueue`          | `stk_sync_msgqueue.h`   | Opaque-message FIFO over external buffer. `Put/Get`, `TryPut/TryGet`, `Reset`                                                      |
-| `sync::Barrier`               | `stk_sync_barrier.h`    | Cyclic rendezvous point for a fixed-size group of tasks. `Wait` returns `true` for the last arriver; `WaitEx` reports cancellation |
+| `sync::Barrier`               | `stk_sync_barrier.h`    | Cyclic rendezvous point for a fixed-size group of tasks. `Wait` returns `true` for the last arriver; `WaitEx` reports cancellation (`BARRIER_CANCELED`) or a kernel failure (`BARRIER_FAILED`) |
 | `sync::MessageQueueT<N, MSG>` | `stk_sync_msgqueue.h`   | `MessageQueue` with compile-time capacity and internal storage                                                                     |
 
 **ISR safety at a glance:**
@@ -611,6 +718,8 @@ Requires `KERNEL_SYNC` in the kernel mode bitmask for most primitives. `ScopedCr
 | `Pipe`                                                     | All `Try*` and `NO_WAIT` variants                                 |
 | `MessageQueue`                                             | `Put(NO_WAIT)`, `TryPut()`, `Get(NO_WAIT)`, `TryGet()`, `Reset()` |
 | `SpinLock` / `Mutex` / `FastMutex` / `RWMutex` / `Barrier` | None                                                              |
+
+> While the [scheduler is locked](#scheduler-lock), only the non-blocking forms (`NO_WAIT`, `Try*()`, immediately successful acquisitions) may be used from the lock holder.
 
 > Calling a blocking method from an ISR is undefined behaviour. In debug builds `STK_ASSERT` halts execution if an ISR-unsafe method is called from interrupt context.
 

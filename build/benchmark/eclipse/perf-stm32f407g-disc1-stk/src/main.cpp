@@ -47,7 +47,7 @@ public:
 private:
     void Run() override
     {
-        uint32_t index = m_id;
+        const uint32_t index = m_id;
 
         // do processing
         g_Enable = true;

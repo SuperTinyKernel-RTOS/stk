@@ -492,6 +492,7 @@ static __stk_forceinline uint32_t GetSysTimerFrequency()
     \note      Unsupported in HRT mode (see stk::KERNEL_HRT); in HRT mode tasks sleep automatically according to their periodicity and workload.
     \param[in] tick_count: Sleep time (in ticks). 0 does not cause yield, use Yield instead. Negative will cause an assertion.
     \warning   ISR-unsafe. Calling from an ISR context is not permitted and will trigger an assertion.
+    \warning   Must not be called while the scheduler is locked (see LockScheduler): asserts in debug builds, no-op in release builds.
 */
 static __stk_forceinline void Sleep(Timeout tick_count)
 {
@@ -505,6 +506,7 @@ static __stk_forceinline void Sleep(Timeout tick_count)
                task to sleep and spins until the kernel switches it back in.
     \param[in] ms: Sleep time (milliseconds). 0 does not cause yield, use Yield instead. Negative will cause an assertion.
     \warning   ISR-unsafe. Calling from an ISR context is not permitted and will trigger an assertion.
+    \warning   Must not be called while the scheduler is locked (see LockScheduler): asserts in debug builds, no-op in release builds.
 */
 static __stk_forceinline void SleepMs(Timeout ms)
 {
@@ -516,6 +518,8 @@ static __stk_forceinline void SleepMs(Timeout ms)
     \note      Unsupported in HRT mode (see stk::KERNEL_HRT); in HRT mode tasks sleep automatically according to their periodicity and workload.
     \param[in] timestamp: Absolute timestamp (ticks). 0 does not cause yield, use Yield instead. Negative will cause an assertion.
     \warning   ISR-unsafe. Calling from an ISR context is not permitted and will trigger an assertion.
+    \warning   Must not be called while the scheduler is locked (see LockScheduler): asserts in debug builds,
+               no-op in release builds (returns false).
     \return    True if sleep succeeded, false otherwise.
 */
 static __stk_forceinline bool SleepUntil(Ticks timestamp)
@@ -554,6 +558,7 @@ static __stk_forceinline void SleepCancel(TId task_id)
     \note      Not the same as Sleep(0), which does not cause a yield.
     \note      Task context only. The call blocks (busy-waits) until the kernel has switched the task out.
     \warning   ISR-unsafe. Calling from an ISR context is not permitted and will trigger an assertion.
+    \warning   Must not be called while the scheduler is locked (see LockScheduler): asserts in debug builds, no-op in release builds.
     \see       stk::ITaskSwitchStrategy::OnTaskYield, IKernelService::SwitchToNext
 */
 static __stk_forceinline void Yield()
@@ -568,12 +573,86 @@ static __stk_forceinline void Yield()
     \note      C++ destructors of the task's local objects are NOT run (there is no unwinding).
     \warning   KERNEL_DYNAMIC mode only, panics with KERNEL_PANIC_BAD_MODE otherwise.
     \warning   ISR-unsafe. Calling from an ISR context is not permitted and will trigger an assertion.
+    \warning   Should not be called while the scheduler is locked (see LockScheduler): asserts in debug builds.
+               The exit can not be refused, in release builds the task exits and the lock is released.
     \see       IKernelService::ExitTask, IKernel::ScheduleTaskRemoval, ITask::OnExit
 */
 static __stk_forceinline void ExitTask()
 {
     IKernelService::GetInstance()->ExitTask();
 }
+
+/*! \brief     Disable task switching (equivalent of CMSIS-RTOS2 osKernelLock). Ticks, timeouts and ISRs keep running.
+    \return    Previous lock state (LOCK_WAS_UNLOCKED / LOCK_WAS_LOCKED), or LOCK_FAIL / LOCK_FAIL_ISR.
+    \details   Only task switching is disabled: the tick counter, sleep timers, synchronization object timeouts
+               and ISRs continue to run. While locked the kernel state is KSTATE_LOCKED.
+    \note      Not nested: pass the returned value to RestoreSchedulerLock() to emulate nesting.
+    \note      Task context only. Not available in KERNEL_HRT mode (LOCK_FAIL).
+    \note      Entering tickless suspend (IKernelService::Suspend()) drops the lock.
+    \warning   The lock holder must keep the CPU. While locked, Sleep(), SleepUntil(), Yield(), IKernelService::Wait()
+               and IKernel::SuspendTask() of the calling task must not be called: they assert in debug builds and are
+               no-ops in release builds. Delay() is allowed. Blocking on a synchronization object owned by another
+               task would never complete.
+    \warning   stk::sync primitives: only non-blocking use is valid while locked (NO_WAIT / Try*() variants, acquisitions
+               which succeed immediately). A call which would block asserts in debug builds; in release builds timed
+               calls fail with WAIT_RESULT_FAIL, while the void Lock() / ReadLock() of Mutex, FastMutex and RWMutex panic
+               (KERNEL_PANIC_ASSERT) because a contended lock under a scheduler lock is a deadlock.
+    \note      Exiting (ExitTask() or returning from ITask::Run()) can not be refused: it asserts in debug builds,
+               in release builds the task exits and the lock is released when it leaves the CPU.
+    \note      Prefer the RAII form, see ScopedSchedulerLock.
+    \par       Example:
+               \code
+               const ELockResult prev = stk::LockScheduler();
+               // ... touch shared (among tasks, NOT ISRs) state without being preempted ...
+               stk::RestoreSchedulerLock(prev == LOCK_WAS_LOCKED);
+               \endcode
+    \see       UnlockScheduler, RestoreSchedulerLock, ScopedSchedulerLock, IKernel::SetSchedulerLock
+*/
+static __stk_forceinline ELockResult LockScheduler()
+{
+    return IKernelService::GetInstance()->LockScheduler();
+}
+
+/*! \brief     Enable task switching (equivalent of CMSIS-RTOS2 osKernelUnlock).
+    \return    Previous lock state (LOCK_WAS_UNLOCKED / LOCK_WAS_LOCKED), or LOCK_FAIL / LOCK_FAIL_ISR.
+    \note      A ready task is switched in on the next tick (not immediately).
+    \note      Task context only. Not available in KERNEL_HRT mode (LOCK_FAIL).
+    \see       LockScheduler, RestoreSchedulerLock, ScopedSchedulerLock, IKernel::SetSchedulerLock
+*/
+static __stk_forceinline ELockResult UnlockScheduler()
+{
+    return IKernelService::GetInstance()->UnlockScheduler();
+}
+
+/*! \brief     Set the scheduler lock state (equivalent of CMSIS-RTOS2 osKernelRestoreLock).
+    \param[in] locked: \c true to lock, \c false to unlock.
+    \return    New lock state (LOCK_WAS_LOCKED if now locked, LOCK_WAS_UNLOCKED if now unlocked), or LOCK_FAIL / LOCK_FAIL_ISR.
+    \note      Unlike LockScheduler() and UnlockScheduler() it reports the NEW state, not the previous one.
+    \note      Use with the value returned by LockScheduler() to emulate nesting.
+    \note      Task context only. Not available in KERNEL_HRT mode (LOCK_FAIL).
+    \see       LockScheduler, UnlockScheduler, ScopedSchedulerLock, IKernel::SetSchedulerLock
+*/
+static __stk_forceinline ELockResult RestoreSchedulerLock(bool locked)
+{
+    return IKernelService::GetInstance()->RestoreSchedulerLock(locked);
+}
+
+/*! \typedef ScopedSchedulerLock
+    \brief   RAII scheduler lock: disables task switching for the lifetime of the object.
+    \note    Alias of IKernelService::ScopedSchedulerLock, the lock is released when the object leaves its scope.
+    \note    Restores the lock state which was before construction on scope exit, i.e. scopes can be nested: the
+             scheduler is unlocked only when the outermost scope (which found it unlocked) is left.
+    \note    See LockScheduler() for the restrictions that apply to the lock holder.
+    \par     Example:
+             \code
+             {
+                 const stk::ScopedSchedulerLock sched_lock;
+                 // ... touch shared state without being preempted ...
+             }
+             \endcode
+    \see     LockScheduler, UnlockScheduler, RestoreSchedulerLock, IKernelService::ScopedSchedulerLock
+*/
+typedef IKernelService::ScopedSchedulerLock ScopedSchedulerLock;
 
 /*! \brief     Change the base scheduling weight of a task at run-time.
     \param[in] tid: Id of the task.
