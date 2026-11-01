@@ -96,6 +96,14 @@ void stk::hw::SpinLock::Unlock()
 {
     m_lock = false;
 }
+bool stk::hw::SpinLock::TryLock()
+{
+    if (m_lock)
+        return false;
+
+    Lock();
+    return true;
+}
 
 uintptr_t stk::hw::GetTls()
 {

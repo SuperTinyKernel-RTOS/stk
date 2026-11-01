@@ -501,6 +501,15 @@ struct MutexMock : public IMutex
         if (--m_nesting == 0)
             m_locked = false;
     }
+
+    bool TryLock() override
+    {
+        if (m_locked)
+            return false;
+
+        Lock();
+        return true;
+    }
 };
 
 struct SyncObjectMock : public SyncObjectBase

@@ -50,7 +50,11 @@ namespace sync {
            code which can be accessed by ISR or another CPU core.
     \see   IMutex, hw::CriticalSection
 */
-class ScopedCriticalSection final : public IMutex
+class ScopedCriticalSection
+#ifndef _STK_UNDER_TEST
+    final
+#endif
+    : public IMutex
 {
     friend class Event;
     template <typename T> friend class EventFlagsT;
@@ -77,12 +81,18 @@ public:
         Unlock();
     }
 
-private:
+protected:
     STK_NONCOPYABLE_CLASS(ScopedCriticalSection);
 
     void Lock() override
     {
         m_ses = hw::CriticalSection::Enter(m_ses);
+    }
+
+    bool TryLock() override
+    {
+        Lock();
+        return true;
     }
 
     void Unlock() override

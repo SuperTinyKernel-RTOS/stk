@@ -730,7 +730,7 @@ int main(void)
 }
 ```
 
-See [interop/pthread](https://github.com/SuperTinyKernel-RTOS/stk/tree/main/interop/pthread) for the source code and the documentation in `stk_c_pthread.h` for the full API reference, return codes and limitations.
+See [interop/posix](https://github.com/SuperTinyKernel-RTOS/stk/tree/main/interop/posix) for the source code and the documentation in `stk_c_pthread.h` for the full API reference, return codes and limitations.
 
 ---
 

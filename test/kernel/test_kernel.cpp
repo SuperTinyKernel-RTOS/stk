@@ -111,6 +111,7 @@ class TestMutex : public IMutex
 public:
     void Lock() override {}
     void Unlock() override {}
+    bool TryLock() override { return false; }
 };
 
 static TestSync  g_Sync;
@@ -659,7 +660,7 @@ int main(int argc, char **argv)
 
 #define RUN(TestClass, name, tasks, param) \
     do { \
-        if (RunTest<TestClass<ACCESS_PRIVILEGED>>(name, tasks, param) \
+        if (RunTest< TestClass<ACCESS_PRIVILEGED> >(name, tasks, param) \
                 != TestContext::SUCCESS_EXIT_CODE) \
             total_failures++; \
         else \
@@ -684,6 +685,13 @@ int main(int argc, char **argv)
 
     // Test 5: A waiter woken under the lock resumes (WAIT_RESULT_SIGNAL) only after the unlock
     RUN(LockTask,       "SchedulerLockWakeDeferred",        2, SC_WAKE_DEFERRED);
+
+#if defined(_STK_ARCH_RISC_V)
+        // QEMU translates code on its first execution: the first run of the TimerHost code paths is much slower
+        // than the following ones and its job 0 can exceed the job deadline. Run a warm-up pass, result is ignored.
+        printf("Warm-up (result ignored)\n");
+        (void)RunTest< LockTask<ACCESS_PRIVILEGED> >("SchedulerLockMutualExclusion", 4, SC_MUTUAL_EXCLUSION);
+#endif
 
     // Test 6: Mutual exclusion of a section guarded by ScopedSchedulerLock (4 tasks)
     RUN(LockTask,       "SchedulerLockMutualExclusion",     4, SC_MUTUAL_EXCLUSION);

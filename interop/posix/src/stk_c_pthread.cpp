@@ -24,6 +24,9 @@
 #include "mqueue.h"    // mq_*: Mutex + ConditionVariable based
 #include <time.h>      // clock_gettime(), nanosleep(), timer_*: extended by time.h of this shim
 #include <sys/time.h>  // gettimeofday(): extended by sys/time.h of this shim
+#if !STK_C_DEFINE_SIGEVENT
+#include <signal.h>     // union sigval / struct sigevent (layer's signal.h: defines _POSIX_THREADS for sigev_notify_function)
+#endif
 #include <unistd.h>    // sysconf(), getpid(): extended by unistd.h of this shim
 #include <cstring>
 #include <cstdarg>
@@ -222,6 +225,7 @@ struct pthread_stk_ctrl_t
         joined          = false;
         reclaimed       = false;
         adopted         = false;
+        tid             = TID_NONE;
         cancel_enabled  = true;
         cancel_pending  = false;
         cleanup_count   = 0U;
@@ -246,6 +250,7 @@ struct pthread_stk_ctrl_t
     bool             reclaimed;  // resources already freed or handed to the reaper
     bool             adopted;    // control block wraps a foreign task (e.g. bootstrap task), see CurrentCtrlOrAdopt()
 
+    TId              tid;            // kernel id of an ADOPTED task (a created thread: id derived from its ITask, see TidOf())
     bool             cancel_enabled; // PTHREAD_CANCEL_ENABLE
     bool             cancel_pending; // pthread_cancel() was requested
     uint8_t          cleanup_count;  // pthread_cleanup_push() depth
@@ -930,6 +935,13 @@ static void TestCancelPoint()
     }
 }
 
+// Kernel id of the task of a thread: a created thread is identified by the address of its ITask, an adopted one by
+// the id recorded at adoption
+static TId TidOf(ThreadCtrl *ctrl)
+{
+    return ctrl->adopted ? ctrl->tid : GetTidFromUserTask(&ctrl->task);
+}
+
 // Runs the pushed cleanup handlers in LIFO order.
 static void RunCleanupHandlers(ThreadCtrl *ctrl)
 {
@@ -960,6 +972,7 @@ static ThreadCtrl *CurrentCtrlOrAdopt()
         if (ctrl != nullptr)
         {
             ctrl->adopted  = true;
+            ctrl->tid      = stk::GetTid();
             ctrl->detached = true; // not joinable, never handed to the reaper
             hw::SetTlsPtr(static_cast<void *>(ctrl));
         }
@@ -1465,18 +1478,17 @@ int pthread_detach(pthread_t thread)
     return result;
 }
 
-void pthread_exit(void *retval)
+// Ends the calling thread without running handlers or destructors: bookkeeping, then the kernel removes the task
+// (stk::ExitTask() works for any task, also for an adopted one). Does not return.
+static void TerminateSelf(ThreadCtrl *ctrl, void *retval)
 {
-    pthread_stk_ctrl_t *const ctrl = CurrentCtrl();
-
     if (ctrl != nullptr)
     {
-        RunCleanupHandlers(ctrl);
-        RunKeyDestructors(ctrl);
-
-        // An adopted (foreign) task has no ITask we could ask the kernel to remove, so for
-        // it pthread_exit() only runs the destructors and then parks (see below).
-        if (!ctrl->adopted)
+        if (ctrl->adopted)
+        {
+            ReleaseThreadResources(ctrl); // nobody joins an adopted task: free its slot
+        }
+        else
         {
             {
                 const CsLock cs_;
@@ -1486,15 +1498,25 @@ void pthread_exit(void *retval)
             }
 
             MaybeReap(ctrl); // joiner/reaper wait for done_event (signaled by OnExit()) before freeing anything
-
-            // switches the thread out and removes it (same as returning from the start routine), does not return
-            stk::ExitTask();
         }
     }
 
-    // An adopted (foreign) thread parks here instead of falling back into caller code that isn't expecting to
-    // regain control (ExitTask() above does not return).
-    for (;;)
+    stk::ExitTask(); // does not return; also correct for a task which never used the pthread API
+}
+
+void pthread_exit(void *retval)
+{
+    pthread_stk_ctrl_t *const ctrl = CurrentCtrl();
+
+    if (ctrl != nullptr)
+    {
+        RunCleanupHandlers(ctrl);
+        RunKeyDestructors(ctrl);
+    }
+
+    TerminateSelf(ctrl, retval);
+
+    for (;;) // not reached: ExitTask() does not return
     {
         stk::Sleep(stk::WAIT_INFINITE);
     }
@@ -2528,7 +2550,7 @@ static int ApplySchedParam(pthread_t thread, int policy, int prio)
             else
             {
                 // requires WEIGHT_API=1 and PRIORITY_INHERITANCE_API=1 in the strategy (asserts otherwise)
-                (void)stk::SetWeight(GetTidFromUserTask(&thread->task), static_cast<Weight>(prio));
+                (void)stk::SetWeight(TidOf(thread), static_cast<Weight>(prio));
 
                 thread->task.SetSchedule(static_cast<int32_t>(prio), policy);
             }
@@ -2956,7 +2978,7 @@ int pthread_cancel(pthread_t thread)
 
             // wake the target out of a Sleep() or a sync-object wait: it then reaches its next cancellation point
             // (the id of a user task is derived from the ITask address, no need to wait until the thread has started)
-            const TId tid = GetTidFromUserTask(&thread->task);
+            const TId tid = TidOf(thread);
             if (wake && (tid != TID_NONE))
             {
                 stk::SleepCancel(tid);
@@ -3306,12 +3328,36 @@ static int64_t WallTimeUs()
     return mono_us + s_WallOffsetUs;
 }
 
-void stk_posix_set_wall_time(int64_t unix_seconds)
+static void SetWallTimeUs(int64_t unix_us)
 {
     const int64_t mono_us = static_cast<int64_t>(stk::GetTicks()) * static_cast<int64_t>(GetTickResolution());
     const CsLock cs_;
 
-    s_WallOffsetUs = (unix_seconds * 1000000LL) - mono_us;
+    s_WallOffsetUs = unix_us - mono_us;
+}
+
+void stk_posix_set_wall_time(int64_t unix_seconds)
+{
+    SetWallTimeUs(unix_seconds * 1000000LL);
+}
+
+int settimeofday(const struct timeval *tv, const struct timezone *tz)
+{
+    int result = -1;
+
+    STK_UNUSED(tz);
+
+    if ((tv == nullptr) || (tv->tv_usec < 0) || (tv->tv_usec >= 1000000))
+    {
+        errno = EINVAL;
+    }
+    else
+    {
+        SetWallTimeUs((static_cast<int64_t>(tv->tv_sec) * 1000000LL) + static_cast<int64_t>(tv->tv_usec));
+        result = 0;
+    }
+
+    return result;
 }
 
 int gettimeofday(struct timeval *tv, void *tz)
@@ -3355,6 +3401,26 @@ pid_t getpid(void)
 {
     return static_cast<pid_t>(STK_C_POSIX_PID);
 }
+
+pid_t getppid(void)
+{
+    return static_cast<pid_t>(STK_C_POSIX_PPID);
+}
+
+pid_t gettid(void)
+{
+    return static_cast<pid_t>(stk::GetTid());
+}
+
+int getpagesize(void)
+{
+    return static_cast<int>(STK_C_SYSCONF_PAGESIZE);
+}
+
+uid_t getuid(void)  { return static_cast<uid_t>(STK_C_POSIX_UID); }
+uid_t geteuid(void) { return static_cast<uid_t>(STK_C_POSIX_UID); }
+gid_t getgid(void)  { return static_cast<gid_t>(STK_C_POSIX_GID); }
+gid_t getegid(void) { return static_cast<gid_t>(STK_C_POSIX_GID); }
 
 long sysconf(int name)
 {
@@ -4286,6 +4352,209 @@ int mq_notify(mqd_t mqdes, const struct sigevent *notification)
     STK_UNUSED(notification);
 
     return MqFail(ENOSYS); // no signals
+}
+
+// -----------------------------------------------------------------------------
+// pthread_kill(): existence check, SIGKILL / SIGTERM; fork/signal-mask stubs
+// -----------------------------------------------------------------------------
+int pthread_kill(pthread_t thread, int sig)
+{
+    int result = EINVAL;
+
+    if ((thread != nullptr) && (sig >= 0))
+    {
+        const bool alive = thread->busy && !thread->finished && !thread->reclaimed;
+
+        if (!alive)
+        {
+            result = ESRCH;
+        }
+        else if (sig == 0)
+        {
+            result = 0; // existence check only
+        }
+        else if ((sig != SIGKILL) && (sig != SIGTERM))
+        {
+            result = ENOSYS; // no signal delivery
+        }
+        else if (thread == CurrentCtrl())
+        {
+            // the calling thread ends itself: SIGTERM like pthread_exit(), SIGKILL cannot be caught: no handlers
+            if (sig == SIGTERM)
+            {
+                pthread_exit(PTHREAD_CANCELED);
+            }
+
+            TerminateSelf(thread, PTHREAD_CANCELED);
+        }
+        else if (thread->adopted || (s_BoundKernel == nullptr))
+        {
+            result = thread->adopted ? ENOTSUP : EINVAL; // an adopted task has no ITask the kernel could remove
+        }
+        else
+        {
+            bool terminate = false;
+
+            {
+                const CsLock cs_;
+
+                if (!thread->finished)
+                {
+                    thread->retval   = PTHREAD_CANCELED;
+                    thread->finished = true;
+                    terminate = true;
+                }
+            }
+
+            if (terminate)
+            {
+                MaybeReap(thread); // detached: the reaper waits for done_event, which OnExit() signals on removal
+
+                s_BoundKernel->ScheduleTaskRemoval(&thread->task);
+            }
+
+            result = 0;
+        }
+    }
+
+    return result;
+}
+
+int pthread_atfork(void (*prepare)(void), void (*parent)(void), void (*child)(void))
+{
+    STK_UNUSED(prepare);
+    STK_UNUSED(parent);
+    STK_UNUSED(child);
+
+    return 0; // there is no fork()
+}
+
+#if !STK_C_DEFINE_SIGEVENT
+int pthread_sigmask(int how, const sigset_t *set, sigset_t *oldset)
+{
+    STK_UNUSED(how);
+    STK_UNUSED(set);
+
+    if (oldset != nullptr)
+    {
+        std::memset(oldset, 0, sizeof(*oldset)); // no signals are ever pending or blocked
+    }
+
+    return 0;
+}
+#endif
+
+// -----------------------------------------------------------------------------
+// <sched.h>: process-level calls, the "process" is the calling thread
+// -----------------------------------------------------------------------------
+static pthread_stk_ctrl_t *SchedTarget(pid_t pid)
+{
+    pthread_stk_ctrl_t *ctrl = nullptr;
+
+    if ((pid == 0) || (pid == static_cast<pid_t>(STK_C_POSIX_PID)))
+    {
+        ctrl = CurrentCtrlOrAdopt();
+    }
+
+    if (ctrl == nullptr)
+    {
+        errno = ESRCH;
+    }
+
+    return ctrl;
+}
+
+int sched_getscheduler(pid_t pid)
+{
+    const pthread_stk_ctrl_t *const ctrl = SchedTarget(pid);
+
+    return (ctrl != nullptr) ? ctrl->task.GetPolicy() : -1;
+}
+
+int sched_getparam(pid_t pid, struct sched_param *param)
+{
+    int result = -1;
+    const pthread_stk_ctrl_t *const ctrl = SchedTarget(pid);
+
+    if (ctrl != nullptr)
+    {
+        if (param == nullptr)
+        {
+            errno = EINVAL;
+        }
+        else
+        {
+            param->sched_priority = static_cast<int>(ctrl->task.GetWeight());
+            result = 0;
+        }
+    }
+
+    return result;
+}
+
+int sched_setscheduler(pid_t pid, int policy, const struct sched_param *param)
+{
+    int result = -1;
+    pthread_stk_ctrl_t *const ctrl = SchedTarget(pid);
+
+    if (ctrl != nullptr)
+    {
+        const int old_policy = ctrl->task.GetPolicy();
+        const int err        = pthread_setschedparam(ctrl, policy, param);
+
+        if (err == 0)
+        {
+            result = old_policy; // POSIX: the previous policy
+        }
+        else
+        {
+            errno = err;
+        }
+    }
+
+    return result;
+}
+
+int sched_setparam(pid_t pid, const struct sched_param *param)
+{
+    int result = -1;
+    pthread_stk_ctrl_t *const ctrl = SchedTarget(pid);
+
+    if (ctrl != nullptr)
+    {
+        const int err = pthread_setschedparam(ctrl, ctrl->task.GetPolicy(), param);
+
+        if (err == 0)
+        {
+            result = 0;
+        }
+        else
+        {
+            errno = err;
+        }
+    }
+
+    return result;
+}
+
+int sched_rr_get_interval(pid_t pid, struct timespec *tp)
+{
+    int result = -1;
+
+    if (SchedTarget(pid) != nullptr)
+    {
+        if (tp == nullptr)
+        {
+            errno = EINVAL;
+        }
+        else
+        {
+            TicksToTimespec(1, tp); // time slice of the kernel: one tick (GetTickResolution())
+            result = 0;
+        }
+    }
+
+    return result;
 }
 
 // =============================================================================

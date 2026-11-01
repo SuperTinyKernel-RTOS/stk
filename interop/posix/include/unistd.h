@@ -11,7 +11,8 @@
 #define STK_C_UNISTD_POSIX_H_
 
 /*! \file     unistd.h
-    \brief    POSIX <unistd.h> extensions for STK: sysconf() and getpid(). Implemented by stk_c_pthread.cpp.
+    \brief    POSIX <unistd.h> extensions for STK: sysconf(), getpid(), getppid(), gettid(), getpagesize(), getuid(),
+              geteuid(), getgid(), getegid(). Implemented by stk_c_pthread.cpp.
 
     \details  This header EXTENDS the toolchain's <unistd.h> (it is included first via \c #include_next on GCC/Clang,
               or the header named by \c STK_C_SYSTEM_UNISTD_H on other compilers), the \c _SC_* names come from there.
@@ -27,6 +28,7 @@
 /* same newlib guard as in stk_c_pthread.h: <sys/types.h> must not define pthread types of its own */
 #ifndef _SYS__PTHREADTYPES_H_
     #define _SYS__PTHREADTYPES_H_
+    #define STK_C_PTHREADTYPES_GUARD
 #endif
 
 #ifndef STK_C_SYSTEM_UNISTD_H
@@ -45,8 +47,8 @@
 extern "C" {
 #endif
 
-/*! \def       STK_C_POSIX_PID / STK_C_SYSCONF_NPROCESSORS / STK_C_SYSCONF_PAGESIZE
-    \brief     Values reported by getpid() and sysconf(). Override in the build system.
+/*! \def       STK_C_POSIX_PID / STK_C_POSIX_PPID / STK_C_POSIX_UID / STK_C_POSIX_GID / STK_C_SYSCONF_NPROCESSORS / STK_C_SYSCONF_PAGESIZE
+    \brief     Values reported by getpid(), getppid(), getuid()..getegid() and sysconf(). Override in the build system.
 */
 #ifndef STK_C_POSIX_PID
     #define STK_C_POSIX_PID (1)
@@ -56,6 +58,15 @@ extern "C" {
 #endif
 #ifndef STK_C_SYSCONF_PAGESIZE
     #define STK_C_SYSCONF_PAGESIZE (4096L)
+#endif
+#ifndef STK_C_POSIX_PPID
+    #define STK_C_POSIX_PPID (0)
+#endif
+#ifndef STK_C_POSIX_UID
+    #define STK_C_POSIX_UID (0)
+#endif
+#ifndef STK_C_POSIX_GID
+    #define STK_C_POSIX_GID (0)
 #endif
 
 /*! \def       STK_C_NO_SYSCONF_DECLS
@@ -74,6 +85,26 @@ long sysconf(int name);
 /*! \brief     Get the process id: always STK_C_POSIX_PID.
 */
 pid_t getpid(void);
+
+/*! \brief     Get the parent process id: always STK_C_POSIX_PPID (0, there is no parent).
+*/
+pid_t getppid(void);
+
+/*! \brief     Get the id of the calling task (kernel task id truncated to pid_t): GNU-style gettid().
+    \warning   Task context only.
+*/
+pid_t gettid(void);
+
+/*! \brief     Get the page size: STK_C_SYSCONF_PAGESIZE (same as sysconf(_SC_PAGESIZE)).
+*/
+int getpagesize(void);
+
+/*! \brief     User and group ids: constants STK_C_POSIX_UID / STK_C_POSIX_GID (there are no users).
+*/
+uid_t getuid(void);
+uid_t geteuid(void);
+gid_t getgid(void);
+gid_t getegid(void);
 
 #endif /* STK_C_NO_SYSCONF_DECLS */
 

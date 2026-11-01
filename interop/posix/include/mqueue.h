@@ -27,6 +27,7 @@
    them (needed here because this header may be included before stk_c_pthread.h). */
 #ifndef _SYS__PTHREADTYPES_H_
     #define _SYS__PTHREADTYPES_H_
+    #define STK_C_PTHREADTYPES_GUARD
 #endif
 
 #include <stddef.h>

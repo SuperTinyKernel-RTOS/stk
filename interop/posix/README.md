@@ -41,6 +41,7 @@ synchronization model. See [What Is Supported](#what-is-supported) and
   - [Stacks and Memory](#stacks-and-memory)
 - [Scheduling and Priorities](#scheduling-and-priorities)
 - [Cancellation](#cancellation)
+  - [Terminating a Thread](#terminating-a-thread)
 - [Mutex](#mutex)
 - [Condition Variable](#condition-variable)
 - [Timed Waits and abstime](#timed-waits-and-abstime)
@@ -77,13 +78,14 @@ synchronization model. See [What Is Supported](#what-is-supported) and
 | `time.h` | Extends the toolchain's `<time.h>`: `clock_*`, `nanosleep()`, `usleep()`, `sleep()`, `timer_*`, `timespec_get()` |
 | `sys/time.h` | Extends the toolchain's `<sys/time.h>`: `gettimeofday()` |
 | `unistd.h` | Extends the toolchain's `<unistd.h>`: `sysconf()`, `getpid()` |
+| `signal.h` | Wraps the toolchain's `<signal.h>`: makes `struct sigevent` / `pthread_kill()` declarations usable next to the layer's pthread types (no signal is implemented) |
 | `threads.h` | C11 `<threads.h>` on top of the pthread layer |
 | `stk_c_pthread.cpp` | Implementation of everything above except C11 threads |
 | `stk_c_threads.cpp` | Implementation of C11 `<threads.h>` (needs only the public pthread/time headers) |
 
-`time.h`, `sys/time.h` and `unistd.h` first include the toolchain's own header (`#include_next`)
-and then add declarations, so they sit in front of the toolchain on the include path without hiding
-anything. See [Toolchain Integration Notes](#toolchain-integration-notes).
+`time.h`, `sys/time.h`, `unistd.h` and `signal.h` first include the toolchain's own header
+(`#include_next`) and then add to it, so they sit in front of the toolchain on the include path
+without hiding anything. See [Toolchain Integration Notes](#toolchain-integration-notes).
 
 Compile the two `.cpp` files with your project (the layer needs only the STK C++ API):
 
@@ -115,6 +117,9 @@ test for them.
 | `pthread_attr_set/getprivileged_np` | Yes (non-portable STK extension) |
 | `pthread_set/getname_np`, `pthread_attr_set/getname_np`, `pthread_getattr_np` | Yes (GNU-style extensions) |
 | `pthread_cancel`, `setcancelstate`, `setcanceltype`, `testcancel`, `cleanup_push/pop` | Yes (deferred cancellation only) |
+| `pthread_kill(t, 0 / SIGKILL / SIGTERM)` | Yes (existence check and thread termination, see [Terminating a Thread](#terminating-a-thread)) |
+| `pthread_atfork`, `pthread_sigmask` | Accepted, no effect (no `fork()`, no signals) |
+| `sched_getscheduler` / `setscheduler` / `getparam` / `setparam` / `sched_rr_get_interval` | Yes (the "process" is the calling thread) |
 | `pthread_mutex_t` (normal / default) | Yes: recursive in practice, see [Mutex](#mutex) |
 | `pthread_mutex_t` (recursive, errorcheck) | Yes |
 | `pthread_mutexattr_set/getprotocol`, `setpshared/getpshared` | Yes (`PRIO_NONE` / `PRIO_INHERIT`, `PROCESS_PRIVATE` only) |
@@ -130,9 +135,9 @@ test for them.
 | `mq_*` (`<mqueue.h>`), named queues with priorities | Yes (`mq_notify` returns `ENOSYS`) |
 | `clock_gettime` / `clock_getres` / `timespec_get` | Yes |
 | `nanosleep` / `clock_nanosleep` / `usleep` / `sleep` | Yes |
-| `gettimeofday` / `time` | Yes (kernel time + optional offset) |
+| `gettimeofday` / `settimeofday` / `time` | Yes (kernel time + optional offset) |
 | `timer_create` / `settime` / `gettime` / `delete` / `getoverrun` | Yes (`SIGEV_THREAD` / `SIGEV_NONE`, on a `TimerHost` you provide) |
-| `sysconf` / `getpid` | Yes |
+| `sysconf` / `getpid` / `getppid` / `gettid` / `getpagesize` / `getuid` / `geteuid` / `getgid` / `getegid` | Yes (limits and constants) |
 | C11 `thrd_*`, `mtx_*`, `cnd_*`, `tss_*`, `call_once` | Yes (`<threads.h>`) |
 | `stk_pthread_bind_kernel()`, `stk_posix_timer_bind_host()`, `stk_posix_set_wall_time()` | Yes: STK-specific, not POSIX |
 
@@ -142,7 +147,7 @@ test for them.
 
 | Area | Why |
 |---|---|
-| Signals: `sigaction`, `kill`, `raise`, `sigwait`, `alarm`, `setitimer`, `pthread_kill`, `pthread_sigmask`, `SIGEV_SIGNAL`, `mq_notify` | STK has no signals |
+| Signals: `sigaction`, `kill`, `raise`, `sigwait`, `alarm`, `setitimer`, `pthread_kill` with any signal other than `0` / `SIGKILL` / `SIGTERM` (`ENOSYS`), `SIGEV_SIGNAL`, `mq_notify` | STK has no signals (`pthread_sigmask` is a no-op) |
 | Processes: `fork`, `exec*`, `wait*`, `posix_spawn`, `pthread_atfork`, process-shared objects | One firmware image, no processes |
 | Named semaphores: `sem_open`, `sem_close`, `sem_unlink` | STK has no named kernel objects (use [message queues](#message-queues) for named objects) |
 | Asynchronous cancellation | A running task cannot be stopped at an arbitrary instruction (`PTHREAD_CANCEL_ASYNCHRONOUS` returns `ENOTSUP`) |
@@ -479,10 +484,10 @@ Consequences of adoption:
   `EINVAL` for it;
 - the task's TLS slot now belongs to the layer: do **not** call the STK TLS API (`stk_tls_set()` /
   `hw::SetTlsPtr()`) in a task that uses the pthread API;
-- `pthread_exit()` from an adopted task runs its cleanup handlers and key destructors and then parks the
-  task forever;
-- `pthread_getschedparam()` of an adopted task reports the default priority (its real weight is unknown to
-  the layer), and its priority cannot be changed through it;
+- `pthread_exit()` from an adopted task runs its cleanup handlers and key destructors, frees its slot and ends
+  the task (`stk::ExitTask()`);
+- `pthread_getschedparam()` of an adopted task reports the default priority until the priority is set through the
+  layer (its real weight is unknown to it); `pthread_setschedparam()` works for it;
 - `pthread_getspecific()` never adopts, so merely reading does not use a slot.
 
 `pthread_self()` returns `NULL` only if no slot is left to adopt into. `pthread_equal(a, b)` compares
@@ -556,6 +561,10 @@ Notes:
 - `pthread_setschedparam()` / `pthread_setschedprio()` return `ESRCH` for a thread that has finished and
   `EINVAL` for a priority outside `sched_get_priority_min()` .. `sched_get_priority_max()`.
 - `sched_yield()` (and `pthread_yield()`) yields the CPU to another ready task.
+- The process-level calls act on the **calling thread** (`pid` must be `0` or the value of `getpid()`, otherwise `ESRCH`):
+  `sched_getscheduler()`, `sched_setscheduler()` (returns the previous policy), `sched_getparam()`,
+  `sched_setparam()`. `sched_rr_get_interval()` returns the time slice of the kernel: one tick
+  (`stk::GetTickResolution()`).
 
 ---
 
@@ -600,6 +609,24 @@ lock, spinlock and barrier waits are **not** cancellation points (as in POSIX).
 Limits: a thread that never reaches a cancellation point cannot be cancelled. A cancelled
 `pthread_cond_wait()` re-acquires the mutex before the handlers run (as in POSIX), so the handler is
 expected to unlock it.
+
+### Terminating a Thread
+
+`pthread_kill()` understands three values; there are no other signals:
+
+| `sig` | Effect |
+|---|---|
+| `0` | Existence check: `0` if the thread is alive, `ESRCH` if it has finished |
+| `SIGKILL` | Terminate immediately. The caller ends itself with `stk::ExitTask()`; another thread is removed with `IKernel::ScheduleTaskRemoval()`. **No** cleanup handler and **no** key destructor runs |
+| `SIGTERM` | The caller: same as `pthread_exit(PTHREAD_CANCELED)` (handlers and destructors run). Another thread: same as `SIGKILL`, a running task cannot be made to execute code |
+
+`pthread_join()` returns `PTHREAD_CANCELED` for a terminated thread, and detached threads are reclaimed as usual.
+Any other signal number returns `ENOSYS`, a negative one `EINVAL`; an adopted task other than the caller cannot be
+removed (`ENOTSUP`).
+
+> Terminating another thread cannot release what it holds: a mutex it locked stays locked and memory it allocated
+> is not freed. Prefer [cancellation](#cancellation) for a cooperative stop, and use `pthread_kill()` for threads
+> which must be stopped unconditionally.
 
 ---
 
@@ -1007,6 +1034,7 @@ until you set the current Unix time:
 
 ```c
 stk_posix_set_wall_time(1735689600);       /* e.g. after reading an RTC or from network time */
+/* or, with microseconds: settimeofday(&tv, NULL); */
 
 struct timeval tv;
 gettimeofday(&tv, NULL);                   /* tv_sec = Unix time, microsecond fields */
@@ -1036,7 +1064,7 @@ static void on_timer(union sigval v) {       /* runs in a timer handler task: ke
     pthread_cond_signal((pthread_cond_t *)v.sival_ptr);
 }
 
-struct sigevent sev = { 0 };
+struct sigevent sev = { 0 };                 /* needs <signal.h> */
 sev.sigev_notify          = SIGEV_THREAD;
 sev.sigev_notify_function = on_timer;
 sev.sigev_value.sival_ptr = &g_cond;
@@ -1073,7 +1101,12 @@ long cpus   = sysconf(_SC_NPROCESSORS_ONLN); /* STK_C_SYSCONF_NPROCESSORS, defau
 long page   = sysconf(_SC_PAGESIZE);         /* STK_C_SYSCONF_PAGESIZE, default 4096 */
 long maxthr = sysconf(_SC_THREAD_THREADS_MAX);
 pid_t pid   = getpid();                      /* constant STK_C_POSIX_PID, default 1 */
+pid_t tid   = gettid();                      /* id of the calling task */
+int   psz   = getpagesize();                 /* STK_C_SYSCONF_PAGESIZE */
 ```
+
+`getppid()` returns `STK_C_POSIX_PPID` (0) and `getuid()` / `geteuid()` / `getgid()` / `getegid()` return
+`STK_C_POSIX_UID` / `STK_C_POSIX_GID` (0): there are no parents or users.
 
 `sysconf()` reports the limits of this layer (threads, keys, stack, semaphore, message queue and timer
 limits), the POSIX option version (`200809L`) for supported options and `-1` for unsupported ones such as
@@ -1154,7 +1187,7 @@ concurrently.
 | `EINVAL` | `NULL` argument; invalid or never-initialized object; no kernel bound; kernel rejected the task; invalid attribute value; invalid `abstime`; thread already joined/detached/adopted |
 | `EAGAIN` | No free thread slot (`STK_C_PTHREAD_MAX_THREADS`); stack allocation failed; kernel task table full; key slots exhausted; mutex recursion depth exceeded; `sem_trywait()` / `mq_*` non-blocking would block; no timer host bound / no free timer |
 | `ENOTSUP` | `PTHREAD_PROCESS_SHARED`, `PTHREAD_PRIO_PROTECT`, `PTHREAD_SCOPE_PROCESS`, `PTHREAD_CANCEL_ASYNCHRONOUS`, `SIGEV_SIGNAL`, a priority change with `STK_C_PTHREAD_RUNTIME_PRIORITY` = 0 |
-| `ENOSYS` | `sem_init()` with `pshared != 0`; `mq_notify()` |
+| `ENOSYS` | `sem_init()` with `pshared != 0`; `mq_notify()`; `pthread_kill()` with a signal other than `0` / `SIGKILL` / `SIGTERM` |
 | `ENOMEM` | `pthread_setspecific()`: no slot left to adopt the calling task into; message queue storage allocation failed |
 | `ERANGE` | Thread or attribute name too long, or the output buffer too small |
 | `ESRCH` | `pthread_cancel()`, `pthread_setschedparam()` or `pthread_getattr_np()` on a thread that is not alive |
@@ -1203,14 +1236,25 @@ size is verified at compile time), so no heap allocation is needed for the synch
 
 **Include path order.** Put `interop/posix/include` before the toolchain's include directories. `time.h`,
 `sys/time.h` and `unistd.h` of the layer include the toolchain's own header first (`#include_next` on
-GCC/Clang; on other compilers define `STK_C_SYSTEM_TIME_H`, `STK_C_SYSTEM_SYS_TIME_H` and
-`STK_C_SYSTEM_UNISTD_H` to the toolchain header path) and then add what is missing.
+GCC/Clang; on other compilers define `STK_C_SYSTEM_TIME_H`, `STK_C_SYSTEM_SYS_TIME_H`,
+`STK_C_SYSTEM_UNISTD_H` and `STK_C_SYSTEM_SIGNAL_H` to the toolchain header path) and then add what is
+missing.
 
-**newlib (arm-none-eabi-gcc).** Detected automatically: the layer does not redefine `timer_t` and
-`struct itimerspec`, which newlib already provides. The pthread headers define `_SYS__PTHREADTYPES_H_` first,
-so `<sys/types.h>` does not define its own pthread types; all layer headers that include `<sys/types.h>` do the
-same, so the include order does not matter. `union sigval` / `struct sigevent` are provided by the layer unless
-`<signal.h>` was included first; if you include `<signal.h>` afterwards define `STK_C_DEFINE_SIGEVENT=0`.
+**newlib (arm-none-eabi-gcc).** Detected automatically:
+
+- the layer does not redefine `timer_t` and `struct itimerspec`, which newlib already provides;
+- `union sigval` / `struct sigevent` / `SIGEV_*` come from newlib's `<signal.h>` (the layer does not define
+  its own copy). Newlib declares the members `sigev_notify_function` / `sigev_notify_attributes` only when
+  `_POSIX_THREADS` is defined, so the layer's `signal.h` defines it while newlib's header is parsed (and
+  restores it afterwards). Include `<signal.h>` in code which fills a `struct sigevent` for `timer_create()`;
+- newlib's `<signal.h>` declares `pthread_kill(pthread_t, int)` and refers to `pthread_attr_t`, so the layer's
+  pthread types must exist before it is read. The layer's `signal.h` guarantees that; any file that includes
+  `<signal.h>` (for example a `syscalls.c`) therefore compiles without including `pthread.h` itself;
+- every layer header installs the guard `_SYS__PTHREADTYPES_H_` before it reads a toolchain header, so
+  `<sys/types.h>` does not define newlib's own pthread types. If the toolchain's `<sys/types.h>`,
+  `<pthread.h>` or `<signal.h>` is read **before** any header of the layer (for example because the layer's
+  include directory is behind the toolchain's), the types are defined twice and `stk_c_pthread.h` stops with an
+  explicit `#error` telling so.
 
 **Declaration clashes.** If your toolchain declares one of the functions with a different spelling, skip the
 layer's declaration with one of these macros (define them in the build system):
@@ -1221,7 +1265,7 @@ layer's declaration with one of these macros (define them in the build system):
 | `STK_C_NO_SLEEP_DECLS` | `usleep`, `sleep` |
 | `STK_C_NO_TIMER_DECLS` | `timer_create` ... `timer_getoverrun` |
 | `STK_C_NO_ITIMERSPEC` / `STK_C_NO_TIMER_T` | `struct itimerspec` / `typedef ... timer_t` |
-| `STK_C_DEFINE_SIGEVENT=0` | `union sigval`, `struct sigevent`, `SIGEV_*` |
+| `STK_C_DEFINE_SIGEVENT` | `1` makes `time.h` define `union sigval`, `struct sigevent`, `SIGEV_*` itself (toolchains without their own); `0` is the default for newlib/glibc, where `<signal.h>` provides them |
 | `STK_C_NO_GETTIMEOFDAY_DECL` / `STK_C_NO_SYSCONF_DECLS` | `gettimeofday` / `sysconf`, `getpid` |
 
 **Replacing C library functions.** `time()`, `gettimeofday()`, `sleep()`, `usleep()`, `nanosleep()`, `clock_*`
@@ -1281,6 +1325,10 @@ region tiny and never block while holding one.
 **Joining an adopted task or yourself** — Adopted tasks are not joinable (`EINVAL`), and joining the calling thread
 returns `EDEADLK`.
 
+**Killing a thread which holds a lock** — `pthread_kill(t, SIGKILL)` / `SIGTERM` of another thread removes it without
+running its cleanup handlers: mutexes it owns stay locked forever. Use cancellation, or make sure the target holds
+no locks.
+
 **Blocking from an ISR** — The whole API is task-context only, except `sem_post()` / `sem_trywait()` /
 `sem_getvalue()`. See [Context Restrictions (ISR)](#context-restrictions-isr).
 
@@ -1329,11 +1377,14 @@ Place these in `stk_config.h` (or the build system) before including any STK hea
 /* --- Timers, system configuration --- */
 #define STK_C_TIMERS_MAX                   8
 #define STK_C_POSIX_PID                    1
+#define STK_C_POSIX_PPID                   0
+#define STK_C_POSIX_UID                    0
+#define STK_C_POSIX_GID                    0
 #define STK_C_SYSCONF_NPROCESSORS          1L
 #define STK_C_SYSCONF_PAGESIZE             4096L
 
 /* --- Toolchain integration (build system) --- */
 /* STK_C_NO_TIME_DECLS, STK_C_NO_SLEEP_DECLS, STK_C_NO_TIMER_DECLS, STK_C_NO_ITIMERSPEC, STK_C_NO_TIMER_T,
-   STK_C_DEFINE_SIGEVENT=0, STK_C_NO_GETTIMEOFDAY_DECL, STK_C_NO_SYSCONF_DECLS,
-   STK_C_SYSTEM_TIME_H / STK_C_SYSTEM_SYS_TIME_H / STK_C_SYSTEM_UNISTD_H (non-GCC compilers) */
+   STK_C_DEFINE_SIGEVENT, STK_C_NO_GETTIMEOFDAY_DECL, STK_C_NO_SYSCONF_DECLS,
+   STK_C_SYSTEM_TIME_H / STK_C_SYSTEM_SYS_TIME_H / STK_C_SYSTEM_UNISTD_H / STK_C_SYSTEM_SIGNAL_H (non-GCC) */
 ```

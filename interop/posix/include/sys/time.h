@@ -30,6 +30,7 @@
 
 #ifndef _SYS__PTHREADTYPES_H_
     #define _SYS__PTHREADTYPES_H_
+    #define STK_C_PTHREADTYPES_GUARD
 #endif
 
 #ifndef STK_C_SYSTEM_SYS_TIME_H
@@ -41,6 +42,8 @@
 #else
     #include STK_C_SYSTEM_SYS_TIME_H
 #endif
+
+struct timezone; /* obsolete, only passed through the interface */
 
 #ifdef __cplusplus
 extern "C" {
@@ -59,6 +62,15 @@ extern "C" {
     \warning   ISR-unsafe.
 */
 int gettimeofday(struct timeval *tv, void *tz);
+
+/*! \brief     Set the wall time (microsecond precision): the offset of time() / gettimeofday() is changed, the kernel
+               timeline of clock_gettime() and of all deadlines is not (see the file description).
+    \param[in] tv: New time since the Unix epoch.
+    \param[in] tz: Obsolete, ignored.
+    \return    0, or -1 with errno = EINVAL for a NULL \a tv or a \c tv_usec outside 0..999999.
+    \warning   ISR-unsafe.
+*/
+int settimeofday(const struct timeval *tv, const struct timezone *tz);
 
 #endif /* STK_C_NO_GETTIMEOFDAY_DECL */
 

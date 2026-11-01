@@ -31,6 +31,11 @@
 			<locationURI>virtual:/virtual</locationURI>
 		</link>
 		<link>
+			<name>deps/newlib</name>
+			<type>2</type>
+			<locationURI>virtual:/virtual</locationURI>
+		</link>
+		<link>
 			<name>deps/posix</name>
 			<type>2</type>
 			<locationURI>virtual:/virtual</locationURI>
@@ -67,6 +72,16 @@
 		</link>
 		<link>
 			<name>deps/c/src</name>
+			<type>2</type>
+			<locationURI>virtual:/virtual</locationURI>
+		</link>
+		<link>
+			<name>deps/newlib/README.md</name>
+			<type>1</type>
+			<locationURI>PARENT-6-PROJECT_LOC/interop/newlib/README.md</locationURI>
+		</link>
+		<link>
+			<name>deps/newlib/src</name>
 			<type>2</type>
 			<locationURI>virtual:/virtual</locationURI>
 		</link>
@@ -184,6 +199,16 @@
 			<name>deps/c/src/stk_c_time.cpp</name>
 			<type>1</type>
 			<locationURI>PARENT-6-PROJECT_LOC/interop/c/src/stk_c_time.cpp</locationURI>
+		</link>
+		<link>
+			<name>deps/newlib/src/stk_newlib.cpp</name>
+			<type>1</type>
+			<locationURI>PARENT-6-PROJECT_LOC/interop/newlib/src/stk_newlib.cpp</locationURI>
+		</link>
+		<link>
+			<name>deps/newlib/src/stk_newlib.h</name>
+			<type>1</type>
+			<locationURI>PARENT-6-PROJECT_LOC/interop/newlib/src/stk_newlib.h</locationURI>
 		</link>
 		<link>
 			<name>deps/posix/include/mqueue.h</name>

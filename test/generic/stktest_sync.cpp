@@ -34,6 +34,28 @@ TEST(Sync, CriticalSection)
     CHECK_EQUAL(0, test::g_CriticalSectionState);
 }
 
+class ScopedCriticalSectionMock : public sync::ScopedCriticalSection
+{
+public:
+    void Unlock() { return sync::ScopedCriticalSection::Unlock(); }
+    bool TryLock() { return sync::ScopedCriticalSection::TryLock(); }
+};
+
+TEST(Sync, CriticalSectionTryLock)
+{
+    CHECK_EQUAL(0, test::g_CriticalSectionState);
+    {
+        ScopedCriticalSectionMock cs;
+
+        cs.Unlock();
+        CHECK_EQUAL(0, test::g_CriticalSectionState);
+
+        CHECK_EQUAL(true, cs.TryLock());
+        CHECK_EQUAL(1, test::g_CriticalSectionState);
+    }
+    CHECK_EQUAL(0, test::g_CriticalSectionState);
+}
+
 TEST(Sync, IMutex_ScopedLock)
 {
     MutexMock mutex;

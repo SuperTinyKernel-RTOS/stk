@@ -12,7 +12,17 @@
 
 // Undefine system headers:
 #undef _POSIX_THREADS
-#define _SYS__PTHREADTYPES_H_
+
+// The toolchain's own pthread types must not be defined: this header provides them. All headers of the layer
+// install the guard below before any toolchain header is read, but a toolchain header which was included EARLIER
+// (<sys/types.h>, <pthread.h>, <signal.h> of the toolchain) has already defined them: reported clearly here.
+#if defined(_SYS__PTHREADTYPES_H_) && !defined(STK_C_PTHREADTYPES_GUARD)
+    #error "The toolchain's pthread types are already defined: include the POSIX layer's headers (pthread.h, time.h, signal.h, ...) before any toolchain header, and put the layer's include directory ahead of the toolchain's"
+#endif
+#ifndef _SYS__PTHREADTYPES_H_
+    #define _SYS__PTHREADTYPES_H_
+    #define STK_C_PTHREADTYPES_GUARD
+#endif
 
 // Self-contained: does not depend on the C API (stk_c.h). Only the kernel configuration is needed to size the
 // opaque storage of the C++ objects the shim constructs in place.
@@ -448,6 +458,17 @@ typedef struct pthread_mutexattr_t
 #define PTHREAD_MUTEX_ERRORCHECK (1)
 #define PTHREAD_MUTEX_RECURSIVE  (2)
 
+/*! \def       STK_C_PTHREAD_ZERO_INIT
+    \brief     All-zero aggregate initializer of the static initializers below. C++ uses \c {} (value-initialization):
+               \c {0} initializes only the first member and makes -Wmissing-field-initializers warn there, while in C
+               \c {0} is accepted by the compilers without a warning.
+*/
+#ifdef __cplusplus
+    #define STK_C_PTHREAD_ZERO_INIT {}
+#else
+    #define STK_C_PTHREAD_ZERO_INIT {0}
+#endif
+
 /*! \brief     A pthread mutex.
     \note      Fields are considered private. May be statically initialized with
                PTHREAD_MUTEX_INITIALIZER, in which case the underlying STK mutex is
@@ -460,7 +481,7 @@ typedef struct pthread_mutex_t
     int             __type;   //!< PTHREAD_MUTEX_* type; 0 (NORMAL) when statically initialized.
 } pthread_mutex_t;
 
-#define PTHREAD_MUTEX_INITIALIZER {0}
+#define PTHREAD_MUTEX_INITIALIZER STK_C_PTHREAD_ZERO_INIT
 
 /*! \brief     Condition variable attributes (currently no settable properties).
 */
@@ -480,7 +501,7 @@ typedef struct pthread_cond_t
     void        *__handle; //!< Object constructed in __mem, or NULL if not yet constructed.
 } pthread_cond_t;
 
-#define PTHREAD_COND_INITIALIZER {0}
+#define PTHREAD_COND_INITIALIZER STK_C_PTHREAD_ZERO_INIT
 
 /*! \brief     Read-write lock attributes (currently no settable properties).
     \note      In particular there is no reader/writer preference setting; the
@@ -506,7 +527,7 @@ typedef struct pthread_rwlock_t
     volatile bool     __wrlocked; //!< True while held for writing; selects Unlock() vs ReadUnlock() on release.
 } pthread_rwlock_t;
 
-#define PTHREAD_RWLOCK_INITIALIZER {0}
+#define PTHREAD_RWLOCK_INITIALIZER STK_C_PTHREAD_ZERO_INIT
 
 #define PTHREAD_PROCESS_PRIVATE (0)
 #define PTHREAD_PROCESS_SHARED  (1)
@@ -563,7 +584,7 @@ typedef struct pthread_once_t
     void           *__handle; //!< Guard mutex constructed in __mem, or NULL if not yet constructed.
 } pthread_once_t;
 
-#define PTHREAD_ONCE_INIT {0}
+#define PTHREAD_ONCE_INIT STK_C_PTHREAD_ZERO_INIT
 
 /*! \brief     A thread-specific data key.
     \note      An index into an internal key table; there is no analogue to a NULL
@@ -1384,6 +1405,40 @@ void pthread_cleanup_pop(int execute);
     \return    0, EINVAL for a NULL argument, ESRCH if the thread is not alive.
 */
 int pthread_getattr_np(pthread_t thread, pthread_attr_t *attr);
+
+// -----------------------------------------------------------------------------
+// Terminating a thread by "signal", fork handlers
+// -----------------------------------------------------------------------------
+
+// values of the signals which pthread_kill() understands (same as newlib and glibc: identical redefinition is allowed)
+#ifndef SIGKILL
+    #define SIGKILL 9
+#endif
+#ifndef SIGTERM
+    #define SIGTERM 15
+#endif
+
+/*! \brief     Send a "signal" to a thread. STK has no signals, three values are supported:
+    \param[in] sig: - 0: existence check, \c 0 if the thread is alive, \c ESRCH if it has finished;
+               - \c SIGKILL: terminate the thread immediately. The calling thread ends itself with stk::ExitTask(),
+                 another thread is removed with IKernel::ScheduleTaskRemoval(). NO cleanup handler and NO key
+                 destructor runs, locks held by the thread stay locked;
+               - \c SIGTERM: as pthread_exit(PTHREAD_CANCELED) for the calling thread (cleanup handlers and key
+                 destructors run); for another thread the same as \c SIGKILL, since a running task can not be made
+                 to execute code.
+               pthread_join() returns \c PTHREAD_CANCELED for a terminated thread. Any other signal number fails
+               with \c ENOSYS, a negative one with \c EINVAL.
+    \return    0, EINVAL, ENOSYS, ESRCH (thread not alive), ENOTSUP (SIGKILL/SIGTERM of an adopted task other than the
+               caller: it has no ITask which could be removed).
+    \note      Needs the KERNEL_DYNAMIC kernel which the layer requires anyway.
+*/
+int pthread_kill(pthread_t thread, int sig);
+
+/*! \brief     Register fork handlers. STK has no fork(): the handlers are never run, the call only exists so that
+               code and libraries which register them link and work.
+    \return    Always 0.
+*/
+int pthread_atfork(void (*prepare)(void), void (*parent)(void), void (*child)(void));
 
 #ifdef __cplusplus
 }
