@@ -104,22 +104,34 @@ extern TestContext g_TestContext;
 /*! \def   STK_TEST_CHECK_EQUAL
     \brief Compare values for equality.
 */
-#define STK_TEST_CHECK_EQUAL(expected, actual)\
-    if ((expected) != (actual)) {\
-        printf("STK_TEST_CHECK_EQUAL failed!\n file: %s\n line: %d\n  expected: %d\n  actual: %d\n", __FILE__, __LINE__, (int)expected, (int)actual);\
-        __stk_debug_break();\
-        exit(1);\
+#define STK_TEST_CHECK_EQUAL(expected, actual) \
+    if ((expected) != (actual)) { \
+        printf("STK_TEST_CHECK_EQUAL failed!\n file: %s\n line: %d\n  expected: %d\n  actual: %d\n", __FILE__, (int)__LINE__, (int)expected, (int)actual); \
+        __stk_debug_break(); \
+        exit(1); \
     }
+
+/*! \def   STK_TEST_CHECK
+    \brief Check helper: reports a failed check and clears \a ok.
+*/
+#define STK_TEST_CHECK(ok, cond) \
+    do { \
+        if (!(cond)) { \
+            printf("STK_TEST_CHECK: check failed (line %d): %s\n", (int)__LINE__, #cond); \
+            (ok) = false; \
+            __stk_debug_break();\
+        } \
+    } while (0)
 
 /*! \def   STK_TEST_DECL_ASSERT
     \brief Declare assertion redirector in the source file.
 */
-#define STK_TEST_DECL_ASSERT\
-    extern void STK_ASSERT_HANDLER(const char *message, const char *file, int32_t line)\
-    {\
-        printf("_STK_ASSERT failed!\n file: %s\n line: %d\n message: %s\n", file, (int)line, message);\
-        __stk_debug_break();\
-        abort();\
+#define STK_TEST_DECL_ASSERT \
+    extern void STK_ASSERT_HANDLER(const char *message, const char *file, int32_t line) \
+    { \
+        printf("_STK_ASSERT failed!\n file: %s\n line: %d\n message: %s\n", file, (int)line, message); \
+        __stk_debug_break(); \
+        abort(); \
     }
 
 } // namespace test

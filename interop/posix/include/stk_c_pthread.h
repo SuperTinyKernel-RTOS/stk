@@ -29,6 +29,8 @@
 
 #include <stk_config.h>
 
+#include "sched.h" // struct sched_param, SCHED_*, sched_yield() and friends
+
 // must match the definition used by the C++ kernel API (stk_c.h and stk.h derive it the same way)
 #ifndef STK_SYNC_DEBUG_NAMES
     #if STK_SEGGER_SYSVIEW
@@ -66,9 +68,23 @@
     | pthread_barrier_t (init/destroy/wait)                                      | Yes                                                                                      |
     | pthread_once                                                               | Yes                                                                                      |
     | pthread_key_t (create/delete/setspecific/getspecific, destructors)         | Yes                                                                                      |
+    | pthread_attr_set/getschedparam/schedpolicy/inheritsched/scope/guardsize    | Yes  (priority = task weight at creation; policy informational)                          |
+    | pthread_getschedparam / pthread_setschedparam / pthread_setschedprio       | Yes  (run-time change via stk::SetWeight(), needs SwitchStrategyFixedPriority)           |
+    | sched_yield, sched_get_priority_min/max  (<sched.h>)                       | Yes                                                                                      |
+    | pthread_set/getname_np, pthread_attr_set/getname_np                        | Yes  (GNU-style extension)                                                               |
+    | pthread_timedjoin_np / pthread_tryjoin_np                                  | Yes  (GNU-style extension)                                                               |
+    | pthread_mutex_clocklock / cond_clockwait / rwlock_clockrd/wrlock           | Yes  (CLOCK_REALTIME and CLOCK_MONOTONIC share the STK tick timeline)                    |
+    | pthread_*attr_set/getpshared, mutexattr protocol, condattr clock           | Yes  (PROCESS_PRIVATE only; PRIO_NONE/INHERIT)                                           |
+    | sem_init/destroy/wait/trywait/timedwait/clockwait/post/getvalue  (<semaphore.h>)| Yes  (unnamed semaphores, see semaphore.h)                                               |
     | stk_pthread_bind_kernel()                                                  | Yes  (STK-specific bootstrap, not POSIX; required before pthread_create())               |
-    | Cancellation (pthread_cancel etc.)                                         | No                                                                                       |
-    | Thread scheduling policy / priority get-set                                | No  (pthread_t is opaque, so stk_task_set_priority() cannot be applied to it)            |
+    | pthread_cancel/setcancelstate/setcanceltype/testcancel/cleanup_push/pop    | Yes  (deferred only; asynchronous cancellation: ENOTSUP)                                 |
+    | pthread_getattr_np                                                         | Yes  (GNU-style extension)                                                               |
+    | clock_gettime/getres, nanosleep, clock_nanosleep, usleep, sleep, timer_*  (<time.h>)| Yes  (see time.h; timers need a TimerHost, stk_posix_timer_bind_host())                  |
+    | gettimeofday (<sys/time.h>), time (<time.h>)                                        | Yes  (kernel time + optional offset, stk_posix_set_wall_time())                          |
+    | sysconf, getpid  (<unistd.h>)                                                       | Yes  (limits of this shim and kernel, single "process")                                  |
+    | mq_open/close/unlink/send/receive/timed variants/getattr/setattr  (<mqueue.h>)     | Yes  (priorities honored; mq_notify: ENOSYS)                                             |
+    | C11 thrd_*, mtx_*, cnd_*, tss_*, call_once  (<threads.h>)                  | Yes  (wrappers over this shim, see threads.h)                                            |
+    | SCHED_FIFO / SCHED_RR policy enforcement                                   | No  (the kernel switch strategy defines scheduling, SCHED_* is informational)            |
 
     \par Requirements on the STK kernel configuration
     - The kernel type configured for the bound core (\c STK_C_KERNEL_TYPE_CPU_X in
@@ -303,7 +319,7 @@ typedef struct pthread_stk_barrier_mem_t { pthread_stk_word_t data[STK_C_PTHREAD
     \note      Also adds the internal reaper task to the kernel, so
                STK_C_KERNEL_MAX_TASKS must have room for it. Binding a second,
                different kernel is not supported (the reaper stays with the first).
-    \param[in] kernel: Pointer to the kernel object, an stk::IKernel (from C++ pass \c &kernel,
+    \param[in] kernel: Pointer to the kernel object, an stk::IKernel (from C++ pass \c static_cast<stk::IKernel *>(&kernel),
                from the C API pass the stk_kernel_t* returned by stk_kernel_create(), it is the
                same object). Typed \c void * to keep this header independent of stk_c.h.
                The kernel type must include KERNEL_DYNAMIC (threads need to be able to
@@ -319,6 +335,69 @@ void stk_pthread_bind_kernel(void *kernel);
 */
 typedef struct pthread_stk_ctrl_t *pthread_t;
 
+/*! \def       STK_C_PTHREAD_NAME_MAX
+    \brief     Capacity of a thread name buffer including the terminating NUL (like Linux, 16).
+*/
+#ifndef STK_C_PTHREAD_NAME_MAX
+    #define STK_C_PTHREAD_NAME_MAX (16U)
+#endif
+
+/*! \def       STK_C_PTHREAD_RUNTIME_PRIORITY
+    \brief     1 (default): pthread_setschedparam() / pthread_setschedprio() change the priority of a running thread with
+               stk::SetWeight(), which requires a kernel switch strategy with WEIGHT_API = 1 and
+               PRIORITY_INHERITANCE_API = 1 (SwitchStrategyFixedPriority). Set it to 0 for other strategies: the
+               functions then return ENOTSUP for any change (an unchanged value still succeeds).
+*/
+#ifndef STK_C_PTHREAD_RUNTIME_PRIORITY
+    #define STK_C_PTHREAD_RUNTIME_PRIORITY (1)
+#endif
+
+#ifndef CLOCK_REALTIME
+    #define CLOCK_REALTIME  (0)
+#endif
+#ifndef CLOCK_MONOTONIC
+    #define CLOCK_MONOTONIC (1)
+#endif
+
+/*! \def       PTHREAD_CANCEL_ENABLE / PTHREAD_CANCEL_DISABLE / PTHREAD_CANCEL_DEFERRED / PTHREAD_CANCEL_ASYNCHRONOUS
+    \brief     pthread_setcancelstate() / pthread_setcanceltype() values. Only deferred cancellation exists.
+*/
+#define PTHREAD_CANCEL_ENABLE       (0)
+#define PTHREAD_CANCEL_DISABLE      (1)
+#define PTHREAD_CANCEL_DEFERRED     (0)
+#define PTHREAD_CANCEL_ASYNCHRONOUS (1)
+
+/*! \def       PTHREAD_CANCELED
+    \brief     Value returned by pthread_join() for a cancelled thread.
+*/
+#define PTHREAD_CANCELED ((void *)(intptr_t)-1)
+
+/*! \def       STK_C_PTHREAD_CLEANUP_MAX
+    \brief     Maximum nesting depth of pthread_cleanup_push() per thread.
+*/
+#ifndef STK_C_PTHREAD_CLEANUP_MAX
+    #define STK_C_PTHREAD_CLEANUP_MAX (8U)
+#endif
+
+/*! \def       PTHREAD_INHERIT_SCHED / PTHREAD_EXPLICIT_SCHED
+    \brief     pthread_attr_setinheritsched() values: take the priority from the creating thread, or from the attributes.
+*/
+#define PTHREAD_INHERIT_SCHED  (0)
+#define PTHREAD_EXPLICIT_SCHED (1)
+
+/*! \def       PTHREAD_SCOPE_SYSTEM / PTHREAD_SCOPE_PROCESS
+    \brief     pthread_attr_setscope() values. Only PTHREAD_SCOPE_SYSTEM exists on STK (all tasks compete in the kernel).
+*/
+#define PTHREAD_SCOPE_SYSTEM  (0)
+#define PTHREAD_SCOPE_PROCESS (1)
+
+/*! \def       PTHREAD_PRIO_NONE / PTHREAD_PRIO_INHERIT / PTHREAD_PRIO_PROTECT
+    \brief     pthread_mutexattr_setprotocol() values. PTHREAD_PRIO_PROTECT (priority ceiling) is not supported.
+*/
+#define PTHREAD_PRIO_NONE    (0)
+#define PTHREAD_PRIO_INHERIT (1)
+#define PTHREAD_PRIO_PROTECT (2)
+
 /*! \brief     Thread creation attributes.
     \note      Fields are considered private; use the pthread_attr_* accessors.
 */
@@ -328,6 +407,12 @@ typedef struct pthread_attr_t
     pthread_stk_word_t *__ext_stack;    //!< Caller-supplied stack, or NULL.
     int         __detachstate;  //!< PTHREAD_CREATE_JOINABLE / _DETACHED.
     int         __privileged;   //!< PTHREAD_CREATE_USER_NP (default) / _PRIVILEGED_NP.
+    int         __policy;       //!< SCHED_OTHER (default) / SCHED_FIFO / SCHED_RR (informational).
+    int         __priority;     //!< Task weight (sched_priority), used if __inheritsched is PTHREAD_EXPLICIT_SCHED.
+    int         __inheritsched; //!< PTHREAD_EXPLICIT_SCHED (default) / PTHREAD_INHERIT_SCHED.
+    int         __scope;        //!< Always PTHREAD_SCOPE_SYSTEM.
+    size_t      __guardsize;    //!< Stored for pthread_attr_getguardsize(), has no effect.
+    char        __name[STK_C_PTHREAD_NAME_MAX]; //!< Thread name, "" = default ("pthread").
 } pthread_attr_t;
 
 #define PTHREAD_CREATE_JOINABLE (0)
@@ -354,7 +439,8 @@ typedef struct pthread_attr_t
 */
 typedef struct pthread_mutexattr_t
 {
-    int __type; //!< PTHREAD_MUTEX_NORMAL / DEFAULT / RECURSIVE / ERRORCHECK.
+    int __type;     //!< PTHREAD_MUTEX_NORMAL / DEFAULT / RECURSIVE / ERRORCHECK.
+    int __protocol; //!< PTHREAD_PRIO_NONE (default) / PTHREAD_PRIO_INHERIT.
 } pthread_mutexattr_t;
 
 #define PTHREAD_MUTEX_NORMAL     (0)
@@ -380,7 +466,7 @@ typedef struct pthread_mutex_t
 */
 typedef struct pthread_condattr_t
 {
-    int __reserved; //!< Unused (no settable properties); reserved for future use.
+    int __clock; //!< CLOCK_REALTIME (default) / CLOCK_MONOTONIC: both are the same STK tick timeline.
 } pthread_condattr_t;
 
 /*! \brief     A pthread condition variable.
@@ -1060,6 +1146,244 @@ int pthread_setspecific(pthread_key_t key, const void *value);
                has not set a value for it (never adopts a foreign task).
 */
 void *pthread_getspecific(pthread_key_t key);
+
+// -----------------------------------------------------------------------------
+// Scheduling attributes, run-time scheduling and thread names
+// -----------------------------------------------------------------------------
+
+/*! \brief     Set the scheduling priority (task weight) of threads created with \a attr.
+    \param[in] param: sched_priority in STK_C_SCHED_PRIORITY_MIN..STK_C_SCHED_PRIORITY_MAX (priority level of
+               SwitchStrategyFixedPriority, higher = more urgent). It is used if the inherit mode is
+               PTHREAD_EXPLICIT_SCHED (default); the default level is STK_C_SCHED_PRIORITY_DEFAULT (PRIORITY_NORMAL).
+    \return    0 on success, EINVAL for a NULL argument or an out-of-range priority.
+*/
+int pthread_attr_setschedparam(pthread_attr_t *attr, const struct sched_param *param);
+
+/*! \brief     Get the scheduling priority stored in \a attr.
+    \return    0 on success, EINVAL for a NULL argument.
+*/
+int pthread_attr_getschedparam(const pthread_attr_t *attr, struct sched_param *param);
+
+/*! \brief     Set the scheduling policy stored in \a attr (SCHED_OTHER, SCHED_FIFO or SCHED_RR).
+    \note      Informational only: the policy is defined by the kernel switch strategy.
+    \return    0 on success, EINVAL for a NULL argument or unknown policy.
+*/
+int pthread_attr_setschedpolicy(pthread_attr_t *attr, int policy);
+
+/*! \brief     Get the scheduling policy stored in \a attr.
+    \return    0 on success, EINVAL for a NULL argument.
+*/
+int pthread_attr_getschedpolicy(const pthread_attr_t *attr, int *policy);
+
+/*! \brief     Select whether a new thread inherits the priority of the creating thread.
+    \param[in] inheritsched: PTHREAD_INHERIT_SCHED (copy the weight of the calling thread; a thread which was not
+               created by pthread_create() gives the default weight) or PTHREAD_EXPLICIT_SCHED (use the attributes).
+    \return    0 on success, EINVAL for a NULL argument or invalid value.
+*/
+int pthread_attr_setinheritsched(pthread_attr_t *attr, int inheritsched);
+
+/*! \brief     Get the inherit-scheduling mode stored in \a attr.
+    \return    0 on success, EINVAL for a NULL argument.
+*/
+int pthread_attr_getinheritsched(const pthread_attr_t *attr, int *inheritsched);
+
+/*! \brief     Set the contention scope. Only PTHREAD_SCOPE_SYSTEM is supported.
+    \return    0 on success, ENOTSUP for PTHREAD_SCOPE_PROCESS, EINVAL for a NULL argument or invalid value.
+*/
+int pthread_attr_setscope(pthread_attr_t *attr, int scope);
+
+/*! \brief     Get the contention scope (always PTHREAD_SCOPE_SYSTEM).
+    \return    0 on success, EINVAL for a NULL argument.
+*/
+int pthread_attr_getscope(const pthread_attr_t *attr, int *scope);
+
+/*! \brief     Set the guard size. Accepted and stored, but STK has no guard pages: it has no effect.
+    \return    0 on success, EINVAL for a NULL argument.
+*/
+int pthread_attr_setguardsize(pthread_attr_t *attr, size_t guardsize);
+
+/*! \brief     Get the stored guard size (0 by default).
+    \return    0 on success, EINVAL for a NULL argument.
+*/
+int pthread_attr_getguardsize(const pthread_attr_t *attr, size_t *guardsize);
+
+/*! \brief     Set the name of threads created with \a attr (non-portable, GNU-style).
+    \return    0 on success, EINVAL for a NULL argument, ERANGE if the name does not fit STK_C_PTHREAD_NAME_MAX
+               (including the NUL).
+*/
+int pthread_attr_setname_np(pthread_attr_t *attr, const char *name);
+
+/*! \brief     Get the name stored in \a attr.
+    \return    0 on success, EINVAL for a NULL argument, ERANGE if \a len is too small.
+*/
+int pthread_attr_getname_np(const pthread_attr_t *attr, char *name, size_t len);
+
+/*! \brief     Get the policy and priority (task weight) of a thread.
+    \return    0 on success, EINVAL for a NULL argument.
+*/
+int pthread_getschedparam(pthread_t thread, int *policy, struct sched_param *param);
+
+/*! \brief     Change the policy/priority of a running thread.
+    \details   The priority is applied with stk::SetWeight() (kernel critical section inside, task context only) and
+               takes effect immediately. If the thread currently inherits a higher priority through a mutex the new
+               base priority is used once the inheritance ends. The policy is only remembered.
+    \return    0 on success, EINVAL for a NULL argument or an invalid value, ESRCH if the thread is not alive,
+               ENOTSUP if STK_C_PTHREAD_RUNTIME_PRIORITY is 0 and the priority would change.
+*/
+int pthread_setschedparam(pthread_t thread, int policy, const struct sched_param *param);
+
+/*! \brief     Change the priority of a running thread (the policy is kept). See pthread_setschedparam().
+    \return    0, EINVAL, ESRCH or ENOTSUP as pthread_setschedparam().
+*/
+int pthread_setschedprio(pthread_t thread, int prio);
+
+/*! \brief     Set the name of a thread (shown by debug/trace tools), non-portable GNU-style.
+    \return    0 on success, EINVAL for a NULL argument, ERANGE if the name is longer than
+               STK_C_PTHREAD_NAME_MAX - 1 characters.
+*/
+int pthread_setname_np(pthread_t thread, const char *name);
+
+/*! \brief     Get the name of a thread.
+    \return    0 on success, EINVAL for a NULL argument, ERANGE if \a len is too small.
+*/
+int pthread_getname_np(pthread_t thread, char *name, size_t len);
+
+/*! \brief     Set the concurrency level hint. Accepted and ignored (STK always schedules kernel tasks).
+    \return    0, or EINVAL for a negative level.
+*/
+int pthread_setconcurrency(int level);
+
+/*! \brief     Get the concurrency level hint.
+    \return    Always 0 (the implementation decides).
+*/
+int pthread_getconcurrency(void);
+
+/*! \brief     Try to join a thread without blocking (GNU extension).
+    \return    0 if the thread has finished (it is joined), EBUSY if it is still running, EINVAL, EDEADLK as for
+               pthread_join().
+*/
+int pthread_tryjoin_np(pthread_t thread, void **retval);
+
+/*! \brief     Join a thread, waiting until the absolute deadline \a abstime (GNU extension).
+    \return    0 on success, ETIMEDOUT if the thread did not finish by the deadline (it stays joinable), EINVAL,
+               EDEADLK as for pthread_join(). Deadlines follow the rules of pthread_cond_timedwait().
+*/
+int pthread_timedjoin_np(pthread_t thread, void **retval, const struct timespec *abstime);
+
+// -----------------------------------------------------------------------------
+// Synchronization attributes (process-shared / protocol / clock)
+// -----------------------------------------------------------------------------
+
+/*! \brief     Set/get the process-shared attribute of mutex, condition variable, rwlock and barrier attributes.
+    \details   Only PTHREAD_PROCESS_PRIVATE exists: the setters return ENOTSUP for PTHREAD_PROCESS_SHARED and EINVAL
+               for other values, the getters always report PTHREAD_PROCESS_PRIVATE.
+    \return    0 on success, ENOTSUP / EINVAL as described.
+*/
+int pthread_mutexattr_setpshared(pthread_mutexattr_t *attr, int pshared);
+int pthread_mutexattr_getpshared(const pthread_mutexattr_t *attr, int *pshared);
+int pthread_condattr_setpshared(pthread_condattr_t *attr, int pshared);
+int pthread_condattr_getpshared(const pthread_condattr_t *attr, int *pshared);
+int pthread_rwlockattr_setpshared(pthread_rwlockattr_t *attr, int pshared);
+int pthread_rwlockattr_getpshared(const pthread_rwlockattr_t *attr, int *pshared);
+int pthread_barrierattr_setpshared(pthread_barrierattr_t *attr, int pshared);
+int pthread_barrierattr_getpshared(const pthread_barrierattr_t *attr, int *pshared);
+
+/*! \brief     Set the mutex protocol.
+    \param[in] protocol: PTHREAD_PRIO_NONE or PTHREAD_PRIO_INHERIT. Priority inheritance is a property of
+               stk::sync::Mutex itself (active when the kernel switch strategy supports it), so both values give
+               the same mutex; PTHREAD_PRIO_PROTECT (priority ceiling) is not supported.
+    \return    0 on success, ENOTSUP for PTHREAD_PRIO_PROTECT, EINVAL for a NULL argument or invalid value.
+*/
+int pthread_mutexattr_setprotocol(pthread_mutexattr_t *attr, int protocol);
+
+/*! \brief     Get the mutex protocol stored in \a attr.
+    \return    0 on success, EINVAL for a NULL argument.
+*/
+int pthread_mutexattr_getprotocol(const pthread_mutexattr_t *attr, int *protocol);
+
+/*! \brief     Set the clock used by pthread_cond_timedwait() deadlines.
+    \param[in] clock_id: CLOCK_REALTIME or CLOCK_MONOTONIC. STK has a single timeline (stk::GetTimeNowMs()), both
+               values select it.
+    \return    0 on success, EINVAL for a NULL argument or any other clock.
+*/
+int pthread_condattr_setclock(pthread_condattr_t *attr, clockid_t clock_id);
+
+/*! \brief     Get the clock stored in \a attr.
+    \return    0 on success, EINVAL for a NULL argument.
+*/
+int pthread_condattr_getclock(const pthread_condattr_t *attr, clockid_t *clock_id);
+
+// -----------------------------------------------------------------------------
+// Clock-selecting timed waits (POSIX.1-2024)
+// -----------------------------------------------------------------------------
+
+/*! \brief     pthread_mutex_timedlock() with an explicit clock.
+    \param[in] clock_id: CLOCK_REALTIME or CLOCK_MONOTONIC (same STK timeline), any other value gives EINVAL.
+    \return    As pthread_mutex_timedlock(); EINVAL also for an invalid \a abstime.
+*/
+int pthread_mutex_clocklock(pthread_mutex_t *mutex, clockid_t clock_id, const struct timespec *abstime);
+
+/*! \brief     pthread_cond_timedwait() with an explicit clock. See pthread_mutex_clocklock() for \a clock_id.
+*/
+int pthread_cond_clockwait(pthread_cond_t *cond, pthread_mutex_t *mutex, clockid_t clock_id,
+                           const struct timespec *abstime);
+
+/*! \brief     pthread_rwlock_timedrdlock() with an explicit clock. See pthread_mutex_clocklock() for \a clock_id.
+*/
+int pthread_rwlock_clockrdlock(pthread_rwlock_t *rwlock, clockid_t clock_id, const struct timespec *abstime);
+
+/*! \brief     pthread_rwlock_timedwrlock() with an explicit clock. See pthread_mutex_clocklock() for \a clock_id.
+*/
+int pthread_rwlock_clockwrlock(pthread_rwlock_t *rwlock, clockid_t clock_id, const struct timespec *abstime);
+
+// -----------------------------------------------------------------------------
+// Cooperative cancellation
+// -----------------------------------------------------------------------------
+
+/*! \brief     Request cancellation of a thread.
+    \details   Cancellation is deferred: the request is recorded and a blocked target is woken (its wait ends early),
+               the target terminates as if it called pthread_exit(PTHREAD_CANCELED) when it reaches a cancellation
+               point with cancellation enabled. Cleanup handlers (pthread_cleanup_push()) and key destructors run.
+               Cancellation points: pthread_testcancel(), pthread_cond_wait/timedwait/clockwait(), pthread_join()
+               and its timed forms, sem_wait/timedwait/clockwait(), mq_send/receive and timed forms, nanosleep(),
+               clock_nanosleep(), usleep(), sleep(), thrd_sleep() and thrd_join(). Mutex, rwlock and barrier waits
+               are NOT cancellation points (as in POSIX). A thread which never reaches a cancellation point can not
+               be cancelled, asynchronous cancellation is not supported.
+    \return    0, EINVAL for a NULL thread, ESRCH if the thread has already finished.
+*/
+int pthread_cancel(pthread_t thread);
+
+/*! \brief     Enable or disable cancellation of the calling thread.
+    \param[out] oldstate: Previous state (may be NULL).
+    \return    0, EINVAL for an invalid \a state.
+*/
+int pthread_setcancelstate(int state, int *oldstate);
+
+/*! \brief     Set the cancellation type. Only PTHREAD_CANCEL_DEFERRED is supported.
+    \return    0, ENOTSUP for PTHREAD_CANCEL_ASYNCHRONOUS, EINVAL otherwise.
+*/
+int pthread_setcanceltype(int type, int *oldtype);
+
+/*! \brief     Create a cancellation point: terminate the calling thread if a cancellation is pending and enabled.
+*/
+void pthread_testcancel(void);
+
+/*! \brief     Push a cleanup handler (run in LIFO order by pthread_exit() and by cancellation).
+    \note      Function form of the POSIX macro: no lexical pairing with pthread_cleanup_pop() is required, but the
+               calls must be balanced. At most STK_C_PTHREAD_CLEANUP_MAX handlers per thread (extra ones are ignored).
+*/
+void pthread_cleanup_push(void (*routine)(void *), void *arg);
+
+/*! \brief     Pop the most recent cleanup handler, running it if \a execute is non-zero.
+*/
+void pthread_cleanup_pop(int execute);
+
+/*! \brief     Get the attributes of a running thread (GNU extension).
+    \details   Fills \a attr with the stack (address and size), detach state, priority, policy and name of \a thread.
+    \warning   The stack address is that of the running thread: do not create a new thread from \a attr.
+    \return    0, EINVAL for a NULL argument, ESRCH if the thread is not alive.
+*/
+int pthread_getattr_np(pthread_t thread, pthread_attr_t *attr);
 
 #ifdef __cplusplus
 }
