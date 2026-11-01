@@ -47,7 +47,7 @@ static volatile bool    g_TestComplete  = false;
 static volatile int32_t g_InstancesDone = 0;
 
 // Kernel (SpinLock does not require KERNEL_SYNC)
-static Kernel<KERNEL_DYNAMIC, _STK_SL_TEST_TASKS_MAX, SwitchStrategyRR, PlatformDefault> g_Kernel;
+static Kernel<KERNEL_DYNAMIC, _STK_SL_TEST_TASKS_MAX, sched::SwitchStrategyRR, PlatformDefault> g_Kernel;
 
 // Test spinlock - shared across tasks; low spin count forces Yield() quickly under contention
 static sync::SpinLock g_TestSpinLock;

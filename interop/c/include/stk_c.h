@@ -383,56 +383,56 @@ stk_version_info_t stk_get_version(void);
                        INCOMPATIBLE with KERNEL_HRT (HRT requires a continuous tick).
 
 // Standard variants
-Kernel<KERNEL_STATIC,  STK_C_KERNEL_MAX_TASKS, SwitchStrategyRR, PlatformDefault>
-Kernel<KERNEL_DYNAMIC, STK_C_KERNEL_MAX_TASKS, SwitchStrategyRR, PlatformDefault>
-Kernel<KERNEL_STATIC,  STK_C_KERNEL_MAX_TASKS, SwitchStrategySWRR, PlatformDefault>
-Kernel<KERNEL_DYNAMIC, STK_C_KERNEL_MAX_TASKS, SwitchStrategySWRR, PlatformDefault>
-Kernel<KERNEL_STATIC,  STK_C_KERNEL_MAX_TASKS, SwitchStrategyFP32, PlatformDefault>
-Kernel<KERNEL_DYNAMIC, STK_C_KERNEL_MAX_TASKS, SwitchStrategyFP32, PlatformDefault>
+Kernel<KERNEL_STATIC,  STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyRR, PlatformDefault>
+Kernel<KERNEL_DYNAMIC, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyRR, PlatformDefault>
+Kernel<KERNEL_STATIC,  STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategySWRR, PlatformDefault>
+Kernel<KERNEL_DYNAMIC, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategySWRR, PlatformDefault>
+Kernel<KERNEL_STATIC,  STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyFP32, PlatformDefault>
+Kernel<KERNEL_DYNAMIC, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyFP32, PlatformDefault>
 
 // HRT variants (KERNEL_TICKLESS must NOT be combined with any of these)
-Kernel<KERNEL_STATIC  | KERNEL_HRT, STK_C_KERNEL_MAX_TASKS, SwitchStrategyRR, PlatformDefault>
-Kernel<KERNEL_DYNAMIC | KERNEL_HRT, STK_C_KERNEL_MAX_TASKS, SwitchStrategyRR, PlatformDefault>
-Kernel<KERNEL_STATIC  | KERNEL_HRT, STK_C_KERNEL_MAX_TASKS, SwitchStrategyRM, PlatformDefault>
-Kernel<KERNEL_DYNAMIC | KERNEL_HRT, STK_C_KERNEL_MAX_TASKS, SwitchStrategyRM, PlatformDefault>
-Kernel<KERNEL_STATIC  | KERNEL_HRT, STK_C_KERNEL_MAX_TASKS, SwitchStrategyDM, PlatformDefault>
-Kernel<KERNEL_DYNAMIC | KERNEL_HRT, STK_C_KERNEL_MAX_TASKS, SwitchStrategyDM, PlatformDefault>
-Kernel<KERNEL_STATIC  | KERNEL_HRT, STK_C_KERNEL_MAX_TASKS, SwitchStrategyEDF, PlatformDefault>
-Kernel<KERNEL_DYNAMIC | KERNEL_HRT, STK_C_KERNEL_MAX_TASKS, SwitchStrategyEDF, PlatformDefault>
+Kernel<KERNEL_STATIC  | KERNEL_HRT, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyRR, PlatformDefault>
+Kernel<KERNEL_DYNAMIC | KERNEL_HRT, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyRR, PlatformDefault>
+Kernel<KERNEL_STATIC  | KERNEL_HRT, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyRM, PlatformDefault>
+Kernel<KERNEL_DYNAMIC | KERNEL_HRT, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyRM, PlatformDefault>
+Kernel<KERNEL_STATIC  | KERNEL_HRT, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyDM, PlatformDefault>
+Kernel<KERNEL_DYNAMIC | KERNEL_HRT, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyDM, PlatformDefault>
+Kernel<KERNEL_STATIC  | KERNEL_HRT, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyEDF, PlatformDefault>
+Kernel<KERNEL_DYNAMIC | KERNEL_HRT, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyEDF, PlatformDefault>
 
 // Standard variants with KERNEL_SYNC
-Kernel<KERNEL_STATIC  | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, SwitchStrategyRR,   PlatformDefault>
-Kernel<KERNEL_DYNAMIC | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, SwitchStrategyRR,   PlatformDefault>
-Kernel<KERNEL_STATIC  | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, SwitchStrategySWRR, PlatformDefault>
-Kernel<KERNEL_DYNAMIC | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, SwitchStrategySWRR, PlatformDefault>
-Kernel<KERNEL_STATIC  | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, SwitchStrategyFP32, PlatformDefault>
-Kernel<KERNEL_DYNAMIC | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, SwitchStrategyFP32, PlatformDefault>
+Kernel<KERNEL_STATIC  | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyRR,   PlatformDefault>
+Kernel<KERNEL_DYNAMIC | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyRR,   PlatformDefault>
+Kernel<KERNEL_STATIC  | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategySWRR, PlatformDefault>
+Kernel<KERNEL_DYNAMIC | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategySWRR, PlatformDefault>
+Kernel<KERNEL_STATIC  | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyFP32, PlatformDefault>
+Kernel<KERNEL_DYNAMIC | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyFP32, PlatformDefault>
 
 // HRT variants with KERNEL_SYNC
-Kernel<KERNEL_STATIC  | KERNEL_HRT | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, SwitchStrategyRR,  PlatformDefault>
-Kernel<KERNEL_DYNAMIC | KERNEL_HRT | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, SwitchStrategyRR,  PlatformDefault>
-Kernel<KERNEL_STATIC  | KERNEL_HRT | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, SwitchStrategyRM,  PlatformDefault>
-Kernel<KERNEL_DYNAMIC | KERNEL_HRT | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, SwitchStrategyRM,  PlatformDefault>
-Kernel<KERNEL_STATIC  | KERNEL_HRT | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, SwitchStrategyDM,  PlatformDefault>
-Kernel<KERNEL_DYNAMIC | KERNEL_HRT | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, SwitchStrategyDM,  PlatformDefault>
-Kernel<KERNEL_STATIC  | KERNEL_HRT | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, SwitchStrategyEDF, PlatformDefault>
-Kernel<KERNEL_DYNAMIC | KERNEL_HRT | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, SwitchStrategyEDF, PlatformDefault>
+Kernel<KERNEL_STATIC  | KERNEL_HRT | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyRR,  PlatformDefault>
+Kernel<KERNEL_DYNAMIC | KERNEL_HRT | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyRR,  PlatformDefault>
+Kernel<KERNEL_STATIC  | KERNEL_HRT | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyRM,  PlatformDefault>
+Kernel<KERNEL_DYNAMIC | KERNEL_HRT | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyRM,  PlatformDefault>
+Kernel<KERNEL_STATIC  | KERNEL_HRT | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyDM,  PlatformDefault>
+Kernel<KERNEL_DYNAMIC | KERNEL_HRT | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyDM,  PlatformDefault>
+Kernel<KERNEL_STATIC  | KERNEL_HRT | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyEDF, PlatformDefault>
+Kernel<KERNEL_DYNAMIC | KERNEL_HRT | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyEDF, PlatformDefault>
 
 // Tickless variants (low-power; KERNEL_TICKLESS requires STK_TICKLESS_IDLE=1 in stk_config.h)
-Kernel<KERNEL_STATIC  | KERNEL_TICKLESS, STK_C_KERNEL_MAX_TASKS, SwitchStrategyRR,   PlatformDefault>
-Kernel<KERNEL_DYNAMIC | KERNEL_TICKLESS, STK_C_KERNEL_MAX_TASKS, SwitchStrategyRR,   PlatformDefault>
-Kernel<KERNEL_STATIC  | KERNEL_TICKLESS, STK_C_KERNEL_MAX_TASKS, SwitchStrategySWRR, PlatformDefault>
-Kernel<KERNEL_DYNAMIC | KERNEL_TICKLESS, STK_C_KERNEL_MAX_TASKS, SwitchStrategySWRR, PlatformDefault>
-Kernel<KERNEL_STATIC  | KERNEL_TICKLESS, STK_C_KERNEL_MAX_TASKS, SwitchStrategyFP32, PlatformDefault>
-Kernel<KERNEL_DYNAMIC | KERNEL_TICKLESS, STK_C_KERNEL_MAX_TASKS, SwitchStrategyFP32, PlatformDefault>
+Kernel<KERNEL_STATIC  | KERNEL_TICKLESS, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyRR,   PlatformDefault>
+Kernel<KERNEL_DYNAMIC | KERNEL_TICKLESS, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyRR,   PlatformDefault>
+Kernel<KERNEL_STATIC  | KERNEL_TICKLESS, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategySWRR, PlatformDefault>
+Kernel<KERNEL_DYNAMIC | KERNEL_TICKLESS, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategySWRR, PlatformDefault>
+Kernel<KERNEL_STATIC  | KERNEL_TICKLESS, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyFP32, PlatformDefault>
+Kernel<KERNEL_DYNAMIC | KERNEL_TICKLESS, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyFP32, PlatformDefault>
 
 // Tickless variants with KERNEL_SYNC
-Kernel<KERNEL_STATIC  | KERNEL_TICKLESS | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, SwitchStrategyRR,   PlatformDefault>
-Kernel<KERNEL_DYNAMIC | KERNEL_TICKLESS | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, SwitchStrategyRR,   PlatformDefault>
-Kernel<KERNEL_STATIC  | KERNEL_TICKLESS | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, SwitchStrategySWRR, PlatformDefault>
-Kernel<KERNEL_DYNAMIC | KERNEL_TICKLESS | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, SwitchStrategySWRR, PlatformDefault>
-Kernel<KERNEL_STATIC  | KERNEL_TICKLESS | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, SwitchStrategyFP32, PlatformDefault>
-Kernel<KERNEL_DYNAMIC | KERNEL_TICKLESS | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, SwitchStrategyFP32, PlatformDefault>
+Kernel<KERNEL_STATIC  | KERNEL_TICKLESS | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyRR,   PlatformDefault>
+Kernel<KERNEL_DYNAMIC | KERNEL_TICKLESS | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyRR,   PlatformDefault>
+Kernel<KERNEL_STATIC  | KERNEL_TICKLESS | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategySWRR, PlatformDefault>
+Kernel<KERNEL_DYNAMIC | KERNEL_TICKLESS | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategySWRR, PlatformDefault>
+Kernel<KERNEL_STATIC  | KERNEL_TICKLESS | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyFP32, PlatformDefault>
+Kernel<KERNEL_DYNAMIC | KERNEL_TICKLESS | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyFP32, PlatformDefault>
 */
 
 /*! \def       STK_C_KERNEL_TYPE_CPU_X
@@ -445,17 +445,17 @@ Kernel<KERNEL_DYNAMIC | KERNEL_TICKLESS | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, S
 
     \code
     // Example of kernel type definition for 8 cores.
-    #define STK_C_KERNEL_TYPE_CPU_0 Kernel<KERNEL_STATIC, STK_C_KERNEL_MAX_TASKS, SwitchStrategyRR, PlatformDefault>
-    #define STK_C_KERNEL_TYPE_CPU_1 Kernel<KERNEL_STATIC, STK_C_KERNEL_MAX_TASKS, SwitchStrategyRR, PlatformDefault>
-    #define STK_C_KERNEL_TYPE_CPU_2 Kernel<KERNEL_STATIC, STK_C_KERNEL_MAX_TASKS, SwitchStrategyRR, PlatformDefault>
-    #define STK_C_KERNEL_TYPE_CPU_3 Kernel<KERNEL_STATIC, STK_C_KERNEL_MAX_TASKS, SwitchStrategyRR, PlatformDefault>
-    #define STK_C_KERNEL_TYPE_CPU_4 Kernel<KERNEL_STATIC, STK_C_KERNEL_MAX_TASKS, SwitchStrategyRR, PlatformDefault>
-    #define STK_C_KERNEL_TYPE_CPU_5 Kernel<KERNEL_STATIC, STK_C_KERNEL_MAX_TASKS, SwitchStrategyRR, PlatformDefault>
-    #define STK_C_KERNEL_TYPE_CPU_6 Kernel<KERNEL_STATIC, STK_C_KERNEL_MAX_TASKS, SwitchStrategyRR, PlatformDefault>
-    #define STK_C_KERNEL_TYPE_CPU_7 Kernel<KERNEL_STATIC, STK_C_KERNEL_MAX_TASKS, SwitchStrategyRR, PlatformDefault>
+    #define STK_C_KERNEL_TYPE_CPU_0 Kernel<KERNEL_STATIC, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyRR, PlatformDefault>
+    #define STK_C_KERNEL_TYPE_CPU_1 Kernel<KERNEL_STATIC, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyRR, PlatformDefault>
+    #define STK_C_KERNEL_TYPE_CPU_2 Kernel<KERNEL_STATIC, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyRR, PlatformDefault>
+    #define STK_C_KERNEL_TYPE_CPU_3 Kernel<KERNEL_STATIC, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyRR, PlatformDefault>
+    #define STK_C_KERNEL_TYPE_CPU_4 Kernel<KERNEL_STATIC, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyRR, PlatformDefault>
+    #define STK_C_KERNEL_TYPE_CPU_5 Kernel<KERNEL_STATIC, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyRR, PlatformDefault>
+    #define STK_C_KERNEL_TYPE_CPU_6 Kernel<KERNEL_STATIC, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyRR, PlatformDefault>
+    #define STK_C_KERNEL_TYPE_CPU_7 Kernel<KERNEL_STATIC, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyRR, PlatformDefault>
 
     // Tickless example - CPU enters low-power state when all tasks are sleeping:
-    #define STK_C_KERNEL_TYPE_CPU_0 Kernel<KERNEL_STATIC | KERNEL_TICKLESS, STK_C_KERNEL_MAX_TASKS, SwitchStrategyRR, PlatformDefault>
+    #define STK_C_KERNEL_TYPE_CPU_0 Kernel<KERNEL_STATIC | KERNEL_TICKLESS, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyRR, PlatformDefault>
     \endcode
  */
 
@@ -765,7 +765,7 @@ stk_task_t *stk_task_create_user(stk_task_entry_t  entry,
     \param[in] tsk: Task handle.
     \param[in] weight: Positive weight value (recommended 1–16777215).
     \note      Must be called before adding task to kernel.
-    \see       SwitchStrategySmoothWeightedRoundRobin.
+    \see       sched::SwitchStrategySmoothWeightedRoundRobin.
 */
 void stk_task_set_weight(stk_task_t *tsk, stk_weight_t weight);
 

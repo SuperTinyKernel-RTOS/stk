@@ -22,7 +22,7 @@
 #define STK_C_CPU_COUNT         (1U)
 #define STK_C_KERNEL_MAX_TASKS  (4U)
 #define STK_C_KERNEL_TYPE_CPU_0 Kernel<KERNEL_STATIC | KERNEL_SYNC | (STK_TICKLESS_IDLE ? KERNEL_TICKLESS : 0),\
-                                    STK_C_KERNEL_MAX_TASKS, SwitchStrategyRR, PlatformDefault>
+                                    STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyRR, PlatformDefault>
 
 #ifdef _STK_ARCH_ARM_CORTEX_M
     // Redefine if SysTick handler name is different from SysTick_Handler

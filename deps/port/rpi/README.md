@@ -142,7 +142,7 @@ A typical `NO_SYS=0` CYW43 + lwIP application:
 
 using MyKernel = stk::Kernel<stk::KERNEL_DYNAMIC | stk::KERNEL_SYNC,
                               16 /* max tasks */,
-                              stk::SwitchStrategySmoothWeightedRoundRobin,
+                              stk::sched::SwitchStrategySmoothWeightedRoundRobin,
                               stk::PlatformDefault>;
 static MyKernel             g_kernel;
 static stk::time::TimerHost g_timer_host;
@@ -192,7 +192,7 @@ directly with `async_context_stk_init_with_defaults()` (or
 
 | Macro | Default | Meaning |
 |---|---|---|
-| `ASYNC_CONTEXT_DEFAULT_STK_TASK_WEIGHT` | `stk::DEFAULT_WEIGHT + 4` | Scheduling weight for `async_context_stk`'s worker task when built via `async_context_stk_default_config()`. Meaning depends on the kernel's switch strategy — a fixed priority level for `SwitchStrategyFixedPriority`, a proportional CPU share for `SwitchStrategySmoothWeightedRoundRobin` |
+| `ASYNC_CONTEXT_DEFAULT_STK_TASK_WEIGHT` | `stk::DEFAULT_WEIGHT + 4` | Scheduling weight for `async_context_stk`'s worker task when built via `async_context_stk_default_config()`. Meaning depends on the kernel's switch strategy — a fixed priority level for `sched::SwitchStrategyFixedPriority`, a proportional CPU share for `sched::SwitchStrategySmoothWeightedRoundRobin` |
 | `ASYNC_CONTEXT_DEFAULT_STK_TASK_STACK_SIZE` | `1024` (words) | Default worker task stack size when built via `async_context_stk_default_config()` |
 | `ASYNC_CONTEXT_STK` | `4` | `async_context_type_t` enum value identifying this backend. Fallback definition only — add a proper entry to your tree's `pico/async_context.h` alongside the other backends if you haven't already |
 | `CYW43_NO_DEFAULT_TASK_STACK` | `0` | Disable the statically-allocated default CYW43 worker task stack; you must then supply `config.task_stack` yourself |

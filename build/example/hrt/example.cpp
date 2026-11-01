@@ -125,9 +125,9 @@ void RunExample()
     enum { TASK_COUNT = 5 };
 
 #if USE_EDF
-    typedef SwitchStrategyEDF SchedulerType;
+    typedef sched::SwitchStrategyEDF SchedulerType;
 #else
-    typedef SwitchStrategyRM SchedulerType;
+    typedef sched::SwitchStrategyRM SchedulerType;
 #endif
 
     static Kernel<KERNEL_STATIC | KERNEL_HRT | KERNEL_SYNC, TASK_COUNT, SchedulerType, PlatformDefault> kernel;

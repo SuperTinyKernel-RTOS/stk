@@ -12,26 +12,34 @@
 
 /*! \file  stk_strategy_fpriority.h
     \brief Fixed-priority preemptive task-switching strategy with round-robin within each
-           priority level (stk::SwitchStrategyFixedPriority / stk::SwitchStrategyFP32, and the no-sleep-yield
-           variant stk::SwitchStrategyFP32_NSY).
+           priority level (stk::sched::SwitchStrategyFixedPriority / stk::sched::SwitchStrategyFP32, and the no-sleep-yield
+           variant stk::sched::SwitchStrategyFP32_NSY, and the 64-level stk::sched::SwitchStrategyFP64 / stk::sched::SwitchStrategyFP64_NSY).
 */
 
 #include "stk_common.h"
+#include "stk_priority_bitmap.h"
 
 namespace stk {
+namespace sched {
 
 /*! \class SwitchStrategyFixedPriority
     \brief Fixed-priority preemptive scheduling strategy with round-robin arbitration
            within each priority level.
 
-    \tparam MAX_PRIORITIES  Number of distinct priority levels. Must be in the range [1, 32]
-                            (enforced by a compile-time assertion). Bit \c i of the 32-bit
+    \tparam MAX_PRIORITIES  Number of distinct priority levels. Must be in the range
+                            [1, PriorityBitmapTraits<ReadyBitmap>::CAPACITY] (enforced by a compile-time
+                            assertion) and not exceed 256 (priority is stored as \c uint8_t, [0, 255]). Bit \c i of
                             \c m_ready_bitmap represents priority level \c i.
-                            The concrete alias SwitchStrategyFP32 uses MAX_PRIORITIES = 32.
+                            The concrete aliases SwitchStrategyFP32 and SwitchStrategyFP64 use
+                            MAX_PRIORITIES = 32 and 64 respectively.
     \tparam NoSleepYield    If true, Yield() keeps the task in the runnable set and hands the CPU
                             to the next task at the \e same priority level (see OnTaskYield). If false
                             (default), the kernel performs the legacy yield: the task sleeps for
                             YIELD_TICKS, which also lets lower-priority tasks run during that tick.
+    \tparam ReadyBitmap     Type of the ready-priorities bitmap (\c m_ready_bitmap). Defaults to \c uint32_t
+                            for MAX_PRIORITIES <= 32, to \c uint64_t for <= 64 and to PriorityBitmap<> (multi-word, 96..256 bits)
+                            above that. Can be any unsigned integer type, PriorityBitmap<BITS>, or a user-defined
+                            class for which a PriorityBitmapTraits specialization is provided.
 
     \par Priority assignment
     Each task's priority is read from \c ITask::GetWeight(), cast to \c uint8_t, and must
@@ -53,10 +61,12 @@ namespace stk {
     CPU to a lower priority level, unlike the legacy sleep-based yield.
 
     \par Priority detection — O(1) bitmap
-    \c m_ready_bitmap is a 32-bit bitmask where bit \c i is set whenever priority level \c i
-    has at least one runnable task. GetNext() and GetFirst() locate the highest set bit in
-    O(1) via \c __builtin_clz (GCC/Clang) or a portable 32->0 scan fallback. The bitmap is
-    kept consistent by AddActive() (bit set) and RemoveActive() (bit cleared on last removal).
+    \c m_ready_bitmap is a bitmask (of type \c ReadyBitmap) where bit \c i is set whenever priority
+    level \c i has at least one runnable task. GetNext() and GetFirst() locate the highest set bit via
+    PriorityBitmapTraits<ReadyBitmap>::HighestSet(): O(1) for native 32-bit and 64-bit bitmaps (a 64-bit
+    scan is two 32-bit scans) and for PriorityBitmap<> (summary word + one word scan). The bitmap is kept consistent by AddActive() (bit set) and RemoveActive()
+    (bit cleared on last removal). All bitmap access goes through PriorityBitmapTraits, so the bitmap type
+    can be replaced without touching the scheduling logic.
 
     \note  Uses the Weight API (WEIGHT_API = 1): \c GetWeight() is interpreted as the task's
            fixed priority level. The dynamic weight functions (SetCurrentWeight /
@@ -65,7 +75,8 @@ namespace stk {
            maintain the per-priority runnable lists and keep \c m_ready_bitmap accurate.
     \see   SwitchStrategyFP32, SwitchStrategyFP32_NSY, ITaskSwitchStrategy, ITask::GetWeight
 */
-template <uint8_t MAX_PRIORITIES, bool NoSleepYield = false>
+template <uint16_t MAX_PRIORITIES, bool NoSleepYield = false,
+          class ReadyBitmap = typename ReadyBitmapSelect<MAX_PRIORITIES>::Type>
 class SwitchStrategyFixedPriority final : public ITaskSwitchStrategy
 {
 public:
@@ -88,6 +99,9 @@ public:
                PRIORITY_HIGHEST = 31, PRIORITY_HIGH = 23, PRIORITY_ABOVE_NORMAL = 17,
                PRIORITY_NORMAL = 16, PRIORITY_BELOW_NORMAL = 15, PRIORITY_LOWER = 8,
                PRIORITY_ABOVE_LOWEST = 1, PRIORITY_LOWEST = 0.
+               For SwitchStrategyFP64 (MAX_PRIORITIES = 64): PRIORITY_HIGHEST = 63, PRIORITY_HIGH = 47,
+               PRIORITY_ABOVE_NORMAL = 33, PRIORITY_NORMAL = 32, PRIORITY_BELOW_NORMAL = 31,
+               PRIORITY_LOWER = 16, PRIORITY_ABOVE_LOWEST = 1, PRIORITY_LOWEST = 0.
     */
     enum EPriority
     {
@@ -102,12 +116,16 @@ public:
     };
 
     /*! \brief Construct an empty strategy with all priority levels empty, a clear bitmap, and null cursors.
-        \note  A compile-time assertion enforces MAX_PRIORITIES <= 32, matching the width of the
-               32-bit \c m_ready_bitmap. Instantiating with MAX_PRIORITIES > 32 is a compile error.
+        \note  A compile-time assertion enforces 1 <= MAX_PRIORITIES <= BitmapTraits::CAPACITY, i.e. the number
+               of bits the \c ReadyBitmap type can hold. Instantiating with more priorities is a compile error.
+    \note  \c m_ready_bitmap is value-initialized, so a user-defined \c ReadyBitmap must be default-constructible
+               into the empty state.
     */
-    explicit SwitchStrategyFixedPriority() : m_tasks(), m_sleep(), m_ready_bitmap(0U), m_prev()
+    explicit SwitchStrategyFixedPriority() : m_tasks(), m_sleep(), m_ready_bitmap(), m_prev()
     {
-        STK_STATIC_ASSERT_DESC(MAX_PRIORITIES <= 32U, "MAX_PRIORITIES exceeds 32-bit bitmap width");
+        STK_STATIC_ASSERT_DESC_N(MinPrio, MAX_PRIORITIES >= 1U, "MAX_PRIORITIES must be at least 1");
+        STK_STATIC_ASSERT_DESC_N(MaxPrio, MAX_PRIORITIES <= static_cast<uint32_t>(BitmapTraits::CAPACITY), "MAX_PRIORITIES exceeds ReadyBitmap width");
+        STK_STATIC_ASSERT_DESC_N(MaxIdx, MAX_PRIORITIES <= 256U, "MAX_PRIORITIES exceeds 256 (priority is uint8_t)");
     }
 
     /*! \brief Destructor.
@@ -171,7 +189,7 @@ public:
 
     /*! \brief     Select and return the next task to run.
         \return    The next task in the highest runnable priority level's round-robin rotation,
-                   or \c nullptr if no runnable tasks exist (\c m_ready_bitmap == 0, kernel sleeps).
+                   or \c nullptr if no runnable tasks exist (\c m_ready_bitmap is empty, kernel sleeps).
         \note      Priority selection is O(1) via GetHighestReadyPriority() on \c m_ready_bitmap.
                    Within the selected level the cursor (\c m_prev[prio]) is advanced by one
                    position in the closed-loop list, implementing round-robin within the level.
@@ -182,7 +200,7 @@ public:
     {
         IKernelTask *next = nullptr;
 
-        if (m_ready_bitmap != 0U)
+        if (!BitmapTraits::IsEmpty(m_ready_bitmap))
         {
             const Priority prio = GetHighestReadyPriority(m_ready_bitmap);
 
@@ -195,7 +213,7 @@ public:
 
     /*! \brief     Get the first task in the managed set (used by the kernel for initial scheduling).
         \return    The first task in the highest runnable priority level if any task is runnable
-                   (bitmap non-zero); otherwise the first task in \c m_sleep.
+                   (bitmap non-empty); otherwise the first task in \c m_sleep.
                    Asserts if the combined set is empty (GetSize() == 0).
         \note      Uses \c m_ready_bitmap to determine whether any runnable task exists, consistent
                    with GetNext(). The sleep fallback allows the kernel to identify any task even
@@ -207,7 +225,7 @@ public:
 
         IKernelTask *first_task = nullptr;
 
-        if (m_ready_bitmap == 0U)
+        if (BitmapTraits::IsEmpty(m_ready_bitmap))
         {
             first_task = (*m_sleep.GetFirst());
         }
@@ -228,7 +246,7 @@ public:
     size_t GetSize() const override
     {
         size_t total = m_sleep.GetSize();
-        for (Priority i = 0U; i < MAX_PRIORITIES; ++i)
+        for (uint16_t i = 0U; i < MAX_PRIORITIES; ++i)
         {
             total += m_tasks[i].GetSize();
         }
@@ -338,6 +356,9 @@ protected:
     //! Priority type.
     typedef uint8_t Priority;
 
+    //! Bitmap operations (set/clear/empty/highest-set) for the \c ReadyBitmap type.
+    typedef PriorityBitmapTraits<ReadyBitmap> BitmapTraits;
+
     /*! \brief     Append a task to its priority level's runnable list and update the bitmap.
         \param[in] task: Task to make runnable.
         \note      Appends to the back of \c m_tasks[prio].
@@ -358,7 +379,7 @@ protected:
         {
             m_prev[prio] = task;
 
-            m_ready_bitmap |= (1U << prio);
+            BitmapTraits::Set(m_ready_bitmap, prio);
         }
     }
 
@@ -389,7 +410,7 @@ protected:
             m_prev[prio] = nullptr;
 
             // this will cause a switch to a lower priority task list
-            m_ready_bitmap &= ~(1U << prio);
+            BitmapTraits::Clear(m_ready_bitmap, prio);
         }
         else if (m_prev[prio] == task)
         {
@@ -421,17 +442,17 @@ protected:
     }
 
     /*! \brief     Find the index of the highest set bit in \a bitmap.
-        \param[in] bitmap: Bitmask of ready priority levels. Must not be 0 (behaviour is
-                   undefined for \c __builtin_clz(0); callers must check before calling).
+        \param[in] bitmap: Bitmask of ready priority levels. Must not be empty (behaviour is
+                   undefined; callers must check before calling).
         \return    Index of the most-significant set bit (0-based), which is the highest
                    runnable priority level.
-        \note      On GCC/Clang: uses \c __builtin_clz for an O(1) hardware instruction
-                   (BSR on x86, CLZ on ARM). On other compilers: falls back to a portable
-                   O(32) linear scan from bit 31 down to 0.
+        \note      Delegates to PriorityBitmapTraits<ReadyBitmap>::HighestSet(). For the native
+                   integer bitmaps this is built on CountLeadingZeros() (a 64-bit bitmap is scanned as
+                   two 32-bit halves, high half first).
     */
-    static __stk_forceinline Priority GetHighestReadyPriority(uint32_t bitmap)
+    static __stk_forceinline Priority GetHighestReadyPriority(const ReadyBitmap &bitmap)
     {
-        return GetTaskPriorityFromWeight(31U - CountLeadingZeros(bitmap));
+        return static_cast<Priority>(BitmapTraits::HighestSet(bitmap));
     }
 
 private:
@@ -439,13 +460,13 @@ private:
 
     IKernelTask::ListHeadType m_tasks[MAX_PRIORITIES]; //!< Per-priority runnable task lists. m_tasks[i] holds all runnable tasks at priority level i.
     IKernelTask::ListHeadType m_sleep;                 //!< Sleeping (blocked) tasks. Priority is retained in GetWeight() and restored on OnTaskWake().
-    uint32_t                  m_ready_bitmap;          //!< Bitmask of non-empty priority levels: bit i is set when m_tasks[i] has at least one runnable task. Updated by AddActive() (bit set) and RemoveActive() (bit cleared on last removal).
+    ReadyBitmap               m_ready_bitmap;          //!< Bitmask of non-empty priority levels: bit i is set when m_tasks[i] has at least one runnable task. Updated by AddActive() (bit set) and RemoveActive() (bit cleared on last removal).
     IKernelTask              *m_prev[MAX_PRIORITIES];  //!< Per-priority round-robin cursor. m_prev[i] is the most recently scheduled task at level i, or \c nullptr when level i is empty. GetNext() advances from this position.
 };
 
 /*! \typedef SwitchStrategyFP32
     \brief   Shorthand alias for SwitchStrategyFixedPriority<32>: 32 priority levels (0..31),
-             using a single 32-bit \c m_ready_bitmap for O(1) highest-priority lookup.
+             using a single 32-bit \c m_ready_bitmap (\c uint32_t) for O(1) highest-priority lookup.
     \see     SwitchStrategyFixedPriority
 */
 typedef SwitchStrategyFixedPriority<32> SwitchStrategyFP32;
@@ -456,6 +477,42 @@ typedef SwitchStrategyFixedPriority<32> SwitchStrategyFP32;
     \see     SwitchStrategyFixedPriority
 */
 typedef SwitchStrategyFixedPriority<32, true> SwitchStrategyFP32_NSY;
+
+/*! \typedef SwitchStrategyFP64
+    \brief   Shorthand alias for SwitchStrategyFixedPriority<64>: 64 priority levels (0..63),
+             using a 64-bit \c m_ready_bitmap (\c uint64_t) for highest-priority lookup.
+    \note    On 32-bit targets (e.g. Cortex-M) the 64-bit bitmap costs two registers and a two-step scan;
+             prefer SwitchStrategyFP32 unless more than 32 levels are really needed.
+    \see     SwitchStrategyFixedPriority
+*/
+typedef SwitchStrategyFixedPriority<64> SwitchStrategyFP64;
+
+/*! \typedef SwitchStrategyFP64_NSY
+    \brief   Shorthand alias for SwitchStrategyFixedPriority<64, true>: same as SwitchStrategyFP64 but
+             Yield() keeps the task runnable and hands the CPU to same-priority peers only (NOSLEEP_YIELD_API = 1).
+    \see     SwitchStrategyFixedPriority
+*/
+typedef SwitchStrategyFixedPriority<64, true> SwitchStrategyFP64_NSY;
+
+} // namespace sched
+
+// ----------------------------------------------------------------------------
+// Backward compatibility: the strategies live in stk::sched, the names below keep existing
+// code that refers to them as stk::<Name> compiling. Migrate to stk::sched::<Name>.
+// ----------------------------------------------------------------------------
+
+//! \deprecated Use stk::sched::SwitchStrategyFixedPriority.
+template <uint16_t MAX_PRIORITIES, bool NoSleepYield = false, class ReadyBitmap = typename sched::ReadyBitmapSelect<MAX_PRIORITIES>::Type>
+using SwitchStrategyFixedPriority __stk_attr_deprecated_type("Use stk::sched::SwitchStrategyFixedPriority") = sched::SwitchStrategyFixedPriority<MAX_PRIORITIES, NoSleepYield, ReadyBitmap>;
+
+//! \deprecated Use stk::sched::SwitchStrategyFP32.
+typedef sched::SwitchStrategyFP32 SwitchStrategyFP32 __stk_attr_deprecated_type("Use stk::sched::SwitchStrategyFP32");
+//! \deprecated Use stk::sched::SwitchStrategyFP32_NSY.
+typedef sched::SwitchStrategyFP32_NSY SwitchStrategyFP32_NSY __stk_attr_deprecated_type("Use stk::sched::SwitchStrategyFP32_NSY");
+//! \deprecated Use stk::sched::SwitchStrategyFP64.
+typedef sched::SwitchStrategyFP64 SwitchStrategyFP64 __stk_attr_deprecated_type("Use stk::sched::SwitchStrategyFP64");
+//! \deprecated Use stk::sched::SwitchStrategyFP64_NSY.
+typedef sched::SwitchStrategyFP64_NSY SwitchStrategyFP64_NSY __stk_attr_deprecated_type("Use stk::sched::SwitchStrategyFP64_NSY");
 
 } // namespace stk
 

@@ -83,7 +83,7 @@ TEST(Basic, GetVersion)
 
 TEST(Basic, ISwitchStrategyStub)
 {
-    SwitchStrategyRR ss;
+    sched::SwitchStrategyRR ss;
 
     // these are just stubs for interface noop functions to achieve 100% coverage, providing nullptr
     // for ITasks should be noop too
@@ -112,7 +112,7 @@ TEST(UserTask, GetStackSize)
 
 TEST(UserTask, GetStackSpace)
 {
-    Kernel<KERNEL_STATIC, 1, SwitchStrategyRR, PlatformTestMock> kernel;
+    Kernel<KERNEL_STATIC, 1, sched::SwitchStrategyRR, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task;
 
     // not initialized with STK_STACK_MEMORY_FILLER

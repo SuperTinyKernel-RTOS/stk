@@ -28,7 +28,7 @@ Clone the `stk` repository and open the `httpd-rp2350w` project folder in Eclips
 - **mDNS responder**: advertises the board as `<hostname>.local` (hostname suffixed with 4 hex digits of the Wi-Fi MAC) with an `_http._tcp` service on port 80.
 - **SSI tag substitution**: `status`, `welcome`, `uptime`, `ledstate`, `ledinv`, and a `table` tag that demonstrates `LWIP_HTTPD_SSI_MULTIPART`, streaming 10 generated rows across multiple SSI callback invocations.
 - **CGI and POST handling**: CGI handlers for `/`, `/index.shtml`, and `/restart`; a POST handler on `/led.cgi` that parses a `led_state` form field out of the request body and toggles the onboard LED via `cyw43_gpio_set()`, returning `/ledpass.shtml` or `/ledfail.shtml` depending on success.
-- **Priority-based scheduling**: the kernel is configured with `KERNEL_DYNAMIC | KERNEL_SYNC` (plus `KERNEL_TICKLESS` where the platform supports it) and `SwitchStrategyFP32`. Task capacity is sized as `1 (WifiHttpdTask) + TimerHost::TASK_COUNT + ASYNC_CONTEXT_STK_TASKS + LWIP_STK_THREAD_POOL_SIZE`, covering the app task, STK's timer host, `async_context_stk`'s worker task(s), and lwIP's `tcpip` thread(s).
+- **Priority-based scheduling**: the kernel is configured with `KERNEL_DYNAMIC | KERNEL_SYNC` (plus `KERNEL_TICKLESS` where the platform supports it) and `sched::SwitchStrategyFP32`. Task capacity is sized as `1 (WifiHttpdTask) + TimerHost::TASK_COUNT + ASYNC_CONTEXT_STK_TASKS + LWIP_STK_THREAD_POOL_SIZE`, covering the app task, STK's timer host, `async_context_stk`'s worker task(s), and lwIP's `tcpip` thread(s).
 
 ---
 

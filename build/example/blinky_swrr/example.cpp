@@ -50,7 +50,7 @@ private:
 
             led_state = !led_state;
 
-            // SWRR, unlike with fixed-priority SwitchStrategyFP32, does not require tasks cooperation with
+            // SWRR, unlike with fixed-priority sched::SwitchStrategyFP32, does not require tasks cooperation with
             // Sleep() or Yield(), all tasks will get their CPU time slice, even tasks with lowest priority
             //stk::Sleep(10);
         }
@@ -65,7 +65,7 @@ void RunExample()
 
     // 3 tasks kernel with Smooth Weighted Round-Robin scheduling strategy
     static Kernel<KERNEL_STATIC | (STK_TICKLESS_IDLE ? KERNEL_TICKLESS : 0), 4,
-            SwitchStrategySWRR, PlatformDefault> kernel;
+            sched::SwitchStrategySWRR, PlatformDefault> kernel;
 
     // RED is lowest priority (1), and BLUE is highest (69):
     // - BLUE gets more CPU time and will blink very often

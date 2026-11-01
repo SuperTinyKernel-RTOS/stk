@@ -11,12 +11,13 @@
 #define STK_STRATEGY_EDF_H_
 
 /*! \file  stk_strategy_edf.h
-    \brief Earliest Deadline First (EDF) task-switching strategy (stk::SwitchStrategyEDF).
+    \brief Earliest Deadline First (EDF) task-switching strategy (stk::sched::SwitchStrategyEDF).
 */
 
 #include "stk_common.h"
 
 namespace stk {
+namespace sched {
 
 /*! \class SwitchStrategyEDF
     \brief Earliest Deadline First (EDF) scheduling strategy: always selects the runnable
@@ -234,6 +235,16 @@ protected:
     IKernelTask::ListHeadType m_tasks; //!< Runnable tasks eligible for scheduling. Scanned in full by GetNext() each tick to find the minimum relative deadline.
     IKernelTask::ListHeadType m_sleep; //!< Sleeping (blocked) tasks not eligible for scheduling. Deadline tracking continues in the kernel while tasks are in this list.
 };
+
+} // namespace sched
+
+// ----------------------------------------------------------------------------
+// Backward compatibility: the strategies live in stk::sched, the names below keep existing
+// code that refers to them as stk::<Name> compiling. Migrate to stk::sched::<Name>.
+// ----------------------------------------------------------------------------
+
+//! \deprecated Use stk::sched::SwitchStrategyEDF.
+typedef sched::SwitchStrategyEDF SwitchStrategyEDF __stk_attr_deprecated_type("Use stk::sched::SwitchStrategyEDF");
 
 } // namespace stk
 

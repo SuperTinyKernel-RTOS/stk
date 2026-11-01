@@ -54,7 +54,7 @@ private:
 };
 
 //! Kernel.
-static Kernel<KERNEL_DYNAMIC, _STK_CHAIN_TEST_TASKS_MAX, SwitchStrategyRoundRobin, PlatformDefault> kernel;
+static Kernel<KERNEL_DYNAMIC, _STK_CHAIN_TEST_TASKS_MAX, sched::SwitchStrategyRoundRobin, PlatformDefault> kernel;
 
 //! Tasks (threads).
 static TestTask<ACCESS_PRIVILEGED> task1(0), task2(1), task3(2);

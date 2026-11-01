@@ -102,7 +102,7 @@ static void SyncWaitWakeRelaxCpu()
 
 TEST(Sync, SyncWait_Wake)
 {
-    Kernel<KERNEL_STATIC | KERNEL_SYNC, 1, SwitchStrategyRR, PlatformTestMock> kernel;
+    Kernel<KERNEL_STATIC | KERNEL_SYNC, 1, sched::SwitchStrategyRR, PlatformTestMock> kernel;
     PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
     TaskMock<ACCESS_USER> task;
 
@@ -147,7 +147,7 @@ TEST(Sync, SyncWait_Wake)
 #undef new
 #endif
 
-typedef Kernel<KERNEL_STATIC | KERNEL_SYNC, 1, SwitchStrategyRR, PlatformTestMock> SyncTickListKernelBase;
+typedef Kernel<KERNEL_STATIC | KERNEL_SYNC, 1, sched::SwitchStrategyRR, PlatformTestMock> SyncTickListKernelBase;
 
 // exposes the list of sync objects the kernel calls Tick() on every tick (see Kernel::UpdateSyncObjects)
 struct SyncTickListKernel : public SyncTickListKernelBase
@@ -663,9 +663,9 @@ static void WaiterIntrospectRelaxCpu()
     g_WaiterIntrospectContext.Process();
 }
 
-static void Test_WaiterIntrospection(WaiterIntrospectContext::EEnd end, EWaitResult expected, Timeout wait_ticks)
+static void Test_WaiterIntrospection(WaiterIntrospectContext::EEnd end, const EWaitResult expected, Timeout wait_ticks)
 {
-    Kernel<KERNEL_STATIC | KERNEL_SYNC, 1, SwitchStrategyRR, PlatformTestMock> kernel;
+    Kernel<KERNEL_STATIC | KERNEL_SYNC, 1, sched::SwitchStrategyRR, PlatformTestMock> kernel;
     PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
     TaskMock<ACCESS_USER> task;
 

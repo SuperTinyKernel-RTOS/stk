@@ -95,7 +95,7 @@ no waiters       →  m_owner_tid = TID_NONE (fully free)
 Other timeouts and hold times used by individual tests (`10`, `20`, `30`, `50`, `100`, `200`, `250` ticks)
 are literals in the test bodies rather than named constants.
 
-The kernel is `Kernel<KERNEL_DYNAMIC | KERNEL_SYNC | KERNEL_TICKLESS (if STK_TICKLESS_IDLE), 5, SwitchStrategyRR, PlatformDefault>`.
+The kernel is `Kernel<KERNEL_DYNAMIC | KERNEL_SYNC | KERNEL_TICKLESS (if STK_TICKLESS_IDLE), 5, sched::SwitchStrategyRR, PlatformDefault>`.
 
 `g_TestMutex` is a plain static — `ResetTestState()` does **not** reconstruct it via
 placement-new. The mutex is shared across all test runs in its naturally unlocked state

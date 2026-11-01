@@ -77,7 +77,7 @@ Timing assumes the default 1 ms tick. A measured sleep of `N` ms is accepted in
 The suite is built once, with the kernel configured as:
 
 ```
-Kernel<KERNEL_DYNAMIC | KERNEL_SYNC (| KERNEL_TICKLESS when STK_TICKLESS_IDLE), 5, SwitchStrategyRR, PlatformDefault>
+Kernel<KERNEL_DYNAMIC | KERNEL_SYNC (| KERNEL_TICKLESS when STK_TICKLESS_IDLE), 5, sched::SwitchStrategyRR, PlatformDefault>
 ```
 
 `KERNEL_SYNC` is required by `Wait()` and `CancelTaskWait()`. Tasks terminate by returning from `Run()`, which

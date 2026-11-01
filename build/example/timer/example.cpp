@@ -78,7 +78,7 @@ void RunExample()
     Led::InitAll(false);
 
     static stk::Kernel<stk::KERNEL_DYNAMIC | stk::KERNEL_SYNC | (STK_TICKLESS_IDLE ? stk::KERNEL_TICKLESS : 0),
-            stk::time::TimerHost::TASK_COUNT, stk::SwitchStrategyRR, stk::PlatformDefault> g_Kernel;
+            stk::time::TimerHost::TASK_COUNT, stk::sched::SwitchStrategyRR, stk::PlatformDefault> g_Kernel;
 
     static LedTimer      LedTimer;
     static ShutdownTimer ShutdownTimer;

@@ -57,7 +57,7 @@ static volatile int32_t g_SharedCounter = 0;
 static volatile bool    g_TestComplete  = false;
 
 // Kernel
-static Kernel<KERNEL_DYNAMIC | KERNEL_SYNC, _STK_EF_TEST_TASKS_MAX, SwitchStrategyRR, PlatformDefault> g_Kernel;
+static Kernel<KERNEL_DYNAMIC | KERNEL_SYNC, _STK_EF_TEST_TASKS_MAX, sched::SwitchStrategyRR, PlatformDefault> g_Kernel;
 
 // Test object (re-constructed per test via ResetTestState)
 static sync::EventFlags g_Flags;

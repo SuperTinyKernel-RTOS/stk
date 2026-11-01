@@ -26,6 +26,6 @@
 #define STK_C_KERNEL_MAX_TASKS  (4)
 #define STK_C_KERNEL_MODE       (KERNEL_STATIC | KERNEL_SYNC | (STK_TICKLESS_IDLE ? KERNEL_TICKLESS : 0))
 #define STK_C_KERNEL_TYPE_CPU_0 Kernel<STK_C_KERNEL_MODE, STK_C_KERNEL_MAX_TASKS + stk::time::TimerHost::TASK_COUNT, \
-                                    SwitchStrategyRR, PlatformDefault>
+                                    sched::SwitchStrategyRR, PlatformDefault>
 
 #endif /* STK_CONFIG_H_ */

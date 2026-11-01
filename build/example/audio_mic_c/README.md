@@ -24,7 +24,7 @@ Notes on the STK task model, since it differs from FreeRTOS:
 - Tasks are created individually with `stk_task_create_privileged()` and only take effect once passed to `stk_kernel_add_task()` — all task creation/registration must happen before `stk_kernel_start()`, which never returns.
 - Task control blocks live in STK's own static slot pool, sized by `STK_C_KERNEL_MAX_TASKS` in `stk_config.h`; callers only need to supply the stack memory (`stk_word_t` arrays), not a full static TCB as with FreeRTOS's `xTaskCreateStatic()`.
 - Stack sizes are always caller-supplied in words of `stk_word_t` — STK has no `configMINIMAL_STACK_SIZE` equivalent, so a baseline (`STK_MINIMAL_STACK_SIZE`) is picked in `main.c` and sized up per task.
-- Priorities (set via `stk_task_set_priority()`) only matter if `STK_C_KERNEL_TYPE_CPU_0` in `stk_config.h` selects `SwitchStrategyFP32`; with the default round-robin strategy they're a no-op.
+- Priorities (set via `stk_task_set_priority()`) only matter if `STK_C_KERNEL_TYPE_CPU_0` in `stk_config.h` selects `sched::SwitchStrategyFP32`; with the default round-robin strategy they're a no-op.
 - `tusb_init()` is called from inside the `usbd` task rather than before the scheduler starts, since the USB IRQ handler relies on RTOS queue APIs that require the kernel to already be running.
 
 ## USB Descriptors

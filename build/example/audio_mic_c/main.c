@@ -130,7 +130,7 @@ int main(int argc, char* argv[]) {
   // stk_task_create_privileged()/_user() and only take effect once added with
   // stk_kernel_add_task() - all of which (for a static kernel) must happen before
   // stk_kernel_start(). Priorities only matter if STK_C_KERNEL_TYPE_CPU_0 (stk_config.h)
-  // selects SwitchStrategyFP32; with the default round-robin strategy they're a no-op.
+  // selects sched::SwitchStrategyFP32; with the default round-robin strategy they're a no-op.
   stk_kernel_t *k = stk_kernel_create(0);
   stk_kernel_init(k, STK_PERIODICITY_DEFAULT);
 

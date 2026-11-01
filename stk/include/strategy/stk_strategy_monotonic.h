@@ -12,13 +12,14 @@
 
 /*! \file  stk_strategy_monotonic.h
     \brief Rate-Monotonic (RM) and Deadline-Monotonic (DM) task-switching strategies
-           (stk::SwitchStrategyMonotonic / stk::SwitchStrategyRM / stk::SwitchStrategyDM), and the
+           (stk::sched::SwitchStrategyMonotonic / stk::sched::SwitchStrategyRM / stk::sched::SwitchStrategyDM), and the
            SchedulabilityCheck utility for Worst-Case Response Time (WCRT) analysis.
 */
 
 #include "stk_common.h"
 
 namespace stk {
+namespace sched {
 
 /*! \enum  EMonotonicSwitchStrategyType
     \brief Policy selector for SwitchStrategyMonotonic: determines the timing attribute
@@ -324,8 +325,8 @@ public:
         Usage example:
         \code
         // Analyse 3 HRT tasks registered with a Rate-Monotonic kernel.
-        auto *rm = static_cast<stk::SwitchStrategyRM *>(kernel.GetSwitchStrategy());
-        auto result = stk::SchedulabilityCheck::IsSchedulableWCRT<3>(rm);
+        auto *rm = static_cast<stk::sched::SwitchStrategyRM *>(kernel.GetSwitchStrategy());
+        auto result = stk::sched::SchedulabilityCheck::IsSchedulableWCRT<3>(rm);
         STK_ASSERT(result); // assert all tasks meet their deadlines
         \endcode
     */
@@ -545,6 +546,25 @@ typedef SwitchStrategyMonotonic<MSS_TYPE_RATE> SwitchStrategyRM;
     \see     SwitchStrategyMonotonic, SchedulabilityCheck
 */
 typedef SwitchStrategyMonotonic<MSS_TYPE_DEADLINE> SwitchStrategyDM;
+
+} // namespace sched
+
+// ----------------------------------------------------------------------------
+// Backward compatibility: the strategies live in stk::sched, the names below keep existing
+// code that refers to them as stk::<Name> compiling. Migrate to stk::sched::<Name>.
+// ----------------------------------------------------------------------------
+
+//! \deprecated Use stk::sched::SwitchStrategyMonotonic.
+template <sched::EMonotonicSwitchStrategyType TStrategyType>
+using SwitchStrategyMonotonic __stk_attr_deprecated_type("Use stk::sched::SwitchStrategyMonotonic") = sched::SwitchStrategyMonotonic<TStrategyType>;
+
+//! \deprecated Use stk::sched::SwitchStrategyRM.
+typedef sched::SwitchStrategyRM SwitchStrategyRM __stk_attr_deprecated_type("Use stk::sched::SwitchStrategyRM");
+//! \deprecated Use stk::sched::SwitchStrategyDM.
+typedef sched::SwitchStrategyDM SwitchStrategyDM __stk_attr_deprecated_type("Use stk::sched::SwitchStrategyDM");
+
+//! \deprecated Use stk::sched::SchedulabilityCheck.
+typedef sched::SchedulabilityCheck SchedulabilityCheck __stk_attr_deprecated_type("Use stk::sched::SchedulabilityCheck");
 
 } // namespace stk
 

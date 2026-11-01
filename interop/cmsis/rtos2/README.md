@@ -18,7 +18,7 @@ STK provides a complete **CMSIS-RTOS2** compatibility layer (`cmsis_os2_stk.cpp`
 
 ## Design & Mapping
 
-* **Kernel configuration:** The wrapper instantiates one global `stk::Kernel` with `KERNEL_DYNAMIC | KERNEL_SYNC` flags and the `SwitchStrategyFP32` (32-level fixed-priority) scheduler. Tickless mode is enabled automatically when `STK_TICKLESS_IDLE=1` is defined.
+* **Kernel configuration:** The wrapper instantiates one global `stk::Kernel` with `KERNEL_DYNAMIC | KERNEL_SYNC` flags and the `sched::SwitchStrategyFP32` (32-level fixed-priority) scheduler. Tickless mode is enabled automatically when `STK_TICKLESS_IDLE=1` is defined.
 * **Thread capacity:** Controlled by the `CMSIS_STK_MAX_THREADS` macro (default: 16). Increase it if more concurrent threads are needed.
 * **Priority mapping:** CMSIS priorities (`osPriorityIdle=1` … `osPriorityISR=56`) are linearly mapped to STK FP32 priority levels 0–31: `stk_prio = (cmsis_prio × 31) / 56`.
 * **Timeouts:** CMSIS tick values are passed through directly as STK ticks (1:1 when tick resolution is 1 ms / `PERIODICITY_DEFAULT`). `osWaitForever` is translated to `stk::WAIT_INFINITE`.
@@ -33,7 +33,7 @@ STK provides a complete **CMSIS-RTOS2** compatibility layer (`cmsis_os2_stk.cpp`
 
 | Area                                              | Behaviour                                                                                    |
 |---------------------------------------------------|----------------------------------------------------------------------------------------------|
-| Priority inheritance (`osMutexPrioInherit`)       | Ignored. STK supports it automatically for `SwitchStrategyFixedPriority/SwitchStrategyFP32`. |
+| Priority inheritance (`osMutexPrioInherit`)       | Ignored. STK supports it automatically for `sched::SwitchStrategyFixedPriority/sched::SwitchStrategyFP32`. |
 | Robust mutex (`osMutexRobust`)                    | Ignored as unsuported. Will assert in Debug build as unsafe coding practice.                 |
 | Message priority (`osMessageQueuePut` `msg_prio`) | Ignored. STK queues are FIFO with no priority lanes.                                         |
 | SMP affinity (`osThreadSetAffinityMask`)          | Ignored. STK uses a per-core AMP model.                                                      |

@@ -121,7 +121,7 @@ void RunExample()
 
     // allocate scheduling kernel for 4 threads (tasks) with Round-robin scheduling strategy
     static Kernel<KERNEL_STATIC | KERNEL_SYNC | (STK_TICKLESS_IDLE ? KERNEL_TICKLESS : 0), 4,
-            SwitchStrategyRR, PlatformDefault> kernel;
+            sched::SwitchStrategyRR, PlatformDefault> kernel;
 
     // note: using ACCESS_PRIVILEGED as Cortex-M7 or Cortex-M33 may require privileged access to peripherals
     static MyTask<0, Led::RED,    ACCESS_PRIVILEGED> task1;

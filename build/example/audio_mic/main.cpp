@@ -55,8 +55,8 @@
 #define AUDIO_STACK_SIZE STK_MINIMAL_STACK_SIZE
 
 // Task priorities. Only meaningful because the kernel below is instantiated with
-// stk::SwitchStrategyFP32 (fixed-priority); with the default round-robin strategy
-// (stk::SwitchStrategyRR, as used in example.cpp) GetWeight() would be a no-op.
+// stk::sched::SwitchStrategyFP32 (fixed-priority); with the default round-robin strategy
+// (stk::sched::SwitchStrategyRR, as used in example.cpp) GetWeight() would be a no-op.
 enum
 {
     PRIO_BLINKY = 1,
@@ -219,7 +219,7 @@ int main(int argc, char* argv[])
 
     // allocate scheduling kernel for 3 tasks (blinky, usbd, audio) with fixed-priority
     // scheduling strategy so that GetWeight() (set above per task) is honored as priority
-    static Kernel<KernelMode, 3, SwitchStrategyFP32, PlatformDefault> kernel;
+    static Kernel<KernelMode, 3, sched::SwitchStrategyFP32, PlatformDefault> kernel;
 
     static BlinkyTask    blinky_task;
     static UsbDeviceTask usb_device_task;

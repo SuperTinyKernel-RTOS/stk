@@ -92,7 +92,7 @@ void RunExample()
     const uint8_t KernelMode = KERNEL_STATIC | KERNEL_SYNC | (STK_TICKLESS_IDLE ? KERNEL_TICKLESS : 0);
 
     // allocate scheduling kernel for 3 threads (tasks) with Round-Robin scheduling strategy
-    static Kernel<KernelMode, 4, SwitchStrategyRR, PlatformDefault> kernel;
+    static Kernel<KernelMode, 4, sched::SwitchStrategyRR, PlatformDefault> kernel;
 
     // note: using ACCESS_PRIVILEGED as Cortex-M3+ may not allow writing to GPIO from a less secure user thread
     static MyTask<ACCESS_PRIVILEGED> task1(LED_RED);

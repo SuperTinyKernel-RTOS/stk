@@ -12,13 +12,15 @@
 
 /*! \file  stk_strategy_pthreshold.h
     \brief Fixed-priority preemptive strategy with ThreadX-style Preemption-Threshold and optional
-           per-task time-slicing (stk::SwitchStrategyPreemptionThreshold / stk::SwitchStrategyPT32 /
-           stk::SwitchStrategyPT32_TS).
+           per-task time-slicing (stk::sched::SwitchStrategyPreemptionThreshold / stk::sched::SwitchStrategyPT32 /
+           stk::sched::SwitchStrategyPT32_TS / stk::sched::SwitchStrategyPT64 / stk::sched::SwitchStrategyPT64_TS).
 */
 
 #include "stk_common.h"
+#include "stk_priority_bitmap.h"
 
 namespace stk {
+namespace sched {
 
 /*! \class SwitchStrategyPreemptionThreshold
     \brief Fixed-priority scheduling with Preemption-Threshold (PTS), modelled on Azure RTOS /
@@ -27,12 +29,20 @@ namespace stk {
            strictly greater than \c T. With \c T == \c P the task behaves like a normal
            fixed-priority task.
 
-    \tparam MAX_PRIORITIES  Number of priority levels, [1, 32].
+    \tparam MAX_PRIORITIES  Number of priority levels, [1, PriorityBitmapTraits<ReadyBitmap>::CAPACITY]
+                           (enforced by a compile-time assertion), at most 256 (priority and threshold
+                           are stored as \c uint8_t, [0, 255]). The aliases SwitchStrategyPT32 and
+                           SwitchStrategyPT64 use 32 and 64 levels respectively.
     \tparam TIMESLICE       \c true to enable time-slicing with per-task quanta for use with
                            stk::KERNEL_TIMESLICE: GetNext() becomes sticky (the selected task of a
                            level keeps running) and the level is rotated only by OnTaskTimeSlice(),
                            OnTaskYield() or when the running task leaves the runnable set.
                            \c false (default): fixed 1-tick round-robin on every GetNext().
+    \tparam ReadyBitmap    Type of the priority bitmaps (ready, held and advance). Defaults to \c uint32_t
+                           for MAX_PRIORITIES <= 32, to \c uint64_t for <= 64 and to PriorityBitmap<> (multi-word,
+                           96..256 bits) above that. Can be any unsigned integer type, PriorityBitmap<BITS>,
+                           or a user-defined class for which a PriorityBitmapTraits specialization is
+                           provided (see stk_priority_bitmap.h).
 
     \par Priority convention
     STK convention is used: \b higher number = higher priority. ThreadX uses the opposite
@@ -72,14 +82,16 @@ namespace stk {
            via IKernelTask::GetBaseWeight().
     \note  Yield() is handled by OnTaskYield() (tx_thread_relinquish semantics) in non-HRT modes.
     \note  Differences from ThreadX: STK priority numbering (higher = more important), at most
-           32 priority levels; without TIMESLICE the slice is fixed at 1 tick, with TIMESLICE
+           256 priority levels (bounded by the ReadyBitmap capacity); without TIMESLICE the slice is fixed at 1 tick, with TIMESLICE
            (stk::KERNEL_TIMESLICE) the per-task quantum comes from ITask::GetTimeSlice().
     \note  With \a TIMESLICE, the quantum of a task can be changed at run-time with
            IKernelService::SetTimeSlice(). A task whose threshold is above its priority is held
            while it runs and is not time-sliced, use \c MakeWeight(p, p) for tasks which must be.
-    \see   SwitchStrategyPT32, SwitchStrategyPT32_TS, SwitchStrategyFixedPriority
+    \see   SwitchStrategyPT32, SwitchStrategyPT32_TS, SwitchStrategyPT64, SwitchStrategyPT64_TS,
+           SwitchStrategyFixedPriority, PriorityBitmapTraits
 */
-template <uint8_t MAX_PRIORITIES, bool TIMESLICE = false>
+template <uint16_t MAX_PRIORITIES, bool TIMESLICE = false,
+          class ReadyBitmap = typename ReadyBitmapSelect<MAX_PRIORITIES>::Type>
 class SwitchStrategyPreemptionThreshold final : public ITaskSwitchStrategy
 {
 public:
@@ -116,10 +128,16 @@ public:
     }
 
     /*! \brief Construct an empty strategy.
+        \note  A compile-time assertion enforces 1 <= MAX_PRIORITIES <= BitmapTraits::CAPACITY, i.e. the number
+               of bits the \c ReadyBitmap type can hold.
+        \note  The bitmaps are value-initialized, so a user-defined \c ReadyBitmap must be default-constructible
+               into the empty state.
     */
-    explicit SwitchStrategyPreemptionThreshold() : m_tasks(), m_sleep(), m_ready_bitmap(0U), m_held_bitmap(0U), m_advance_bitmap(0U), m_running(nullptr), m_prev(), m_held()
+    explicit SwitchStrategyPreemptionThreshold() : m_tasks(), m_sleep(), m_ready_bitmap(), m_held_bitmap(), m_advance_bitmap(), m_running(nullptr), m_prev(), m_held()
     {
-        STK_STATIC_ASSERT_DESC(MAX_PRIORITIES <= 32U, "MAX_PRIORITIES exceeds 32-bit bitmap width");
+        STK_STATIC_ASSERT_DESC_N(MinPrio, MAX_PRIORITIES >= 1U, "MAX_PRIORITIES must be at least 1");
+        STK_STATIC_ASSERT_DESC_N(MaxPrio, MAX_PRIORITIES <= static_cast<uint32_t>(BitmapTraits::CAPACITY), "MAX_PRIORITIES exceeds ReadyBitmap width");
+        STK_STATIC_ASSERT_DESC_N(MaxIdx, MAX_PRIORITIES <= 256U, "MAX_PRIORITIES exceeds 256 (priority is uint8_t)");
     }
 
     /*! \brief Destructor.
@@ -188,11 +206,11 @@ public:
     {
         IKernelTask *next = nullptr;
 
-        if (m_ready_bitmap != 0U)
+        if (!BitmapTraits::IsEmpty(m_ready_bitmap))
         {
             const Priority hi = GetHighestReadyPriority(m_ready_bitmap);
 
-            if (m_held_bitmap != 0U)
+            if (!BitmapTraits::IsEmpty(m_held_bitmap))
             {
                 IKernelTask *const holder = m_held[GetHighestReadyPriority(m_held_bitmap)];
                 STK_ASSERT(holder != nullptr);
@@ -210,8 +228,8 @@ public:
                 if __stk_constexpr_cpp17 (TIMESLICE)
                 {
                     // sticky: the cursor moves only when a rotation was requested for this level
-                    advance = ((m_advance_bitmap & (1U << hi)) != 0U);
-                    m_advance_bitmap &= ~(1U << hi);
+                    advance = BitmapTraits::IsSet(m_advance_bitmap, hi);
+                    BitmapTraits::Clear(m_advance_bitmap, hi);
                 }
 
                 if (advance)
@@ -227,7 +245,7 @@ public:
                 if (GetTaskThreshold(next) > hi)
                 {
                     m_held[hi] = next;
-                    m_held_bitmap |= (1U << hi);
+                    BitmapTraits::Set(m_held_bitmap, hi);
                 }
             }
         }
@@ -245,7 +263,7 @@ public:
 
         IKernelTask *first_task = nullptr;
 
-        if (m_ready_bitmap == 0U)
+        if (BitmapTraits::IsEmpty(m_ready_bitmap))
         {
             first_task = (*m_sleep.GetFirst());
         }
@@ -262,7 +280,7 @@ public:
     size_t GetSize() const override
     {
         size_t total = m_sleep.GetSize();
-        for (Priority i = 0U; i < MAX_PRIORITIES; ++i)
+        for (uint16_t i = 0U; i < MAX_PRIORITIES; ++i)
         {
             total += m_tasks[i].GetSize();
         }
@@ -331,7 +349,7 @@ public:
                 if (was_held && (GetTaskThreshold(task) > new_prio) && (m_held[new_prio] == nullptr))
                 {
                     m_held[new_prio] = task;
-                    m_held_bitmap |= (1U << new_prio);
+                    BitmapTraits::Set(m_held_bitmap, new_prio);
                 }
             }
         }
@@ -363,7 +381,7 @@ public:
             if (m_held[prio] == task)
             {
                 m_held[prio] = nullptr;
-                m_held_bitmap &= ~(1U << prio);
+                BitmapTraits::Clear(m_held_bitmap, prio);
             }
 
             m_prev[prio] = task;
@@ -371,7 +389,7 @@ public:
 
             if __stk_constexpr_cpp17 (TIMESLICE)
             {
-                m_advance_bitmap |= (1U << prio);
+                BitmapTraits::Set(m_advance_bitmap, prio);
             }
         }
 
@@ -405,7 +423,7 @@ public:
                 m_prev[prio] = task;
                 rotated      = true;
 
-                m_advance_bitmap |= (1U << prio);
+                BitmapTraits::Set(m_advance_bitmap, prio);
             }
         }
 
@@ -436,6 +454,9 @@ protected:
     //! Priority type.
     typedef uint8_t Priority;
 
+    //! Bitmap operations (set/clear/test/empty/highest-set) for the \c ReadyBitmap type.
+    typedef PriorityBitmapTraits<ReadyBitmap> BitmapTraits;
+
     void AddActive(IKernelTask *task)
     {
         const Priority prio = GetTaskPriority(task);
@@ -445,7 +466,7 @@ protected:
         if (m_tasks[prio].GetSize() == 1U)
         {
             m_prev[prio] = task;
-            m_ready_bitmap |= (1U << prio);
+            BitmapTraits::Set(m_ready_bitmap, prio);
         }
     }
 
@@ -464,17 +485,17 @@ protected:
         if (m_held[prio] == task)
         {
             m_held[prio] = nullptr;
-            m_held_bitmap &= ~(1U << prio);
+            BitmapTraits::Clear(m_held_bitmap, prio);
         }
 
         if (next == task)
         {
             m_prev[prio] = nullptr;
-            m_ready_bitmap &= ~(1U << prio);
+            BitmapTraits::Clear(m_ready_bitmap, prio);
 
             if __stk_constexpr_cpp17 (TIMESLICE)
             {
-                m_advance_bitmap &= ~(1U << prio);
+                BitmapTraits::Clear(m_advance_bitmap, prio);
             }
         }
         else if (m_prev[prio] == task)
@@ -486,7 +507,7 @@ protected:
             if __stk_constexpr_cpp17 (TIMESLICE)
             {
                 // sticky mode: the successor must run next
-                m_advance_bitmap |= (1U << prio);
+                BitmapTraits::Set(m_advance_bitmap, prio);
             }
         }
     }
@@ -502,13 +523,13 @@ protected:
             if ((task == m_running) && (m_held[prio] == nullptr))
             {
                 m_held[prio] = task;
-                m_held_bitmap |= (1U << prio);
+                BitmapTraits::Set(m_held_bitmap, prio);
             }
         }
         else if (m_held[prio] == task)
         {
             m_held[prio] = nullptr;
-            m_held_bitmap &= ~(1U << prio);
+            BitmapTraits::Clear(m_held_bitmap, prio);
         }
         else
         {
@@ -548,9 +569,10 @@ protected:
         return (thr > prio ? thr : prio);
     }
 
-    static __stk_forceinline Priority GetHighestReadyPriority(uint32_t bitmap)
+    //! Index of the highest set bit of \a bitmap (must not be empty), i.e. the highest ready priority.
+    static __stk_forceinline Priority GetHighestReadyPriority(const ReadyBitmap &bitmap)
     {
-        return static_cast<Priority>(31U - CountLeadingZeros(bitmap));
+        return static_cast<Priority>(BitmapTraits::HighestSet(bitmap));
     }
 
 private:
@@ -558,9 +580,9 @@ private:
 
     IKernelTask::ListHeadType m_tasks[MAX_PRIORITIES]; //!< Runnable tasks per priority level.
     IKernelTask::ListHeadType m_sleep;                 //!< Sleeping tasks.
-    uint32_t                  m_ready_bitmap;          //!< Bit i set when m_tasks[i] is non-empty.
-    uint32_t                  m_held_bitmap;           //!< Bit i set when m_held[i] is a task holding its preemption-threshold.
-    uint32_t                  m_advance_bitmap;        //!< Bit i set: next GetNext() at level i advances the cursor (TIMESLICE only).
+    ReadyBitmap               m_ready_bitmap;          //!< Bit i set when m_tasks[i] is non-empty.
+    ReadyBitmap               m_held_bitmap;           //!< Bit i set when m_held[i] is a task holding its preemption-threshold.
+    ReadyBitmap               m_advance_bitmap;        //!< Bit i set: next GetNext() at level i advances the cursor (TIMESLICE only).
     IKernelTask              *m_running;               //!< Task returned by the last GetNext() (nullptr if none or it left the runnable set).
     IKernelTask              *m_prev[MAX_PRIORITIES];  //!< Per-level round-robin cursor: last task returned by GetNext() (sticky mode: the selected task, kept until a rotation is requested).
     IKernelTask              *m_held[MAX_PRIORITIES];  //!< Per-level task currently holding its threshold (at most one per level, as in ThreadX).
@@ -576,6 +598,39 @@ typedef SwitchStrategyPreemptionThreshold<32> SwitchStrategyPT32;
              for use with stk::KERNEL_TIMESLICE.
 */
 typedef SwitchStrategyPreemptionThreshold<32, true> SwitchStrategyPT32_TS;
+
+/*! \typedef SwitchStrategyPT64
+    \brief   SwitchStrategyPreemptionThreshold with 64 priority levels (64-bit bitmaps).
+    \note    On 32-bit targets (e.g. Cortex-M) 64-bit bitmaps cost two registers and a two-step scan;
+             prefer SwitchStrategyPT32 unless more than 32 levels are really needed.
+*/
+typedef SwitchStrategyPreemptionThreshold<64> SwitchStrategyPT64;
+
+/*! \typedef SwitchStrategyPT64_TS
+    \brief   SwitchStrategyPreemptionThreshold with 64 priority levels (64-bit bitmaps) and per-task
+             time-slicing, for use with stk::KERNEL_TIMESLICE.
+*/
+typedef SwitchStrategyPreemptionThreshold<64, true> SwitchStrategyPT64_TS;
+
+} // namespace sched
+
+// ----------------------------------------------------------------------------
+// Backward compatibility: the strategies live in stk::sched, the names below keep existing
+// code that refers to them as stk::<Name> compiling. Migrate to stk::sched::<Name>.
+// ----------------------------------------------------------------------------
+
+//! \deprecated Use stk::sched::SwitchStrategyPreemptionThreshold.
+template <uint16_t MAX_PRIORITIES, bool TIMESLICE = false, class ReadyBitmap = typename sched::ReadyBitmapSelect<MAX_PRIORITIES>::Type>
+using SwitchStrategyPreemptionThreshold __stk_attr_deprecated_type("Use stk::sched::SwitchStrategyPreemptionThreshold") = sched::SwitchStrategyPreemptionThreshold<MAX_PRIORITIES, TIMESLICE, ReadyBitmap>;
+
+//! \deprecated Use stk::sched::SwitchStrategyPT32.
+typedef sched::SwitchStrategyPT32 SwitchStrategyPT32 __stk_attr_deprecated_type("Use stk::sched::SwitchStrategyPT32");
+//! \deprecated Use stk::sched::SwitchStrategyPT32_TS.
+typedef sched::SwitchStrategyPT32_TS SwitchStrategyPT32_TS __stk_attr_deprecated_type("Use stk::sched::SwitchStrategyPT32_TS");
+//! \deprecated Use stk::sched::SwitchStrategyPT64.
+typedef sched::SwitchStrategyPT64 SwitchStrategyPT64 __stk_attr_deprecated_type("Use stk::sched::SwitchStrategyPT64");
+//! \deprecated Use stk::sched::SwitchStrategyPT64_TS.
+typedef sched::SwitchStrategyPT64_TS SwitchStrategyPT64_TS __stk_attr_deprecated_type("Use stk::sched::SwitchStrategyPT64_TS");
 
 } // namespace stk
 

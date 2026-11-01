@@ -28,20 +28,24 @@
                                   GetMsFromTicks, GetTimeNowMs, Delay, Sleep, SleepUntil, Yield,
                                   LockScheduler, UnlockScheduler, RestoreSchedulerLock, and the
                                   ScopedSchedulerLock RAII alias.
-     - stk_strategy_rrobin.h    - SwitchStrategyRoundRobin.
-     - stk_strategy_swrrobin.h  - SwitchStrategySmoothWeightedRoundRobin.
-     - stk_strategy_monotonic.h - SwitchStrategyMonotonic (SRT rate-monotonic).
-     - stk_strategy_edf.h       - SwitchStrategyEdf (Earliest Deadline First).
-     - stk_strategy_fpriority.h - SwitchStrategyFixedPriority.
-     - stk_strategy_pthreshold  - SwitchStrategyPreemptionThreshold (Fixed-priority preemptive with Preemption-Threshold).
+     - stk_strategy_rrobin.h    - sched::SwitchStrategyRoundRobin.
+     - stk_strategy_swrrobin.h  - sched::SwitchStrategySmoothWeightedRoundRobin.
+     - stk_strategy_monotonic.h - sched::SwitchStrategyMonotonic (SRT rate-monotonic).
+     - stk_strategy_edf.h       - sched::SwitchStrategyEdf (Earliest Deadline First).
+     - stk_strategy_fpriority.h - sched::SwitchStrategyFixedPriority.
+     - stk_strategy_pthreshold  - sched::SwitchStrategyPreemptionThreshold (Fixed-priority preemptive with Preemption-Threshold).
 */
 
 namespace stk {
+
+namespace detail {
 
 // Helper function for Kernel::UpdateTaskState.
 template <bool TicklessMode> __stk_forceinline Timeout GetInitialSleepTicks();
 template <> __stk_forceinline Timeout GetInitialSleepTicks<true>()  { return STK_TICKLESS_TICKS_MAX; }
 template <> __stk_forceinline Timeout GetInitialSleepTicks<false>() { return 1; }
+
+} // namespace detail
 
 /*! \class Kernel
     \brief Concrete implementation of IKernel.
@@ -80,7 +84,7 @@ template <> __stk_forceinline Timeout GetInitialSleepTicks<false>() { return 1; 
 
     Usage example:
     \code
-    static stk::Kernel<KERNEL_STATIC, 3, SwitchStrategyRoundRobin, PlatformDefault> kernel;
+    static stk::Kernel<KERNEL_STATIC, 3, sched::SwitchStrategyRoundRobin, PlatformDefault> kernel;
 
     static MyTask1<256, ACCESS_PRIVILEGED> task1;
     static MyTask2<512, ACCESS_USER>       task2;
@@ -2911,7 +2915,7 @@ protected:
     */
     Timeout UpdateTaskState(const Timeout elapsed_ticks)
     {
-        Timeout sleep_ticks = GetInitialSleepTicks<IsTicklessMode()>();
+        Timeout sleep_ticks = detail::GetInitialSleepTicks<IsTicklessMode()>();
 
         for (size_t i = 0U; i < TASKS_MAX; ++i)
         {

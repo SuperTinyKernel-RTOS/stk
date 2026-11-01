@@ -49,7 +49,7 @@ static volatile bool    g_TestComplete  = false;
 static volatile int32_t g_InstancesDone = 0;
 
 // Kernel (Pipe uses ConditionVariable internally, so KERNEL_SYNC is required)
-static Kernel<KERNEL_DYNAMIC | KERNEL_SYNC, _STK_PIPE_TEST_TASKS_MAX, SwitchStrategyRR, PlatformDefault> g_Kernel;
+static Kernel<KERNEL_DYNAMIC | KERNEL_SYNC, _STK_PIPE_TEST_TASKS_MAX, sched::SwitchStrategyRR, PlatformDefault> g_Kernel;
 
 // Test pipe (re-constructed per test via ResetTestState)
 static sync::PipeT<int32_t, _STK_PIPE_CAPACITY> g_TestPipe;

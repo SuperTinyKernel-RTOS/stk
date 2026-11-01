@@ -56,7 +56,7 @@
     - **TimerHost** commands are asynchronous: they are queued and applied by the tick task (task mode) or by the next
       \c Process() call (polled mode). They return \c false if the command queue is full.
     - **Weights** (\c TimerHost::Config) are strategy-specific and forwarded to the kernel unchanged. With
-      \c SwitchStrategyPreemptionThreshold they must be set explicitly (\c MakeWeight(p, p)): \c DEFAULT_WEIGHT decodes as
+      \c sched::SwitchStrategyPreemptionThreshold they must be set explicitly (\c MakeWeight(p, p)): \c DEFAULT_WEIGHT decodes as
       priority 0 / threshold 1 and every timer task would be held while it runs.
     - **Polled mode** resolution is the call period of \c Process(): a timer fires on the first call at or after its
       deadline. An overdue periodic timer fires once per call until its schedule has caught up (no drift).

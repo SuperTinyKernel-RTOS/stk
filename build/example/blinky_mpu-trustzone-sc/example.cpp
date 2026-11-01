@@ -533,7 +533,7 @@ static void CreateKernel()
     const uint8_t KernelMode = KERNEL_TYPE | KERNEL_SYNC | (STK_TICKLESS_IDLE ? KERNEL_TICKLESS : 0);
 
     // Allocate scheduling kernel for 3 threads (tasks) with Round-Robin scheduling strategy.
-    static Kernel<KernelMode, TASK_COUNT, SwitchStrategyRR, PlatformDefault> kernel;
+    static Kernel<KernelMode, TASK_COUNT, sched::SwitchStrategyRR, PlatformDefault> kernel;
 
     // for MPU configuration and MemFault/HardFault exceptions processing (also supplies the
     // system-wide background MPU regions via OnConfigureMpu(), see above).

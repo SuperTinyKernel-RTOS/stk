@@ -42,7 +42,7 @@
  * lwip_init():
  *
  *     stk::Kernel<stk::KERNEL_DYNAMIC | stk::KERNEL_SYNC, MY_MAX_TASKS,
- *                 stk::SwitchStrategySmoothWeightedRoundRobin,
+ *                 stk::sched::SwitchStrategySmoothWeightedRoundRobin,
  *                 stk::PlatformDefault> my_kernel;
  *
  *     my_kernel.Initialize();

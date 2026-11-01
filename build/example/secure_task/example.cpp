@@ -219,7 +219,7 @@ void RunExample()
 
     // allocate scheduling kernel for 4 threads (tasks) with Round-robin scheduling strategy
     static Kernel<KERNEL_STATIC | KERNEL_SYNC | (STK_TICKLESS_IDLE ? KERNEL_TICKLESS : 0), 4,
-            SwitchStrategyRR, PlatformDefault> kernel;
+            sched::SwitchStrategyRR, PlatformDefault> kernel;
 
     // these are secure/trusted tasks which are allowed to access hardware safely
     static LedTask<ACCESS_PRIVILEGED> secure_hw_task;

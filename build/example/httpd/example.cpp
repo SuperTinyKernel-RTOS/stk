@@ -460,8 +460,8 @@ void RunExample()
     // LWIP_NETCONN_SEM_PER_THREAD and has no bearing on kernel.AddTask() capacity.
     static constexpr size_t tasks_count = 1U + stk::time::TimerHost::TASK_COUNT + ASYNC_CONTEXT_STK_TASKS + LWIP_STK_THREAD_POOL_SIZE;
 
-    // Allocate the scheduling kernel with priority-based scheduling (SwitchStrategyFP32).
-    static Kernel<KernelMode, tasks_count, SwitchStrategyFP32, PlatformDefault> kernel;
+    // Allocate the scheduling kernel with priority-based scheduling (sched::SwitchStrategyFP32).
+    static Kernel<KernelMode, tasks_count, sched::SwitchStrategyFP32, PlatformDefault> kernel;
     static stk::time::TimerHost timer_host;
     static WifiHttpdTask task;
 

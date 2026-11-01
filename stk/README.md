@@ -126,18 +126,18 @@ All user configuration belongs in `stk_config.h`, which is picked up automatical
 
 Single source of truth for the STK version (Semantic Versioning 2.0.0 numbering). `STK_VERSION_MAJOR`, `STK_VERSION_MINOR` and `STK_VERSION_PATCH` (each 0..255) are edited only in this header and are not overridable: defining them elsewhere, e.g. with `-D`, is a compile error. The `STK_VERSION_*` macros work from both C and C++, while `stk::VersionInfo` and `stk::GetVersion()` are C++ only (C code uses `stk_get_version()` from `stk_c.h`).
 
-| Symbol                           | Description                                                                                                              |
-|----------------------------------|--------------------------------------------------------------------------------------------------------------------------|
-| `STK_VERSION_MAJOR/MINOR/PATCH`  | Numeric version parts                                                                                                    |
-| `STK_VERSION_PRERELEASE`         | Pre-release tag, e.g. `"-rc1"`; empty for a release. Overridable by the build system                                     |
-| `STK_VERSION_STRING`             | Version string literal (the minor part is zero-padded to two digits, e.g. `1.08.0`) followed by `STK_VERSION_PRERELEASE` |
-| `STK_VERSION_CODE`               | Packed `0x00MMmmpp`, CMSIS-Core style (major in the upper halfword), usable in `#if`. The packing format is stable       |
-| `STK_VERSION_ENCODE(M, m, p)`    | Packs a version the same way as `STK_VERSION_CODE`                                                                       |
-| `STK_VERSION_AT_LEAST(M, m, p)`  | `true` if the STK version is equal to or newer than the given one, usable in `#if`                                       |
-| `STK_VERSION_CMSIS_RTOS2`        | CMSIS-RTOS2 `osVersion_t` style: `major*10,000,000 + minor*10,000 + patch` (reported by the CMSIS-RTOS2 wrapper)         |
-| `STK_VERSION_REVISION`           | Build metadata: git commit count, `0` if unknown                                                                         |
-| `STK_VERSION_GIT_HASH`           | Build metadata: short git hash, with a `-dirty` suffix if tracked files are modified, `"unknown"` if unavailable         |
-| `stk::GetVersion()`              | `constexpr` function returning `stk::VersionInfo` (`major`, `minor`, `patch`, `string`, `code`, `revision`, `git_hash`)  |
+| Symbol                          | Description                                                                                                              |
+|---------------------------------|--------------------------------------------------------------------------------------------------------------------------|
+| `STK_VERSION_MAJOR/MINOR/PATCH` | Numeric version parts                                                                                                    |
+| `STK_VERSION_PRERELEASE`        | Pre-release tag, e.g. `"-rc1"`; empty for a release. Overridable by the build system                                     |
+| `STK_VERSION_STRING`            | Version string literal (the minor part is zero-padded to two digits, e.g. `1.08.0`) followed by `STK_VERSION_PRERELEASE` |
+| `STK_VERSION_CODE`              | Packed `0x00MMmmpp`, CMSIS-Core style (major in the upper halfword), usable in `#if`. The packing format is stable       |
+| `STK_VERSION_ENCODE(M, m, p)`   | Packs a version the same way as `STK_VERSION_CODE`                                                                       |
+| `STK_VERSION_AT_LEAST(M, m, p)` | `true` if the STK version is equal to or newer than the given one, usable in `#if`                                       |
+| `STK_VERSION_CMSIS_RTOS2`       | CMSIS-RTOS2 `osVersion_t` style: `major*10,000,000 + minor*10,000 + patch` (reported by the CMSIS-RTOS2 wrapper)         |
+| `STK_VERSION_REVISION`          | Build metadata: git commit count, `0` if unknown                                                                         |
+| `STK_VERSION_GIT_HASH`          | Build metadata: short git hash, with a `-dirty` suffix if tracked files are modified, `"unknown"` if unavailable         |
+| `stk::GetVersion()`             | `constexpr` function returning `stk::VersionInfo` (`major`, `minor`, `patch`, `string`, `code`, `revision`, `git_hash`)  |
 
 **Build metadata.** `STK_VERSION_REVISION` and `STK_VERSION_GIT_HASH` do not take part in version ordering. CMake generates them into `stk_revision.h` at build time (`ENABLE_REVISION=ON`, the default; see `build/cmake/GenerateRevision.cmake` and `gen_revision.py`) and defines `STK_REVISION_HEADER` so that `stk_version.h` includes it. Without git, Python or history (source archive, shallow clone, other build systems, `-DENABLE_REVISION=OFF`) they fall back to `0` and `"unknown"`. CI jobs should check out the full history (`fetch-depth: 0` in `actions/checkout`), otherwise the commit count is wrong.
 
@@ -183,15 +183,15 @@ Defines every kernel interface, type alias, and enumeration. Key contents:
 
 **Enumerations:**
 
-| Enum             | Values                                                                                                                                                                                                |
-|------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `EAccessMode`    | `ACCESS_USER`, `ACCESS_PRIVILEGED`, `ACCESS_SECURE` (ARM TrustZone Secure binary)                                                                                                                     |
-| `EKernelMode`    | `KERNEL_STATIC`, `KERNEL_DYNAMIC`, `KERNEL_HRT`, `KERNEL_SYNC`, `KERNEL_TICKLESS`, `KERNEL_TIMESLICE`                                                                                                |
-| `EKernelPanicId` | 13 panic codes (`KERNEL_PANIC_NONE` plus 12 fault reasons: spin-lock deadlock, stack corruption, assert, HRT hard fault, CPU exception, CS-nesting overflow, unknown SVC, bad state, bad mode, bad stack type, non-secure access, bad memory region) |
-| `EStackType`     | `STACK_USER_TASK`, `STACK_SLEEP_TRAP`, `STACK_EXIT_TRAP`                                                                                                                                              |
-| `ELockResult`    | `LOCK_FAIL_ISR` (-2), `LOCK_FAIL` (-1), `LOCK_WAS_UNLOCKED` (0), `LOCK_WAS_LOCKED` (1) — result of the scheduler lock calls, see [Scheduler lock](#scheduler-lock)                                    |
-| `EAddResult`     | `ADD_OK`, `ADD_FAIL_POOL_FULL`, `ADD_FAIL_DUPLICATE`, `ADD_FAIL_INVALID` — result of `IKernel::AddTask()` (both the soft real-time and the hard real-time overloads), see [Adding and removing tasks at runtime](#adding-and-removing-tasks-at-runtime-kernel_dynamic)|
-| `EConsts`        | `PERIODICITY_MAX` (99 000 µs), `PERIODICITY_DEFAULT` (1 000 µs), `STACK_SIZE_MIN`                                                                                                                     |
+| Enum             | Values                                                                                                                                                                                                                                                                 |
+|------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `EAccessMode`    | `ACCESS_USER`, `ACCESS_PRIVILEGED`, `ACCESS_SECURE` (ARM TrustZone Secure binary)                                                                                                                                                                                      |
+| `EKernelMode`    | `KERNEL_STATIC`, `KERNEL_DYNAMIC`, `KERNEL_HRT`, `KERNEL_SYNC`, `KERNEL_TICKLESS`, `KERNEL_TIMESLICE`                                                                                                                                                                  |
+| `EKernelPanicId` | 13 panic codes (`KERNEL_PANIC_NONE` plus 12 fault reasons: spin-lock deadlock, stack corruption, assert, HRT hard fault, CPU exception, CS-nesting overflow, unknown SVC, bad state, bad mode, bad stack type, non-secure access, bad memory region)                   |
+| `EStackType`     | `STACK_USER_TASK`, `STACK_SLEEP_TRAP`, `STACK_EXIT_TRAP`                                                                                                                                                                                                               |
+| `ELockResult`    | `LOCK_FAIL_ISR` (-2), `LOCK_FAIL` (-1), `LOCK_WAS_UNLOCKED` (0), `LOCK_WAS_LOCKED` (1) — result of the scheduler lock calls, see [Scheduler lock](#scheduler-lock)                                                                                                                 |
+| `EAddResult`     | `ADD_OK`, `ADD_FAIL_POOL_FULL`, `ADD_FAIL_DUPLICATE`, `ADD_FAIL_INVALID` — result of `IKernel::AddTask()` (both the soft real-time and the hard real-time overloads), see [Adding and removing tasks at runtime](#adding-and-removing-tasks-at-runtime-kernel_dynamic) |
+| `EConsts`        | `PERIODICITY_MAX` (99 000 µs), `PERIODICITY_DEFAULT` (1 000 µs), `STACK_SIZE_MIN`                                                                                                                                                                                      |
 
 **Interfaces defined here:**
 
@@ -263,7 +263,7 @@ class MyTask : public stk::Task<256, Mode>
 };
 ```
 
-**`TaskW<Weight, StackSize, AccessMode>`** — Variant of `Task` with a compile-time scheduling weight for use with `SwitchStrategySWRR`. Incompatible with `KERNEL_HRT`.
+**`TaskW<Weight, StackSize, AccessMode>`** — Variant of `Task` with a compile-time scheduling weight for use with `sched::SwitchStrategySWRR`. Incompatible with `KERNEL_HRT`.
 
 **`ScopedSchedulerLock`** — RAII guard for the [scheduler lock](#scheduler-lock) (`typedef IKernelService::ScopedSchedulerLock ScopedSchedulerLock` in `stk::`): locks on construction and restores the state that was in effect before on destruction, so guards nest safely.
 
@@ -273,30 +273,30 @@ class MyTask : public stk::Task<256, Mode>
 
 **Free functions** (all delegate to `IKernelService::GetInstance()`):
 
-| Function                     | ISR-safe  | Description                                                                                |
-|------------------------------|-----------|--------------------------------------------------------------------------------------------|
-| `GetTid()`                   | Yes       | Task identifier of the calling task                                                        |
-| `GetTicks()`                 | Yes       | Ticks elapsed since kernel start                                                           |
-| `GetTickResolution()`        | Yes       | Microseconds per tick                                                                      |
-| `GetTicksFromMs(ms)`         | Yes       | Convert ms → ticks (queries resolution)                                                    |
-| `GetTicksFromMs(ms, res)`    | Yes       | Convert ms → ticks (explicit resolution)                                                   |
-| `GetMsFromTicks(ticks, res)` | Yes       | Convert ticks → ms                                                                         |
-| `GetTimeNowMs()`             | Yes       | Milliseconds since kernel start                                                            |
-| `GetSysTimerCount()`         | Yes       | Raw hardware timer counter value                                                           |
-| `GetSysTimerFrequency()`     | Yes       | Hardware timer frequency (Hz)                                                              |
-| `Sleep(ticks)`               | No        | Suspend calling task for N ticks                                                           |
-| `SleepMs(ms)`                | No        | Suspend calling task for N milliseconds                                                    |
-| `SleepUntil(timestamp)`      | No        | Suspend until absolute tick timestamp                                                      |
-| `SleepCancel(task_id)`       | Yes       | Cancel a task's pending sleep                                                              |
-| `Yield()`                    | No        | Cooperatively yield to the next task                                                       |
-| `ExitTask()`                 | No        | Terminate the calling task (`KERNEL_DYNAMIC` only), does not return                        |
-| `SetTimeSlice(tid, ticks)`   | No        | Change a task's time-slice quantum (`KERNEL_TIMESLICE` only); returns the previous quantum |
-| `SetTimeSlice(ticks)`        | No        | Same for the calling task                                                                  |
-| `LockScheduler()`            | No        | Disable task switching, returns the previous state (`ELockResult`), see [Scheduler lock](#scheduler-lock) |
-| `UnlockScheduler()`          | No        | Re-enable task switching, returns the previous state (`ELockResult`)                       |
-| `RestoreSchedulerLock(locked)` | No      | Set the lock to a state saved earlier (nesting), returns the new state (`ELockResult`)     |
-| `Delay(ticks)`               | No        | Busy-wait for N ticks (spins, no sleep)                                                    |
-| `DelayMs(ms)`                | No        | Busy-wait for N milliseconds                                                               |
+| Function                       | ISR-safe | Description                                                                                               |
+|--------------------------------|----------|-----------------------------------------------------------------------------------------------------------|
+| `GetTid()`                     | Yes      | Task identifier of the calling task                                                                       |
+| `GetTicks()`                   | Yes      | Ticks elapsed since kernel start                                                                          |
+| `GetTickResolution()`          | Yes      | Microseconds per tick                                                                                     |
+| `GetTicksFromMs(ms)`           | Yes      | Convert ms → ticks (queries resolution)                                                                   |
+| `GetTicksFromMs(ms, res)`      | Yes      | Convert ms → ticks (explicit resolution)                                                                  |
+| `GetMsFromTicks(ticks, res)`   | Yes      | Convert ticks → ms                                                                                        |
+| `GetTimeNowMs()`               | Yes      | Milliseconds since kernel start                                                                           |
+| `GetSysTimerCount()`           | Yes      | Raw hardware timer counter value                                                                          |
+| `GetSysTimerFrequency()`       | Yes      | Hardware timer frequency (Hz)                                                                             |
+| `Sleep(ticks)`                 | No       | Suspend calling task for N ticks                                                                          |
+| `SleepMs(ms)`                  | No       | Suspend calling task for N milliseconds                                                                   |
+| `SleepUntil(timestamp)`        | No       | Suspend until absolute tick timestamp                                                                     |
+| `SleepCancel(task_id)`         | Yes      | Cancel a task's pending sleep                                                                             |
+| `Yield()`                      | No       | Cooperatively yield to the next task                                                                      |
+| `ExitTask()`                   | No       | Terminate the calling task (`KERNEL_DYNAMIC` only), does not return                                       |
+| `SetTimeSlice(tid, ticks)`     | No       | Change a task's time-slice quantum (`KERNEL_TIMESLICE` only); returns the previous quantum                |
+| `SetTimeSlice(ticks)`          | No       | Same for the calling task                                                                                 |
+| `LockScheduler()`              | No       | Disable task switching, returns the previous state (`ELockResult`), see [Scheduler lock](#scheduler-lock) |
+| `UnlockScheduler()`            | No       | Re-enable task switching, returns the previous state (`ELockResult`)                                      |
+| `RestoreSchedulerLock(locked)` | No       | Set the lock to a state saved earlier (nesting), returns the new state (`ELockResult`)                    |
+| `Delay(ticks)`                 | No       | Busy-wait for N ticks (spins, no sleep)                                                                   |
+| `DelayMs(ms)`                  | No       | Busy-wait for N milliseconds                                                                              |
 
 ---
 
@@ -312,7 +312,7 @@ It pulls in `stk_helper.h` and all the built-in strategy headers, then defines t
 |-------------|-----------------------------------------------------|
 | `TMode`     | Bitmask of `EKernelMode` flags (see table below)    |
 | `TSize`     | Maximum concurrent tasks (must be > 0)              |
-| `TStrategy` | Scheduling strategy class (e.g. `SwitchStrategyRR`) |
+| `TStrategy` | Scheduling strategy class (e.g. `sched::SwitchStrategyRR`) |
 | `TPlatform` | Platform driver class (e.g. `PlatformDefault`)      |
 
 **`TMode` flag combinations:**
@@ -324,7 +324,7 @@ It pulls in `stk_helper.h` and all the built-in strategy headers, then defines t
 | `KERNEL_HRT`      | Hard Real-Time mode — tasks have deadlines and periods. Must combine with `KERNEL_STATIC` or `KERNEL_DYNAMIC`. Incompatible with `KERNEL_TICKLESS` and weighted strategies                                            |
 | `KERNEL_SYNC`     | Enables `sync::` primitives (Mutex, Event, Semaphore, etc.)                                                                                                                                                           |
 | `KERNEL_TICKLESS` | Low-power tickless idle. Requires `STK_TICKLESS_IDLE=1` in `stk_config.h`. Incompatible with `KERNEL_HRT`                                                                                                             |
-| `KERNEL_TIMESLICE`| Per-task time-slicing: a running task is rotated behind its same-priority peers when its quantum expires. Requires a strategy with `TIMESLICE_API = 1` (e.g. `SwitchStrategyPT32_TS`). Incompatible with `KERNEL_HRT` |
+| `KERNEL_TIMESLICE`| Per-task time-slicing: a running task is rotated behind its same-priority peers when its quantum expires. Requires a strategy with `TIMESLICE_API = 1` (e.g. `sched::SwitchStrategyPT32_TS`). Incompatible with `KERNEL_HRT` |
 
 All illegal combinations are caught at compile time by `STK_STATIC_ASSERT`.
 
@@ -342,7 +342,7 @@ class Task1 : public stk::Task<512, stk::ACCESS_USER>
 // Instantiate kernel with Round-Robin, 3 tasks, default platform
 static stk::Kernel<stk::KERNEL_STATIC | stk::KERNEL_SYNC,
                    3,
-                   stk::SwitchStrategyRR,
+                   stk::sched::SwitchStrategyRR,
                    stk::PlatformDefault> kernel;
 
 static Task1 task1, task2, task3;
@@ -388,7 +388,7 @@ if (res == stk::ADD_FAIL_POOL_FULL)
 
 ### Time-slicing (`KERNEL_TIMESLICE`)
 
-Optional ThreadX-style time-slicing with a per-task quantum, enabled by the `KERNEL_TIMESLICE` mode flag together with a strategy that reports `TIMESLICE_API = 1` (currently `SwitchStrategyPT32_TS`, see [`include/strategy/README.md`](include/strategy/README.md)). Without the flag there is no per-task accounting and no extra memory per task.
+Optional ThreadX-style time-slicing with a per-task quantum, enabled by the `KERNEL_TIMESLICE` mode flag together with a strategy that reports `TIMESLICE_API = 1` (currently `sched::SwitchStrategyPT32_TS`, see [`include/strategy/README.md`](include/strategy/README.md)). Without the flag there is no per-task accounting and no extra memory per task.
 
 | API                                                     | Where           | Description                                                                                                                                                                                                                    |
 |---------------------------------------------------------|-----------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
@@ -410,13 +410,13 @@ Optional ThreadX-style time-slicing with a per-task quantum, enabled by the `KER
 class Worker : public stk::Task<256, stk::ACCESS_USER>
 {
     stk::Timeout GetTimeSlice() const override { return 10; } // 10 ticks
-    stk::Weight  GetWeight()    const override { return stk::SwitchStrategyPT32_TS::MakeWeight(5, 5); }
+    stk::Weight  GetWeight()    const override { return stk::sched::SwitchStrategyPT32_TS::MakeWeight(5, 5); }
 
     void Run() override { while (true) { /* work */ } }
 };
 
 static stk::Kernel<stk::KERNEL_STATIC | stk::KERNEL_TIMESLICE, 3,
-                   stk::SwitchStrategyPT32_TS, stk::PlatformDefault> kernel;
+                   stk::sched::SwitchStrategyPT32_TS, stk::PlatformDefault> kernel;
 
 // later, from a task:
 const stk::Timeout prev = stk::SetTimeSlice(20); // calling task: 20 ticks from now on
@@ -429,13 +429,13 @@ stk::SetTimeSlice(prev);                         // restore
 
 Disables task switching while ticks, sleep timers, timeouts and ISRs keep running (the equivalent of CMSIS-RTOS2 `osKernelLock()` / `osKernelUnlock()` / `osKernelRestoreLock()`). While locked, `IKernel::GetState()` reports `KSTATE_LOCKED`. It is a soft critical section among tasks only: it does **not** protect data shared with ISRs (use `ScopedCriticalSection` for that).
 
-| API                                                       | Description                                                                                                                  |
-|-----------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------|
-| `IKernel::SetSchedulerLock(bool lock)`                    | The single kernel entry point (keeps the binary small); returns the **previous** state                                       |
-| `IKernelService::LockScheduler()` / `stk::LockScheduler()` | Lock; returns `LOCK_WAS_UNLOCKED` / `LOCK_WAS_LOCKED`                                                                        |
-| `IKernelService::UnlockScheduler()` / `stk::UnlockScheduler()` | Unlock; returns the previous state                                                                                       |
-| `IKernelService::RestoreSchedulerLock(locked)` / `stk::RestoreSchedulerLock(locked)` | Set the lock to a saved state; returns the **new** state                                       |
-| `stk::ScopedSchedulerLock`                                | RAII guard, restores the previous state on destruction                                                                       |
+| API                                                                                  | Description                                                                            |
+|--------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------|
+| `IKernel::SetSchedulerLock(bool lock)`                                               | The single kernel entry point (keeps the binary small); returns the **previous** state |
+| `IKernelService::LockScheduler()` / `stk::LockScheduler()`                           | Lock; returns `LOCK_WAS_UNLOCKED` / `LOCK_WAS_LOCKED`                                  |
+| `IKernelService::UnlockScheduler()` / `stk::UnlockScheduler()`                       | Unlock; returns the previous state                                                     |
+| `IKernelService::RestoreSchedulerLock(locked)` / `stk::RestoreSchedulerLock(locked)` | Set the lock to a saved state; returns the **new** state                               |
+| `stk::ScopedSchedulerLock`                                                           | RAII guard, restores the previous state on destruction                                 |
 
 **Rules:**
 
@@ -470,18 +470,18 @@ The CMSIS-RTOS2 wrapper maps `osKernelLock()` / `osKernelUnlock()` / `osKernelRe
 
 STK offers two different ways to protect shared data. They are **not interchangeable**: they protect against different things and have a very different cost.
 
-| | `sync::ScopedCriticalSection` / `hw::CriticalSection` | `stk::ScopedSchedulerLock` |
-|---|---|---|
-| **Level** | Hardware: masks interrupts on the calling core (and, on SMP, takes a global cross-core spinlock) | Kernel: disables task switching only |
-| **ISRs** | Blocked for the whole duration | Keep running (no ISR latency added) |
-| **Other tasks on this core** | Cannot run (no interrupt, no tick, no switch) | Cannot run (no task switch) |
-| **Other CPU cores** | Excluded (cross-core spinlock) | **Not excluded**: it is a per-kernel (per-core) lock |
-| **Ticks, sleep timers, timeouts** | Delayed while interrupts are masked | Keep advancing |
-| **Jitter / latency** | Adds interrupt latency for every cycle spent inside; can cause missed deadlines | None on ISRs; a task switch due while locked is performed on the next tick after unlock |
-| **Callable from an ISR** | Yes | No (`LOCK_FAIL_ISR`) |
-| **Nesting** | Yes (counted) | Binary; nest with the returned state / `ScopedSchedulerLock` |
-| **Available in `KERNEL_HRT`** | Yes | No (`LOCK_FAIL`) |
-| **Cost** | Very short sections only | Cheap; the section may be longer, but must stay non-blocking (see the rules above) |
+|                                   | `sync::ScopedCriticalSection` / `hw::CriticalSection`                                            | `stk::ScopedSchedulerLock`                                                              |
+|-----------------------------------|--------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------|
+| **Level**                         | Hardware: masks interrupts on the calling core (and, on SMP, takes a global cross-core spinlock) | Kernel: disables task switching only                                                    |
+| **ISRs**                          | Blocked for the whole duration                                                                   | Keep running (no ISR latency added)                                                     |
+| **Other tasks on this core**      | Cannot run (no interrupt, no tick, no switch)                                                    | Cannot run (no task switch)                                                             |
+| **Other CPU cores**               | Excluded (cross-core spinlock)                                                                   | **Not excluded**: it is a per-kernel (per-core) lock                                    |
+| **Ticks, sleep timers, timeouts** | Delayed while interrupts are masked                                                              | Keep advancing                                                                          |
+| **Jitter / latency**              | Adds interrupt latency for every cycle spent inside; can cause missed deadlines                  | None on ISRs; a task switch due while locked is performed on the next tick after unlock |
+| **Callable from an ISR**          | Yes                                                                                              | No (`LOCK_FAIL_ISR`)                                                                    |
+| **Nesting**                       | Yes (counted)                                                                                    | Binary; nest with the returned state / `ScopedSchedulerLock`                            |
+| **Available in `KERNEL_HRT`**     | Yes                                                                                              | No (`LOCK_FAIL`)                                                                        |
+| **Cost**                          | Very short sections only                                                                         | Cheap; the section may be longer, but must stay non-blocking (see the rules above)      |
 
 > **WARNING: use `sync::ScopedCriticalSection` / `hw::CriticalSection` whenever the shared data is read or modified by an ISR, or is shared between multiple CPU cores.** `ScopedSchedulerLock` does **not** stop interrupts, so an ISR can run in the middle of your update and observe or corrupt a half-written state; and it does not stop tasks running on another core. Only a critical section protects against both.
 
@@ -643,31 +643,31 @@ All strategies are **header-only** classes implementing `ITaskSwitchStrategy`. T
 
 **Available strategies at a glance:**
 
-| Header                     | Class / Alias                                  | `WEIGHT_API` | `SLEEP_EVENT_API` | Requires                     | License       |
-|----------------------------|------------------------------------------------|:------------:|:-----------------:|------------------------------|---------------|
-| `stk_strategy_rrobin.h`    | `SwitchStrategyRR`                             |      0       |         1         | —                            | MIT           |
-| `stk_strategy_swrrobin.h`  | `SwitchStrategySWRR`                           |      1       |         1         | —                            | MIT           |
-| `stk_strategy_fpriority.h` | `SwitchStrategyFP32`                           |      1       |         1         | —                            | MIT           |
-| `stk_strategy_pthreshold.h`| `SwitchStrategyPT32` / `SwitchStrategyPT32_TS` |      1       |         1         | `KERNEL_TIMESLICE` for `_TS` | MIT           |
-| `stk_strategy_edf.h`       | `SwitchStrategyEDF`                            |      0       |         1         | `KERNEL_HRT`                 | MIT           |
-| `stk_strategy_monotonic.h` | `SwitchStrategyRM` / `SwitchStrategyDM`        |      0       |         0         | `KERNEL_HRT`                 | MIT           |
-| `stk_strategy_mcas.h`      | `SwitchStrategyMCAS`                           |      —       |         —         | —                            | 🔒 Commercial |
-| `stk_strategy_mcas4.h`     | `SwitchStrategyMCAS4`                          |      —       |         —         | —                            | 🔒 Commercial |
+| Header                     | Class / Alias                                                | `WEIGHT_API` | `SLEEP_EVENT_API` | Requires                     | License       |
+|----------------------------|--------------------------------------------------------------|:------------:|:-----------------:|------------------------------|---------------|
+| `stk_strategy_rrobin.h`    | `sched::SwitchStrategyRR`                                    |      0       |         1         | —                            | MIT           |
+| `stk_strategy_swrrobin.h`  | `sched::SwitchStrategySWRR`                                  |      1       |         1         | —                            | MIT           |
+| `stk_strategy_fpriority.h` | `sched::SwitchStrategyFP32`                                  |      1       |         1         | —                            | MIT           |
+| `stk_strategy_pthreshold.h`| `sched::SwitchStrategyPT32` / `sched::SwitchStrategyPT32_TS` |      1       |         1         | `KERNEL_TIMESLICE` for `_TS` | MIT           |
+| `stk_strategy_edf.h`       | `sched::SwitchStrategyEDF`                                   |      0       |         1         | `KERNEL_HRT`                 | MIT           |
+| `stk_strategy_monotonic.h` | `sched::SwitchStrategyRM` / `sched::SwitchStrategyDM`        |      0       |         0         | `KERNEL_HRT`                 | MIT           |
+| `stk_strategy_mcas.h`      | `sched::SwitchStrategyMCAS`                                  |      —       |         —         | —                            | 🔒 Commercial |
+| `stk_strategy_mcas4.h`     | `sched::SwitchStrategyMCAS4`                                 |      —       |         —         | —                            | 🔒 Commercial |
 
 **Quick selection guide:**
 
 ```
 Is CPU time equal for all tasks?
-├── Yes → SwitchStrategyRR
+├── Yes → sched::SwitchStrategyRR
 └── No
-    ├── Static weights, proportional fairness  → SwitchStrategySWRR
-    ├── Hard priorities, classic RTOS model    → SwitchStrategyFP32
-    ├── Hard priorities + preemption-threshold → SwitchStrategyPT32
-    ├── ...and per-task time-slices            → SwitchStrategyPT32_TS + KERNEL_TIMESLICE
-    ├── Periodic tasks, formal guarantees      → SwitchStrategyRM / SwitchStrategyDM
-    ├── Dynamic deadlines, max utilisation     → SwitchStrategyEDF
-    ├── Mixed-criticality (2-level)            → SwitchStrategyMCAS   [commercial]
-    └── Mixed-criticality (4-level)            → SwitchStrategyMCAS4  [commercial]
+    ├── Static weights, proportional fairness  → sched::SwitchStrategySWRR
+    ├── Hard priorities, classic RTOS model    → sched::SwitchStrategyFP32
+    ├── Hard priorities + preemption-threshold → sched::SwitchStrategyPT32
+    ├── ...and per-task time-slices            → sched::SwitchStrategyPT32_TS + KERNEL_TIMESLICE
+    ├── Periodic tasks, formal guarantees      → sched::SwitchStrategyRM / sched::SwitchStrategyDM
+    ├── Dynamic deadlines, max utilisation     → sched::SwitchStrategyEDF
+    ├── Mixed-criticality (2-level)            → sched::SwitchStrategyMCAS   [commercial]
+    └── Mixed-criticality (4-level)            → sched::SwitchStrategyMCAS4  [commercial]
 ```
 
 For algorithm details, capability flag semantics, `KERNEL_HRT` requirements, offline schedulability analysis (`SchedulabilityCheck::IsSchedulableWCRT()`), and commercial licensing, see [`include/strategy/README.md`](include/strategy/README.md).
@@ -688,36 +688,36 @@ Requires `KERNEL_SYNC` in the kernel mode bitmask for most primitives. `ScopedCr
 
 **Primitives at a glance:**
 
-| Class                         | Header                  | Description                                                                                                                        |
-|-------------------------------|-------------------------|------------------------------------------------------------------------------------------------------------------------------------|
-| `sync::ScopedCriticalSection` | `stk_sync_cs.h`         | RAII interrupt-disable critical section. Always available, ISR-safe. For data shared with ISRs or other cores, see [Critical section vs. scheduler lock](#critical-section-vs-scheduler-lock) |
-| `sync::ConditionVariable`     | `stk_sync_cv.h`         | Monitor-style wait/notify. Foundation for Pipe, MessageQueue, EventFlags, BlockMemoryPool, BytePool                                |
-| `sync::Mutex`                 | `stk_sync_mutex.h`      | Recursive mutex. `Lock`, `TryLock`, `TimedLock`, `Unlock`. FIFO direct handover on unlock                                          |
-| `sync::FastMutex`             | `stk_sync_fastmutex.h`  | Non-recursive (binary) mutex, smaller and faster than `Mutex`. Self-lock fails/asserts. FIFO handover                              |
-| `sync::SpinLock`              | `stk_sync_spinlock.h`   | Recursive spinlock for ultra-short sections. ISR-unsafe                                                                            |
-| `sync::RWMutex`               | `stk_sync_rwmutex.h`    | Non-recursive reader-writer lock with writer-preference policy. RAII guards included                                               |
-| `sync::SemaphoreT<T>`         | `stk_sync_semaphore.h`  | Counting semaphore with a selectable unsigned counter type (`uint8_t`/`uint16_t`/`uint32_t`/`uint64_t`). Direct handover on `Signal()`, `TrySignal()` (optionally with a per-call ceiling) |
-| `sync::Semaphore`             | `stk_sync_semaphore.h`  | `typedef SemaphoreT<uint16_t> Semaphore`: default counting semaphore with a 16-bit counter (max count 0xFFFF)                      |
-| `sync::Event`                 | `stk_sync_event.h`      | Binary signal. Auto-reset or manual-reset. `Set`, `Reset`, `Wait`, `TryWait`, `Pulse`                                              |
+| Class                         | Header                  | Description                                                                                                                                                                                                                                                                                      |
+|-------------------------------|-------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `sync::ScopedCriticalSection` | `stk_sync_cs.h`         | RAII interrupt-disable critical section. Always available, ISR-safe. For data shared with ISRs or other cores, see [Critical section vs. scheduler lock](#critical-section-vs-scheduler-lock)                                                                                                    |
+| `sync::ConditionVariable`     | `stk_sync_cv.h`         | Monitor-style wait/notify. Foundation for Pipe, MessageQueue, EventFlags, BlockMemoryPool, BytePool                                                                                                                                                                                              |
+| `sync::Mutex`                 | `stk_sync_mutex.h`      | Recursive mutex. `Lock`, `TryLock`, `TimedLock`, `Unlock`. FIFO direct handover on unlock                                                                                                                                                                                                        |
+| `sync::FastMutex`             | `stk_sync_fastmutex.h`  | Non-recursive (binary) mutex, smaller and faster than `Mutex`. Self-lock fails/asserts. FIFO handover                                                                                                                                                                                            |
+| `sync::SpinLock`              | `stk_sync_spinlock.h`   | Recursive spinlock for ultra-short sections. ISR-unsafe                                                                                                                                                                                                                                          |
+| `sync::RWMutex`               | `stk_sync_rwmutex.h`    | Non-recursive reader-writer lock with writer-preference policy. RAII guards included                                                                                                                                                                                                             |
+| `sync::SemaphoreT<T>`         | `stk_sync_semaphore.h`  | Counting semaphore with a selectable unsigned counter type (`uint8_t`/`uint16_t`/`uint32_t`/`uint64_t`). Direct handover on `Signal()`, `TrySignal()` (optionally with a per-call ceiling)                                                                                                       |
+| `sync::Semaphore`             | `stk_sync_semaphore.h`  | `typedef SemaphoreT<uint16_t> Semaphore`: default counting semaphore with a 16-bit counter (max count 0xFFFF)                                                                                                                                                                                    |
+| `sync::Event`                 | `stk_sync_event.h`      | Binary signal. Auto-reset or manual-reset. `Set`, `Reset`, `Wait`, `TryWait`, `Pulse`                                                                                                                                                                                                            |
 | `sync::EventFlagsT<T>`        | `stk_sync_eventflags.h` | Multi-flag group with a selectable unsigned flags word (`uint8_t`/`uint16_t`/`uint32_t`/`uint64_t`; MSB reserved for errors, so 7/15/31/63 usable flags). `OPT_WAIT_ANY` / `OPT_WAIT_ALL` / `OPT_NO_CLEAR`. Error sentinels. `Set`, `Clear`, `And`, `Get`, `Wait`, `WaitEx`, `Sync` (rendezvous) |
-| `sync::EventFlags`            | `stk_sync_eventflags.h` | `typedef EventFlagsT<uint32_t> EventFlags`: default 32-bit group (31 usable flags), source-compatible with earlier releases        |
-| `sync::Pipe<T, N>`            | `stk_sync_pipe.h`       | Typed FIFO ring-buffer. Single-element and bulk read/write. `memcpy` fast-path for scalars                                         |
-| `sync::MessageQueue`          | `stk_sync_msgqueue.h`   | Opaque-message FIFO over external buffer. `Put/Get`, `TryPut/TryGet`, `Reset`                                                      |
-| `sync::Barrier`               | `stk_sync_barrier.h`    | Cyclic rendezvous point for a fixed-size group of tasks. `Wait` returns `true` for the last arriver; `WaitEx` reports cancellation (`BARRIER_CANCELED`) or a kernel failure (`BARRIER_FAILED`) |
-| `sync::MessageQueueT<N, MSG>` | `stk_sync_msgqueue.h`   | `MessageQueue` with compile-time capacity and internal storage                                                                     |
+| `sync::EventFlags`            | `stk_sync_eventflags.h` | `typedef EventFlagsT<uint32_t> EventFlags`: default 32-bit group (31 usable flags), source-compatible with earlier releases                                                                                                                                                                      |
+| `sync::Pipe<T, N>`            | `stk_sync_pipe.h`       | Typed FIFO ring-buffer. Single-element and bulk read/write. `memcpy` fast-path for scalars                                                                                                                                                                                                       |
+| `sync::MessageQueue`          | `stk_sync_msgqueue.h`   | Opaque-message FIFO over external buffer. `Put/Get`, `TryPut/TryGet`, `Reset`                                                                                                                                                                                                                    |
+| `sync::Barrier`               | `stk_sync_barrier.h`    | Cyclic rendezvous point for a fixed-size group of tasks. `Wait` returns `true` for the last arriver; `WaitEx` reports cancellation (`BARRIER_CANCELED`) or a kernel failure (`BARRIER_FAILED`)                                                                                                   |
+| `sync::MessageQueueT<N, MSG>` | `stk_sync_msgqueue.h`   | `MessageQueue` with compile-time capacity and internal storage                                                                                                                                                                                                                                   |
 
 **ISR safety at a glance:**
 
-| Primitive                                                  | ISR-safe operations                                               |
-|------------------------------------------------------------|-------------------------------------------------------------------|
-| `ScopedCriticalSection`                                    | All                                                               |
-| `Event`                                                    | `Set()`, `Pulse()`, `Reset()`, `TryWait()`                        |
+| Primitive                                                  | ISR-safe operations                                                               |
+|------------------------------------------------------------|-----------------------------------------------------------------------------------|
+| `ScopedCriticalSection`                                    | All                                                                               |
+| `Event`                                                    | `Set()`, `Pulse()`, `Reset()`, `TryWait()`                                        |
 | `EventFlagsT<T>` / `EventFlags`                            | `Set()`, `Clear()`, `And()`, `Get()`, `TryWait()`, `TryWaitEx()`, `Wait(NO_WAIT)` |
-| `SemaphoreT<T>` / `Semaphore`                              | `Signal()`, `TrySignal()`, `TryWait()`, `GetCount()`              |
-| `ConditionVariable`                                        | `NotifyOne()`, `NotifyAll()`, `Wait(NO_WAIT)`                     |
-| `Pipe`                                                     | All `Try*` and `NO_WAIT` variants                                 |
-| `MessageQueue`                                             | `Put(NO_WAIT)`, `TryPut()`, `Get(NO_WAIT)`, `TryGet()`, `Reset()` |
-| `SpinLock` / `Mutex` / `FastMutex` / `RWMutex` / `Barrier` | None                                                              |
+| `SemaphoreT<T>` / `Semaphore`                              | `Signal()`, `TrySignal()`, `TryWait()`, `GetCount()`                              |
+| `ConditionVariable`                                        | `NotifyOne()`, `NotifyAll()`, `Wait(NO_WAIT)`                                     |
+| `Pipe`                                                     | All `Try*` and `NO_WAIT` variants                                                 |
+| `MessageQueue`                                             | `Put(NO_WAIT)`, `TryPut()`, `Get(NO_WAIT)`, `TryGet()`, `Reset()`                 |
+| `SpinLock` / `Mutex` / `FastMutex` / `RWMutex` / `Barrier` | None                                                                              |
 
 > While the [scheduler is locked](#scheduler-lock), only the non-blocking forms (`NO_WAIT`, `Try*()`, immediately successful acquisitions) may be used from the lock holder.
 
@@ -848,7 +848,7 @@ if (trigger.Poll()) { ReadSensor(); }
 
 **`time::TimerHost` + `time::TimerHost::Timer`** (`stk_time_timer.h`) — Software timer multiplexer with two operating modes. Subclass `Timer` and override `OnExpired()`. Key commands: `Start`, `Stop`, `Reset`, `Restart` (atomic stop+start), `StartOrReset` (TOCTOU-safe), `SetPeriod`, `Shutdown`; all are asynchronous (queued, applied by the tick task or by the next `Process()`).
 
-- **Task mode** — `Initialize(kernel, mode, cfg)`: fixed overhead of one tick task plus N handler tasks (`STK_TIMER_THREADS_COUNT`, default 1) regardless of how many timers are active; callbacks run in a handler task. The optional `TimerHost::Config` sets the weights of the tick and handler tasks and external stack buffers; the returned `EAddResult` reports a failed registration. A weight is strategy-specific and forwarded unchanged: set it explicitly, in particular with `SwitchStrategyPreemptionThreshold`, where `DEFAULT_WEIGHT` decodes as priority 0 / threshold 1 and would hold every timer task while it runs.
+- **Task mode** — `Initialize(kernel, mode, cfg)`: fixed overhead of one tick task plus N handler tasks (`STK_TIMER_THREADS_COUNT`, default 1) regardless of how many timers are active; callbacks run in a handler task. The optional `TimerHost::Config` sets the weights of the tick and handler tasks and external stack buffers; the returned `EAddResult` reports a failed registration. A weight is strategy-specific and forwarded unchanged: set it explicitly, in particular with `sched::SwitchStrategyPreemptionThreshold`, where `DEFAULT_WEIGHT` decodes as priority 0 / threshold 1 and would hold every timer task while it runs.
 - **Polled mode** — `InitializePolled()` + `Process()`: no kernel tasks. The application calls `Process()` periodically from one context of its own (a task loop or an HRT job); each call applies pending commands and runs the callbacks of expired timers **inline**, never blocks, and returns the ticks until the earliest deadline (`NO_WAIT` if overdue, `WAIT_INFINITE` if no timer is active). The call period is the timer resolution and the callbacks count against the caller's time budget.
 
 `TimerHost` requires `KERNEL_SYNC` (its queues are `sync::Pipe` based). Task mode also needs `KERNEL_DYNAMIC` and cannot be used with `KERNEL_HRT`; polled mode works with `KERNEL_HRT`.
@@ -856,8 +856,8 @@ if (trigger.Poll()) { ReadSensor(); }
 ```cpp
 // Task mode: weights of the host tasks (strategy-specific), result of the registration
 stk::time::TimerHost::Config cfg;
-cfg.tick_weight    = stk::SwitchStrategyPT32::MakeWeight(5, 5);   // threshold == priority: no hold
-cfg.handler_weight = stk::SwitchStrategyPT32::MakeWeight(4, 4);
+cfg.tick_weight    = stk::sched::SwitchStrategyPT32::MakeWeight(5, 5);   // threshold == priority: no hold
+cfg.handler_weight = stk::sched::SwitchStrategyPT32::MakeWeight(4, 4);
 
 if (g_TimerHost.Initialize(&kernel, stk::ACCESS_USER, cfg) != stk::ADD_OK) { /* e.g. no free task slots */ }
 ```
@@ -1006,7 +1006,7 @@ class SensorTask : public stk::Task<512, stk::ACCESS_USER>
 ```cpp
 static stk::Kernel<stk::KERNEL_STATIC | stk::KERNEL_SYNC,
                    2,
-                   stk::SwitchStrategyRR,
+                   stk::sched::SwitchStrategyRR,
                    stk::PlatformDefault> kernel;
 
 static SensorTask sensor;
@@ -1029,34 +1029,34 @@ int main()
 
 All macros below can be defined in `stk_config.h`. Macros marked **required** must be set; all others have the shown defaults.
 
-| Macro                          | Default              | Description                                                                                    |
-|--------------------------------|:--------------------:|------------------------------------------------------------------------------------------------|
-| `_STK_ARCH_ARM_CORTEX_M`       | —                    | **Required (one arch)** — select ARM Cortex-M port                                             |
-| `_STK_ARCH_RISC_V`             | —                    | **Required (one arch)** — select RISC-V port                                                   |
-| `_STK_ARCH_X86_WIN32`          | —                    | **Required (one arch)** — select x86 Win32 simulation port                                     |
-| `STK_TICKLESS_IDLE`            | `0`                  | `1` = enable tickless low-power idle                                                           |
-| `STK_TICKLESS_USE_ARM_DWT`     | `1`                  | `1` = use DWT for tickless drift correction (Cortex-M3+)                                       |
-| `STK_TICKLESS_TICKS_MAX`       | `1000`               | Maximum ticks the timer may be suppressed per idle interval                                    |
-| `STK_ARCH_CPU_COUNT`           | `1`                  | Number of CPU cores (SMP)                                                                      |
-| `STK_ARCH_GET_CPU_ID()`        | `0`                  | Expression returning the calling core's index                                                  |
+| Macro                          | Default              | Description                                                                                                                                                                                                      |
+|--------------------------------|:--------------------:|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `_STK_ARCH_ARM_CORTEX_M`       | —                    | **Required (one arch)** — select ARM Cortex-M port                                                                                                                                                               |
+| `_STK_ARCH_RISC_V`             | —                    | **Required (one arch)** — select RISC-V port                                                                                                                                                                     |
+| `_STK_ARCH_X86_WIN32`          | —                    | **Required (one arch)** — select x86 Win32 simulation port                                                                                                                                                       |
+| `STK_TICKLESS_IDLE`            | `0`                  | `1` = enable tickless low-power idle                                                                                                                                                                             |
+| `STK_TICKLESS_USE_ARM_DWT`     | `1`                  | `1` = use DWT for tickless drift correction (Cortex-M3+)                                                                                                                                                         |
+| `STK_TICKLESS_TICKS_MAX`       | `1000`               | Maximum ticks the timer may be suppressed per idle interval                                                                                                                                                      |
+| `STK_ARCH_CPU_COUNT`           | `1`                  | Number of CPU cores (SMP)                                                                                                                                                                                        |
+| `STK_ARCH_GET_CPU_ID()`        | `0`                  | Expression returning the calling core's index                                                                                                                                                                    |
 | `STK_CORE_FREQ_UNIFIED`        | `1`                  | `1` = all CPU cores share the same clock frequency. Set `0` on SMP targets with independent per-core clocks and call `IPlatform::SetCpuFrequency(core_id, frequency)` to report each core's frequency at runtime |
-| `STK_STACK_SIZE_MIN`           | arch-dependent       | Minimum stack size in `Word` elements                                                          |
-| `STK_SLEEP_TRAP_STACK_SIZE`    | `STK_STACK_SIZE_MIN` | Sleep trap stack size                                                                          |
-| `STK_STACK_MEMORY_ALIGN`       | arch-dependent       | Required stack buffer alignment (bytes)                                                        |
-| `STK_STACK_GUARD`              | `1`                  | `1` = kernel checks stack health on every context switch                                       |
-| `STK_CS_NESTINGS_MAX`          | `16`                 | Maximum critical section nesting depth                                                         |
-| `STK_STRICT_COMPLIANCY`        | `0`                  | `1` = disable workarounds that break MISRA/safety-critical rules                               |
-| `STK_TLS`                      | `0`                  | `1` = enable per-task thread-local storage                                                     |
-| `STK_TLS_PREFER_REGISTER`      | `0` (`1` on RISC-V)  | `1` = keep the TLS pointer in a CPU register (`r9`/`tp`) instead of `Stack::tls`               |
-| `STK_MPU`                      | `0`                  | `1` = enable MPU support                                                                       |
-| `STK_MPU_STACK_GUARD`          | `0`                  | `1` = give each task `STK_MPU_TASK_REGIONS` dynamic MPU regions (auto stack guard + app-defined), reprogrammed every context switch. Requires `STK_MPU=1` |
-| `STK_MPU_TASK_REGIONS`         | `2`                  | Dynamic MPU regions per task when `STK_MPU_STACK_GUARD=1`: `2`, `4`, or `6`. Region 0 is always the automatic stack guard; the rest are supplied via `ITask::GetMpuRegions()` |
-| `STK_SEGGER_SYSVIEW`           | `0`                  | `1` = enable SEGGER SystemView tracing                                                         |
-| `STK_SYNC_DEBUG_NAMES`         | `0`                  | `1` = enable debug names for sync objects                                                      |
-| `STK_SYSTICK_HANDLER`          | `SysTick_Handler`    | ARM: SysTick ISR symbol name                                                                   |
-| `STK_PENDSV_HANDLER`           | `PendSV_Handler`     | ARM: PendSV ISR symbol name                                                                    |
-| `STK_SVC_HANDLER`              | `SVC_Handler`        | ARM/RISC-V: SVC/exception handler symbol name                                                  |
-| `STK_TIMER_THREADS_COUNT`      | `1`                  | TimerHost: number of callback handler tasks                                                    |
-| `STK_TIMER_HANDLER_STACK_SIZE` | `256`                | TimerHost: handler task stack size (words)                                                     |
-| `STK_TIMER_COUNT_MAX`          | `32`                 | TimerHost: max concurrently active timers                                                      |
-| `STK_PANIC_HANDLER(id)`        | spin loop            | Override with a platform-specific fault handler                                                |
+| `STK_STACK_SIZE_MIN`           | arch-dependent       | Minimum stack size in `Word` elements                                                                                                                                                                            |
+| `STK_SLEEP_TRAP_STACK_SIZE`    | `STK_STACK_SIZE_MIN` | Sleep trap stack size                                                                                                                                                                                            |
+| `STK_STACK_MEMORY_ALIGN`       | arch-dependent       | Required stack buffer alignment (bytes)                                                                                                                                                                          |
+| `STK_STACK_GUARD`              | `1`                  | `1` = kernel checks stack health on every context switch                                                                                                                                                         |
+| `STK_CS_NESTINGS_MAX`          | `16`                 | Maximum critical section nesting depth                                                                                                                                                                           |
+| `STK_STRICT_COMPLIANCY`        | `0`                  | `1` = disable workarounds that break MISRA/safety-critical rules                                                                                                                                                 |
+| `STK_TLS`                      | `0`                  | `1` = enable per-task thread-local storage                                                                                                                                                                       |
+| `STK_TLS_PREFER_REGISTER`      | `0` (`1` on RISC-V)  | `1` = keep the TLS pointer in a CPU register (`r9`/`tp`) instead of `Stack::tls`                                                                                                                                 |
+| `STK_MPU`                      | `0`                  | `1` = enable MPU support                                                                                                                                                                                         |
+| `STK_MPU_STACK_GUARD`          | `0`                  | `1` = give each task `STK_MPU_TASK_REGIONS` dynamic MPU regions (auto stack guard + app-defined), reprogrammed every context switch. Requires `STK_MPU=1`                                                        |
+| `STK_MPU_TASK_REGIONS`         | `2`                  | Dynamic MPU regions per task when `STK_MPU_STACK_GUARD=1`: `2`, `4`, or `6`. Region 0 is always the automatic stack guard; the rest are supplied via `ITask::GetMpuRegions()`                                    |
+| `STK_SEGGER_SYSVIEW`           | `0`                  | `1` = enable SEGGER SystemView tracing                                                                                                                                                                           |
+| `STK_SYNC_DEBUG_NAMES`         | `0`                  | `1` = enable debug names for sync objects                                                                                                                                                                        |
+| `STK_SYSTICK_HANDLER`          | `SysTick_Handler`    | ARM: SysTick ISR symbol name                                                                                                                                                                                     |
+| `STK_PENDSV_HANDLER`           | `PendSV_Handler`     | ARM: PendSV ISR symbol name                                                                                                                                                                                      |
+| `STK_SVC_HANDLER`              | `SVC_Handler`        | ARM/RISC-V: SVC/exception handler symbol name                                                                                                                                                                    |
+| `STK_TIMER_THREADS_COUNT`      | `1`                  | TimerHost: number of callback handler tasks                                                                                                                                                                      |
+| `STK_TIMER_HANDLER_STACK_SIZE` | `256`                | TimerHost: handler task stack size (words)                                                                                                                                                                       |
+| `STK_TIMER_COUNT_MAX`          | `32`                 | TimerHost: max concurrently active timers                                                                                                                                                                        |
+| `STK_PANIC_HANDLER(id)`        | spin loop            | Override with a platform-specific fault handler                                                                                                                                                                  |

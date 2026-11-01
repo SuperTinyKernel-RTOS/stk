@@ -381,15 +381,15 @@ void Destroy(DynamicTimer *timer)
 // Weights are strategy-specific: set the ones of the strategy the kernel uses.
 stk::time::TimerHost::Config cfg;
 
-// SwitchStrategyFP32: real preemption priority
-cfg.tick_weight    = stk::SwitchStrategyFP32::PRIORITY_HIGH;
-cfg.handler_weight = stk::SwitchStrategyFP32::PRIORITY_ABOVE_NORMAL;
+// sched::SwitchStrategyFP32: real preemption priority
+cfg.tick_weight    = stk::sched::SwitchStrategyFP32::PRIORITY_HIGH;
+cfg.handler_weight = stk::sched::SwitchStrategyFP32::PRIORITY_ABOVE_NORMAL;
 
-// SwitchStrategyPT32: keep threshold == priority (no hold)
-cfg.tick_weight    = stk::SwitchStrategyPT32::MakeWeight(5, 5);
-cfg.handler_weight = stk::SwitchStrategyPT32::MakeWeight(4, 4);
+// sched::SwitchStrategyPT32: keep threshold == priority (no hold)
+cfg.tick_weight    = stk::sched::SwitchStrategyPT32::MakeWeight(5, 5);
+cfg.handler_weight = stk::sched::SwitchStrategyPT32::MakeWeight(4, 4);
 
-// SwitchStrategySWRR: no preemption, only a larger share
+// sched::SwitchStrategySWRR: no preemption, only a larger share
 cfg.tick_weight    = 4;
 cfg.handler_weight = 1;
 

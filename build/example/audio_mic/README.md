@@ -22,9 +22,9 @@ Three STK tasks are defined as classes deriving from `stk::Task<>` and are added
 Notes on the STK task model, since it differs from FreeRTOS:
 
 - Each task is a class deriving from `stk::Task<_StackSize, _AccessMode>`, with the task body in an overridden `Run()`, a `GetTraceName()` override for diagnostics, and a `GetWeight()` override for priority. Static task instances are only scheduled once passed to `kernel.AddTask()` — all task creation/registration must happen before `kernel.Start()`, which never returns.
-- Task control blocks live inside the `stk::Kernel<>` object itself, whose max task count is fixed via the kernel's template parameter (here `Kernel<KernelMode, 3, SwitchStrategyFP32, PlatformDefault>`); callers only need to supply the stack memory, sized via the `Task<>` template's `_StackSize` parameter, not a full static TCB as with FreeRTOS's `xTaskCreateStatic()`.
+- Task control blocks live inside the `stk::Kernel<>` object itself, whose max task count is fixed via the kernel's template parameter (here `Kernel<KernelMode, 3, sched::SwitchStrategyFP32, PlatformDefault>`); callers only need to supply the stack memory, sized via the `Task<>` template's `_StackSize` parameter, not a full static TCB as with FreeRTOS's `xTaskCreateStatic()`.
 - Stack sizes are always caller-supplied in words of `stk::Word` (via the `Task<>` template's `_StackSize` parameter) — STK has no `configMINIMAL_STACK_SIZE` equivalent, so a baseline (`STK_MINIMAL_STACK_SIZE`) is picked in `main.cpp` and sized up per task.
-- Priorities, returned from each task's `GetWeight()` override, only matter because the kernel here is instantiated with `stk::SwitchStrategyFP32` (fixed-priority); with the default round-robin strategy (`stk::SwitchStrategyRR`) `GetWeight()` is a no-op.
+- Priorities, returned from each task's `GetWeight()` override, only matter because the kernel here is instantiated with `stk::sched::SwitchStrategyFP32` (fixed-priority); with the default round-robin strategy (`stk::sched::SwitchStrategyRR`) `GetWeight()` is a no-op.
 - `tusb_init()` is called from inside `UsbDeviceTask::Run()` rather than before the scheduler starts, since the USB IRQ handler relies on RTOS queue APIs that require the kernel to already be running.
 
 ## USB Descriptors

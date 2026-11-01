@@ -28,7 +28,7 @@ TEST_GROUP(SwitchStrategyMonotonic)
 
 TEST(SwitchStrategyMonotonic, GetFirstEmpty)
 {
-    SwitchStrategyRM rr;
+    sched::SwitchStrategyRM rr;
 
     try
     {
@@ -45,7 +45,7 @@ TEST(SwitchStrategyMonotonic, GetFirstEmpty)
 
 TEST(SwitchStrategyMonotonic, SleepNotSupported)
 {
-    Kernel<KERNEL_DYNAMIC, 1, SwitchStrategyRM, PlatformTestMock> kernel;
+    Kernel<KERNEL_DYNAMIC, 1, sched::SwitchStrategyRM, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task1;
     ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
 
@@ -85,7 +85,7 @@ TEST(SwitchStrategyMonotonic, SleepNotSupported)
 
 TEST(SwitchStrategyMonotonic, GetNextEmpty)
 {
-    Kernel<KERNEL_DYNAMIC, 1, SwitchStrategyRM, PlatformTestMock> kernel;
+    Kernel<KERNEL_DYNAMIC, 1, sched::SwitchStrategyRM, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task1;
     ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
 
@@ -135,12 +135,12 @@ static void TestPriorityNext()
 
 TEST(SwitchStrategyMonotonic, PriorityNextRM)
 {
-    TestPriorityNext<SwitchStrategyRM>();
+    TestPriorityNext<sched::SwitchStrategyRM>();
 }
 
 TEST(SwitchStrategyMonotonic, PriorityNextDM)
 {
-    TestPriorityNext<SwitchStrategyDM>();
+    TestPriorityNext<sched::SwitchStrategyDM>();
 }
 
 template <class _SwitchStrategy>
@@ -203,19 +203,19 @@ static void TestAlgorithm()
 
 TEST(SwitchStrategyMonotonic, AlgorithmRM)
 {
-    TestAlgorithm<SwitchStrategyRM>();
+    TestAlgorithm<sched::SwitchStrategyRM>();
 }
 
 TEST(SwitchStrategyMonotonic, AlgorithmDM)
 {
-    TestAlgorithm<SwitchStrategyDM>();
+    TestAlgorithm<sched::SwitchStrategyDM>();
 }
 
 TEST(SwitchStrategyMonotonic, FailedWCRT)
 {
-    Kernel<KERNEL_DYNAMIC | KERNEL_HRT, 2, SwitchStrategyRM, PlatformTestMock> kernel;
+    Kernel<KERNEL_DYNAMIC | KERNEL_HRT, 2, sched::SwitchStrategyRM, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task1, task2;
-    const SwitchStrategyRM *strategy = static_cast<const SwitchStrategyRM *>(kernel.GetSwitchStrategy());
+    const sched::SwitchStrategyRM *strategy = static_cast<const sched::SwitchStrategyRM *>(kernel.GetSwitchStrategy());
 
     kernel.Initialize();
 
@@ -233,9 +233,9 @@ TEST(SwitchStrategyMonotonic, FailedWCRT)
 
 TEST(SwitchStrategyMonotonic, SchedulableWCRT)
 {
-    Kernel<KERNEL_DYNAMIC | KERNEL_HRT, 3, SwitchStrategyRM, PlatformTestMock> kernel;
+    Kernel<KERNEL_DYNAMIC | KERNEL_HRT, 3, sched::SwitchStrategyRM, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task1, task2, task3, task4;
-    const SwitchStrategyRM *strategy = static_cast<const SwitchStrategyRM *>(kernel.GetSwitchStrategy());
+    const sched::SwitchStrategyRM *strategy = static_cast<const sched::SwitchStrategyRM *>(kernel.GetSwitchStrategy());
 
     kernel.Initialize();
 
@@ -256,7 +256,7 @@ TEST(SwitchStrategyMonotonic, SchedulableWCRT)
 
 TEST(SwitchStrategyMonotonic, YieldNotSupported)
 {
-    Kernel<KERNEL_DYNAMIC | KERNEL_HRT, 1, SwitchStrategyRM, PlatformTestMock> kernel;
+    Kernel<KERNEL_DYNAMIC | KERNEL_HRT, 1, sched::SwitchStrategyRM, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task;
     ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
 
@@ -273,7 +273,7 @@ TEST(SwitchStrategyMonotonic, YieldNotSupported)
 
 TEST(SwitchStrategyMonotonic, TimeSliceNotSupported)
 {
-    Kernel<KERNEL_DYNAMIC | KERNEL_HRT, 1, SwitchStrategyRM, PlatformTestMock> kernel;
+    Kernel<KERNEL_DYNAMIC | KERNEL_HRT, 1, sched::SwitchStrategyRM, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task;
     ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
 

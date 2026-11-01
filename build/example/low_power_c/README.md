@@ -267,7 +267,7 @@ While suspended:
 /* Kernel type is configured in stk_config.h via STK_C_KERNEL_TYPE_CPU_0:
  *   KERNEL_STATIC | KERNEL_SYNC | KERNEL_TICKLESS
  *   4 user tasks + TimerHost::TASK_COUNT
- *   SwitchStrategyRR, PlatformDefault                */
+ *   sched::SwitchStrategyRR, PlatformDefault                */
 g_Kernel = stk_kernel_create(0);
 stk_kernel_init(g_Kernel, STK_PERIODICITY_DEFAULT);
 ```

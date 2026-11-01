@@ -816,7 +816,7 @@ void RunExample()
 
     // 4 user tasks: 3 LED + 1 Log.
     // TimerHost::TASK_COUNT additional internal tasks are registered separately.
-    static Kernel<KernelMode, 4 + stk::time::TimerHost::TASK_COUNT, SwitchStrategyRR, PlatformDefault> kernel;
+    static Kernel<KernelMode, 4 + stk::time::TimerHost::TASK_COUNT, sched::SwitchStrategyRR, PlatformDefault> kernel;
 
     // Tasks run in privileged mode - GPIO and ADC registers require it on
     // Cortex-M4 when the MPU restricts peripheral access to privileged code.

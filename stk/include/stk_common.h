@@ -986,7 +986,7 @@ public:
 
     /*! \brief     Get static base weight of the task.
         \return    Static weight value of the task (must be non-zero, positive 24-bit number).
-        \see       SwitchStrategyFixedPriority, SwitchStrategySmoothWeightedRoundRobin,
+        \see       sched::SwitchStrategyFixedPriority, sched::SwitchStrategySmoothWeightedRoundRobin,
                    IKernelTask::GetWeight, IKernelService::InheritWeight, IKernelService::RestoreWeight
     */
     virtual Weight GetWeight() const { return DEFAULT_WEIGHT; }

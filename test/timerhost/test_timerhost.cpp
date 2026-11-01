@@ -48,7 +48,7 @@ static sync::Event g_LastExpired[_STK_TIMER_TEST_TASKS_MAX];
 static volatile int64_t g_ExpiredTime[_STK_TIMER_TEST_TASKS_MAX] = {0};
 
 // Kernel
-static Kernel<KERNEL_DYNAMIC | KERNEL_SYNC, _STK_TIMER_TEST_TASKS_MAX + stk::time::TimerHost::TASK_COUNT, SwitchStrategyRR, PlatformDefault> g_Kernel;
+static Kernel<KERNEL_DYNAMIC | KERNEL_SYNC, _STK_TIMER_TEST_TASKS_MAX + stk::time::TimerHost::TASK_COUNT, sched::SwitchStrategyRR, PlatformDefault> g_Kernel;
 
 // TimerHost
 static time::TimerHost g_TimerHost;

@@ -19,6 +19,6 @@
 #define STK_C_CPU_COUNT         (1)
 #define STK_C_KERNEL_MAX_TASKS  (3)
 #define STK_C_KERNEL_TYPE_CPU_0 Kernel<KERNEL_DYNAMIC | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, \
-                                    SwitchStrategyRR, PlatformDefault>
+                                    sched::SwitchStrategyRR, PlatformDefault>
 
 #endif /* STK_CONFIG_H_ */

@@ -217,7 +217,7 @@ using StkKernel = stk::Kernel<stk::KERNEL_DYNAMIC | stk::KERNEL_SYNC
 #if STK_TICKLESS_IDLE
     | stk::KERNEL_TICKLESS
 #endif
-    , CMSIS_STK_MAX_THREADS, stk::SwitchStrategyFP32_NSY, stk::PlatformDefault>;
+    , CMSIS_STK_MAX_THREADS, stk::sched::SwitchStrategyFP32_NSY, stk::PlatformDefault>;
 
 static StkKernel g_StkKernel;
 

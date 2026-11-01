@@ -53,7 +53,7 @@ private:
     }
 };
 
-static stk::Kernel<stk::KERNEL_DYNAMIC, 4, stk::SwitchStrategyRoundRobin, stk::PlatformDefault> g_Kernel;
+static stk::Kernel<stk::KERNEL_DYNAMIC, 4, stk::sched::SwitchStrategyRoundRobin, stk::PlatformDefault> g_Kernel;
 
 // note: using ACCESS_PRIVILEGED as some MCUs may not allow writing to GPIO from a user thread, such as i.MX RT1050 (Arm Cortex-M7)
 static MyTask<stk::ACCESS_PRIVILEGED>

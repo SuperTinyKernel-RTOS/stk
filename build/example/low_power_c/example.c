@@ -46,7 +46,7 @@
  *     #define STK_C_KERNEL_TYPE_CPU_0  \
  *         stk::Kernel<KERNEL_STATIC | KERNEL_SYNC | KERNEL_TICKLESS,
  *                     4 + stk::time::TimerHost::TASK_COUNT,
- *                     stk::SwitchStrategyRR,
+ *                     stk::sched::SwitchStrategyRR,
  *                     stk::PlatformDefault>
  *   (Replace KERNEL_TICKLESS with 0 when STK_TICKLESS_IDLE is not enabled.)
  * ============================================================================ */
@@ -539,7 +539,7 @@ void RunExample(void)
     /* STK_C_KERNEL_TYPE_CPU_0 must be configured in stk_config.h with:
      *   KERNEL_STATIC | KERNEL_SYNC | (STK_TICKLESS_IDLE ? KERNEL_TICKLESS : 0)
      *   task count = 4 + TimerHost::TASK_COUNT
-     *   strategy   = SwitchStrategyRR
+     *   strategy   = sched::SwitchStrategyRR
      *   platform   = PlatformDefault                                            */
     g_Kernel = stk_kernel_create(0);
     stk_kernel_init(g_Kernel, STK_PERIODICITY_DEFAULT);

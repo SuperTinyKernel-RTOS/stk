@@ -57,7 +57,7 @@ public:
 
     // All tasks MUST have the same priority and the threshold equal to it: a task with the preemption
     // threshold higher than its priority is "held" and is never time-sliced
-    stk::Weight GetWeight() const override { return stk::SwitchStrategyPT32_TS::MakeWeight(1, 1); }
+    stk::Weight GetWeight() const override { return stk::sched::SwitchStrategyPT32_TS::MakeWeight(1, 1); }
 
 private:
     void Run() override;
@@ -120,7 +120,7 @@ void RunExample()
     const uint8_t KernelMode = KERNEL_STATIC | KERNEL_TIMESLICE;
 
     // allocate scheduling kernel for 4 threads (tasks) with Preemption-Threshold strategy with time-slicing
-    static Kernel<KernelMode, LED_MAX, SwitchStrategyPT32_TS, PlatformDefault> kernel;
+    static Kernel<KernelMode, LED_MAX, sched::SwitchStrategyPT32_TS, PlatformDefault> kernel;
 
     // init scheduling kernel
     kernel.Initialize();
