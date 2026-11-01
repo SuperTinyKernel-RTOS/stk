@@ -721,6 +721,11 @@
 			<locationURI>PARENT-4-PROJECT_LOC/stk/include/sync/stk_sync.h</locationURI>
 		</link>
 		<link>
+			<name>deps/stk/include/sync/stk_sync_barrier.h</name>
+			<type>1</type>
+			<locationURI>PARENT-4-PROJECT_LOC/stk/include/sync/stk_sync_barrier.h</locationURI>
+		</link>
+		<link>
 			<name>deps/stk/include/sync/stk_sync_cs.h</name>
 			<type>1</type>
 			<locationURI>PARENT-4-PROJECT_LOC/stk/include/sync/stk_sync_cs.h</locationURI>

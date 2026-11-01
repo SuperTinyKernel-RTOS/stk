@@ -111,6 +111,7 @@ class TestMutex : public IMutex
 public:
     void Lock() override {}
     void Unlock() override {}
+    bool TryLock() override { return false; }
 };
 
 static TestSync  g_Sync;
@@ -144,16 +145,6 @@ static void WaitCounter(int32_t idx, int32_t value)
         stk::Sleep(1);
 }
 
-//! Check helper: reports a failed check and clears \a ok.
-#define STK_KTEST_CHECK(ok, cond) \
-    do { \
-        if (!(cond)) \
-        { \
-            printf("  check failed (line %d): %s\n", (int)__LINE__, #cond); \
-            (ok) = false; \
-        } \
-    } while (0)
-
 /*! \class LockApiTask
     \brief Single task: results and kernel state of LockScheduler(), UnlockScheduler(),
            RestoreSchedulerLock() and ScopedSchedulerLock.
@@ -178,84 +169,84 @@ private:
     {
         bool ok = true;
 
-        STK_KTEST_CHECK(ok, IsState(IKernel::KSTATE_RUNNING));
+        STK_TEST_CHECK(ok, IsState(IKernel::KSTATE_RUNNING));
 
         // Lock / Unlock: previous state is reported
-        STK_KTEST_CHECK(ok, stk::LockScheduler() == LOCK_WAS_UNLOCKED);
-        STK_KTEST_CHECK(ok, IsState(IKernel::KSTATE_LOCKED));
+        STK_TEST_CHECK(ok, stk::LockScheduler() == LOCK_WAS_UNLOCKED);
+        STK_TEST_CHECK(ok, IsState(IKernel::KSTATE_LOCKED));
 
-        STK_KTEST_CHECK(ok, stk::LockScheduler() == LOCK_WAS_LOCKED); // not nested: still one lock
-        STK_KTEST_CHECK(ok, IsState(IKernel::KSTATE_LOCKED));
+        STK_TEST_CHECK(ok, stk::LockScheduler() == LOCK_WAS_LOCKED); // not nested: still one lock
+        STK_TEST_CHECK(ok, IsState(IKernel::KSTATE_LOCKED));
 
-        STK_KTEST_CHECK(ok, stk::UnlockScheduler() == LOCK_WAS_LOCKED);
-        STK_KTEST_CHECK(ok, IsState(IKernel::KSTATE_RUNNING)); // a single unlock releases it
+        STK_TEST_CHECK(ok, stk::UnlockScheduler() == LOCK_WAS_LOCKED);
+        STK_TEST_CHECK(ok, IsState(IKernel::KSTATE_RUNNING)); // a single unlock releases it
 
-        STK_KTEST_CHECK(ok, stk::UnlockScheduler() == LOCK_WAS_UNLOCKED);
-        STK_KTEST_CHECK(ok, IsState(IKernel::KSTATE_RUNNING));
+        STK_TEST_CHECK(ok, stk::UnlockScheduler() == LOCK_WAS_UNLOCKED);
+        STK_TEST_CHECK(ok, IsState(IKernel::KSTATE_RUNNING));
 
         // RestoreSchedulerLock: the new state is reported
-        STK_KTEST_CHECK(ok, stk::RestoreSchedulerLock(true) == LOCK_WAS_LOCKED);
-        STK_KTEST_CHECK(ok, IsState(IKernel::KSTATE_LOCKED));
+        STK_TEST_CHECK(ok, stk::RestoreSchedulerLock(true) == LOCK_WAS_LOCKED);
+        STK_TEST_CHECK(ok, IsState(IKernel::KSTATE_LOCKED));
 
-        STK_KTEST_CHECK(ok, stk::RestoreSchedulerLock(true) == LOCK_WAS_LOCKED);
-        STK_KTEST_CHECK(ok, IsState(IKernel::KSTATE_LOCKED));
+        STK_TEST_CHECK(ok, stk::RestoreSchedulerLock(true) == LOCK_WAS_LOCKED);
+        STK_TEST_CHECK(ok, IsState(IKernel::KSTATE_LOCKED));
 
-        STK_KTEST_CHECK(ok, stk::RestoreSchedulerLock(false) == LOCK_WAS_UNLOCKED);
-        STK_KTEST_CHECK(ok, IsState(IKernel::KSTATE_RUNNING));
+        STK_TEST_CHECK(ok, stk::RestoreSchedulerLock(false) == LOCK_WAS_UNLOCKED);
+        STK_TEST_CHECK(ok, IsState(IKernel::KSTATE_RUNNING));
 
-        STK_KTEST_CHECK(ok, stk::RestoreSchedulerLock(false) == LOCK_WAS_UNLOCKED);
-        STK_KTEST_CHECK(ok, IsState(IKernel::KSTATE_RUNNING));
+        STK_TEST_CHECK(ok, stk::RestoreSchedulerLock(false) == LOCK_WAS_UNLOCKED);
+        STK_TEST_CHECK(ok, IsState(IKernel::KSTATE_RUNNING));
 
         // emulated nesting with the saved state: the outer lock stays held
         {
             const ELockResult outer = stk::LockScheduler();
             const ELockResult inner = stk::LockScheduler();
 
-            STK_KTEST_CHECK(ok, outer == LOCK_WAS_UNLOCKED);
-            STK_KTEST_CHECK(ok, inner == LOCK_WAS_LOCKED);
+            STK_TEST_CHECK(ok, outer == LOCK_WAS_UNLOCKED);
+            STK_TEST_CHECK(ok, inner == LOCK_WAS_LOCKED);
 
-            STK_KTEST_CHECK(ok, stk::RestoreSchedulerLock(inner == LOCK_WAS_LOCKED) == LOCK_WAS_LOCKED);
-            STK_KTEST_CHECK(ok, IsState(IKernel::KSTATE_LOCKED));
+            STK_TEST_CHECK(ok, stk::RestoreSchedulerLock(inner == LOCK_WAS_LOCKED) == LOCK_WAS_LOCKED);
+            STK_TEST_CHECK(ok, IsState(IKernel::KSTATE_LOCKED));
 
-            STK_KTEST_CHECK(ok, stk::RestoreSchedulerLock(outer == LOCK_WAS_LOCKED) == LOCK_WAS_UNLOCKED);
-            STK_KTEST_CHECK(ok, IsState(IKernel::KSTATE_RUNNING));
+            STK_TEST_CHECK(ok, stk::RestoreSchedulerLock(outer == LOCK_WAS_LOCKED) == LOCK_WAS_UNLOCKED);
+            STK_TEST_CHECK(ok, IsState(IKernel::KSTATE_RUNNING));
         }
 
         // RAII guard
         {
             const stk::ScopedSchedulerLock guard;
-            STK_KTEST_CHECK(ok, IsState(IKernel::KSTATE_LOCKED));
+            STK_TEST_CHECK(ok, IsState(IKernel::KSTATE_LOCKED));
         }
-        STK_KTEST_CHECK(ok, IsState(IKernel::KSTATE_RUNNING));
+        STK_TEST_CHECK(ok, IsState(IKernel::KSTATE_RUNNING));
 
         // nested RAII guards: the state before construction is restored, the outer guard stays locked
         {
             const stk::ScopedSchedulerLock outer;
             {
                 const stk::ScopedSchedulerLock inner;
-                STK_KTEST_CHECK(ok, IsState(IKernel::KSTATE_LOCKED));
+                STK_TEST_CHECK(ok, IsState(IKernel::KSTATE_LOCKED));
             }
-            STK_KTEST_CHECK(ok, IsState(IKernel::KSTATE_LOCKED));
+            STK_TEST_CHECK(ok, IsState(IKernel::KSTATE_LOCKED));
         }
-        STK_KTEST_CHECK(ok, IsState(IKernel::KSTATE_RUNNING));
+        STK_TEST_CHECK(ok, IsState(IKernel::KSTATE_RUNNING));
 
         // RAII guard inside of a manual lock: the manual lock stays held after the guard
         {
-            STK_KTEST_CHECK(ok, stk::LockScheduler() == LOCK_WAS_UNLOCKED);
+            STK_TEST_CHECK(ok, stk::LockScheduler() == LOCK_WAS_UNLOCKED);
             {
                 const stk::ScopedSchedulerLock guard;
-                STK_KTEST_CHECK(ok, IsState(IKernel::KSTATE_LOCKED));
+                STK_TEST_CHECK(ok, IsState(IKernel::KSTATE_LOCKED));
             }
-            STK_KTEST_CHECK(ok, IsState(IKernel::KSTATE_LOCKED));
-            STK_KTEST_CHECK(ok, stk::UnlockScheduler() == LOCK_WAS_LOCKED);
-            STK_KTEST_CHECK(ok, IsState(IKernel::KSTATE_RUNNING));
+            STK_TEST_CHECK(ok, IsState(IKernel::KSTATE_LOCKED));
+            STK_TEST_CHECK(ok, stk::UnlockScheduler() == LOCK_WAS_LOCKED);
+            STK_TEST_CHECK(ok, IsState(IKernel::KSTATE_RUNNING));
         }
 
         // a task keeps running normally after the lock was used (sleeps and wakes)
         {
             const Ticks t0 = GetTicks();
             stk::Sleep(ToTicks(5));
-            STK_KTEST_CHECK(ok, (GetTicks() - t0) >= 5);
+            STK_TEST_CHECK(ok, (GetTicks() - t0) >= 5);
         }
 
         printf("lock api: %s\n", ok ? "ok" : "failed");
@@ -346,10 +337,10 @@ private:
         printf("  locked for %d ticks: spinner progress %d -> %d\n", (int)(t1 - t0), (int)c0, (int)c1);
 
         // no task switch: the spinner did not run at all
-        STK_KTEST_CHECK(ok, c1 == c0);
+        STK_TEST_CHECK(ok, c1 == c0);
 
         // the tick is not stopped by the lock: time advanced by the full busy-wait
-        STK_KTEST_CHECK(ok, (t1 - t0) >= (_STK_KERNEL_TEST_LOCK_MS - _STK_KERNEL_TEST_LO_MS));
+        STK_TEST_CHECK(ok, (t1 - t0) >= (_STK_KERNEL_TEST_LOCK_MS - _STK_KERNEL_TEST_LO_MS));
 
         progress_after = c1;
         return ok;
@@ -358,11 +349,14 @@ private:
     //! After the unlock the spinner must get the CPU again.
     static void CheckSpinnerResumed(bool &ok, int32_t progress_after)
     {
+    #ifdef _STK_ARCH_RISC_V
+        stk::Sleep(ToTicks(_STK_KERNEL_TEST_SETTLE_MS)); // pre-warm for a QEMU RISC-V due to QEMU timer implementation
+    #endif
         stk::Sleep(ToTicks(_STK_KERNEL_TEST_SETTLE_MS));
 
         printf("  after unlock: spinner progress %d -> %d\n", (int)progress_after, (int)g_Counter[1]);
 
-        STK_KTEST_CHECK(ok, g_Counter[1] > progress_after);
+        STK_TEST_CHECK(ok, g_Counter[1] > progress_after);
     }
 
     void RunHolderNoSwitch(bool nested)
@@ -372,16 +366,16 @@ private:
 
         // let the spinner run first
         stk::Sleep(ToTicks(_STK_KERNEL_TEST_SHORT_SLEEP));
-        STK_KTEST_CHECK(ok, g_Counter[1] > 0);
+        STK_TEST_CHECK(ok, g_Counter[1] > 0);\
 
         if (!nested)
         {
-            STK_KTEST_CHECK(ok, stk::LockScheduler() == LOCK_WAS_UNLOCKED);
-            STK_KTEST_CHECK(ok, g_Kernel.GetState() == IKernel::KSTATE_LOCKED);
+            STK_TEST_CHECK(ok, stk::LockScheduler() == LOCK_WAS_UNLOCKED);
+            STK_TEST_CHECK(ok, g_Kernel.GetState() == IKernel::KSTATE_LOCKED);
 
             HoldAndCheckNoSwitch(ok, progress);
 
-            STK_KTEST_CHECK(ok, stk::UnlockScheduler() == LOCK_WAS_LOCKED);
+            STK_TEST_CHECK(ok, stk::UnlockScheduler() == LOCK_WAS_LOCKED);
         }
         else
         {
@@ -389,17 +383,17 @@ private:
                 const stk::ScopedSchedulerLock outer;
                 {
                     const stk::ScopedSchedulerLock inner;
-                    STK_KTEST_CHECK(ok, g_Kernel.GetState() == IKernel::KSTATE_LOCKED);
+                    STK_TEST_CHECK(ok, g_Kernel.GetState() == IKernel::KSTATE_LOCKED);
                 }
 
                 // the inner guard has been released, the outer one still holds the lock
-                STK_KTEST_CHECK(ok, g_Kernel.GetState() == IKernel::KSTATE_LOCKED);
+                STK_TEST_CHECK(ok, g_Kernel.GetState() == IKernel::KSTATE_LOCKED);
 
                 HoldAndCheckNoSwitch(ok, progress);
             }
         }
 
-        STK_KTEST_CHECK(ok, g_Kernel.GetState() == IKernel::KSTATE_RUNNING);
+        STK_TEST_CHECK(ok, g_Kernel.GetState() == IKernel::KSTATE_RUNNING);
 
         CheckSpinnerResumed(ok, progress);
 
@@ -428,10 +422,10 @@ private:
             // the sleeper's timer (10 ms) expires while the scheduler is locked: the tick is still running
             stk::Delay(ToTicks(_STK_KERNEL_TEST_LOCK_MS));
 
-            STK_KTEST_CHECK(ok, GetTimeNowMs() >= (lock_ms + _STK_KERNEL_TEST_LOCK_MS - _STK_KERNEL_TEST_LO_MS));
+            STK_TEST_CHECK(ok, GetTimeNowMs() >= (lock_ms + _STK_KERNEL_TEST_LOCK_MS - _STK_KERNEL_TEST_LO_MS));
 
             // ... but the sleeper has not been scheduled
-            STK_KTEST_CHECK(ok, g_WakeMs[1] == 0);
+            STK_TEST_CHECK(ok, g_WakeMs[1] == 0);
         }
         const int32_t unlock_ms = (int32_t)GetTimeNowMs();
 
@@ -441,9 +435,9 @@ private:
         printf("  locked at %d ms, unlocked at %d ms, sleeper resumed at %d ms\n",
             (int)lock_ms, (int)unlock_ms, (int)g_WakeMs[1]);
 
-        STK_KTEST_CHECK(ok, g_WakeMs[1] != 0);
-        STK_KTEST_CHECK(ok, g_WakeMs[1] >= (unlock_ms - _STK_KERNEL_TEST_LO_MS));
-        STK_KTEST_CHECK(ok, g_WakeMs[1] <= (unlock_ms + _STK_KERNEL_TEST_HI_MS));
+        STK_TEST_CHECK(ok, g_WakeMs[1] != 0);
+        STK_TEST_CHECK(ok, g_WakeMs[1] >= (unlock_ms - _STK_KERNEL_TEST_LO_MS));
+        STK_TEST_CHECK(ok, g_WakeMs[1] <= (unlock_ms + _STK_KERNEL_TEST_HI_MS));
 
         g_Done[0] = 1;
         WaitAllDone();
@@ -462,7 +456,7 @@ private:
         WaitCounter(1, 1);
         stk::Sleep(ToTicks(_STK_KERNEL_TEST_SHORT_SLEEP));
 
-        STK_KTEST_CHECK(ok, g_Counter[1] == 1); // still waiting
+        STK_TEST_CHECK(ok, g_Counter[1] == 1); // still waiting
 
         int32_t unlock_ms;
         {
@@ -476,8 +470,8 @@ private:
             stk::Delay(ToTicks(_STK_KERNEL_TEST_LOCK_MS));
 
             // woken, but not scheduled while the scheduler is locked
-            STK_KTEST_CHECK(ok, g_Counter[1] == 1);
-            STK_KTEST_CHECK(ok, g_WakeMs[1] == 0);
+            STK_TEST_CHECK(ok, g_Counter[1] == 1);
+            STK_TEST_CHECK(ok, g_WakeMs[1] == 0);
 
             unlock_ms = (int32_t)GetTimeNowMs();
         }
@@ -487,10 +481,10 @@ private:
         printf("  unlocked at %d ms, waiter resumed at %d ms, result=%d\n",
             (int)unlock_ms, (int)g_WakeMs[1], (int)g_Result[1]);
 
-        STK_KTEST_CHECK(ok, g_Counter[1] == 2);
-        STK_KTEST_CHECK(ok, g_Result[1] == WAIT_RESULT_SIGNAL);
-        STK_KTEST_CHECK(ok, g_WakeMs[1] >= (unlock_ms - _STK_KERNEL_TEST_LO_MS));
-        STK_KTEST_CHECK(ok, g_WakeMs[1] <= (unlock_ms + _STK_KERNEL_TEST_HI_MS));
+        STK_TEST_CHECK(ok, g_Counter[1] == 2);
+        STK_TEST_CHECK(ok, g_Result[1] == WAIT_RESULT_SIGNAL);
+        STK_TEST_CHECK(ok, g_WakeMs[1] >= (unlock_ms - _STK_KERNEL_TEST_LO_MS));
+        STK_TEST_CHECK(ok, g_WakeMs[1] <= (unlock_ms + _STK_KERNEL_TEST_HI_MS));
 
         g_Done[0] = 1;
         WaitAllDone();
@@ -666,7 +660,7 @@ int main(int argc, char **argv)
 
 #define RUN(TestClass, name, tasks, param) \
     do { \
-        if (RunTest<TestClass<ACCESS_PRIVILEGED>>(name, tasks, param) \
+        if (RunTest< TestClass<ACCESS_PRIVILEGED> >(name, tasks, param) \
                 != TestContext::SUCCESS_EXIT_CODE) \
             total_failures++; \
         else \
@@ -691,6 +685,13 @@ int main(int argc, char **argv)
 
     // Test 5: A waiter woken under the lock resumes (WAIT_RESULT_SIGNAL) only after the unlock
     RUN(LockTask,       "SchedulerLockWakeDeferred",        2, SC_WAKE_DEFERRED);
+
+#if defined(_STK_ARCH_RISC_V)
+        // QEMU translates code on its first execution: the first run of the TimerHost code paths is much slower
+        // than the following ones and its job 0 can exceed the job deadline. Run a warm-up pass, result is ignored.
+        printf("Warm-up (result ignored)\n");
+        (void)RunTest< LockTask<ACCESS_PRIVILEGED> >("SchedulerLockMutualExclusion", 4, SC_MUTUAL_EXCLUSION);
+#endif
 
     // Test 6: Mutual exclusion of a section guarded by ScopedSchedulerLock (4 tasks)
     RUN(LockTask,       "SchedulerLockMutualExclusion",     4, SC_MUTUAL_EXCLUSION);

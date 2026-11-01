@@ -34,6 +34,7 @@
    them (needed here because this header may be included before stk_c_pthread.h). */
 #ifndef _SYS__PTHREADTYPES_H_
     #define _SYS__PTHREADTYPES_H_
+    #define STK_C_PTHREADTYPES_GUARD
 #endif
 
 #ifndef STK_C_SYSTEM_TIME_H
@@ -59,6 +60,10 @@
     #endif
     #ifndef STK_C_NO_ITIMERSPEC
         #define STK_C_NO_ITIMERSPEC
+    #endif
+    /* union sigval / struct sigevent come from the toolchain's <signal.h> (use the layer's signal.h) */
+    #ifndef STK_C_DEFINE_SIGEVENT
+        #define STK_C_DEFINE_SIGEVENT (0)
     #endif
 #endif
 #if defined(_SYS_TIMESPEC_H) && !defined(STK_C_NO_ITIMERSPEC)
@@ -153,7 +158,9 @@ unsigned int sleep(unsigned int seconds);
 #endif
 
 /*! \def       STK_C_DEFINE_SIGEVENT
-    \brief     Set to 0 if the toolchain's <signal.h> already provides union sigval / struct sigevent / SIGEV_*.
+    \brief     1: this header defines union sigval / struct sigevent / SIGEV_* itself (toolchains which have no
+               definition of their own). 0 (default for newlib and glibc, detected automatically): they come from the
+               toolchain's <signal.h>, include the layer's signal.h to use them with timer_create().
 */
 #ifndef STK_C_DEFINE_SIGEVENT
     #define STK_C_DEFINE_SIGEVENT (1)
@@ -178,6 +185,11 @@ unsigned int sleep(unsigned int seconds);
     #define SIGEV_NONE   (0)
     #define SIGEV_SIGNAL (1)
     #define SIGEV_THREAD (2)
+#endif
+
+#if !STK_C_DEFINE_SIGEVENT
+    /* complete type: include <signal.h> (the layer's signal.h makes struct sigevent usable with SIGEV_THREAD) */
+    struct sigevent;
 #endif
 
 #ifndef STK_C_NO_ITIMERSPEC

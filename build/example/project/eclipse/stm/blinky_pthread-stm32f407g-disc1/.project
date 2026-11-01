@@ -31,7 +31,12 @@
 			<locationURI>virtual:/virtual</locationURI>
 		</link>
 		<link>
-			<name>deps/pthread</name>
+			<name>deps/newlib</name>
+			<type>2</type>
+			<locationURI>virtual:/virtual</locationURI>
+		</link>
+		<link>
+			<name>deps/posix</name>
 			<type>2</type>
 			<locationURI>virtual:/virtual</locationURI>
 		</link>
@@ -71,17 +76,32 @@
 			<locationURI>virtual:/virtual</locationURI>
 		</link>
 		<link>
-			<name>deps/pthread/include</name>
+			<name>deps/newlib/README.md</name>
+			<type>1</type>
+			<locationURI>PARENT-6-PROJECT_LOC/interop/newlib/README.md</locationURI>
+		</link>
+		<link>
+			<name>deps/newlib/src</name>
 			<type>2</type>
 			<locationURI>virtual:/virtual</locationURI>
 		</link>
 		<link>
-			<name>deps/pthread/src</name>
+			<name>deps/posix/README.md</name>
+			<type>1</type>
+			<locationURI>PARENT-6-PROJECT_LOC/interop/posix/README.md</locationURI>
+		</link>
+		<link>
+			<name>deps/posix/include</name>
 			<type>2</type>
 			<locationURI>virtual:/virtual</locationURI>
 		</link>
 		<link>
-			<name>deps/pthread/util</name>
+			<name>deps/posix/src</name>
+			<type>2</type>
+			<locationURI>virtual:/virtual</locationURI>
+		</link>
+		<link>
+			<name>deps/posix/util</name>
 			<type>2</type>
 			<locationURI>virtual:/virtual</locationURI>
 		</link>
@@ -181,24 +201,74 @@
 			<locationURI>PARENT-6-PROJECT_LOC/interop/c/src/stk_c_time.cpp</locationURI>
 		</link>
 		<link>
-			<name>deps/pthread/include/pthread.h</name>
+			<name>deps/newlib/src/stk_newlib.cpp</name>
 			<type>1</type>
-			<locationURI>PARENT-6-PROJECT_LOC/interop/pthread/include/pthread.h</locationURI>
+			<locationURI>PARENT-6-PROJECT_LOC/interop/newlib/src/stk_newlib.cpp</locationURI>
 		</link>
 		<link>
-			<name>deps/pthread/include/stk_c_pthread.h</name>
+			<name>deps/newlib/src/stk_newlib.h</name>
 			<type>1</type>
-			<locationURI>PARENT-6-PROJECT_LOC/interop/pthread/include/stk_c_pthread.h</locationURI>
+			<locationURI>PARENT-6-PROJECT_LOC/interop/newlib/src/stk_newlib.h</locationURI>
 		</link>
 		<link>
-			<name>deps/pthread/src/stk_c_pthread.cpp</name>
+			<name>deps/posix/include/mqueue.h</name>
 			<type>1</type>
-			<locationURI>PARENT-6-PROJECT_LOC/interop/pthread/src/stk_c_pthread.cpp</locationURI>
+			<locationURI>PARENT-6-PROJECT_LOC/interop/posix/include/mqueue.h</locationURI>
 		</link>
 		<link>
-			<name>deps/pthread/util/pthread_compile_check.c</name>
+			<name>deps/posix/include/pthread.h</name>
 			<type>1</type>
-			<locationURI>PARENT-6-PROJECT_LOC/interop/pthread/util/pthread_compile_check.c</locationURI>
+			<locationURI>PARENT-6-PROJECT_LOC/interop/posix/include/pthread.h</locationURI>
+		</link>
+		<link>
+			<name>deps/posix/include/sched.h</name>
+			<type>1</type>
+			<locationURI>PARENT-6-PROJECT_LOC/interop/posix/include/sched.h</locationURI>
+		</link>
+		<link>
+			<name>deps/posix/include/semaphore.h</name>
+			<type>1</type>
+			<locationURI>PARENT-6-PROJECT_LOC/interop/posix/include/semaphore.h</locationURI>
+		</link>
+		<link>
+			<name>deps/posix/include/stk_c_pthread.h</name>
+			<type>1</type>
+			<locationURI>PARENT-6-PROJECT_LOC/interop/posix/include/stk_c_pthread.h</locationURI>
+		</link>
+		<link>
+			<name>deps/posix/include/sys</name>
+			<type>2</type>
+			<locationURI>virtual:/virtual</locationURI>
+		</link>
+		<link>
+			<name>deps/posix/include/threads.h</name>
+			<type>1</type>
+			<locationURI>PARENT-6-PROJECT_LOC/interop/posix/include/threads.h</locationURI>
+		</link>
+		<link>
+			<name>deps/posix/include/time.h</name>
+			<type>1</type>
+			<locationURI>PARENT-6-PROJECT_LOC/interop/posix/include/time.h</locationURI>
+		</link>
+		<link>
+			<name>deps/posix/include/unistd.h</name>
+			<type>1</type>
+			<locationURI>PARENT-6-PROJECT_LOC/interop/posix/include/unistd.h</locationURI>
+		</link>
+		<link>
+			<name>deps/posix/src/stk_c_pthread.cpp</name>
+			<type>1</type>
+			<locationURI>PARENT-6-PROJECT_LOC/interop/posix/src/stk_c_pthread.cpp</locationURI>
+		</link>
+		<link>
+			<name>deps/posix/src/stk_c_threads.cpp</name>
+			<type>1</type>
+			<locationURI>PARENT-6-PROJECT_LOC/interop/posix/src/stk_c_threads.cpp</locationURI>
+		</link>
+		<link>
+			<name>deps/posix/util/pthread_compile_check.c</name>
+			<type>1</type>
+			<locationURI>PARENT-6-PROJECT_LOC/interop/posix/util/pthread_compile_check.c</locationURI>
 		</link>
 		<link>
 			<name>deps/stk/include/arch</name>
@@ -334,6 +404,11 @@
 			<name>src/driver/stm32f4xx/led.cpp</name>
 			<type>1</type>
 			<locationURI>PARENT-4-PROJECT_LOC/driver/stm32f4xx/led.cpp</locationURI>
+		</link>
+		<link>
+			<name>deps/posix/include/sys/time.h</name>
+			<type>1</type>
+			<locationURI>PARENT-6-PROJECT_LOC/interop/posix/include/sys/time.h</locationURI>
 		</link>
 		<link>
 			<name>deps/stk/include/arch/arm</name>

@@ -104,6 +104,7 @@ class TestMutex : public IMutex
 public:
     void Lock() override {}
     void Unlock() override {}
+    bool TryLock() override { return false; }
 };
 
 static TestSync  g_Sync;
