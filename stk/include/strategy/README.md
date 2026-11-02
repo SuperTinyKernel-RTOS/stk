@@ -88,7 +88,7 @@ Classic fixed-priority preemptive scheduling. Tasks are assigned a numeric prior
 
 Fixed-priority scheduling with ThreadX-style preemption-threshold. Each task has a priority *P* and a threshold *T* ≥ *P*; while it runs it can be preempted only by tasks whose priority is strictly greater than *T*. With *T* = *P* a task behaves exactly like a normal fixed-priority task. Priorities follow the STK convention (higher number = higher priority); use `FromThreadX()` to convert ThreadX (priority, threshold) pairs.
 
-**Algorithm:** Same per-level round-robin structure as Fixed-Priority (ready bitmap, O(1) level selection) plus a *held* bitmap. All bitmaps (ready, held and, with `_TS`, advance) share one type, the third template parameter `ReadyBitmap` (`SwitchStrategyPreemptionThreshold<MAX_PRIORITIES, TIMESLICE, ReadyBitmap>`), which defaults to `uint32_t` for up to 32 priorities, `uint64_t` for up to 64 and `PriorityBitmap<>` above that. `SwitchStrategyPT64` / `SwitchStrategyPT64_TS` provide 64 priority levels. A task becomes *held* when it is selected while *T* > *P*. A held task keeps (or resumes) the CPU as long as no ready task is above its threshold, and is never time-sliced. The hold ends when the task sleeps, is removed, yields, or its threshold is lowered to its priority. Priority and threshold are packed into the task weight as `(priority << 8) | threshold` (`MakeWeight()` / `FromThreadX()`). Priority inheritance raises the effective priority only; the effective threshold is `max(configured threshold, current priority)`. The threshold can be changed at run-time with `ChangeThreshold()` (equivalent of `tx_thread_preemption_change`). `Yield()` is always handled by the strategy (`tx_thread_relinquish` semantics): the hold is released and the CPU goes to the next task of the same priority.
+**Algorithm:** Same per-level round-robin structure as Fixed-Priority (ready bitmap, O(1) level selection) plus a *held* bitmap. All bitmaps (ready, held and, with `_TS`, advance) share one type, the third template parameter `ReadyBitmap` (`SwitchStrategyPreemptionThreshold<MAX_PRIORITIES, TIMESLICE, ReadyBitmap>`), which defaults to `uint32_t` for up to 32 priorities, `uint64_t` for up to 64 and `PriorityBitmap<>` above that. `SwitchStrategyPT64` / `SwitchStrategyPT64_TS` provide 64 priority levels. A task becomes *held* when it is selected while *T* > *P*. A held task keeps (or resumes) the CPU as long as no ready task is above its threshold, and is never time-sliced. The hold ends when the task sleeps, is removed, yields, or its threshold is lowered to its priority. Priority and threshold are packed into the task weight as `(priority << 16) | threshold`, 16 bits each (`MakeWeight()` / `FromThreadX()`); the weight is a signed `int32_t`, so the priority stays in [0, 32767]. The number of levels is bounded by the bitmap type: up to 1024 with the default `PriorityBitmap<>`. Priority inheritance raises the effective priority only; the effective threshold is `max(configured threshold, current priority)`. The threshold can be changed at run-time with `ChangeThreshold()` (equivalent of `tx_thread_preemption_change`). `Yield()` is always handled by the strategy (`tx_thread_relinquish` semantics): the hold is released and the CPU goes to the next task of the same priority.
 
 #### Time-slicing (`SwitchStrategyPT32_TS`)
 
@@ -105,7 +105,7 @@ static stk::Kernel<stk::KERNEL_STATIC | stk::KERNEL_TIMESLICE, 3, stk::sched::Sw
 
 **Capability flags:** `WEIGHT_API = 1` (weight = encoded priority/threshold), `SLEEP_EVENT_API = 1`, `PRIORITY_INHERITANCE_API = 1`, `NOSLEEP_YIELD_API = 1`, `TIMESLICE_API = 0` (`1` for `_TS`)
 
-**Differences from ThreadX:** STK priority numbering, the number of priority levels is limited by the bitmap type (32 for `PT32`, 64 for `PT64`, up to 256 with `PriorityBitmap<>`); without `_TS` the time slice is fixed at 1 tick with no per-task length, with `_TS` the quantum is in kernel ticks.
+**Differences from ThreadX:** STK priority numbering, the number of priority levels is limited by the bitmap type (32 for `PT32`, 64 for `PT64`, up to 1024 with `PriorityBitmap<>`); without `_TS` the time slice is fixed at 1 tick with no per-task length, with `_TS` the quantum is in kernel ticks.
 
 **Best for:**
 - Protecting short sequences of cooperating tasks from preemption by mid-priority tasks without using mutexes, and reducing needless context switches.
@@ -138,7 +138,7 @@ template <> struct PriorityBitmapTraits<MyBitmap>
 } // namespace stk
 ```
 
-- **Compile-time check:** instantiating a strategy with `MAX_PRIORITIES` outside `[1, CAPACITY]` fails with a `static_assert`. `SwitchStrategyFixedPriority` supports up to 1024 levels (the largest `PriorityBitmap<>`), `SwitchStrategyPreemptionThreshold` up to 256 because it packs priority and threshold into one task weight as two 8-bit fields (0..255). `MAX_PRIORITIES` is a `uint16_t` template parameter for this reason.
+- **Compile-time check:** instantiating a strategy with `MAX_PRIORITIES` outside `[1, CAPACITY]` fails with a `static_assert`. Both `SwitchStrategyFixedPriority` and `SwitchStrategyPreemptionThreshold` support up to 1024 levels with the stock bitmaps (the largest `PriorityBitmap<>`). Beyond that a custom bitmap can be used, up to 32768 levels: `SwitchStrategyFixedPriority` stores the priority as `uint16_t`, and `SwitchStrategyPreemptionThreshold` packs priority and threshold into one `int32_t` task weight as two 16-bit fields, keeping the priority below 32768. `MAX_PRIORITIES` is a `uint16_t` template parameter for this reason. Note that RAM grows linearly with `MAX_PRIORITIES` (a task list head and a cursor per level, plus a held-task pointer per level for `SwitchStrategyPreemptionThreshold`).
 
 ---
 
@@ -214,8 +214,8 @@ Is CPU time equal for all tasks?
 └── No
     ├── Static weights, proportional fairness  → SwitchStrategySWRR
     ├── Hard priorities, classic RTOS model    → SwitchStrategyFP32 (SwitchStrategyFP64 for 33–64 levels, SwitchStrategyFixedPriority<N> up to 1024)
-    ├── Hard priorities + preemption-threshold → SwitchStrategyPT32 (SwitchStrategyPT64 for 33–64 levels)
-    ├── ...and per-task time-slices (ThreadX-like) → SwitchStrategyPT32_TS / PT64_TS + KERNEL_TIMESLICE
+    ├── Hard priorities + preemption-threshold → SwitchStrategyPT32 (SwitchStrategyPT64 for 33–64 levels, SwitchStrategyPreemptionThreshold<N> up to 1024)
+    ├── ...and per-task time-slices (ThreadX-like) → SwitchStrategyPT32_TS / PT64_TS (SwitchStrategyPreemptionThreshold<N, true> up to 1024) + KERNEL_TIMESLICE
     ├── Periodic tasks, formal guarantees      → SwitchStrategyRM / SwitchStrategyDM
     ├── Dynamic deadlines, max utilisation     → SwitchStrategyEDF
     ├── Mixed-criticality (2-level)            → SwitchStrategyMCAS   [commercial]

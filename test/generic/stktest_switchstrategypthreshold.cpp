@@ -36,8 +36,8 @@ TEST_GROUP(SwitchStrategyPreemptionThreshold)
 TEST(SwitchStrategyPreemptionThreshold, MakeWeight)
 {
     CHECK_EQUAL(0,                     PTS::MakeWeight(0, 0));
-    CHECK_EQUAL((3 << 8) | 5,          PTS::MakeWeight(3, 5));
-    CHECK_EQUAL((31 << 8) | 31,        PTS::MakeWeight(31, 31));
+    CHECK_EQUAL((3 << 16) | 5,         PTS::MakeWeight(3, 5));
+    CHECK_EQUAL((31 << 16) | 31,       PTS::MakeWeight(31, 31));
 
     // priority occupies the high bits: weights are ordered by priority first, threshold second
     CHECK_TRUE(PTS::MakeWeight(2, 2)  > PTS::MakeWeight(1, 31));
@@ -1105,7 +1105,7 @@ TEST(SwitchStrategyPreemptionThreshold, RemoveSleepingTask)
 // Priority and threshold of the holder sit in different bitmap words (2 and 40), TOP is the topmost level
 // of the strategy: band blocks b and d, only the task above the threshold preempts, the hold survives the
 // preemption and is released when the holder leaves.
-template <class StrategyT, uint8_t TOP>
+template <class StrategyT, uint16_t TOP>
 static void CheckHighLevels()
 {
     Kernel<KERNEL_DYNAMIC, 4, StrategyT, PlatformTestMock> kernel;
@@ -1154,6 +1154,231 @@ TEST(SwitchStrategyPreemptionThreshold, FromThreadXHighLevels)
     CHECK_EQUAL(PT64::MakeWeight(63, 63), PT64::FromThreadX(0, 0));
     CHECK_EQUAL(PT64::MakeWeight(0, 0),   PT64::FromThreadX(63, 63));
     CHECK_EQUAL(PT64::MakeWeight(53, 58), PT64::FromThreadX(10, 5));
+}
+
+// ---------------------------------------------------------------------------- //
+// More than 256 priorities (priority and threshold are 16-bit: (priority << 16) | threshold)
+// ---------------------------------------------------------------------------- //
+
+typedef sched::SwitchStrategyPreemptionThreshold<1024> PT1024;
+
+TEST(SwitchStrategyPreemptionThreshold, HighLevels1024)
+{
+    CheckHighLevels<PT1024, 1023>(); // PriorityBitmap<1024>, topmost level is above 8 bits
+}
+
+// Priority and threshold above 255, in different bitmap words: band (300..700], b and d are inside it,
+// only the task above the threshold preempts.
+template <class StrategyT, uint16_t TOP>
+static void CheckWideLevels()
+{
+    Kernel<KERNEL_DYNAMIC, 4, StrategyT, PlatformTestMock> kernel;
+    TaskMockW<StrategyT::MakeWeight(300, 700), ACCESS_USER> a; // band (300..700]
+    TaskMockW<StrategyT::MakeWeight(500, 500), ACCESS_USER> b; // inside band
+    TaskMockW<StrategyT::MakeWeight(700, 700), ACCESS_USER> d; // exactly at threshold: still blocked
+    TaskMockW<StrategyT::MakeWeight(TOP, TOP), ACCESS_USER> c; // above threshold: preempts
+    ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
+
+    kernel.Initialize();
+
+    kernel.AddTask(&a);
+    CHECK_EQUAL_TEXT(&a, strategy->GetNext()->GetUserTask(), "expecting a (now holds its threshold)");
+
+    kernel.AddTask(&b);
+    kernel.AddTask(&d);
+    CHECK_EQUAL_TEXT(&a, strategy->GetNext()->GetUserTask(), "b and d (priority <= threshold 700) must not preempt a");
+
+    kernel.AddTask(&c);
+    CHECK_EQUAL_TEXT(&c, strategy->GetNext()->GetUserTask(), "c (above threshold) must preempt a");
+
+    kernel.RemoveTask(&c);
+    CHECK_EQUAL_TEXT(&a, strategy->GetNext()->GetUserTask(), "a resumes before b and d");
+
+    kernel.RemoveTask(&a);
+    CHECK_EQUAL_TEXT(&d, strategy->GetNext()->GetUserTask(), "hold released: d (700) runs before b (500)");
+
+    kernel.RemoveTask(&d);
+    CHECK_EQUAL_TEXT(&b, strategy->GetNext()->GetUserTask(), "b runs last");
+}
+
+TEST(SwitchStrategyPreemptionThreshold, WideLevels1024)
+{
+    CheckWideLevels<PT1024, 1023>();
+}
+
+TEST(SwitchStrategyPreemptionThreshold, WideLevelsMultiWordBitmap)
+{
+    CheckWideLevels<sched::SwitchStrategyPreemptionThreshold<800>, 799>(); // PriorityBitmap<800>
+}
+
+// Priority and threshold must not bleed into each other once either of them is above 8 bits.
+TEST(SwitchStrategyPreemptionThreshold, MakeWeightWide)
+{
+    CHECK_EQUAL(256 << 16,                 PT1024::MakeWeight(256, 0));
+    CHECK_EQUAL(256,                       PT1024::MakeWeight(0, 256));
+    CHECK_EQUAL((300 << 16) | 700,         PT1024::MakeWeight(300, 700));
+    CHECK_EQUAL((1023 << 16) | 1023,       PT1024::MakeWeight(1023, 1023));
+
+    // ordering by priority first, threshold second
+    CHECK_TRUE(PT1024::MakeWeight(256, 256)   > PT1024::MakeWeight(255, 1023));
+    CHECK_TRUE(PT1024::MakeWeight(700, 900)   > PT1024::MakeWeight(700, 800));
+
+    // weights stay non-negative (Weight is int32_t) for any priority the strategy accepts
+    CHECK_TRUE(PT1024::MakeWeight(1023, 1023)   > 0);
+    CHECK_TRUE(PT1024::MakeWeight(32767, 32767) > 0);
+}
+
+TEST(SwitchStrategyPreemptionThreshold, FromThreadXWide)
+{
+    CHECK_EQUAL(PT1024::MakeWeight(1023, 1023), PT1024::FromThreadX(0, 0));
+    CHECK_EQUAL(PT1024::MakeWeight(0, 0),       PT1024::FromThreadX(1023, 1023));
+    CHECK_EQUAL(PT1024::MakeWeight(1013, 1018), PT1024::FromThreadX(10, 5));
+    CHECK_EQUAL(PT1024::MakeWeight(723, 823),   PT1024::FromThreadX(300, 200));
+}
+
+// Priority inheritance at levels above 8 bits: the task is moved to the new level and back.
+TEST(SwitchStrategyPreemptionThreshold, WeightChangeWideLevels)
+{
+    Kernel<KERNEL_DYNAMIC, 2, PT1024, PlatformTestMock> kernel;
+    TaskMockW<PT1024::MakeWeight(1, 1), ACCESS_USER>     lo;
+    TaskMockW<PT1024::MakeWeight(300, 300), ACCESS_USER> mid;
+    ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
+
+    kernel.Initialize();
+
+    kernel.AddTask(&lo);
+    IKernelTask *klo = strategy->GetNext();
+    CHECK_EQUAL(&lo, klo->GetUserTask());
+
+    kernel.AddTask(&mid);
+    CHECK_EQUAL_TEXT(&mid, strategy->GetNext()->GetUserTask(), "mid has higher priority");
+
+    // boost lo above mid (priority inheritance)
+    Weight old_weight = klo->GetWeight();
+    klo->SetCurrentWeight(PT1024::MakeWeight(900, 900));
+    strategy->OnTaskWeightChange(klo, old_weight);
+
+    CHECK_EQUAL(2, strategy->GetSize());
+    CHECK_EQUAL_TEXT(&lo, strategy->GetNext()->GetUserTask(), "boosted lo must run before mid");
+    CHECK_EQUAL_TEXT(&lo, strategy->GetNext()->GetUserTask(), "boosted lo is alone at its level");
+
+    // restore
+    old_weight = klo->GetWeight();
+    klo->SetCurrentWeight(NO_WEIGHT);
+    strategy->OnTaskWeightChange(klo, old_weight);
+
+    CHECK_EQUAL(2, strategy->GetSize());
+    CHECK_EQUAL_TEXT(&mid, strategy->GetNext()->GetUserTask(), "mid runs again after lo's boost is gone");
+}
+
+// Effective threshold = max(configured threshold, current priority) with values above 8 bits, the
+// waiter's threshold is ignored, the hold migrates with the task.
+TEST(SwitchStrategyPreemptionThreshold, WeightChangeKeepsConfiguredThresholdWide)
+{
+    Kernel<KERNEL_DYNAMIC, 3, PT1024, PlatformTestMock> kernel;
+    TaskMockW<PT1024::MakeWeight(1, 700), ACCESS_USER>   a; // configured band [1..700]
+    TaskMockW<PT1024::MakeWeight(700, 700), ACCESS_USER> c;
+    TaskMockW<PT1024::MakeWeight(701, 701), ACCESS_USER> d;
+    ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
+
+    kernel.Initialize();
+
+    kernel.AddTask(&a);
+    IKernelTask *ka = strategy->GetNext(); // a becomes held on level 1
+    CHECK_EQUAL(&a, ka->GetUserTask());
+
+    // boost a to priority 500 with a waiter threshold that must be ignored (1023)
+    Weight old_weight = ka->GetWeight();
+    ka->SetCurrentWeight(PT1024::MakeWeight(500, 1023));
+    strategy->OnTaskWeightChange(ka, old_weight);
+
+    // the hold migrated to level 500, effective threshold = max(700, 500) = 700
+    kernel.AddTask(&c);
+    CHECK_EQUAL_TEXT(&a, strategy->GetNext()->GetUserTask(), "c (700 <= threshold 700) must not preempt boosted a");
+
+    kernel.AddTask(&d);
+    CHECK_EQUAL_TEXT(&d, strategy->GetNext()->GetUserTask(), "d (701 > threshold 700) must preempt boosted a");
+
+    kernel.RemoveTask(&d);
+    CHECK_EQUAL_TEXT(&a, strategy->GetNext()->GetUserTask(), "boosted a resumes");
+
+    // restore: hold migrates back to level 1 (configured threshold 700 still protects against c)
+    old_weight = ka->GetWeight();
+    ka->SetCurrentWeight(NO_WEIGHT);
+    strategy->OnTaskWeightChange(ka, old_weight);
+
+    CHECK_EQUAL_TEXT(&a, strategy->GetNext()->GetUserTask(), "restored a keeps its configured threshold");
+
+    kernel.RemoveTask(&a);
+    CHECK_EQUAL_TEXT(&c, strategy->GetNext()->GetUserTask(), "c runs once a is gone");
+}
+
+// Run-time threshold change with priority/threshold above 8 bits: the previous threshold is decoded in full.
+TEST(SwitchStrategyPreemptionThreshold, ChangeThresholdWide)
+{
+    Kernel<KERNEL_STATIC, 2, PT1024, PlatformTestMock> kernel;
+    TaskMockW<PT1024::MakeWeight(700, 700), ACCESS_USER> task1, task2; // round-robin peers
+    PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
+    Stack *&active = platform->m_stack_active;
+
+    kernel.Initialize();
+    kernel.AddTask(&task1);
+    kernel.AddTask(&task2);
+    kernel.Start();
+
+    // make sure the strategy has selected the running task through GetNext()
+    platform->ProcessTick();
+
+    ITask *running = (active->SP == (Word)task1.GetStack()) ? static_cast<ITask *>(&task1) : static_cast<ITask *>(&task2);
+    ITask *other   = (running == &task1)                    ? static_cast<ITask *>(&task2) : static_cast<ITask *>(&task1);
+
+    IKernelService *service = IKernelService::GetInstance();
+
+    // raise the threshold: the running task protects itself from its same-level peer
+    CHECK_EQUAL_TEXT(700, PT1024::ChangeThreshold(*service, service->GetTid(), 700, 1000), "expecting previous threshold 700");
+
+    for (int32_t i = 0; i < 3; i++)
+    {
+        platform->ProcessTick();
+        CHECK_EQUAL_TEXT(active->SP, (Word)running->GetStack(), "raised threshold: running task must not be time-sliced");
+    }
+
+    // threshold equal to the priority releases the protection
+    CHECK_EQUAL_TEXT(1000, PT1024::ChangeThreshold(*service, service->GetTid(), 700, 700), "expecting previous threshold 1000");
+
+    platform->ProcessTick();
+    CHECK_EQUAL_TEXT(active->SP, (Word)other->GetStack(), "released: peer must be scheduled");
+}
+
+// AddTask() must reject a priority or a threshold outside [0, MAX_PRIORITIES) as encoded in the weight.
+template <class StrategyT, Weight WEIGHT>
+static void CheckAddTaskAsserts()
+{
+    Kernel<KERNEL_DYNAMIC, 1, StrategyT, PlatformTestMock> kernel;
+    TaskMockW<WEIGHT, ACCESS_USER> task1;
+
+    kernel.Initialize();
+
+    try
+    {
+        g_TestContext.ExpectAssert(true);
+        kernel.AddTask(&task1);
+        CHECK_TEXT(false, "expecting assertion for weight out of range");
+    }
+    catch (TestAssertPassed &pass)
+    {
+        CHECK(true);
+        g_TestContext.ExpectAssert(false);
+    }
+}
+
+TEST(SwitchStrategyPreemptionThreshold, AddTaskWideOutOfRangeAsserts)
+{
+    CheckAddTaskAsserts<PT1024, PT1024::MakeWeight(1024, 1024)>();            // first priority above the maximum
+    CheckAddTaskAsserts<PT1024, PT1024::MakeWeight(1023, 1024)>();            // threshold above the maximum
+    CheckAddTaskAsserts<PT1024, PT1024::MakeWeight(700, 600)>();              // threshold below the priority
+    CheckAddTaskAsserts<sched::SwitchStrategyPT32, PTS::MakeWeight(261, 261)>(); // priority above 8 bits must not alias onto level 5
+    CheckAddTaskAsserts<sched::SwitchStrategyPT32, PTS::MakeWeight(5, 261)>();   // threshold above 8 bits must not alias onto level 5
 }
 
 // ============================================================================ //

@@ -28,7 +28,8 @@ namespace sched {
 
     \tparam MAX_PRIORITIES  Number of distinct priority levels. Must be in the range
                             [1, PriorityBitmapTraits<ReadyBitmap>::CAPACITY] (enforced by a compile-time
-                            assertion) and not exceed 1024 (the widest PriorityBitmap, priority is stored as \c uint16_t). Bit \c i of
+                            assertion) and not exceed 32768 (priority is stored as \c uint16_t, the same ceiling as
+                            SwitchStrategyPreemptionThreshold; the default PriorityBitmap<> tops out at 1024). Bit \c i of
                             \c m_ready_bitmap represents priority level \c i.
                             The concrete aliases SwitchStrategyFP32 and SwitchStrategyFP64 use
                             MAX_PRIORITIES = 32 and 64 respectively.
@@ -125,7 +126,7 @@ public:
     {
         STK_STATIC_ASSERT_DESC_N(MinPrio, MAX_PRIORITIES >= 1U, "MAX_PRIORITIES must be at least 1");
         STK_STATIC_ASSERT_DESC_N(MaxPrio, MAX_PRIORITIES <= static_cast<uint32_t>(BitmapTraits::CAPACITY), "MAX_PRIORITIES exceeds ReadyBitmap width");
-        STK_STATIC_ASSERT_DESC_N(MaxIdx, MAX_PRIORITIES <= 1024U, "MAX_PRIORITIES exceeds 1024 (widest supported ReadyBitmap)");
+        STK_STATIC_ASSERT_DESC_N(MaxIdx, MAX_PRIORITIES <= 32768U, "MAX_PRIORITIES exceeds 32768 (priority is uint16_t)");
     }
 
     /*! \brief Destructor.
@@ -353,7 +354,7 @@ public:
     }
 
 protected:
-    //! Priority type, wide enough for the 1024 levels of the largest PriorityBitmap.
+    //! Priority type, wide enough for the 1024 levels of the largest PriorityBitmap and for custom wider bitmaps.
     typedef uint16_t Priority;
 
     //! Bitmap operations (set/clear/empty/highest-set) for the \c ReadyBitmap type.

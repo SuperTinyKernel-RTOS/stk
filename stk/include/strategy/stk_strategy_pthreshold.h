@@ -30,8 +30,9 @@ namespace sched {
            fixed-priority task.
 
     \tparam MAX_PRIORITIES  Number of priority levels, [1, PriorityBitmapTraits<ReadyBitmap>::CAPACITY]
-                           (enforced by a compile-time assertion), at most 256 (priority and threshold
-                           are stored as \c uint8_t, [0, 255]). The aliases SwitchStrategyPT32 and
+                           (enforced by a compile-time assertion), at most 32768 (priority and threshold
+                           are stored as \c uint16_t, but the packed weight is a signed \c int32_t so the
+                           priority is limited to [0, 32767]). The aliases SwitchStrategyPT32 and
                            SwitchStrategyPT64 use 32 and 64 levels respectively.
     \tparam TIMESLICE       \c true to enable time-slicing with per-task quanta for use with
                            stk::KERNEL_TIMESLICE: GetNext() becomes sticky (the selected task of a
@@ -40,7 +41,7 @@ namespace sched {
                            \c false (default): fixed 1-tick round-robin on every GetNext().
     \tparam ReadyBitmap    Type of the priority bitmaps (ready, held and advance). Defaults to \c uint32_t
                            for MAX_PRIORITIES <= 32, to \c uint64_t for <= 64 and to PriorityBitmap<> (multi-word,
-                           96..256 bits) above that. Can be any unsigned integer type, PriorityBitmap<BITS>,
+                           up to 1024 bits) above that. Can be any unsigned integer type, PriorityBitmap<BITS>,
                            or a user-defined class for which a PriorityBitmapTraits specialization is
                            provided (see stk_priority_bitmap.h).
 
@@ -49,7 +50,9 @@ namespace sched {
     (0 = highest). Use FromThreadX() to convert ThreadX (priority, threshold) pairs.
 
     \par Encoding in ITask::GetWeight()
-    Both values are packed into the task weight: <tt>(priority << 8) | threshold</tt>.
+    Both values are packed into the task weight: <tt>(priority << 16) | threshold</tt>
+    (16 bits each). Weight is \c int32_t, so the priority must stay below 32768
+    to keep the weight non-negative and correctly ordered.
     Use MakeWeight() / FromThreadX() inside ITask::GetWeight(). Priority occupies the high
     bits so integer comparison of weights (as used by kernel priority inheritance) orders
     by priority first.
@@ -82,7 +85,7 @@ namespace sched {
            via IKernelTask::GetBaseWeight().
     \note  Yield() is handled by OnTaskYield() (tx_thread_relinquish semantics) in non-HRT modes.
     \note  Differences from ThreadX: STK priority numbering (higher = more important), at most
-           256 priority levels (bounded by the ReadyBitmap capacity); without TIMESLICE the slice is fixed at 1 tick, with TIMESLICE
+           32768 priority levels (bounded by the ReadyBitmap capacity); without TIMESLICE the slice is fixed at 1 tick, with TIMESLICE
            (stk::KERNEL_TIMESLICE) the per-task quantum comes from ITask::GetTimeSlice().
     \note  With \a TIMESLICE, the quantum of a task can be changed at run-time with
            IKernelService::SetTimeSlice(). A task whose threshold is above its priority is held
@@ -112,19 +115,19 @@ public:
         \param[in] priority:  Task priority, [0, MAX_PRIORITIES - 1], higher = more important.
         \param[in] threshold: Preemption-threshold, [priority, MAX_PRIORITIES - 1].
     */
-    static constexpr Weight MakeWeight(uint8_t priority, uint8_t threshold)
+    static constexpr Weight MakeWeight(uint16_t priority, uint16_t threshold)
     {
-        return static_cast<Weight>((static_cast<Weight>(priority) << 8) | static_cast<Weight>(threshold));
+        return static_cast<Weight>((static_cast<uint32_t>(priority) << 16) | static_cast<uint32_t>(threshold));
     }
 
     /*! \brief     Build a task weight from ThreadX numbers (0 = highest priority).
         \param[in] tx_priority:  ThreadX priority, [0, MAX_PRIORITIES - 1].
         \param[in] tx_threshold: ThreadX preemption-threshold, [0, tx_priority].
     */
-    static constexpr Weight FromThreadX(uint8_t tx_priority, uint8_t tx_threshold)
+    static constexpr Weight FromThreadX(uint16_t tx_priority, uint16_t tx_threshold)
     {
-        return MakeWeight(static_cast<uint8_t>((MAX_PRIORITIES - 1U) - tx_priority),
-                          static_cast<uint8_t>((MAX_PRIORITIES - 1U) - tx_threshold));
+        return MakeWeight(static_cast<uint16_t>((MAX_PRIORITIES - 1U) - tx_priority),
+                          static_cast<uint16_t>((MAX_PRIORITIES - 1U) - tx_threshold));
     }
 
     /*! \brief Construct an empty strategy.
@@ -137,7 +140,7 @@ public:
     {
         STK_STATIC_ASSERT_DESC_N(MinPrio, MAX_PRIORITIES >= 1U, "MAX_PRIORITIES must be at least 1");
         STK_STATIC_ASSERT_DESC_N(MaxPrio, MAX_PRIORITIES <= static_cast<uint32_t>(BitmapTraits::CAPACITY), "MAX_PRIORITIES exceeds ReadyBitmap width");
-        STK_STATIC_ASSERT_DESC_N(MaxIdx, MAX_PRIORITIES <= 256U, "MAX_PRIORITIES exceeds 256 (priority is uint8_t)");
+        STK_STATIC_ASSERT_DESC_N(MaxIdx, MAX_PRIORITIES <= 32768U, "MAX_PRIORITIES exceeds 32768 (priority is encoded in the upper 15 bits of the int32_t Weight)");
     }
 
     /*! \brief Destructor.
@@ -442,7 +445,7 @@ public:
                    selection. The task's time slice is not affected, but with TIMESLICE a task
                    which is held (threshold above its priority) is not time-sliced while it holds.
     */
-    static uint8_t ChangeThreshold(IKernelService &service, TId tid, uint8_t priority, uint8_t threshold)
+    static uint16_t ChangeThreshold(IKernelService &service, TId tid, uint16_t priority, uint16_t threshold)
     {
         STK_ASSERT(priority < MAX_PRIORITIES);
         STK_ASSERT((threshold >= priority) && (threshold < MAX_PRIORITIES));
@@ -452,7 +455,7 @@ public:
 
 protected:
     //! Priority type.
-    typedef uint8_t Priority;
+    typedef uint16_t Priority;
 
     //! Bitmap operations (set/clear/test/empty/highest-set) for the \c ReadyBitmap type.
     typedef PriorityBitmapTraits<ReadyBitmap> BitmapTraits;
@@ -539,7 +542,7 @@ protected:
 
     static __stk_forceinline Priority DecodePriority(Weight weight)
     {
-        return static_cast<Priority>((static_cast<uint32_t>(weight) >> 8) & 0xFFU);
+        return static_cast<Priority>((static_cast<uint32_t>(weight) >> 16) & 0xFFFFU);
     }
 
     static __stk_forceinline Priority GetTaskPriority(IKernelTask *task)
@@ -549,7 +552,7 @@ protected:
 
     static __stk_forceinline Priority DecodeThreshold(Weight weight)
     {
-        return static_cast<Priority>(static_cast<uint32_t>(weight) & 0xFFU);
+        return static_cast<Priority>(static_cast<uint32_t>(weight) & 0xFFFFU);
     }
 
     //! Configured threshold from the task's base weight (unaffected by priority inheritance).

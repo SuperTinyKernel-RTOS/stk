@@ -65,8 +65,9 @@ stk/
 │   ├── strategy/
 │   │   ├── stk_strategy_rrobin.h    ← Round-Robin
 │   │   ├── stk_strategy_swrrobin.h  ← Smooth Weighted Round-Robin
-│   │   ├── stk_strategy_fpriority.h ← Fixed Priority
-│   │   ├── stk_strategy_pthreshold.h ← Preemption-Threshold (+ time-slicing variant)
+│   │   ├── stk_priority_bitmap.h    ← Priority bitmaps (up to 1024 levels) for FP / PT
+│   │   ├── stk_strategy_fpriority.h ← Fixed Priority (up to 1024 levels)
+│   │   ├── stk_strategy_pthreshold.h ← Preemption-Threshold (+ time-slicing variant, up to 1024 levels)
 │   │   ├── stk_strategy_edf.h       ← Earliest Deadline First
 │   │   └── stk_strategy_monotonic.h ← Rate/Deadline Monotonic
 │   ├── sync/
@@ -388,7 +389,7 @@ if (res == stk::ADD_FAIL_POOL_FULL)
 
 ### Time-slicing (`KERNEL_TIMESLICE`)
 
-Optional ThreadX-style time-slicing with a per-task quantum, enabled by the `KERNEL_TIMESLICE` mode flag together with a strategy that reports `TIMESLICE_API = 1` (currently `sched::SwitchStrategyPT32_TS`, see [`include/strategy/README.md`](include/strategy/README.md)). Without the flag there is no per-task accounting and no extra memory per task.
+Optional ThreadX-style time-slicing with a per-task quantum, enabled by the `KERNEL_TIMESLICE` mode flag together with a strategy that reports `TIMESLICE_API = 1` (currently the `_TS` variants of Preemption-Threshold: `sched::SwitchStrategyPT32_TS`, `sched::SwitchStrategyPT64_TS` or `sched::SwitchStrategyPreemptionThreshold<N, true>` with up to 1024 levels, see [`include/strategy/README.md`](include/strategy/README.md)). Without the flag there is no per-task accounting and no extra memory per task.
 
 | API                                                     | Where           | Description                                                                                                                                                                                                                    |
 |---------------------------------------------------------|-----------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
@@ -647,8 +648,8 @@ All strategies are **header-only** classes implementing `ITaskSwitchStrategy`. T
 |----------------------------|--------------------------------------------------------------|:------------:|:-----------------:|------------------------------|---------------|
 | `stk_strategy_rrobin.h`    | `sched::SwitchStrategyRR`                                    |      0       |         1         | —                            | MIT           |
 | `stk_strategy_swrrobin.h`  | `sched::SwitchStrategySWRR`                                  |      1       |         1         | —                            | MIT           |
-| `stk_strategy_fpriority.h` | `sched::SwitchStrategyFP32`                                  |      1       |         1         | —                            | MIT           |
-| `stk_strategy_pthreshold.h`| `sched::SwitchStrategyPT32` / `sched::SwitchStrategyPT32_TS` |      1       |         1         | `KERNEL_TIMESLICE` for `_TS` | MIT           |
+| `stk_strategy_fpriority.h` | `sched::SwitchStrategyFP32` / `FP64`, `sched::SwitchStrategyFixedPriority<N>` (N ≤ 1024) |      1       |         1         | —                            | MIT           |
+| `stk_strategy_pthreshold.h`| `sched::SwitchStrategyPT32` / `PT64` + `_TS`, `sched::SwitchStrategyPreemptionThreshold<N>` (N ≤ 1024) |      1       |         1         | `KERNEL_TIMESLICE` for `_TS` | MIT           |
 | `stk_strategy_edf.h`       | `sched::SwitchStrategyEDF`                                   |      0       |         1         | `KERNEL_HRT`                 | MIT           |
 | `stk_strategy_monotonic.h` | `sched::SwitchStrategyRM` / `sched::SwitchStrategyDM`        |      0       |         0         | `KERNEL_HRT`                 | MIT           |
 | `stk_strategy_mcas.h`      | `sched::SwitchStrategyMCAS`                                  |      —       |         —         | —                            | 🔒 Commercial |
@@ -661,14 +662,16 @@ Is CPU time equal for all tasks?
 ├── Yes → sched::SwitchStrategyRR
 └── No
     ├── Static weights, proportional fairness  → sched::SwitchStrategySWRR
-    ├── Hard priorities, classic RTOS model    → sched::SwitchStrategyFP32
-    ├── Hard priorities + preemption-threshold → sched::SwitchStrategyPT32
-    ├── ...and per-task time-slices            → sched::SwitchStrategyPT32_TS + KERNEL_TIMESLICE
+    ├── Hard priorities, classic RTOS model    → sched::SwitchStrategyFP32 (FP64 for 33–64 levels, sched::SwitchStrategyFixedPriority<N> up to 1024)
+    ├── Hard priorities + preemption-threshold → sched::SwitchStrategyPT32 (PT64 for 33–64 levels, sched::SwitchStrategyPreemptionThreshold<N> up to 1024)
+    ├── ...and per-task time-slices            → sched::SwitchStrategyPT32_TS (sched::SwitchStrategyPreemptionThreshold<N, true> up to 1024) + KERNEL_TIMESLICE
     ├── Periodic tasks, formal guarantees      → sched::SwitchStrategyRM / sched::SwitchStrategyDM
     ├── Dynamic deadlines, max utilisation     → sched::SwitchStrategyEDF
     ├── Mixed-criticality (2-level)            → sched::SwitchStrategyMCAS   [commercial]
     └── Mixed-criticality (4-level)            → sched::SwitchStrategyMCAS4  [commercial]
 ```
+
+**Priority levels.** `SwitchStrategyFixedPriority<N>` and `SwitchStrategyPreemptionThreshold<N>` accept any `N` from 1 up to 1024 out of the box. The ready bitmap type is selected automatically (`uint32_t` up to 32 levels, `uint64_t` up to 64, the two-level `PriorityBitmap<>` from `stk_priority_bitmap.h` above that), and all bitmap operations stay O(1). RAM grows linearly with `N` (a task list head and a cursor per level, plus a held-task pointer per level for Preemption-Threshold). A user-defined bitmap can be supplied as the last template parameter for more than 1024 levels (up to 32768).
 
 For algorithm details, capability flag semantics, `KERNEL_HRT` requirements, offline schedulability analysis (`SchedulabilityCheck::IsSchedulableWCRT()`), and commercial licensing, see [`include/strategy/README.md`](include/strategy/README.md).
 

@@ -26,7 +26,7 @@ namespace sched {
 
     The primary template supports any unsigned integer type (uint8_t, uint16_t, uint32_t, uint64_t).
     To support more priority levels than a native integer can hold use stk::sched::PriorityBitmap (96, 128, ...,
-    256 priorities, its traits are provided below), or define your own bitmap class and provide a
+    1024 priorities, its traits are provided below), or define your own bitmap class and provide a
     \b full specialization of this template for it. A specialization
     must provide:
     \code
@@ -117,7 +117,7 @@ struct PriorityBitmapTraits
 
 /*! \class PriorityBitmap
     \brief Two-level bitmap for more priority levels than a native integer can hold (BITS = 64 + x * 32,
-           e.g. 96, 128, 160, 192, 224, 256).
+           e.g. 96, 128, 160, 192, 224, 256, ..., 1024).
 
     Level 0 is an array of BITS / 32 words (bit \c i lives in word <tt>i / 32</tt>, position <tt>i % 32</tt>).
     Level 1 is a single 32-bit \e summary word where bit \c w is set if and only if word \c w is non-zero.
@@ -131,7 +131,7 @@ struct PriorityBitmapTraits
                   Any such value works (32 and 64 too), but plain \c uint32_t / \c uint64_t are cheaper
                   for up to 64 priorities.
 
-    \note Memory: BITS / 8 + 4 bytes, e.g. 36 bytes for 256 priorities.
+    \note Memory: BITS / 8 + 4 bytes, e.g. 36 bytes for 256 priorities, 132 bytes for 1024.
     \note The default constructor creates an empty bitmap (value-initialization is therefore valid).
     \see  PriorityBitmapTraits
 */
