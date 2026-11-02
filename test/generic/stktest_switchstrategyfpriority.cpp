@@ -536,5 +536,87 @@ TEST(SwitchStrategyFixedPriority, TimeSliceNotSupported)
     CHECK_FALSE(strategy->OnTaskTimeSlice(k1));
 }
 
+// ============================================================================ //
+// ========================= More than 32 priorities ========================== //
+// ============================================================================ //
+
+// Highest level wins, peers rotate, lower levels wait, and a task added back at the top wins again.
+// Levels 1 and 40 sit in different bitmap words, HIGH is the topmost level of the strategy.
+template <class StrategyT, Weight HIGH>
+static void CheckHighPriorities()
+{
+    Kernel<KERNEL_DYNAMIC, 4, StrategyT, PlatformTestMock> kernel;
+    TaskMockW<1, ACCESS_USER>    low;
+    TaskMockW<40, ACCESS_USER>   mid1, mid2;
+    TaskMockW<HIGH, ACCESS_USER> high;
+    ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
+
+    kernel.Initialize();
+    kernel.AddTask(&low);
+    kernel.AddTask(&mid1);
+    kernel.AddTask(&mid2);
+    kernel.AddTask(&high);
+
+    CHECK_EQUAL_TEXT(&high, strategy->GetNext()->GetUserTask(), "expecting high");
+    CHECK_EQUAL_TEXT(&high, strategy->GetNext()->GetUserTask(), "expecting high again");
+
+    kernel.RemoveTask(&high);
+    CHECK_EQUAL_TEXT(&mid1, strategy->GetNext()->GetUserTask(), "expecting mid1");
+    CHECK_EQUAL_TEXT(&mid2, strategy->GetNext()->GetUserTask(), "expecting mid2");
+    CHECK_EQUAL_TEXT(&mid1, strategy->GetNext()->GetUserTask(), "expecting mid1 again");
+
+    kernel.RemoveTask(&mid1);
+    kernel.RemoveTask(&mid2);
+    CHECK_EQUAL_TEXT(&low, strategy->GetNext()->GetUserTask(), "expecting low");
+
+    kernel.AddTask(&high);
+    CHECK_EQUAL_TEXT(&high, strategy->GetNext()->GetUserTask(), "expecting re-added high");
+}
+
+TEST(SwitchStrategyFixedPriority, Priority64)
+{
+    CheckHighPriorities<sched::SwitchStrategyFP64, 63>();
+}
+
+TEST(SwitchStrategyFixedPriority, PriorityMultiWordBitmap)
+{
+    CheckHighPriorities<sched::SwitchStrategyFixedPriority<100>, 99>(); // PriorityBitmap<128>
+}
+
+TEST(SwitchStrategyFixedPriority, Priority1024)
+{
+    CheckHighPriorities<sched::SwitchStrategyFixedPriority<1024>, 1023>(); // PriorityBitmap<1024>, above 8 bits
+}
+
+// AddTask() must reject a weight outside [0, MAX_PRIORITIES) as given, not after narrowing it to the priority type.
+template <class StrategyT, Weight WEIGHT>
+static void CheckAddTaskAsserts()
+{
+    Kernel<KERNEL_DYNAMIC, 1, StrategyT, PlatformTestMock> kernel;
+    TaskMockW<WEIGHT, ACCESS_USER> task1;
+
+    kernel.Initialize();
+
+    try
+    {
+        g_TestContext.ExpectAssert(true);
+        kernel.AddTask(&task1);
+        CHECK_TEXT(false, "expecting assertion for weight out of range");
+    }
+    catch (TestAssertPassed &pass)
+    {
+        CHECK(true);
+        g_TestContext.ExpectAssert(false);
+    }
+}
+
+TEST(SwitchStrategyFixedPriority, AddTaskWeightOutOfRangeAsserts)
+{
+    CheckAddTaskAsserts<sched::SwitchStrategyFP32, 32>();                       // first level above the range
+    CheckAddTaskAsserts<sched::SwitchStrategyFP32, -1>();                       // negative
+    CheckAddTaskAsserts<sched::SwitchStrategyFP32, 65536 + 5>();                // would alias to level 5 after narrowing
+    CheckAddTaskAsserts<sched::SwitchStrategyFixedPriority<1024>, 1024>();      // first level above the maximum
+}
+
 } // namespace stk
 } // namespace test

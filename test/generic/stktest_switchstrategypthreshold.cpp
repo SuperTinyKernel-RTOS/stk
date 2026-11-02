@@ -1098,6 +1098,64 @@ TEST(SwitchStrategyPreemptionThreshold, RemoveSleepingTask)
     CHECK_EQUAL(1, g_PTRemoveSleepingContext.size_final);
 }
 
+// ---------------------------------------------------------------------------- //
+// More than 32 priorities
+// ---------------------------------------------------------------------------- //
+
+// Priority and threshold of the holder sit in different bitmap words (2 and 40), TOP is the topmost level
+// of the strategy: band blocks b and d, only the task above the threshold preempts, the hold survives the
+// preemption and is released when the holder leaves.
+template <class StrategyT, uint8_t TOP>
+static void CheckHighLevels()
+{
+    Kernel<KERNEL_DYNAMIC, 4, StrategyT, PlatformTestMock> kernel;
+    TaskMockW<StrategyT::MakeWeight(2, 40), ACCESS_USER>    a; // band (2..40]
+    TaskMockW<StrategyT::MakeWeight(35, 35), ACCESS_USER>   b; // inside band
+    TaskMockW<StrategyT::MakeWeight(40, 40), ACCESS_USER>   d; // exactly at threshold: still blocked
+    TaskMockW<StrategyT::MakeWeight(TOP, TOP), ACCESS_USER> c; // above threshold: preempts
+    ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
+
+    kernel.Initialize();
+
+    kernel.AddTask(&a);
+    CHECK_EQUAL_TEXT(&a, strategy->GetNext()->GetUserTask(), "expecting a (now holds its threshold)");
+
+    kernel.AddTask(&b);
+    kernel.AddTask(&d);
+    CHECK_EQUAL_TEXT(&a, strategy->GetNext()->GetUserTask(), "b and d (priority <= threshold 40) must not preempt a");
+
+    kernel.AddTask(&c);
+    CHECK_EQUAL_TEXT(&c, strategy->GetNext()->GetUserTask(), "c (above threshold) must preempt a");
+
+    kernel.RemoveTask(&c);
+    CHECK_EQUAL_TEXT(&a, strategy->GetNext()->GetUserTask(), "a resumes before b and d");
+
+    kernel.RemoveTask(&a);
+    CHECK_EQUAL_TEXT(&d, strategy->GetNext()->GetUserTask(), "hold released: d (40) runs before b (35)");
+
+    kernel.RemoveTask(&d);
+    CHECK_EQUAL_TEXT(&b, strategy->GetNext()->GetUserTask(), "b runs last");
+}
+
+TEST(SwitchStrategyPreemptionThreshold, HighLevels64)
+{
+    CheckHighLevels<sched::SwitchStrategyPT64, 63>();
+}
+
+TEST(SwitchStrategyPreemptionThreshold, HighLevelsMultiWordBitmap)
+{
+    CheckHighLevels<sched::SwitchStrategyPreemptionThreshold<100>, 99>(); // PriorityBitmap<128>
+}
+
+TEST(SwitchStrategyPreemptionThreshold, FromThreadXHighLevels)
+{
+    typedef sched::SwitchStrategyPT64 PT64;
+
+    CHECK_EQUAL(PT64::MakeWeight(63, 63), PT64::FromThreadX(0, 0));
+    CHECK_EQUAL(PT64::MakeWeight(0, 0),   PT64::FromThreadX(63, 63));
+    CHECK_EQUAL(PT64::MakeWeight(53, 58), PT64::FromThreadX(10, 5));
+}
+
 // ============================================================================ //
 // ============== SwitchStrategyPreemptionThreshold: TIMESLICE mode =========== //
 // ============================================================================ //

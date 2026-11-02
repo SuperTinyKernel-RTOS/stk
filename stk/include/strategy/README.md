@@ -70,7 +70,7 @@ Proportional CPU distribution with burst-free interleaving. A task with weight 3
 
 Classic fixed-priority preemptive scheduling. Tasks are assigned a numeric priority (0 = lowest; 31 = highest for the `FP32` alias, 63 for `FP64`). The highest-priority runnable task always executes. Equal-priority tasks share the CPU in round-robin.
 
-**Algorithm:** A ready bitmap where bit *i* is set whenever priority level *i* has at least one runnable task. `GetNext()` finds the highest set bit in O(1) via `CountLeadingZeros()` (a 64-bit bitmap is scanned as two 32-bit halves, a multi-word `PriorityBitmap<>` as a summary word plus one word), then advances the per-level round-robin cursor. The template parameter `MAX_PRIORITIES` can be 1 up to the capacity of the bitmap type (32 for `uint32_t`, 64 for `uint64_t`, up to 256 for `PriorityBitmap<>`, see [Priority bitmap](#priority-bitmap-stk_priority_bitmaph)). The bitmap type is the third template parameter (`SwitchStrategyFixedPriority<MAX_PRIORITIES, NoSleepYield, ReadyBitmap>`) and defaults to `uint32_t` for up to 32 priorities, `uint64_t` for up to 64 and `PriorityBitmap<>` above that, so `SwitchStrategyFP32` is unchanged, `SwitchStrategyFP64` (`SwitchStrategyFixedPriority<64>`) uses a 64-bit bitmap and e.g. `SwitchStrategyFixedPriority<200>` works without further configuration. On 32-bit targets a 64-bit bitmap costs two registers and a two-step scan, prefer `FP32` unless more than 32 levels are needed.
+**Algorithm:** A ready bitmap where bit *i* is set whenever priority level *i* has at least one runnable task. `GetNext()` finds the highest set bit in O(1) via `CountLeadingZeros()` (a 64-bit bitmap is scanned as two 32-bit halves, a multi-word `PriorityBitmap<>` as a summary word plus one word), then advances the per-level round-robin cursor. The template parameter `MAX_PRIORITIES` can be 1 up to the capacity of the bitmap type (32 for `uint32_t`, 64 for `uint64_t`, up to 1024 for `PriorityBitmap<>`, see [Priority bitmap](#priority-bitmap-stk_priority_bitmaph)). The bitmap type is the third template parameter (`SwitchStrategyFixedPriority<MAX_PRIORITIES, NoSleepYield, ReadyBitmap>`) and defaults to `uint32_t` for up to 32 priorities, `uint64_t` for up to 64 and `PriorityBitmap<>` above that, so `SwitchStrategyFP32` is unchanged, `SwitchStrategyFP64` (`SwitchStrategyFixedPriority<64>`) uses a 64-bit bitmap and e.g. `SwitchStrategyFixedPriority<200>` or `SwitchStrategyFixedPriority<1024>` work without further configuration. A task's priority is its weight (`GetWeight()`), which must be in [0, `MAX_PRIORITIES` - 1] (asserted). Every level costs one task list head and one cursor pointer in the strategy, so its RAM grows linearly with `MAX_PRIORITIES`. On 32-bit targets a 64-bit bitmap costs two registers and a two-step scan, prefer `FP32` unless more than 32 levels are needed.
 
 **No-sleep yield (`SwitchStrategyFP32_NSY`, `SwitchStrategyFP64_NSY`):** `Yield()` keeps the task runnable and hands the CPU to the next task at the **same** priority level (or continues if the task is alone at its level). A yield never hands the CPU to a lower priority level, unlike the legacy sleep-based yield.
 
@@ -119,7 +119,7 @@ static stk::Kernel<stk::KERNEL_STATIC | stk::KERNEL_TIMESLICE, 3, stk::sched::Sw
 The bitmap-based priority strategies (`SwitchStrategyFixedPriority`, `SwitchStrategyPreemptionThreshold`) do not touch the bitmap directly, all operations go through `stk::sched::PriorityBitmapTraits<T>`, so the bitmap type can be replaced without changing the scheduling logic:
 
 - **Native integers:** `uint8_t`, `uint16_t`, `uint32_t` and `uint64_t` are supported out of the box. The default type is selected by `stk::sched::ReadyBitmapSelect`: `uint32_t` for up to 32 priorities, `uint64_t` for up to 64, `PriorityBitmap<>` above that.
-- **65 to 256 priorities:** `stk::sched::PriorityBitmap<BITS>` (BITS = 96, 128, 160, 192, 224, 256, i.e. 64 + x * 32; any multiple of 32 up to 1024 is accepted). It is a two-level bitmap: an array of 32-bit words plus a 32-bit summary word with one bit per non-zero word, so `Set()`, `Clear()`, `IsEmpty()` and `HighestSet()` stay O(1) (at most two `CountLeadingZeros()` calls, no loops). It occupies `BITS / 8 + 4` bytes (36 bytes for 256 priorities). It is selected automatically, `SwitchStrategyFixedPriority<200>` uses `PriorityBitmap<224>`, or can be given explicitly: `SwitchStrategyFixedPriority<256, false, PriorityBitmap<256>>`.
+- **65 to 1024 priorities:** `stk::sched::PriorityBitmap<BITS>` (BITS = 96, 128, 160, 192, 224, 256, ..., 1024, i.e. 64 + x * 32; any multiple of 32 up to 1024 is accepted, the limit is the 32-bit summary word). It is a two-level bitmap: an array of 32-bit words plus a 32-bit summary word with one bit per non-zero word, so `Set()`, `Clear()`, `IsEmpty()` and `HighestSet()` stay O(1) (at most two `CountLeadingZeros()` calls, no loops). It occupies `BITS / 8 + 4` bytes (36 bytes for 256 priorities, 132 bytes for 1024). It is selected automatically, `SwitchStrategyFixedPriority<200>` uses `PriorityBitmap<224>`, or can be given explicitly: `SwitchStrategyFixedPriority<256, false, PriorityBitmap<256>>`.
 - **Custom bitmaps:** write a bitmap class (default-constructible into the empty state) and a full specialization of `PriorityBitmapTraits` for it, then pass it as the last template parameter, e.g. `SwitchStrategyFixedPriority<128, false, MyBitmap>`. The specialization provides `CAPACITY`, `Set()`, `Clear()`, `IsSet()`, `IsEmpty()` and `HighestSet()` (index of the most significant set bit):
 
 ```cpp
@@ -138,7 +138,7 @@ template <> struct PriorityBitmapTraits<MyBitmap>
 } // namespace stk
 ```
 
-- **Compile-time check:** instantiating a strategy with `MAX_PRIORITIES` outside `[1, CAPACITY]` fails with a `static_assert`. Priority and threshold are stored as `uint8_t`, so the absolute limit is 256 levels (0..255), `MAX_PRIORITIES` is a `uint16_t` template parameter for this reason.
+- **Compile-time check:** instantiating a strategy with `MAX_PRIORITIES` outside `[1, CAPACITY]` fails with a `static_assert`. `SwitchStrategyFixedPriority` supports up to 1024 levels (the largest `PriorityBitmap<>`), `SwitchStrategyPreemptionThreshold` up to 256 because it packs priority and threshold into one task weight as two 8-bit fields (0..255). `MAX_PRIORITIES` is a `uint16_t` template parameter for this reason.
 
 ---
 
@@ -213,7 +213,7 @@ Is CPU time equal for all tasks?
 ├── Yes → SwitchStrategyRR
 └── No
     ├── Static weights, proportional fairness  → SwitchStrategySWRR
-    ├── Hard priorities, classic RTOS model    → SwitchStrategyFP32 (SwitchStrategyFP64 for 33–64 levels)
+    ├── Hard priorities, classic RTOS model    → SwitchStrategyFP32 (SwitchStrategyFP64 for 33–64 levels, SwitchStrategyFixedPriority<N> up to 1024)
     ├── Hard priorities + preemption-threshold → SwitchStrategyPT32 (SwitchStrategyPT64 for 33–64 levels)
     ├── ...and per-task time-slices (ThreadX-like) → SwitchStrategyPT32_TS / PT64_TS + KERNEL_TIMESLICE
     ├── Periodic tasks, formal guarantees      → SwitchStrategyRM / SwitchStrategyDM

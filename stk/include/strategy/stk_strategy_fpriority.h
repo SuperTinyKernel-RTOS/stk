@@ -28,7 +28,7 @@ namespace sched {
 
     \tparam MAX_PRIORITIES  Number of distinct priority levels. Must be in the range
                             [1, PriorityBitmapTraits<ReadyBitmap>::CAPACITY] (enforced by a compile-time
-                            assertion) and not exceed 256 (priority is stored as \c uint8_t, [0, 255]). Bit \c i of
+                            assertion) and not exceed 1024 (the widest PriorityBitmap, priority is stored as \c uint16_t). Bit \c i of
                             \c m_ready_bitmap represents priority level \c i.
                             The concrete aliases SwitchStrategyFP32 and SwitchStrategyFP64 use
                             MAX_PRIORITIES = 32 and 64 respectively.
@@ -37,13 +37,13 @@ namespace sched {
                             (default), the kernel performs the legacy yield: the task sleeps for
                             YIELD_TICKS, which also lets lower-priority tasks run during that tick.
     \tparam ReadyBitmap     Type of the ready-priorities bitmap (\c m_ready_bitmap). Defaults to \c uint32_t
-                            for MAX_PRIORITIES <= 32, to \c uint64_t for <= 64 and to PriorityBitmap<> (multi-word, 96..256 bits)
+                            for MAX_PRIORITIES <= 32, to \c uint64_t for <= 64 and to PriorityBitmap<> (multi-word, 96..1024 bits)
                             above that. Can be any unsigned integer type, PriorityBitmap<BITS>, or a user-defined
                             class for which a PriorityBitmapTraits specialization is provided.
 
     \par Priority assignment
-    Each task's priority is read from \c ITask::GetWeight(), cast to \c uint8_t, and must
-    be in the range [0, MAX_PRIORITIES - 1]. Tasks do \b not use the dynamic current-weight
+    Each task's priority is read from \c ITask::GetWeight(), narrowed to \c uint16_t, and must
+    be in the range [0, MAX_PRIORITIES - 1] (checked on the raw weight). Tasks do \b not use the dynamic current-weight
     mechanism, the static weight value \e is the priority. Configure a task's priority by
     overriding \c ITask::GetWeight() to return the desired level.
 
@@ -125,7 +125,7 @@ public:
     {
         STK_STATIC_ASSERT_DESC_N(MinPrio, MAX_PRIORITIES >= 1U, "MAX_PRIORITIES must be at least 1");
         STK_STATIC_ASSERT_DESC_N(MaxPrio, MAX_PRIORITIES <= static_cast<uint32_t>(BitmapTraits::CAPACITY), "MAX_PRIORITIES exceeds ReadyBitmap width");
-        STK_STATIC_ASSERT_DESC_N(MaxIdx, MAX_PRIORITIES <= 256U, "MAX_PRIORITIES exceeds 256 (priority is uint8_t)");
+        STK_STATIC_ASSERT_DESC_N(MaxIdx, MAX_PRIORITIES <= 1024U, "MAX_PRIORITIES exceeds 1024 (widest supported ReadyBitmap)");
     }
 
     /*! \brief Destructor.
@@ -135,9 +135,9 @@ public:
 
     /*! \brief     Add task to the runnable set at its fixed priority level.
         \param[in] task: Task to add. Must not be \c NULL and must not already be in any list.
-        \note      Priority is extracted by casting \c GetWeight() to \c uint8_t. The result must
-                   be less than MAX_PRIORITIES (asserted); passing a task whose GetWeight() is
-                   out of range is a programming error.
+        \note      Priority is extracted from \c GetWeight(). The weight must be in
+                   [0, MAX_PRIORITIES) (asserted before it is narrowed to the \c Priority type);
+                   passing a task whose GetWeight() is out of range is a programming error.
         \note      Delegates to AddActive() which appends the task to \c m_tasks[prio], sets
                    \c m_ready_bitmap bit \c prio if this is the first task at that level, and
                    initializes \c m_prev[prio].
@@ -149,7 +149,7 @@ public:
     {
         STK_ASSERT(task != nullptr);
         STK_ASSERT(task->GetHead() == nullptr);
-        STK_ASSERT(GetTaskPriority(task) < MAX_PRIORITIES);
+        STK_ASSERT(IsWeightValid(task->GetWeight()));
 
         const Priority prio = GetTaskPriority(task);
         const bool is_tail = (m_prev[prio] == m_tasks[prio].GetLast());
@@ -302,8 +302,8 @@ public:
     {
         const Priority old_prio = GetTaskPriorityFromWeight(old_weight);
 
-        STK_ASSERT(GetTaskPriority(task) < MAX_PRIORITIES);
-        STK_ASSERT(old_prio < MAX_PRIORITIES);
+        STK_ASSERT(IsWeightValid(task->GetWeight()));
+        STK_ASSERT(IsWeightValid(old_weight));
 
         if (task->GetHead() != &m_sleep)
         {
@@ -353,8 +353,8 @@ public:
     }
 
 protected:
-    //! Priority type.
-    typedef uint8_t Priority;
+    //! Priority type, wide enough for the 1024 levels of the largest PriorityBitmap.
+    typedef uint16_t Priority;
 
     //! Bitmap operations (set/clear/empty/highest-set) for the \c ReadyBitmap type.
     typedef PriorityBitmapTraits<ReadyBitmap> BitmapTraits;
@@ -423,9 +423,19 @@ protected:
         }
     }
 
-    /*! \brief     Get priority from the task.
+    /*! \brief     Check that a weight is a valid priority level, [0, MAX_PRIORITIES).
         \param[in] weight: Weight of the task read from \c GetWeight().
-        \return    Weight value.
+        \note      Checked on the raw weight: narrowing to Priority first would alias negative or
+                   too large weights onto valid levels.
+    */
+    static __stk_forceinline bool IsWeightValid(int32_t weight)
+    {
+        return ((weight >= 0) && (weight < static_cast<int32_t>(MAX_PRIORITIES)));
+    }
+
+    /*! \brief     Get priority from the weight.
+        \param[in] weight: Weight of the task read from \c GetWeight().
+        \return    Priority level.
     */
     static __stk_forceinline Priority GetTaskPriorityFromWeight(int32_t weight)
     {
