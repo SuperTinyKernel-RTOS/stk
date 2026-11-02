@@ -83,7 +83,7 @@ void RunExample()
     Led::InitAll(false);
 
     // allocate scheduling kernel for THREADS_MAX threads (tasks) with Round-robin scheduling strategy
-    static Kernel<KERNEL_DYNAMIC, THREADS_MAX, SwitchStrategyRoundRobin, PlatformDefault> kernel;
+    static Kernel<KERNEL_DYNAMIC, THREADS_MAX, sched::SwitchStrategyRoundRobin, PlatformDefault> kernel;
 
     // note: using ACCESS_PRIVILEGED as some MCUs may not allow writing to GPIO from a user thread, such as i.MX RT1050 (Arm Cortex-M7)
     static Thread<ACCESS_PRIVILEGED> task[THREADS_MAX];

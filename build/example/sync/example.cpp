@@ -158,7 +158,7 @@ void StartCore0()
     using namespace stk;
 
     // allocate scheduling kernel for 1 thread (tasks) with Round-robin scheduling strategy
-    static Kernel<KERNEL_STATIC | KERNEL_SYNC, 2, SwitchStrategyRR, PlatformDefault> kernel;
+    static Kernel<KERNEL_STATIC | KERNEL_SYNC, 2, sched::SwitchStrategyRR, PlatformDefault> kernel;
 
     // these are secure/trusted tasks which are allowed to access hardware safely
     static LedTask<ACCESS_PRIVILEGED> secure_hw_task0(LED_OFF);
@@ -187,7 +187,7 @@ void StartCore1()
     using namespace stk;
 
     // allocate scheduling kernel for 1 thread (tasks) with Round-Robin scheduling strategy
-    static Kernel<KERNEL_STATIC | KERNEL_SYNC, 1, SwitchStrategyRR, PlatformDefault> kernel;
+    static Kernel<KERNEL_STATIC | KERNEL_SYNC, 1, sched::SwitchStrategyRR, PlatformDefault> kernel;
 
     // if MCU supports (for example Cortex-M7/M33), ACCESS_USER does not allow an access to a hardware directly,
     // therefore you can process in this thread/task an insecure context or data
@@ -235,7 +235,7 @@ void RunExample()
 
     // allocate scheduling kernel for 1 thread (tasks) with Round-Robin scheduling strategy
     static Kernel<KERNEL_STATIC | KERNEL_SYNC | (STK_TICKLESS_IDLE ? KERNEL_TICKLESS : 0), 3,
-        SwitchStrategyRR, PlatformDefault> kernel;
+        sched::SwitchStrategyRR, PlatformDefault> kernel;
 
     // these are secure/trusted tasks which are allowed to access hardware safely
     static LedTask<ACCESS_PRIVILEGED> secure_hw_task0(LED_OFF);

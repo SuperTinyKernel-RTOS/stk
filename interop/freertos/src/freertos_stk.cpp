@@ -318,7 +318,7 @@ void vPortGetHeapStats(HeapStats_t *pxHeapStats)
 //   FreeRTOS range       : 0 (lowest/idle) .. configMAX_PRIORITIES-1 (highest)
 //   STK FP32 level range : 0               .. 31
 //
-//   SwitchStrategyFixedPriority interprets GetWeight() as the raw priority
+//   sched::SwitchStrategyFixedPriority interprets GetWeight() as the raw priority
 //   level directly (not a proportional weight).  Higher numeric value means
 //   higher priority and strictly preempts all lower levels.  The mapping is
 //   therefore a direct clamp — no shift needed:
@@ -332,8 +332,8 @@ void vPortGetHeapStats(HeapStats_t *pxHeapStats)
 
 // Enforce that configMAX_PRIORITIES fits within the 32-level FP32 strategy.
 static_assert(configMAX_PRIORITIES <= 32U,
-    "configMAX_PRIORITIES exceeds SwitchStrategyFP32's 32 priority levels. "
-    "Reduce configMAX_PRIORITIES or instantiate SwitchStrategyFixedPriority "
+    "configMAX_PRIORITIES exceeds sched::SwitchStrategyFP32's 32 priority levels. "
+    "Reduce configMAX_PRIORITIES or instantiate sched::SwitchStrategyFixedPriority "
     "with a larger MAX_PRIORITIES template parameter and update FrtosKernel.");
 
 static inline int32_t FrtosPrioToStkWeight(UBaseType_t p)
@@ -388,7 +388,7 @@ static inline bool IsIrqContext()
 // Global kernel type alias.
 // KERNEL_DYNAMIC  : tasks can be created/deleted at runtime.
 // KERNEL_SYNC     : enables all synchronisation primitives.
-// SwitchStrategyFP32: Fixed-priority preemptive, 32 levels (0=lowest, 31=highest),
+// sched::SwitchStrategyFP32: Fixed-priority preemptive, 32 levels (0=lowest, 31=highest),
 //   with round-robin within each level.  This exactly mirrors FreeRTOS scheduling
 //   semantics: the highest-priority ready task always runs immediately.
 // -----------------------------------------------------------------------------
@@ -397,7 +397,7 @@ using FrtosKernel = stk::Kernel<stk::KERNEL_DYNAMIC | stk::KERNEL_SYNC
     | stk::KERNEL_TICKLESS
 #endif
     , FREERTOS_STK_MAX_TASKS,
-    stk::SwitchStrategyFP32,
+    stk::sched::SwitchStrategyFP32,
     stk::PlatformDefault>;
 
 static FrtosKernel g_StkKernel;
@@ -1559,7 +1559,7 @@ void vTaskPrioritySet(TaskHandle_t xTask, UBaseType_t uxNewPriority)
 
     if (t->m_state != FrtosTask::State::Deleted)
     {
-        // SwitchStrategyFixedPriority keeps its ready lists keyed by the task's (base) weight and the kernel reads
+        // sched::SwitchStrategyFixedPriority keeps its ready lists keyed by the task's (base) weight and the kernel reads
         // the weight from its own record, so only IKernelService::SetWeight() moves the task to the new priority
         // level (and keeps priority inheritance consistent). It must run BEFORE m_weight is updated: the kernel
         // derives the old level from the weight which is still in effect. Writing m_weight alone would leave the

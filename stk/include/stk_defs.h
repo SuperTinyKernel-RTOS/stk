@@ -372,6 +372,29 @@
     #define __stk_attr_deprecated
 #endif
 
+/*! \def       __stk_attr_deprecated_type
+    \brief     Marks a type alias (typedef or alias template) as deprecated and attaches a migration message (declarator suffix).
+    \param[in] MSG: String literal shown in the compiler warning, normally the replacement name.
+    \note      Unlike __stk_attr_deprecated (declaration prefix) this macro is placed \e after the declared name,
+               before \c = or \c ;. That is the one position accepted for both \c typedef and \c using by every
+               supported compiler:
+               \code
+               typedef sched::SwitchStrategyEDF SwitchStrategyEDF __stk_attr_deprecated_type("Use stk::sched::SwitchStrategyEDF");
+               template <bool B> using Foo __stk_attr_deprecated_type("Use stk::sched::Foo") = sched::Foo<B>;
+               \endcode
+    \note      GCC/Clang/IAR expand to \c __attribute__((deprecated(MSG))) (works in C++11 mode), MSVC to the
+               standard \c [[deprecated(MSG)]]. On other compilers the macro expands to nothing.
+    \note      Clang does not diagnose uses of a deprecated \e alias \e template (compiler limitation, any attribute
+               spelling); deprecated typedefs are diagnosed normally by all compilers.
+*/
+#if defined(__GNUC__) || defined(__ICCARM__)
+    #define __stk_attr_deprecated_type(MSG) __attribute__((deprecated(MSG)))
+#elif defined(_MSC_VER)
+    #define __stk_attr_deprecated_type(MSG) [[deprecated(MSG)]]
+#else
+    #define __stk_attr_deprecated_type(MSG)
+#endif
+
 /*! \brief Emits a full (sequentially-consistent) memory barrier (in-code statement).
     \note  Prevents both the compiler and the CPU from reordering memory accesses across this point.
            Used to enforce visibility ordering between cores or between a task and an ISR without
@@ -825,6 +848,12 @@ static __stk_forceinline uint32_t CountLeadingZeros(const uint32_t value) noexce
                used by the kernel implementation. Not part of the public user API.
 */
 namespace util {}
+
+/*! \namespace stk::sched
+    \brief     Task-switching strategies (stk::sched::SwitchStrategy*) and their helpers (priority bitmaps,
+               schedulability analysis). Shortcuts in namespace stk are deprecated, see __stk_attr_deprecated_type.
+*/
+namespace sched {}
 
 // ----------------------------------------------------------------------------
 } // namespace stk

@@ -53,7 +53,7 @@ static volatile int32_t g_OrderIndex = 0;
 static volatile bool    g_TestComplete = false;
 
 // Kernel
-static Kernel<KERNEL_DYNAMIC | KERNEL_SYNC, _STK_EVT_TEST_TASKS_MAX, SwitchStrategyRR, PlatformDefault> g_Kernel;
+static Kernel<KERNEL_DYNAMIC | KERNEL_SYNC, _STK_EVT_TEST_TASKS_MAX, sched::SwitchStrategyRR, PlatformDefault> g_Kernel;
 
 // Test event (re-constructed per test via ResetTestState)
 static sync::Event g_TestEvent;

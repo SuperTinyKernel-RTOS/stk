@@ -57,7 +57,7 @@ static volatile int32_t g_SharedCounter = 0;
 
 // Kernel
 static Kernel<KERNEL_DYNAMIC | KERNEL_SYNC | (STK_TICKLESS_IDLE ? KERNEL_TICKLESS : 0),
-    _STK_POOL_TEST_TASKS_MAX, SwitchStrategyRR, PlatformDefault> g_Kernel;
+    _STK_POOL_TEST_TASKS_MAX, sched::SwitchStrategyRR, PlatformDefault> g_Kernel;
 
 // Shared pool + external-storage buffer used by most tests
 alignas(sizeof(void *)) static uint8_t

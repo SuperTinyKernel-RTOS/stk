@@ -69,10 +69,10 @@ namespace test {
 namespace yield {
 
 #if STK_YIELD_TEST_NATIVE
-typedef SwitchStrategyRR_NSY TestStrategy;
+typedef sched::SwitchStrategyRR_NSY TestStrategy;
 static const bool g_Native = true;
 #else
-typedef SwitchStrategyRR TestStrategy;
+typedef sched::SwitchStrategyRR TestStrategy;
 static const bool g_Native = false;
 #endif
 

@@ -68,7 +68,7 @@ static void DelayRelaxCpu()
 
 TEST(KernelService, Delay)
 {
-    Kernel<KERNEL_STATIC, 1, SwitchStrategyRR, PlatformTestMock> kernel;
+    Kernel<KERNEL_STATIC, 1, sched::SwitchStrategyRR, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task;
 
     kernel.Initialize();
@@ -87,7 +87,7 @@ TEST(KernelService, Delay)
 
 TEST(KernelService, DelayMs)
 {
-    Kernel<KERNEL_STATIC, 1, SwitchStrategyRR, PlatformTestMock> kernel;
+    Kernel<KERNEL_STATIC, 1, sched::SwitchStrategyRR, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task;
 
     kernel.Initialize(2000); // decrease resolution to 1 tick = 2 ms
@@ -106,7 +106,7 @@ TEST(KernelService, DelayMs)
 
 TEST(KernelService, GetTid)
 {
-    Kernel<KERNEL_STATIC, 2, SwitchStrategyRR, PlatformTestMock> kernel;
+    Kernel<KERNEL_STATIC, 2, sched::SwitchStrategyRR, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task;
     PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
 
@@ -123,7 +123,7 @@ TEST(KernelService, GetTid)
 
 TEST(KernelService, GetTickResolution)
 {
-    Kernel<KERNEL_STATIC, 2, SwitchStrategyRR, PlatformTestMock> kernel;
+    Kernel<KERNEL_STATIC, 2, sched::SwitchStrategyRR, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task;
     const uint32_t periodicity = PERIODICITY_DEFAULT + 1;
 
@@ -137,7 +137,7 @@ TEST(KernelService, GetTickResolution)
 
 TEST(KernelService, GetTicks)
 {
-    Kernel<KERNEL_STATIC, 2, SwitchStrategyRR, PlatformTestMock> kernel;
+    Kernel<KERNEL_STATIC, 2, sched::SwitchStrategyRR, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task1, task2;
     PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
 
@@ -159,7 +159,7 @@ TEST(KernelService, GetTicks)
 
 TEST(KernelService, GetTimeNowMs)
 {
-    Kernel<KERNEL_STATIC, 1, SwitchStrategyRR, PlatformTestMock> kernel;
+    Kernel<KERNEL_STATIC, 1, sched::SwitchStrategyRR, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task1;
     PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
 
@@ -179,7 +179,7 @@ TEST(KernelService, GetTimeNowMs)
 
 TEST(KernelService, GetTimeNowMsWith10UsecTick)
 {
-    Kernel<KERNEL_STATIC, 1, SwitchStrategyRR, PlatformTestMock> kernel;
+    Kernel<KERNEL_STATIC, 1, sched::SwitchStrategyRR, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task1;
     PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
 
@@ -262,7 +262,7 @@ static void SwitchToNextRelaxCpu()
 
 TEST(KernelService, SwitchToNext)
 {
-    Kernel<KERNEL_STATIC, 2, SwitchStrategyRR, PlatformTestMock> kernel;
+    Kernel<KERNEL_STATIC, 2, sched::SwitchStrategyRR, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task1, task2;
     PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
     Stack *&active = platform->m_stack_active;
@@ -304,7 +304,7 @@ TEST(KernelService, SwitchToNext)
 
 TEST(KernelService, SwitchToNextInactiveTask)
 {
-    Kernel<KERNEL_STATIC, 2, SwitchStrategyRR, PlatformTestMock> kernel;
+    Kernel<KERNEL_STATIC, 2, sched::SwitchStrategyRR, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task1, task2;
     PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
     Stack *&active = platform->m_stack_active;
@@ -429,37 +429,37 @@ static void TestTaskSleep(bool until)
 
 TEST(KernelService, SleepRR)
 {
-    TestTaskSleep<SwitchStrategyRR>(false);
+    TestTaskSleep<sched::SwitchStrategyRR>(false);
 }
 
 TEST(KernelService, SleepSWRR)
 {
-    TestTaskSleep<SwitchStrategySWRR>(false);
+    TestTaskSleep<sched::SwitchStrategySWRR>(false);
 }
 
 TEST(KernelService, SleepFP31)
 {
-    TestTaskSleep<SwitchStrategyFP32>(false);
+    TestTaskSleep<sched::SwitchStrategyFP32>(false);
 }
 
 TEST(KernelService, SleepUntilRR)
 {
-    TestTaskSleep<SwitchStrategyRR>(true);
+    TestTaskSleep<sched::SwitchStrategyRR>(true);
 }
 
 TEST(KernelService, SleepUntilSWRR)
 {
-    TestTaskSleep<SwitchStrategySWRR>(true);
+    TestTaskSleep<sched::SwitchStrategySWRR>(true);
 }
 
 TEST(KernelService, SleepUntilFP31)
 {
-    TestTaskSleep<SwitchStrategyFP32>(true);
+    TestTaskSleep<sched::SwitchStrategyFP32>(true);
 }
 
 TEST(KernelService, SleepMsRR)
 {
-    Kernel<KERNEL_STATIC, 2, SwitchStrategyRR, PlatformTestMock> kernel;
+    Kernel<KERNEL_STATIC, 2, sched::SwitchStrategyRR, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task1, task2;
     PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
     Stack *&active = platform->m_stack_active;
@@ -495,7 +495,7 @@ TEST(KernelService, SleepMsRR)
 
 TEST(KernelService, SleepUntilMissDeadline)
 {
-    Kernel<KERNEL_STATIC, 2, SwitchStrategyRR, PlatformTestMock> kernel;
+    Kernel<KERNEL_STATIC, 2, sched::SwitchStrategyRR, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task1, task2;
     PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
     Stack *&active = platform->m_stack_active;
@@ -579,7 +579,7 @@ static void SleepAllAndWakeRelaxCpu()
 
 TEST(KernelService, SleepAllAndWake)
 {
-    Kernel<KERNEL_STATIC, 1, SwitchStrategyRR, PlatformTestMock> kernel;
+    Kernel<KERNEL_STATIC, 1, sched::SwitchStrategyRR, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task;
 
     kernel.Initialize();
@@ -628,7 +628,7 @@ static void SleepAndWakeTicklessRelaxCpu()
 
 TEST(KernelService, SleepAndWakeTickless)
 {
-    Kernel<KERNEL_STATIC | KERNEL_TICKLESS, 1, SwitchStrategyRR, PlatformTestMock> kernel;
+    Kernel<KERNEL_STATIC | KERNEL_TICKLESS, 1, sched::SwitchStrategyRR, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task;
     PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
 
@@ -689,7 +689,7 @@ static void SleepCancelRelaxCpu()
 
 TEST(KernelService, SleepCancel)
 {
-    Kernel<KERNEL_STATIC, 2, SwitchStrategyRR, PlatformTestMock> kernel;
+    Kernel<KERNEL_STATIC, 2, sched::SwitchStrategyRR, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task1;
     PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
     Stack *&active = platform->m_stack_active;
@@ -755,7 +755,7 @@ static void YieldNsyRelaxCpu()
 
 TEST(KernelService, YieldNoSleepYieldSwitchesToNextTask)
 {
-    Kernel<KERNEL_STATIC, 3, SwitchStrategyRR_NSY, PlatformTestMock> kernel;
+    Kernel<KERNEL_STATIC, 3, sched::SwitchStrategyRR_NSY, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task1, task2, task3;
     PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
     Stack *&active = platform->m_stack_active;
@@ -784,7 +784,7 @@ TEST(KernelService, YieldNoSleepYieldSwitchesToNextTask)
 
 TEST(KernelService, YieldNoSleepYieldKeepsTaskRunnable)
 {
-    Kernel<KERNEL_STATIC, 3, SwitchStrategyRR_NSY, PlatformTestMock> kernel;
+    Kernel<KERNEL_STATIC, 3, sched::SwitchStrategyRR_NSY, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task1, task2, task3;
     PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
     Stack *&active = platform->m_stack_active;
@@ -820,7 +820,7 @@ TEST(KernelService, YieldNoSleepYieldKeepsTaskRunnable)
 
 TEST(KernelService, YieldNoSleepYieldSingleTask)
 {
-    Kernel<KERNEL_STATIC, 1, SwitchStrategyRR_NSY, PlatformTestMock> kernel;
+    Kernel<KERNEL_STATIC, 1, sched::SwitchStrategyRR_NSY, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task;
     PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
     Stack *&active = platform->m_stack_active;
@@ -849,7 +849,7 @@ TEST(KernelService, YieldNoSleepYieldSingleTask)
 
 TEST(KernelService, YieldNoSleepYieldRepeated)
 {
-    Kernel<KERNEL_STATIC, 2, SwitchStrategyRR_NSY, PlatformTestMock> kernel;
+    Kernel<KERNEL_STATIC, 2, sched::SwitchStrategyRR_NSY, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task1, task2;
     PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
     Stack *&active = platform->m_stack_active;
@@ -880,7 +880,7 @@ TEST(KernelService, YieldNoSleepYieldRepeated)
 
 TEST(KernelService, YieldNoSleepYieldHrtSingleTask)
 {
-    Kernel<KERNEL_DYNAMIC | KERNEL_HRT, 1, SwitchStrategyRR_NSY, PlatformTestMock> kernel;
+    Kernel<KERNEL_DYNAMIC | KERNEL_HRT, 1, sched::SwitchStrategyRR_NSY, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task;
     PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
 
@@ -952,7 +952,7 @@ static void YieldNsyTraceRelaxCpu()
 
 TEST(KernelService, YieldNoSleepYieldHrtHandsOverToNextTask)
 {
-    Kernel<KERNEL_DYNAMIC | KERNEL_HRT, 2, SwitchStrategyRR_NSY, PlatformTestMock> kernel;
+    Kernel<KERNEL_DYNAMIC | KERNEL_HRT, 2, sched::SwitchStrategyRR_NSY, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task1, task2;
     PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
     Stack *&active = platform->m_stack_active;
@@ -1073,7 +1073,7 @@ static void YieldNsySleepingPeerRelaxCpu()
 
 TEST(KernelService, YieldNoSleepYieldSkipsSleepingPeer)
 {
-    Kernel<KERNEL_STATIC, 3, SwitchStrategyRR_NSY, PlatformTestMock> kernel;
+    Kernel<KERNEL_STATIC, 3, sched::SwitchStrategyRR_NSY, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task1, task2, task3;
     PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
     Stack *&active = platform->m_stack_active;
@@ -1125,7 +1125,7 @@ TEST(KernelService, YieldNoSleepYieldSkipsSleepingPeer)
 TEST(KernelService, SetWeightUnsupportedStrategy)
 {
     // SwitchStrategyRR has no WEIGHT_API / PRIORITY_INHERITANCE_API: it does not handle OnTaskWeightChange()
-    Kernel<KERNEL_STATIC, 1, SwitchStrategyRR, PlatformTestMock> kernel;
+    Kernel<KERNEL_STATIC, 1, sched::SwitchStrategyRR, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task;
 
     kernel.Initialize();
@@ -1148,7 +1148,7 @@ TEST(KernelService, SetWeightUnsupportedStrategy)
 TEST(KernelService, SetWeightUnsupportedStrategyReturnsNoWeight)
 {
     // SwitchStrategyRR has no WEIGHT_API / PRIORITY_INHERITANCE_API: it does not handle OnTaskWeightChange()
-    Kernel<KERNEL_STATIC, 1, SwitchStrategyRR, PlatformTestMock> kernel;
+    Kernel<KERNEL_STATIC, 1, sched::SwitchStrategyRR, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task;
 
     kernel.Initialize();
@@ -1192,7 +1192,7 @@ TEST_GROUP(KernelServiceIsrSafety)
 
 TEST(KernelServiceIsrSafety, Common)
 {
-    Kernel<KERNEL_STATIC, 1, SwitchStrategyRR, PlatformTestMock> kernel;
+    Kernel<KERNEL_STATIC, 1, sched::SwitchStrategyRR, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task;
 
     kernel.Initialize();
@@ -1252,7 +1252,7 @@ TEST(KernelServiceIsrSafety, Common)
 
 TEST(KernelService, SysTimer)
 {
-    Kernel<KERNEL_STATIC, 1, SwitchStrategyRR, PlatformTestMock> kernel;
+    Kernel<KERNEL_STATIC, 1, sched::SwitchStrategyRR, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task;
 
     PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());

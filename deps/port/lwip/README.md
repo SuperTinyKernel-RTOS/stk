@@ -27,7 +27,7 @@ lwIP:
 
 using MyKernel = stk::Kernel<stk::KERNEL_DYNAMIC | stk::KERNEL_SYNC,
                               16 /* max tasks */,
-                              stk::SwitchStrategySmoothWeightedRoundRobin,
+                              stk::sched::SwitchStrategySmoothWeightedRoundRobin,
                               stk::PlatformDefault>;
 static MyKernel g_kernel;
 

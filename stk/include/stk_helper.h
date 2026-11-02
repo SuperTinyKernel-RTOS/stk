@@ -661,7 +661,7 @@ typedef IKernelService::ScopedSchedulerLock ScopedSchedulerLock;
     \return    Previous base weight (pass it back to restore).
     \note      Requires a strategy with WEIGHT_API = 1 and PRIORITY_INHERITANCE_API = 1, asserts otherwise.
     \note      Takes the kernel critical section internally. Intended for task context.
-    \see       IKernelService::SetWeight, SwitchStrategyPreemptionThreshold::ChangeThreshold
+    \see       IKernelService::SetWeight, sched::SwitchStrategyPreemptionThreshold::ChangeThreshold
 */
 static __stk_forceinline Weight SetWeight(TId tid, Weight weight)
 {
@@ -673,7 +673,7 @@ static __stk_forceinline Weight SetWeight(TId tid, Weight weight)
     \return    Previous base weight.
     \note      Example (preemption-threshold, equivalent of ThreadX's tx_thread_preemption_change):
                \code
-               const Weight old = stk::SetWeight(SwitchStrategyPT32::MakeWeight(prio, new_threshold));
+               const Weight old = stk::SetWeight(sched::SwitchStrategyPT32::MakeWeight(prio, new_threshold));
                \endcode
     \warning   ISR-unsafe (resolves the calling task via GetTid()).
 */

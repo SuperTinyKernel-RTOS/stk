@@ -22,7 +22,7 @@
 #define STK_C_CPU_COUNT         (1U)
 #define STK_C_KERNEL_MAX_TASKS  (6U)
 #define STK_C_KERNEL_TYPE_CPU_0 Kernel<KERNEL_DYNAMIC | KERNEL_SYNC | (STK_TICKLESS_IDLE ? KERNEL_TICKLESS : 0),\
-                                    STK_C_KERNEL_MAX_TASKS, SwitchStrategyRR, PlatformDefault>
+                                    STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyRR, PlatformDefault>
 
 // Need TLS for pthread API:
 #define STK_TLS                 (1U)

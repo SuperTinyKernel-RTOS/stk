@@ -83,7 +83,7 @@ TEST(Basic, GetVersion)
 
 TEST(Basic, ISwitchStrategyStub)
 {
-    SwitchStrategyRR ss;
+    sched::SwitchStrategyRR ss;
 
     // these are just stubs for interface noop functions to achieve 100% coverage, providing nullptr
     // for ITasks should be noop too
@@ -112,7 +112,7 @@ TEST(UserTask, GetStackSize)
 
 TEST(UserTask, GetStackSpace)
 {
-    Kernel<KERNEL_STATIC, 1, SwitchStrategyRR, PlatformTestMock> kernel;
+    Kernel<KERNEL_STATIC, 1, sched::SwitchStrategyRR, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task;
 
     // not initialized with STK_STACK_MEMORY_FILLER
@@ -396,6 +396,127 @@ TEST(DList, Relink)
     CHECK_EQUAL(&list2, e1.GetHead());
     CHECK_EQUAL(&list2, e2.GetHead());
     CHECK_EQUAL(&list2, e3.GetHead());
+}
+
+// ============================================================================ //
+// ========================== PriorityBitmapTraits ========================== //
+// ============================================================================ //
+
+// Sets the given bits (ascending order), checks that the highest one is reported after every Set(),
+// then clears them from the top and checks that the highest falls back to the previous one.
+template <class BitmapT>
+static void CheckBitmapTraits(const uint32_t *bits, uint32_t count)
+{
+    typedef sched::PriorityBitmapTraits<BitmapT> Traits;
+
+    BitmapT bitmap = BitmapT();
+    CHECK_TRUE(Traits::IsEmpty(bitmap));
+
+    for (uint32_t i = 0; i < count; i++)
+    {
+        Traits::Set(bitmap, bits[i]);
+        CHECK_TRUE(Traits::IsSet(bitmap, bits[i]));
+        CHECK_EQUAL(bits[i], Traits::HighestSet(bitmap));
+    }
+
+    CHECK_FALSE(Traits::IsEmpty(bitmap));
+    CHECK_FALSE(Traits::IsSet(bitmap, 1)); // never set
+
+    for (uint32_t i = count - 1U; i > 0U; i--)
+    {
+        Traits::Clear(bitmap, bits[i]);
+        CHECK_FALSE(Traits::IsSet(bitmap, bits[i]));
+        CHECK_EQUAL(bits[i - 1U], Traits::HighestSet(bitmap));
+    }
+
+    Traits::Clear(bitmap, bits[0]);
+    CHECK_TRUE(Traits::IsEmpty(bitmap));
+}
+
+// Every bit of a PriorityBitmap<BITS>: a lone bit toggles IsEmpty() (exercises the summary bit of every word),
+// then all bits are set one by one and cleared from the top while HighestSet() follows.
+template <uint32_t BITS>
+static void CheckEveryBit()
+{
+    typedef sched::PriorityBitmapTraits< sched::PriorityBitmap<BITS> > Traits;
+
+    sched::PriorityBitmap<BITS> bitmap;
+    CHECK_EQUAL(BITS, static_cast<uint32_t>(Traits::CAPACITY));
+
+    for (uint32_t i = 0; i < BITS; i++)
+    {
+        Traits::Set(bitmap, i);
+        CHECK_FALSE(Traits::IsEmpty(bitmap));
+        CHECK_EQUAL(i, Traits::HighestSet(bitmap));
+        Traits::Clear(bitmap, i);
+        CHECK_TRUE(Traits::IsEmpty(bitmap));
+    }
+
+    for (uint32_t i = 0; i < BITS; i++)
+    {
+        Traits::Set(bitmap, i);
+        CHECK_TRUE(Traits::IsSet(bitmap, i));
+        CHECK_EQUAL(i, Traits::HighestSet(bitmap));
+    }
+
+    for (uint32_t i = BITS - 1U; i > 0U; i--)
+    {
+        Traits::Clear(bitmap, i);
+        CHECK_FALSE(Traits::IsSet(bitmap, i));
+        CHECK_EQUAL(i - 1U, Traits::HighestSet(bitmap));
+    }
+
+    Traits::Clear(bitmap, 0);
+    CHECK_TRUE(Traits::IsEmpty(bitmap));
+}
+
+template <uint16_t MAX_PRIORITIES>
+static uint32_t SelectedCapacity()
+{
+    return static_cast<uint32_t>(sched::PriorityBitmapTraits<typename sched::ReadyBitmapSelect<MAX_PRIORITIES>::Type>::CAPACITY);
+}
+
+TEST_GROUP(PriorityBitmapTraits)
+{
+    void setup() {}
+    void teardown() {}
+};
+
+TEST(PriorityBitmapTraits, Native32)
+{
+    const uint32_t bits[] = { 0, 7, 31 };
+    CheckBitmapTraits<uint32_t>(bits, STK_STATIC_ARRAY_SIZE(bits));
+}
+
+TEST(PriorityBitmapTraits, Native64)
+{
+    const uint32_t bits[] = { 0, 31, 32, 63 }; // crosses the 32-bit halves
+    CheckBitmapTraits<uint64_t>(bits, STK_STATIC_ARRAY_SIZE(bits));
+}
+
+TEST(PriorityBitmapTraits, MultiWord)
+{
+    const uint32_t bits[] = { 0, 31, 32, 64, 127 }; // word boundaries, summary word updates
+    CheckBitmapTraits< sched::PriorityBitmap<128> >(bits, STK_STATIC_ARRAY_SIZE(bits));
+}
+
+TEST(PriorityBitmapTraits, EveryBitUpToMaxSize)
+{
+    CheckEveryBit<32>();   // minimum
+    CheckEveryBit<96>();
+    CheckEveryBit<544>();  // 17 words, not a power of two
+    CheckEveryBit<1024>(); // maximum: 32 words, all 32 summary bits
+}
+
+TEST(PriorityBitmapTraits, DefaultTypeMatchesPriorityCount)
+{
+    CHECK_EQUAL(32U,  SelectedCapacity<32>());
+    CHECK_EQUAL(64U,  SelectedCapacity<33>());
+    CHECK_EQUAL(64U,  SelectedCapacity<64>());
+    CHECK_EQUAL(96U,  SelectedCapacity<65>());
+    CHECK_EQUAL(128U, SelectedCapacity<100>());
+    CHECK_EQUAL(256U, SelectedCapacity<256>());
+    CHECK_EQUAL(1024U, SelectedCapacity<1024>());
 }
 
 } // namespace stk

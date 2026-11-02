@@ -73,7 +73,7 @@ Timing assumes the default 1 ms tick. A lock that is held for `LOCK_MS` must sho
 The suite is built once, with the kernel configured as:
 
 ```
-Kernel<KERNEL_DYNAMIC | KERNEL_SYNC (| KERNEL_TICKLESS when STK_TICKLESS_IDLE), 5, SwitchStrategyRR, PlatformDefault>
+Kernel<KERNEL_DYNAMIC | KERNEL_SYNC (| KERNEL_TICKLESS when STK_TICKLESS_IDLE), 5, sched::SwitchStrategyRR, PlatformDefault>
 ```
 
 `KERNEL_SYNC` is required by `Wait()` / `Wake()` (test 5). Tasks terminate by returning from `Run()`, which is how

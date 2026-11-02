@@ -272,7 +272,7 @@ const uint8_t KernelMode = KERNEL_STATIC    // tasks run forever (while(true))
 // 4 user tasks + TimerHost's internal tasks
 static Kernel<KernelMode,
               4 + stk::time::TimerHost::TASK_COUNT,
-              SwitchStrategyRR,
+              sched::SwitchStrategyRR,
               PlatformDefault> kernel;
 ```
 

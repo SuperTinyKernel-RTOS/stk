@@ -52,7 +52,7 @@ static ITask *volatile  g_WaiterTask = nullptr;
 
 // Kernel
 static Kernel<KERNEL_DYNAMIC | KERNEL_SYNC | (STK_TICKLESS_IDLE ? KERNEL_TICKLESS : 0),
-    _STK_FMUTEX_TEST_TASKS_MAX, SwitchStrategyRR, PlatformDefault> g_Kernel;
+    _STK_FMUTEX_TEST_TASKS_MAX, sched::SwitchStrategyRR, PlatformDefault> g_Kernel;
 
 // Test mutex
 static sync::FastMutex g_TestMutex;

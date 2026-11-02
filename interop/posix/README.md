@@ -113,7 +113,7 @@ test for them.
 | `pthread_yield` / `sched_yield` | Yes |
 | `pthread_attr_t` (stack size, external stack, detach state) | Yes |
 | `pthread_attr_set/get` scheduling: `schedparam`, `schedpolicy`, `inheritsched`, `scope`, `guardsize` | Yes (priority = task weight, see [Scheduling and Priorities](#scheduling-and-priorities)) |
-| `pthread_getschedparam` / `pthread_setschedparam` / `pthread_setschedprio` | Yes (run-time change through `stk::SetWeight()`, needs `SwitchStrategyFixedPriority`) |
+| `pthread_getschedparam` / `pthread_setschedparam` / `pthread_setschedprio` | Yes (run-time change through `stk::SetWeight()`, needs `sched::SwitchStrategyFixedPriority`) |
 | `pthread_attr_set/getprivileged_np` | Yes (non-portable STK extension) |
 | `pthread_set/getname_np`, `pthread_attr_set/getname_np`, `pthread_getattr_np` | Yes (GNU-style extensions) |
 | `pthread_cancel`, `setcancelstate`, `setcanceltype`, `testcancel`, `cleanup_push/pop` | Yes (deferred cancellation only) |
@@ -174,8 +174,8 @@ your project's `stk_config.h`. All of them have defaults, see the
 | `STK_C_PTHREAD_KEYS_MAX` | `8` | Max concurrently-alive `pthread_key_t`'s (also `PTHREAD_KEYS_MAX`) |
 | `STK_C_PTHREAD_NAME_MAX` | `16` | Thread name capacity including the NUL |
 | `STK_C_PTHREAD_CLEANUP_MAX` | `8` | Cleanup-handler nesting depth per thread |
-| `STK_C_SCHED_PRIORITY_MAX` | `31` | Highest priority level (`MAX_PRIORITIES - 1` of your `SwitchStrategyFixedPriority`) |
-| `STK_C_PTHREAD_RUNTIME_PRIORITY` | `1` | Allow priority changes of running threads (needs `SwitchStrategyFixedPriority`) |
+| `STK_C_SCHED_PRIORITY_MAX` | `31` | Highest priority level (`MAX_PRIORITIES - 1` of your `sched::SwitchStrategyFixedPriority`) |
+| `STK_C_PTHREAD_RUNTIME_PRIORITY` | `1` | Allow priority changes of running threads (needs `sched::SwitchStrategyFixedPriority`) |
 | `STK_C_MQ_MAX_QUEUES` / `STK_C_MQ_MAX_DESCRIPTORS` | `4` / `8` | Message queue limits |
 | `STK_C_TIMERS_MAX` | `8` | POSIX timers alive at the same time |
 
@@ -206,7 +206,7 @@ using namespace stk;
 
 // 1 bootstrap task + 1 reaper + up to 4 worker threads (+ spare)
 typedef Kernel<KERNEL_DYNAMIC | KERNEL_SYNC, 8,
-               SwitchStrategyFP32, PlatformDefault> KernelType;
+               sched::SwitchStrategyFP32, PlatformDefault> KernelType;
 
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
 static int g_counter = 0;
@@ -289,7 +289,7 @@ The kernel type of the bound core must include **both** `KERNEL_DYNAMIC` and `KE
 
 ```cpp
 typedef Kernel<KERNEL_DYNAMIC | KERNEL_SYNC, 8,
-               SwitchStrategyFP32, PlatformDefault> KernelType;
+               sched::SwitchStrategyFP32, PlatformDefault> KernelType;
 ```
 
 (With the C interface define `STK_C_KERNEL_TYPE_CPU_0` to the same `Kernel<...>` type.)
@@ -300,9 +300,9 @@ typedef Kernel<KERNEL_DYNAMIC | KERNEL_SYNC, 8,
 | `KERNEL_SYNC` | Enables the Mutex / Event / Semaphore / ConditionVariable primitives the layer is built on |
 | Not `KERNEL_HRT` | `pthread_create()` has no way to supply a period and deadline; sleeping functions are unavailable in HRT |
 
-Use `SwitchStrategyFixedPriority` (for example `SwitchStrategyFP32`) if you want POSIX thread
+Use `sched::SwitchStrategyFixedPriority` (for example `sched::SwitchStrategyFP32`) if you want POSIX thread
 priorities, including changing them at run time: they are the fixed priority levels of that strategy.
-Other non-HRT strategies (`SwitchStrategyRR`, `SwitchStrategySWRR`) work for everything else; with them
+Other non-HRT strategies (`sched::SwitchStrategyRR`, `sched::SwitchStrategySWRR`) work for everything else; with them
 set `STK_C_PTHREAD_RUNTIME_PRIORITY` to `0`. The layer cannot verify the kernel type at run time: a
 mismatch is a build-configuration error and is **not** reported through an error code.
 
@@ -322,7 +322,7 @@ reaper for detached threads once they finish. A finished-but-not-yet-joined thre
 
 ```cpp
 /* 1 bootstrap task + 1 reaper + up to 4 worker threads */
-typedef Kernel<KERNEL_DYNAMIC | KERNEL_SYNC, 6, SwitchStrategyFP32, PlatformDefault> KernelType;
+typedef Kernel<KERNEL_DYNAMIC | KERNEL_SYNC, 6, sched::SwitchStrategyFP32, PlatformDefault> KernelType;
 
 /* 4 workers + 1 adopted bootstrap task (see "Thread Identity and Adoption") */
 #define STK_C_PTHREAD_MAX_THREADS   5
@@ -522,10 +522,10 @@ heap-free system, use only the default stack size or supply your own stacks, and
 
 ## Scheduling and Priorities
 
-POSIX thread priorities are the **fixed priority levels** of `SwitchStrategyFixedPriority`:
+POSIX thread priorities are the **fixed priority levels** of `sched::SwitchStrategyFixedPriority`:
 
 - `sched_priority` is the task weight: `0` is the lowest level and `MAX_PRIORITIES - 1` the highest
-  (`SwitchStrategyFP32`: `0..31`). Set `STK_C_SCHED_PRIORITY_MAX` to match your strategy.
+  (`sched::SwitchStrategyFP32`: `0..31`). Set `STK_C_SCHED_PRIORITY_MAX` to match your strategy.
 - The default level is `PRIORITY_NORMAL` = `MAX_PRIORITIES / 2` (`STK_C_SCHED_PRIORITY_DEFAULT`, 16 for
   FP32). Threads created without attributes, and the internal reaper, run at that level.
 - Threads of equal priority are scheduled round-robin by the strategy; higher priorities preempt lower.
@@ -551,7 +551,7 @@ pthread_setschedprio(t, 10);
 Notes:
 
 - The priority of a running thread is changed with `stk::SetWeight()`. This requires a strategy with
-  `WEIGHT_API` and `PRIORITY_INHERITANCE_API` (`SwitchStrategyFixedPriority`); with another strategy set
+  `WEIGHT_API` and `PRIORITY_INHERITANCE_API` (`sched::SwitchStrategyFixedPriority`); with another strategy set
   `STK_C_PTHREAD_RUNTIME_PRIORITY` to `0`, a change then returns `ENOTSUP` (an unchanged value still
   succeeds).
 - If a thread currently inherits a higher priority through a mutex, the new base priority takes effect
@@ -1282,8 +1282,8 @@ definitions are used (an object file given explicitly on the link line is always
 **Wrong kernel type** — The kernel must include `KERNEL_DYNAMIC | KERNEL_SYNC` and must not be `KERNEL_HRT`. This
 cannot be detected at run time and is not reported through an error code.
 
-**Priorities without `SwitchStrategyFixedPriority`** — `pthread_setschedparam()` calls `stk::SetWeight()`, which
-asserts when the strategy has no weight/priority-inheritance API. Use `SwitchStrategyFixedPriority`, or set
+**Priorities without `sched::SwitchStrategyFixedPriority`** — `pthread_setschedparam()` calls `stk::SetWeight()`, which
+asserts when the strategy has no weight/priority-inheritance API. Use `sched::SwitchStrategyFixedPriority`, or set
 `STK_C_PTHREAD_RUNTIME_PRIORITY` to `0`. Also match `STK_C_SCHED_PRIORITY_MAX` to the number of levels.
 
 **Passing the wrong pointer to `stk_pthread_bind_kernel()`** — It takes the `stk::IKernel *`. From C++ use
@@ -1350,7 +1350,7 @@ Place these in `stk_config.h` (or the build system) before including any STK hea
 ```c
 /* --- Kernel --- */
 /* Kernel type: DYNAMIC + SYNC, not HRT; task count = own tasks + 1 reaper + live pthreads.
-   Use SwitchStrategyFixedPriority (e.g. FP32) for priorities. With the C interface define
+   Use sched::SwitchStrategyFixedPriority (e.g. FP32) for priorities. With the C interface define
    STK_C_KERNEL_MAX_TASKS and STK_C_KERNEL_TYPE_CPU_0 instead. */
 
 /* --- Threads --- */

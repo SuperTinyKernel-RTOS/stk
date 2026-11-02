@@ -12,13 +12,14 @@
 
 /*! \file  stk_strategy_swrrobin.h
     \brief Smooth Weighted Round-Robin task-switching strategy
-           (stk::SwitchStrategySmoothWeightedRoundRobin / stk::SwitchStrategySWRR, and the no-sleep-yield
-           variants stk::SwitchStrategySmoothWeightedRoundRobinNoSleepYield / stk::SwitchStrategySWRR_NSY).
+           (stk::sched::SwitchStrategySmoothWeightedRoundRobin / stk::sched::SwitchStrategySWRR, and the no-sleep-yield
+           variants stk::sched::SwitchStrategySmoothWeightedRoundRobinNoSleepYield / stk::sched::SwitchStrategySWRR_NSY).
 */
 
 #include "stk_common.h"
 
 namespace stk {
+namespace sched {
 
 /*! \class SwitchStrategySmoothWeightedRoundRobinT
     \brief Smooth Weighted Round-Robin (SWRR) task-switching strategy: distributes CPU time
@@ -385,6 +386,26 @@ typedef SwitchStrategySmoothWeightedRoundRobinT<true> SwitchStrategySmoothWeight
     \see     SwitchStrategySmoothWeightedRoundRobinNoSleepYield
 */
 typedef SwitchStrategySmoothWeightedRoundRobinT<true> SwitchStrategySWRR_NSY;
+
+} // namespace sched
+
+// ----------------------------------------------------------------------------
+// Backward compatibility: the strategies live in stk::sched, the names below keep existing
+// code that refers to them as stk::<Name> compiling. Migrate to stk::sched::<Name>.
+// ----------------------------------------------------------------------------
+
+//! \deprecated Use stk::sched::SwitchStrategySmoothWeightedRoundRobinT.
+template <bool NoSleepYield>
+using SwitchStrategySmoothWeightedRoundRobinT __stk_attr_deprecated_type("Use stk::sched::SwitchStrategySmoothWeightedRoundRobinT") = sched::SwitchStrategySmoothWeightedRoundRobinT<NoSleepYield>;
+
+//! \deprecated Use stk::sched::SwitchStrategySmoothWeightedRoundRobin.
+typedef sched::SwitchStrategySmoothWeightedRoundRobin SwitchStrategySmoothWeightedRoundRobin __stk_attr_deprecated_type("Use stk::sched::SwitchStrategySmoothWeightedRoundRobin");
+//! \deprecated Use stk::sched::SwitchStrategySWRR.
+typedef sched::SwitchStrategySWRR SwitchStrategySWRR __stk_attr_deprecated_type("Use stk::sched::SwitchStrategySWRR");
+//! \deprecated Use stk::sched::SwitchStrategySmoothWeightedRoundRobinNoSleepYield.
+typedef sched::SwitchStrategySmoothWeightedRoundRobinNoSleepYield SwitchStrategySmoothWeightedRoundRobinNoSleepYield __stk_attr_deprecated_type("Use stk::sched::SwitchStrategySmoothWeightedRoundRobinNoSleepYield");
+//! \deprecated Use stk::sched::SwitchStrategySWRR_NSY.
+typedef sched::SwitchStrategySWRR_NSY SwitchStrategySWRR_NSY __stk_attr_deprecated_type("Use stk::sched::SwitchStrategySWRR_NSY");
 
 } // namespace stk
 

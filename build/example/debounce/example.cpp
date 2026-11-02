@@ -149,7 +149,7 @@ void RunExample()
     Board::ButtonInit();
 
     static stk::Kernel<stk::KERNEL_STATIC | stk::KERNEL_SYNC | (STK_TICKLESS_IDLE ? stk::KERNEL_TICKLESS : 0),
-        stk::time::TimerHost::TASK_COUNT, stk::SwitchStrategyRR, stk::PlatformDefault> g_Kernel;
+        stk::time::TimerHost::TASK_COUNT, stk::sched::SwitchStrategyRR, stk::PlatformDefault> g_Kernel;
 
     g_Kernel.Initialize();
     g_Timers.Initialize(&g_Kernel, stk::ACCESS_PRIVILEGED);

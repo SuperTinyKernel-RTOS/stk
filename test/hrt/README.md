@@ -120,7 +120,7 @@ A job start is accepted within `±10` ms of `base + delay + i * period`.
 The suite is built once, with the kernel configured as:
 
 ```
-Kernel<KERNEL_DYNAMIC | KERNEL_HRT | KERNEL_SYNC, 4, SwitchStrategyRoundRobin, PlatformDefault>
+Kernel<KERNEL_DYNAMIC | KERNEL_HRT | KERNEL_SYNC, 4, sched::SwitchStrategyRoundRobin, PlatformDefault>
 ```
 
 `KERNEL_DYNAMIC` makes `Kernel::Start()` return once all tasks have exited, which is how each test completes

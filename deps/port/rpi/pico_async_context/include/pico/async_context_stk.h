@@ -52,8 +52,8 @@
 
 #ifndef ASYNC_CONTEXT_DEFAULT_STK_TASK_WEIGHT
 // Meaning depends on the application's chosen ITaskSwitchStrategy:
-//  - SwitchStrategyFixedPriority (FP32-style): treated as a fixed priority level (0..31).
-//  - SwitchStrategySmoothWeightedRoundRobin:   treated as a proportional CPU share.
+//  - sched::SwitchStrategyFixedPriority (FP32-style): treated as a fixed priority level (0..31).
+//  - sched::SwitchStrategySmoothWeightedRoundRobin:   treated as a proportional CPU share.
 // The default (idle weight + 4) gives the worker task a modest priority boost above idle
 // without approaching time-critical priorities, for the fixed-priority case.
 #define ASYNC_CONTEXT_DEFAULT_STK_TASK_WEIGHT (stk::DEFAULT_WEIGHT + 4U)

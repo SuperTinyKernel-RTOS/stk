@@ -204,12 +204,12 @@ your `stk_config.h` **before** any STK header is included:
 ```c
 /* Soft real-time, static tasks, round-robin */
 #define STK_C_KERNEL_TYPE_CPU_0 \
-    Kernel<KERNEL_STATIC, STK_C_KERNEL_MAX_TASKS, SwitchStrategyRR, PlatformDefault>
+    Kernel<KERNEL_STATIC, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyRR, PlatformDefault>
 
 /* Hard real-time, dynamic tasks, EDF scheduling, with sync primitives */
 #define STK_C_KERNEL_TYPE_CPU_0 \
     Kernel<KERNEL_DYNAMIC | KERNEL_HRT | KERNEL_SYNC, \
-           STK_C_KERNEL_MAX_TASKS, SwitchStrategyEDF, PlatformDefault>
+           STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyEDF, PlatformDefault>
 ```
 
 The kernel flags can be OR-combined, subject to these rules:
@@ -281,12 +281,12 @@ The arguments are evaluated more than once, so do not pass expressions with side
 
 | Strategy | Macro | Best for |
 |---|---|---|
-| Round Robin | `SwitchStrategyRR` | Equal time-slicing, simplest |
-| Smooth Weighted RR | `SwitchStrategySWRR` | Proportional CPU share per task |
-| Fixed Priority (32 levels) | `SwitchStrategyFP32` | Priority-driven soft real-time |
-| Rate Monotonic | `SwitchStrategyRM` | HRT: shorter period = higher priority |
-| Deadline Monotonic | `SwitchStrategyDM` | HRT: shorter deadline = higher priority |
-| Earliest Deadline First | `SwitchStrategyEDF` | HRT: optimal utilization |
+| Round Robin | `sched::SwitchStrategyRR` | Equal time-slicing, simplest |
+| Smooth Weighted RR | `sched::SwitchStrategySWRR` | Proportional CPU share per task |
+| Fixed Priority (32 levels) | `sched::SwitchStrategyFP32` | Priority-driven soft real-time |
+| Rate Monotonic | `sched::SwitchStrategyRM` | HRT: shorter period = higher priority |
+| Deadline Monotonic | `sched::SwitchStrategyDM` | HRT: shorter deadline = higher priority |
+| Earliest Deadline First | `sched::SwitchStrategyEDF` | HRT: optimal utilization |
 
 ### Hard Real-Time (HRT)
 
@@ -1624,5 +1624,5 @@ Place these in `stk_config.h` before including any STK header.
 /* Kernel type for core 0 — required */
 #define STK_C_KERNEL_TYPE_CPU_0 \
     Kernel<KERNEL_STATIC | KERNEL_SYNC, \
-           STK_C_KERNEL_MAX_TASKS, SwitchStrategyFP32, PlatformDefault>
+           STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyFP32, PlatformDefault>
 ```

@@ -225,11 +225,11 @@ private:
     The tick task and the handler tasks are registered with the weights supplied via Config
     (see Initialize()), by default DEFAULT_WEIGHT is used for all of them. A weight is
     \e strategy-specific and is passed to the kernel unchanged, TimerHost does not interpret it:
-    - SwitchStrategyRoundRobin, SwitchStrategyEDF, SwitchStrategyMonotonic: weights are ignored.
-    - SwitchStrategyFixedPriority: the weight is the priority level, [0, MAX_PRIORITIES - 1].
-    - SwitchStrategySmoothWeightedRoundRobin: the weight is a CPU share, (0, 0x7FFFFF], a larger value
+    - sched::SwitchStrategyRoundRobin, sched::SwitchStrategyEDF, sched::SwitchStrategyMonotonic: weights are ignored.
+    - sched::SwitchStrategyFixedPriority: the weight is the priority level, [0, MAX_PRIORITIES - 1].
+    - sched::SwitchStrategySmoothWeightedRoundRobin: the weight is a CPU share, (0, 0x7FFFFF], a larger value
       gives more slices but does not preempt.
-    - SwitchStrategyPreemptionThreshold: the weight is encoded with MakeWeight(priority, threshold).
+    - sched::SwitchStrategyPreemptionThreshold: the weight is encoded with MakeWeight(priority, threshold).
       DEFAULT_WEIGHT (1) decodes as priority 0 / threshold 1, i.e. every timer task would be \e held while
       it runs, therefore the weights \b must be set explicitly. Use threshold == priority
       (MakeWeight(p, p)) unless holding is intended.
@@ -238,19 +238,19 @@ private:
     OnExpired() callback delays evaluation of all other deadlines.
 
     Configuration examples (pick the one matching the strategy the kernel is built with, a kernel
-    using SwitchStrategyRoundRobin, SwitchStrategyEDF or SwitchStrategyMonotonic needs no Config):
+    using sched::SwitchStrategyRoundRobin, sched::SwitchStrategyEDF or sched::SwitchStrategyMonotonic needs no Config):
     \code
     stk::time::TimerHost::Config cfg;
 
-    // SwitchStrategyFP32: real preemption priority
-    cfg.tick_weight    = stk::SwitchStrategyFP32::PRIORITY_HIGH;
-    cfg.handler_weight = stk::SwitchStrategyFP32::PRIORITY_ABOVE_NORMAL;
+    // sched::SwitchStrategyFP32: real preemption priority
+    cfg.tick_weight    = stk::sched::SwitchStrategyFP32::PRIORITY_HIGH;
+    cfg.handler_weight = stk::sched::SwitchStrategyFP32::PRIORITY_ABOVE_NORMAL;
 
-    // SwitchStrategyPT32: keep threshold == priority (no hold)
-    cfg.tick_weight    = stk::SwitchStrategyPT32::MakeWeight(5, 5);
-    cfg.handler_weight = stk::SwitchStrategyPT32::MakeWeight(4, 4);
+    // sched::SwitchStrategyPT32: keep threshold == priority (no hold)
+    cfg.tick_weight    = stk::sched::SwitchStrategyPT32::MakeWeight(5, 5);
+    cfg.handler_weight = stk::sched::SwitchStrategyPT32::MakeWeight(4, 4);
 
-    // SwitchStrategySWRR: no preemption, only a larger share. Tick latency is bounded by rotation, not priority.
+    // sched::SwitchStrategySWRR: no preemption, only a larger share. Tick latency is bounded by rotation, not priority.
     cfg.tick_weight    = 4;
     cfg.handler_weight = 1;
 
@@ -543,7 +543,7 @@ public:
         \note      On failure the host is unusable. Tasks added before the failure remain registered with the
                    kernel (blocked on the empty ready list), in KERNEL_DYNAMIC mode they can be released with
                    IKernel::ScheduleTaskRemoval().
-        \warning   With SwitchStrategyPreemptionThreshold the weights in \a cfg must be set explicitly,
+        \warning   With sched::SwitchStrategyPreemptionThreshold the weights in \a cfg must be set explicitly,
                    the default weight is not neutral for this strategy (see "Scheduling weights" in TimerHost).
     */
     EAddResult Initialize(IKernel *kernel, EAccessMode mode, const Config &cfg = Config());

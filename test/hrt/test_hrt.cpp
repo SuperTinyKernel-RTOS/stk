@@ -114,7 +114,7 @@ static volatile int32_t g_MissCount[_STK_HRT_TEST_TASKS_MAX] = {};  // OnDeadlin
 static volatile int32_t g_MissFirst[_STK_HRT_TEST_TASKS_MAX] = {};  // duration reported by the first call
 
 // Kernel (KERNEL_SYNC: required by the queues of TimerHost used in polled mode, see the TimerHost tests)
-static Kernel<KERNEL_DYNAMIC | KERNEL_HRT | KERNEL_SYNC, _STK_HRT_TEST_TASKS_MAX, SwitchStrategyRoundRobin, PlatformDefault> g_Kernel;
+static Kernel<KERNEL_DYNAMIC | KERNEL_HRT | KERNEL_SYNC, _STK_HRT_TEST_TASKS_MAX, sched::SwitchStrategyRoundRobin, PlatformDefault> g_Kernel;
 
 /*! \class HrtOverrider
     \brief Makes a hard fault (HRT deadline miss) survivable and countable.

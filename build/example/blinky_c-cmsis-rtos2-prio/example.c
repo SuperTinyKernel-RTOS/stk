@@ -144,7 +144,7 @@ void MidPrioThread (void *argument) {
     //printf("[Mid ] Running busy loop (non-blocking)\n");
 
     /* Busy payload without blocking call to the kernel (osThreadYield, osDelay)
-     * will not allow stk::SwitchStrategyFP32 to switch to the LowPrioThread priority
+     * will not allow stk::sched::SwitchStrategyFP32 to switch to the LowPrioThread priority
      * thread which holds mutex blocking execution of HighPrioThread.
      */
     for (volatile int32_t i = 0; i < 1000000; ++i);

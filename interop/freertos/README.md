@@ -46,17 +46,17 @@ FreeRTOS implements a single scheduling policy: fixed-priority preemptive with r
 
 | Strategy | Description |
 |---|---|
-| `SwitchStrategyRoundRobin` | Equal time-slicing, 100% CPU utilization |
-| `SwitchStrategySWRR` | Smooth Weighted Round-Robin for proportional CPU allocation |
-| `SwitchStrategyFixedPriority` | FreeRTOS-equivalent, used by this wrapper |
-| `SwitchStrategyRM` | Rate-Monotonic for hard real-time HRT tasks |
-| `SwitchStrategyDM` | Deadline-Monotonic for hard real-time HRT tasks |
-| `SwitchStrategyEDF` | Earliest-Deadline-First, provably optimal for single-processor |
-| `SwitchStrategyMCAS` 🔒 | Mixed-Criticality Adaptive Scheduler (2-level) |
-| `SwitchStrategyMCAS4` 🔒 | Mixed-Criticality Adaptive Scheduler (4-level, EWMA-based) |
+| `sched::SwitchStrategyRoundRobin` | Equal time-slicing, 100% CPU utilization |
+| `sched::SwitchStrategySWRR` | Smooth Weighted Round-Robin for proportional CPU allocation |
+| `sched::SwitchStrategyFixedPriority` | FreeRTOS-equivalent, used by this wrapper |
+| `sched::SwitchStrategyRM` | Rate-Monotonic for hard real-time HRT tasks |
+| `sched::SwitchStrategyDM` | Deadline-Monotonic for hard real-time HRT tasks |
+| `sched::SwitchStrategyEDF` | Earliest-Deadline-First, provably optimal for single-processor |
+| `sched::SwitchStrategyMCAS` 🔒 | Mixed-Criticality Adaptive Scheduler (2-level) |
+| `sched::SwitchStrategyMCAS4` 🔒 | Mixed-Criticality Adaptive Scheduler (4-level, EWMA-based) |
 | Custom | Plug in your own via `ITaskSwitchStrategy` |
 
-The wrapper uses `SwitchStrategyFP32` to exactly replicate FreeRTOS scheduling semantics. When you are ready, switching to EDF, SWRR, or a mixed-criticality strategy requires changing a single template parameter.
+The wrapper uses `sched::SwitchStrategyFP32` to exactly replicate FreeRTOS scheduling semantics. When you are ready, switching to EDF, SWRR, or a mixed-criticality strategy requires changing a single template parameter.
 
 ### Hard Real-Time Mode
 
@@ -132,7 +132,7 @@ The following table documents every FreeRTOS API function and whether it is **fu
 
 | Function | Status | Notes |
 |---|---|---|
-| `vTaskStartScheduler` | ✅ Full | Instantiates `FrtosKernel` with `KERNEL_DYNAMIC | KERNEL_SYNC`, `SwitchStrategyFP32`, tickless if `STK_TICKLESS_IDLE=1` |
+| `vTaskStartScheduler` | ✅ Full | Instantiates `FrtosKernel` with `KERNEL_DYNAMIC | KERNEL_SYNC`, `sched::SwitchStrategyFP32`, tickless if `STK_TICKLESS_IDLE=1` |
 | `vTaskEndScheduler` | ✅ Full | Enumerates all active tasks via `EnumerateTasksT`, calls `ScheduleTaskRemoval` on each, then calls `stk::Yield()` to let the scheduler drain them. `g_StkKernel.Start()` returns once all `KERNEL_DYNAMIC` tasks have exited |
 | `vTaskSuspendAll` | ✅ Full | Maps to `stk::hw::CriticalSection::Enter()` |
 | `xTaskResumeAll` | ✅ Full | Maps to `stk::hw::CriticalSection::Exit()`; always returns `pdFALSE` — no wrapper-level pending-switch tracking |
@@ -348,7 +348,7 @@ Backed by a `stk::sync::MessageQueue` envelope FIFO paired with a `stk::memory::
 
 ## Design & Mapping
 
-**Kernel configuration:** The wrapper instantiates one global `stk::Kernel` with `KERNEL_DYNAMIC | KERNEL_SYNC` flags and the `SwitchStrategyFP32` (32-level fixed-priority) scheduler. This exactly mirrors FreeRTOS scheduling semantics: the highest-priority ready task always runs immediately, with round-robin within each priority level. Tickless mode is enabled automatically when `STK_TICKLESS_IDLE=1` is defined.
+**Kernel configuration:** The wrapper instantiates one global `stk::Kernel` with `KERNEL_DYNAMIC | KERNEL_SYNC` flags and the `sched::SwitchStrategyFP32` (32-level fixed-priority) scheduler. This exactly mirrors FreeRTOS scheduling semantics: the highest-priority ready task always runs immediately, with round-robin within each priority level. Tickless mode is enabled automatically when `STK_TICKLESS_IDLE=1` is defined.
 
 **Task capacity:** Controlled by the `FREERTOS_STK_MAX_TASKS` macro (default: 16). Increase it if more concurrent tasks are needed.
 

@@ -28,7 +28,7 @@ TEST_GROUP(SwitchStrategyEDF)
 
 TEST(SwitchStrategyEDF, GetFirstEmpty)
 {
-    SwitchStrategyEDF rr;
+    sched::SwitchStrategyEDF rr;
 
     try
     {
@@ -45,7 +45,7 @@ TEST(SwitchStrategyEDF, GetFirstEmpty)
 
 TEST(SwitchStrategyEDF, GetNextEmpty)
 {
-    Kernel<KERNEL_DYNAMIC, 1, SwitchStrategyEDF, PlatformTestMock> kernel;
+    Kernel<KERNEL_DYNAMIC, 1, sched::SwitchStrategyEDF, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task1;
     ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
 
@@ -61,7 +61,7 @@ TEST(SwitchStrategyEDF, GetNextEmpty)
 
 TEST(SwitchStrategyEDF, PriorityNext)
 {
-    Kernel<KERNEL_DYNAMIC | KERNEL_HRT, 3, SwitchStrategyEDF, PlatformTestMock> kernel;
+    Kernel<KERNEL_DYNAMIC | KERNEL_HRT, 3, sched::SwitchStrategyEDF, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task1, task2, task3;
     ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
 
@@ -96,7 +96,7 @@ TEST(SwitchStrategyEDF, PriorityNext)
 
 TEST(SwitchStrategyEDF, Algorithm)
 {
-    Kernel<KERNEL_DYNAMIC | KERNEL_HRT, 3, SwitchStrategyEDF, PlatformTestMock> kernel;
+    Kernel<KERNEL_DYNAMIC | KERNEL_HRT, 3, sched::SwitchStrategyEDF, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task1, task2, task3;
     ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
 
@@ -155,7 +155,7 @@ TEST(SwitchStrategyEDF, Algorithm)
 
 TEST(SwitchStrategyEDF, RelativeDeadlineEvolution)
 {
-    Kernel<KERNEL_DYNAMIC | KERNEL_HRT, 1, SwitchStrategyEDF, PlatformTestMock> kernel;
+    Kernel<KERNEL_DYNAMIC | KERNEL_HRT, 1, sched::SwitchStrategyEDF, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task;
     PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
 
@@ -257,7 +257,7 @@ static void g_EDFDynamicSchedulingContextProcess()
 
 TEST(SwitchStrategyEDF, DynamicScheduling)
 {
-    Kernel<KERNEL_DYNAMIC | KERNEL_HRT, 3, SwitchStrategyEDF, PlatformTestMock> kernel;
+    Kernel<KERNEL_DYNAMIC | KERNEL_HRT, 3, sched::SwitchStrategyEDF, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task1, task2, task3;
     PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
 
@@ -288,7 +288,7 @@ TEST(SwitchStrategyEDF, DynamicScheduling)
 
 TEST(SwitchStrategyEDF, YieldNotSupported)
 {
-    Kernel<KERNEL_DYNAMIC | KERNEL_HRT, 1, SwitchStrategyEDF, PlatformTestMock> kernel;
+    Kernel<KERNEL_DYNAMIC | KERNEL_HRT, 1, sched::SwitchStrategyEDF, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task;
     ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
 
@@ -304,7 +304,7 @@ TEST(SwitchStrategyEDF, YieldNotSupported)
 
 TEST(SwitchStrategyEDF, TimeSliceNotSupported)
 {
-    Kernel<KERNEL_DYNAMIC | KERNEL_HRT, 1, SwitchStrategyEDF, PlatformTestMock> kernel;
+    Kernel<KERNEL_DYNAMIC | KERNEL_HRT, 1, sched::SwitchStrategyEDF, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task;
     ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
 

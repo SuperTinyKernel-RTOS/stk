@@ -77,7 +77,7 @@ either way.
 - **`audio_mic` (C++, `main.cpp`)** — STK's native C++ API. Each task is a
   `stk::Task<StackSize, AccessMode>` subclass with the body in `Run()`,
   priorities expressed via `GetWeight()`, and the kernel instantiated as a
-  template (`Kernel<KERNEL_STATIC | KERNEL_SYNC, 3, SwitchStrategyFP32, PlatformDefault>`):
+  template (`Kernel<KERNEL_STATIC | KERNEL_SYNC, 3, sched::SwitchStrategyFP32, PlatformDefault>`):
 
   ```cpp
   #include "stk.h"
@@ -103,7 +103,7 @@ either way.
   int main()
   {
       static stk::Kernel<stk::KERNEL_STATIC | stk::KERNEL_SYNC, 3,
-                          stk::SwitchStrategyFP32, stk::PlatformDefault> kernel;
+                          stk::sched::SwitchStrategyFP32, stk::PlatformDefault> kernel;
       kernel.Initialize();
       kernel.AddTask(&blinky_task);
       // ... AddTask() for the other two ...

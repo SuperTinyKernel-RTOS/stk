@@ -51,7 +51,7 @@
 			<locationURI>virtual:/virtual</locationURI>
 		</link>
 		<link>
-			<name>src/blinky_pthread</name>
+			<name>src/blinky_c-pthread</name>
 			<type>2</type>
 			<locationURI>virtual:/virtual</locationURI>
 		</link>
@@ -136,14 +136,14 @@
 			<locationURI>virtual:/virtual</locationURI>
 		</link>
 		<link>
-			<name>src/blinky_pthread/example.c</name>
+			<name>src/blinky_c-pthread/example.c</name>
 			<type>1</type>
-			<locationURI>PARENT-4-PROJECT_LOC/blinky_pthread/example.c</locationURI>
+			<locationURI>PARENT-4-PROJECT_LOC/blinky_c-pthread/example.c</locationURI>
 		</link>
 		<link>
-			<name>src/blinky_pthread/example.h</name>
+			<name>src/blinky_c-pthread/example.h</name>
 			<type>1</type>
-			<locationURI>PARENT-4-PROJECT_LOC/blinky_pthread/example.h</locationURI>
+			<locationURI>PARENT-4-PROJECT_LOC/blinky_c-pthread/example.h</locationURI>
 		</link>
 		<link>
 			<name>src/driver/c_wrapper.cpp</name>

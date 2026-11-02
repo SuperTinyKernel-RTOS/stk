@@ -60,7 +60,7 @@ static volatile int32_t g_Phase2Sum[_STK_BARRIER_TEST_TASKS_MAX] = {0};
 
 // Kernel
 static Kernel<KERNEL_DYNAMIC | KERNEL_SYNC | (STK_TICKLESS_IDLE ? KERNEL_TICKLESS : 0),
-    _STK_BARRIER_TEST_TASKS_MAX, SwitchStrategyRR, PlatformDefault> g_Kernel;
+    _STK_BARRIER_TEST_TASKS_MAX, sched::SwitchStrategyRR, PlatformDefault> g_Kernel;
 
 // Test barriers - one per distinct group size exercised by the suite. Each is naturally left in
 // its reset state (m_count == m_threshold) once every participating task has completed its final

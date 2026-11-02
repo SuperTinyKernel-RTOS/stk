@@ -53,7 +53,7 @@ private:
             // with Fixed-Priority strategy tasks must cooperate by giving up processing with Sleep(), note
             // that Yield() may not be sufficient with >2 tasks because task with highest priority may
             // return in processing and task with lowest priority will never get its CPU time slice.
-            // More robust scheduling strategy in this respect is SwitchStrategySWRR which guarantees CPU
+            // More robust scheduling strategy in this respect is sched::SwitchStrategySWRR which guarantees CPU
             // time slice for tasks with lowest priority (weight) and SWRR does not require tasks to
             // cooperate with Sleep() or Yield() which you can still use to achieve lower power consumption.
             stk::Sleep(10);
@@ -69,7 +69,7 @@ void RunExample()
 
     // 3 tasks kernel with 3 priorities
     static Kernel<KERNEL_STATIC | (STK_TICKLESS_IDLE ? KERNEL_TICKLESS : 0), 4,
-            SwitchStrategyFP32, PlatformDefault> kernel;
+            sched::SwitchStrategyFP32, PlatformDefault> kernel;
 
     // RED has lowest priority, and BLUE has highest:
     // - BLUE gets more CPU time and will blink very often
@@ -77,10 +77,10 @@ void RunExample()
     // - ORANGE is blinking less often than GREEN
     // - RED is least blinking as it gets gets the least CPU time
     // note: if you set the same priority for tasks LEDs of these tasks will blink equally
-    static LedTask<SwitchStrategyFP32::PRIORITY_LOWEST, ACCESS_PRIVILEGED> task_red(Led::RED);
-    static LedTask<SwitchStrategyFP32::PRIORITY_LOWER, ACCESS_PRIVILEGED> task_org(Led::ORANGE);
-    static LedTask<SwitchStrategyFP32::PRIORITY_NORMAL, ACCESS_PRIVILEGED> task_green(Led::GREEN);
-    static LedTask<SwitchStrategyFP32::PRIORITY_HIGHEST, ACCESS_PRIVILEGED> task_blue(Led::BLUE);
+    static LedTask<sched::SwitchStrategyFP32::PRIORITY_LOWEST, ACCESS_PRIVILEGED> task_red(Led::RED);
+    static LedTask<sched::SwitchStrategyFP32::PRIORITY_LOWER, ACCESS_PRIVILEGED> task_org(Led::ORANGE);
+    static LedTask<sched::SwitchStrategyFP32::PRIORITY_NORMAL, ACCESS_PRIVILEGED> task_green(Led::GREEN);
+    static LedTask<sched::SwitchStrategyFP32::PRIORITY_HIGHEST, ACCESS_PRIVILEGED> task_blue(Led::BLUE);
 
     kernel.Initialize();
 

@@ -64,37 +64,37 @@
               data. This is deliberately a subset of full POSIX threads, scoped to what
               maps cleanly onto STK's task/synchronization model:
 
-    | POSIX area                                                                 | Support                                                                                  |
-    |----------------------------------------------------------------------------|------------------------------------------------------------------------------------------|
-    | pthread_create/join/detach/exit/self/equal                                 | Yes                                                                                      |
-    | pthread_yield (non-POSIX; POSIX uses sched_yield())                        | Yes  (GNU/BSD-style extension)                                                           |
-    | pthread_attr_t (stacksize, stack, detachstate)                             | Yes                                                                                      |
-    | pthread_attr_set/getprivileged_np                                          | Yes  (non-portable STK extension)                                                        |
-    | pthread_mutex_t (normal/default)                                           | Yes  (recursive in practice, see PTHREAD_MUTEX_NORMAL note)                              |
-    | pthread_mutex_t (recursive, errorcheck)                                    | Yes                                                                                      |
-    | pthread_cond_t (wait/timedwait/signal/broadcast)                           | Yes                                                                                      |
-    | pthread_rwlock_t (rdlock/wrlock/tryrdlock/trywrlock/timed variants/unlock) | Yes                                                                                      |
-    | pthread_spin_* (init/destroy/lock/trylock/unlock)                          | Yes                                                                                      |
-    | pthread_barrier_t (init/destroy/wait)                                      | Yes                                                                                      |
-    | pthread_once                                                               | Yes                                                                                      |
-    | pthread_key_t (create/delete/setspecific/getspecific, destructors)         | Yes                                                                                      |
-    | pthread_attr_set/getschedparam/schedpolicy/inheritsched/scope/guardsize    | Yes  (priority = task weight at creation; policy informational)                          |
-    | pthread_getschedparam / pthread_setschedparam / pthread_setschedprio       | Yes  (run-time change via stk::SetWeight(), needs SwitchStrategyFixedPriority)           |
-    | sched_yield, sched_get_priority_min/max  (<sched.h>)                       | Yes                                                                                      |
-    | pthread_set/getname_np, pthread_attr_set/getname_np                        | Yes  (GNU-style extension)                                                               |
-    | pthread_timedjoin_np / pthread_tryjoin_np                                  | Yes  (GNU-style extension)                                                               |
-    | pthread_mutex_clocklock / cond_clockwait / rwlock_clockrd/wrlock           | Yes  (CLOCK_REALTIME and CLOCK_MONOTONIC share the STK tick timeline)                    |
-    | pthread_*attr_set/getpshared, mutexattr protocol, condattr clock           | Yes  (PROCESS_PRIVATE only; PRIO_NONE/INHERIT)                                           |
-    | sem_init/destroy/wait/trywait/timedwait/clockwait/post/getvalue  (<semaphore.h>)| Yes  (unnamed semaphores, see semaphore.h)                                               |
-    | stk_pthread_bind_kernel()                                                  | Yes  (STK-specific bootstrap, not POSIX; required before pthread_create())               |
-    | pthread_cancel/setcancelstate/setcanceltype/testcancel/cleanup_push/pop    | Yes  (deferred only; asynchronous cancellation: ENOTSUP)                                 |
-    | pthread_getattr_np                                                         | Yes  (GNU-style extension)                                                               |
-    | clock_gettime/getres, nanosleep, clock_nanosleep, usleep, sleep, timer_*  (<time.h>)| Yes  (see time.h; timers need a TimerHost, stk_posix_timer_bind_host())                  |
-    | gettimeofday (<sys/time.h>), time (<time.h>)                                        | Yes  (kernel time + optional offset, stk_posix_set_wall_time())                          |
-    | sysconf, getpid  (<unistd.h>)                                                       | Yes  (limits of this shim and kernel, single "process")                                  |
-    | mq_open/close/unlink/send/receive/timed variants/getattr/setattr  (<mqueue.h>)     | Yes  (priorities honored; mq_notify: ENOSYS)                                             |
-    | C11 thrd_*, mtx_*, cnd_*, tss_*, call_once  (<threads.h>)                  | Yes  (wrappers over this shim, see threads.h)                                            |
-    | SCHED_FIFO / SCHED_RR policy enforcement                                   | No  (the kernel switch strategy defines scheduling, SCHED_* is informational)            |
+    | POSIX area                                                                                    | Support                                                                             |
+    |-----------------------------------------------------------------------------------------------+-------------------------------------------------------------------------------------|
+    | pthread_create/join/detach/exit/self/equal                                                    | Yes                                                                                 |
+    | pthread_yield (non-POSIX; POSIX uses sched_yield())                                           | Yes (GNU/BSD-style extension)                                                       |
+    | pthread_attr_t (stacksize, stack, detachstate)                                                | Yes                                                                                 |
+    | pthread_attr_set/getprivileged_np                                                             | Yes (non-portable STK extension)                                                    |
+    | pthread_mutex_t (normal/default)                                                              | Yes (recursive in practice, see PTHREAD_MUTEX_NORMAL note)                          |
+    | pthread_mutex_t (recursive, errorcheck)                                                       | Yes                                                                                 |
+    | pthread_cond_t (wait/timedwait/signal/broadcast)                                              | Yes                                                                                 |
+    | pthread_rwlock_t (rdlock/wrlock/tryrdlock/trywrlock/timed variants/unlock)                    | Yes                                                                                 |
+    | pthread_spin_* (init/destroy/lock/trylock/unlock)                                             | Yes                                                                                 |
+    | pthread_barrier_t (init/destroy/wait)                                                         | Yes                                                                                 |
+    | pthread_once                                                                                  | Yes                                                                                 |
+    | pthread_key_t (create/delete/setspecific/getspecific, destructors)                            | Yes                                                                                 |
+    | pthread_attr_set/getschedparam/schedpolicy/inheritsched/scope/guardsize                       | Yes (priority = task weight at creation; policy informational)                      |
+    | pthread_getschedparam / pthread_setschedparam / pthread_setschedprio                          | Yes (run-time change via stk::SetWeight(), needs sched::SwitchStrategyFixedPriority)|
+    | sched_yield, sched_get_priority_min/max (<sched.h>)                                           | Yes                                                                                 |
+    | pthread_set/getname_np, pthread_attr_set/getname_np                                           | Yes (GNU-style extension)                                                           |
+    | pthread_timedjoin_np / pthread_tryjoin_np                                                     | Yes (GNU-style extension)                                                           |
+    | pthread_mutex_clocklock / cond_clockwait / rwlock_clockrd/wrlock                              | Yes (CLOCK_REALTIME and CLOCK_MONOTONIC share the STK tick timeline)                |
+    | pthread_*attr_set/getpshared, mutexattr protocol, condattr clock                              | Yes (PROCESS_PRIVATE only; PRIO_NONE/INHERIT)                                       |
+    | sem_init/destroy/wait/trywait/timedwait/clockwait/post/getvalue (<semaphore.h>)               | Yes (unnamed semaphores, see semaphore.h)                                           |
+    | stk_pthread_bind_kernel()                                                                     | Yes (STK-specific bootstrap, not POSIX; required before pthread_create())           |
+    | pthread_cancel/setcancelstate/setcanceltype/testcancel/cleanup_push/pop                       | Yes (deferred only; asynchronous cancellation: ENOTSUP)                             |
+    | pthread_getattr_np                                                                            | Yes (GNU-style extension)                                                           |
+    | clock_gettime/getres, nanosleep, clock_nanosleep, usleep, sleep, timer_* (<time.h>)           | Yes (see time.h; timers need a TimerHost, stk_posix_timer_bind_host())              |
+    | gettimeofday (<sys/time.h>), time (<time.h>)                                                  | Yes (kernel time + optional offset, stk_posix_set_wall_time())                      |
+    | sysconf, getpid (<unistd.h>)                                                                  | Yes (limits of this shim and kernel, single "process")                              |
+    | mq_open/close/unlink/send/receive/timed variants/getattr/setattr (<mqueue.h>)                 | Yes (priorities honored; mq_notify: ENOSYS)                                         |
+    | C11 thrd_*, mtx_*, cnd_*, tss_*, call_once (<threads.h>)                                      | Yes (wrappers over this shim, see threads.h)                                        |
+    | SCHED_FIFO / SCHED_RR policy enforcement                                                      | No (the kernel switch strategy defines scheduling, SCHED_* is informational)        |
 
     \par Requirements on the STK kernel configuration
     - The kernel type configured for the bound core (\c STK_C_KERNEL_TYPE_CPU_X in
@@ -355,7 +355,7 @@ typedef struct pthread_stk_ctrl_t *pthread_t;
 /*! \def       STK_C_PTHREAD_RUNTIME_PRIORITY
     \brief     1 (default): pthread_setschedparam() / pthread_setschedprio() change the priority of a running thread with
                stk::SetWeight(), which requires a kernel switch strategy with WEIGHT_API = 1 and
-               PRIORITY_INHERITANCE_API = 1 (SwitchStrategyFixedPriority). Set it to 0 for other strategies: the
+               PRIORITY_INHERITANCE_API = 1 (sched::SwitchStrategyFixedPriority). Set it to 0 for other strategies: the
                functions then return ENOTSUP for any change (an unchanged value still succeeds).
 */
 #ifndef STK_C_PTHREAD_RUNTIME_PRIORITY
@@ -1174,7 +1174,7 @@ void *pthread_getspecific(pthread_key_t key);
 
 /*! \brief     Set the scheduling priority (task weight) of threads created with \a attr.
     \param[in] param: sched_priority in STK_C_SCHED_PRIORITY_MIN..STK_C_SCHED_PRIORITY_MAX (priority level of
-               SwitchStrategyFixedPriority, higher = more urgent). It is used if the inherit mode is
+               sched::SwitchStrategyFixedPriority, higher = more urgent). It is used if the inherit mode is
                PTHREAD_EXPLICIT_SCHED (default); the default level is STK_C_SCHED_PRIORITY_DEFAULT (PRIORITY_NORMAL).
     \return    0 on success, EINVAL for a NULL argument or an out-of-range priority.
 */

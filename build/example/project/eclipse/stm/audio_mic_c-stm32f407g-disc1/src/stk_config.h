@@ -25,6 +25,6 @@
 #define STK_C_CPU_COUNT         (1U)
 #define STK_C_KERNEL_MAX_TASKS  (3U)
 #define STK_C_KERNEL_TYPE_CPU_0 Kernel<KERNEL_STATIC | KERNEL_SYNC | (STK_TICKLESS_IDLE ? KERNEL_TICKLESS : 0),\
-                                       STK_C_KERNEL_MAX_TASKS, SwitchStrategyFP32, PlatformDefault>
+                                       STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyFP32, PlatformDefault>
 
 #endif /* STK_CONFIG_H_ */

@@ -11,13 +11,14 @@
 #define STK_STRATEGY_RROBIN_H_
 
 /*! \file  stk_strategy_rrobin.h
-    \brief Round-Robin task-switching strategy (stk::SwitchStrategyRoundRobin / stk::SwitchStrategyRR, and the
-           no-sleep-yield variants stk::SwitchStrategyRoundRobinNoSleepYield / stk::SwitchStrategyRR_NSY).
+    \brief Round-Robin task-switching strategy (stk::sched::SwitchStrategyRoundRobin / stk::sched::SwitchStrategyRR, and the
+           no-sleep-yield variants stk::sched::SwitchStrategyRoundRobinNoSleepYield / stk::sched::SwitchStrategyRR_NSY).
 */
 
 #include "stk_common.h"
 
 namespace stk {
+namespace sched {
 
 /*! \class SwitchStrategyRoundRobin
     \brief Round-Robin task-switching strategy: each runnable task receives one time slice
@@ -306,6 +307,26 @@ typedef SwitchStrategyRoundRobinT<true> SwitchStrategyRoundRobinNoSleepYield;
     \see     SwitchStrategyRoundRobinNoSleepYield
 */
 typedef SwitchStrategyRoundRobinT<true> SwitchStrategyRR_NSY;
+
+} // namespace sched
+
+// ----------------------------------------------------------------------------
+// Backward compatibility: the strategies live in stk::sched, the names below keep existing
+// code that refers to them as stk::<Name> compiling. Migrate to stk::sched::<Name>.
+// ----------------------------------------------------------------------------
+
+//! \deprecated Use stk::sched::SwitchStrategyRoundRobinT.
+template <bool NoSleepYield>
+using SwitchStrategyRoundRobinT __stk_attr_deprecated_type("Use stk::sched::SwitchStrategyRoundRobinT") = sched::SwitchStrategyRoundRobinT<NoSleepYield>;
+
+//! \deprecated Use stk::sched::SwitchStrategyRoundRobin.
+typedef sched::SwitchStrategyRoundRobin SwitchStrategyRoundRobin __stk_attr_deprecated_type("Use stk::sched::SwitchStrategyRoundRobin");
+//! \deprecated Use stk::sched::SwitchStrategyRR.
+typedef sched::SwitchStrategyRR SwitchStrategyRR __stk_attr_deprecated_type("Use stk::sched::SwitchStrategyRR");
+//! \deprecated Use stk::sched::SwitchStrategyRoundRobinNoSleepYield.
+typedef sched::SwitchStrategyRoundRobinNoSleepYield SwitchStrategyRoundRobinNoSleepYield __stk_attr_deprecated_type("Use stk::sched::SwitchStrategyRoundRobinNoSleepYield");
+//! \deprecated Use stk::sched::SwitchStrategyRR_NSY.
+typedef sched::SwitchStrategyRR_NSY SwitchStrategyRR_NSY __stk_attr_deprecated_type("Use stk::sched::SwitchStrategyRR_NSY");
 
 } // namespace stk
 

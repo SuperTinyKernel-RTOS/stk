@@ -28,7 +28,7 @@ TEST_GROUP(SwitchStrategySWRoundRobin)
 
 TEST(SwitchStrategySWRoundRobin, GetFirstEmpty)
 {
-    SwitchStrategySWRR rr;
+    sched::SwitchStrategySWRR rr;
 
     try
     {
@@ -45,7 +45,7 @@ TEST(SwitchStrategySWRoundRobin, GetFirstEmpty)
 
 TEST(SwitchStrategySWRoundRobin, GetNextEmpty)
 {
-    Kernel<KERNEL_DYNAMIC, 1, SwitchStrategySWRR, PlatformTestMock> kernel;
+    Kernel<KERNEL_DYNAMIC, 1, sched::SwitchStrategySWRR, PlatformTestMock> kernel;
     TaskMockW<1, ACCESS_USER> task1;
     ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
 
@@ -61,7 +61,7 @@ TEST(SwitchStrategySWRoundRobin, GetNextEmpty)
 
 TEST(SwitchStrategySWRoundRobin, EndlessNext)
 {
-    Kernel<KERNEL_DYNAMIC, 3, SwitchStrategySWRR, PlatformTestMock> kernel;
+    Kernel<KERNEL_DYNAMIC, 3, sched::SwitchStrategySWRR, PlatformTestMock> kernel;
     TaskMockW<1, ACCESS_USER> task1, task2, task3;
 
     kernel.Initialize();
@@ -132,7 +132,7 @@ TEST(SwitchStrategySWRoundRobin, EndlessNext)
 
 TEST(SwitchStrategySWRoundRobin, Algorithm)
 {
-    Kernel<KERNEL_DYNAMIC, 3, SwitchStrategySWRR, PlatformTestMock> kernel;
+    Kernel<KERNEL_DYNAMIC, 3, sched::SwitchStrategySWRR, PlatformTestMock> kernel;
     TaskMockW<1, ACCESS_USER> task1; // weight 1
     TaskMockW<2, ACCESS_USER> task2; // weight 2
     TaskMockW<3, ACCESS_USER> task3; // weight 3
@@ -224,7 +224,7 @@ TEST(SwitchStrategySWRoundRobin, Algorithm)
 // kernel falls back to the legacy sleep-based yield, and must not influence the selection.
 TEST(SwitchStrategySWRoundRobin, YieldLegacyReturnsFalse)
 {
-    Kernel<KERNEL_DYNAMIC, 3, SwitchStrategySWRR, PlatformTestMock> kernel;
+    Kernel<KERNEL_DYNAMIC, 3, sched::SwitchStrategySWRR, PlatformTestMock> kernel;
     TaskMockW<1, ACCESS_USER> task1, task2, task3;
     ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
 
@@ -254,7 +254,7 @@ TEST(SwitchStrategySWRoundRobin, YieldLegacyReturnsFalse)
 
 TEST(SwitchStrategySWRoundRobin, YieldLegacySingleTaskReturnsFalse)
 {
-    Kernel<KERNEL_DYNAMIC, 1, SwitchStrategySWRR, PlatformTestMock> kernel;
+    Kernel<KERNEL_DYNAMIC, 1, sched::SwitchStrategySWRR, PlatformTestMock> kernel;
     TaskMockW<1, ACCESS_USER> task1;
     ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
 
@@ -273,14 +273,14 @@ TEST(SwitchStrategySWRoundRobin, YieldLegacySingleTaskReturnsFalse)
 
 TEST(SwitchStrategySWRoundRobin, YieldNoSleepConfig)
 {
-    CHECK_EQUAL(0, SwitchStrategySWRR::NOSLEEP_YIELD_API);
-    CHECK_EQUAL(1, SwitchStrategySWRR_NSY::NOSLEEP_YIELD_API);
+    CHECK_EQUAL(0, sched::SwitchStrategySWRR::NOSLEEP_YIELD_API);
+    CHECK_EQUAL(1, sched::SwitchStrategySWRR_NSY::NOSLEEP_YIELD_API);
 }
 
 // Without yields SWRR_NSY behaves exactly like SWRR: equal weights give strict rotation.
 TEST(SwitchStrategySWRoundRobin, YieldNoSleepNoYieldBaseline)
 {
-    Kernel<KERNEL_DYNAMIC, 3, SwitchStrategySWRR_NSY, PlatformTestMock> kernel;
+    Kernel<KERNEL_DYNAMIC, 3, sched::SwitchStrategySWRR_NSY, PlatformTestMock> kernel;
     TaskMockW<1, ACCESS_USER> task1, task2, task3;
     ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
 
@@ -300,7 +300,7 @@ TEST(SwitchStrategySWRoundRobin, YieldNoSleepNoYieldBaseline)
 // Yielding task, which would have been selected next, is skipped (one-shot) and stays runnable.
 TEST(SwitchStrategySWRoundRobin, YieldNoSleepSkipsYieldingTaskOnce)
 {
-    Kernel<KERNEL_DYNAMIC, 3, SwitchStrategySWRR_NSY, PlatformTestMock> kernel;
+    Kernel<KERNEL_DYNAMIC, 3, sched::SwitchStrategySWRR_NSY, PlatformTestMock> kernel;
     TaskMockW<1, ACCESS_USER> task1, task2, task3;
     ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
 
@@ -331,7 +331,7 @@ TEST(SwitchStrategySWRoundRobin, YieldNoSleepSkipsYieldingTaskOnce)
 // Weighted case: the heavy task that yields is skipped once even though it has the highest weight.
 TEST(SwitchStrategySWRoundRobin, YieldNoSleepHeavyTaskYields)
 {
-    Kernel<KERNEL_DYNAMIC, 2, SwitchStrategySWRR_NSY, PlatformTestMock> kernel;
+    Kernel<KERNEL_DYNAMIC, 2, sched::SwitchStrategySWRR_NSY, PlatformTestMock> kernel;
     TaskMockW<3, ACCESS_USER> task1; // heavy
     TaskMockW<1, ACCESS_USER> task2; // light
     ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
@@ -355,7 +355,7 @@ TEST(SwitchStrategySWRoundRobin, YieldNoSleepHeavyTaskYields)
 // Alone in the runnable list: yield is handled and the same task is selected anyway.
 TEST(SwitchStrategySWRoundRobin, YieldNoSleepSingleTask)
 {
-    Kernel<KERNEL_DYNAMIC, 1, SwitchStrategySWRR_NSY, PlatformTestMock> kernel;
+    Kernel<KERNEL_DYNAMIC, 1, sched::SwitchStrategySWRR_NSY, PlatformTestMock> kernel;
     TaskMockW<1, ACCESS_USER> task1;
     ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
 
@@ -377,7 +377,7 @@ TEST(SwitchStrategySWRoundRobin, YieldNoSleepSingleTask)
 // Two equal tasks ping-pong via yield.
 TEST(SwitchStrategySWRoundRobin, YieldNoSleepPingPong)
 {
-    Kernel<KERNEL_DYNAMIC, 2, SwitchStrategySWRR_NSY, PlatformTestMock> kernel;
+    Kernel<KERNEL_DYNAMIC, 2, sched::SwitchStrategySWRR_NSY, PlatformTestMock> kernel;
     TaskMockW<1, ACCESS_USER> task1, task2;
     ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
 
@@ -405,7 +405,7 @@ TEST(SwitchStrategySWRoundRobin, YieldNoSleepPingPong)
 // A yielding task removed before the next GetNext() must not leave a stale exclusion behind.
 TEST(SwitchStrategySWRoundRobin, YieldNoSleepRemovedTaskDropsExclusion)
 {
-    Kernel<KERNEL_DYNAMIC, 3, SwitchStrategySWRR_NSY, PlatformTestMock> kernel;
+    Kernel<KERNEL_DYNAMIC, 3, sched::SwitchStrategySWRR_NSY, PlatformTestMock> kernel;
     TaskMockW<1, ACCESS_USER> task1, task2, task3;
     ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
 
@@ -487,7 +487,7 @@ static void SWRRYieldSleepingRelaxCpu()
 
 TEST(SwitchStrategySWRoundRobin, YieldNoSleepSleepingTaskNotHandled)
 {
-    Kernel<KERNEL_STATIC, 1, SwitchStrategySWRR_NSY, PlatformTestMock> kernel;
+    Kernel<KERNEL_STATIC, 1, sched::SwitchStrategySWRR_NSY, PlatformTestMock> kernel;
     TaskMockW<1, ACCESS_USER> task1;
     PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
 
@@ -512,7 +512,7 @@ TEST(SwitchStrategySWRoundRobin, YieldNoSleepSleepingTaskNotHandled)
 
 TEST(SwitchStrategySWRoundRobin, TimeSliceNotSupported)
 {
-    Kernel<KERNEL_STATIC, 1, SwitchStrategySWRR, PlatformTestMock> kernel;
+    Kernel<KERNEL_STATIC, 1, sched::SwitchStrategySWRR, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task;
     ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
 

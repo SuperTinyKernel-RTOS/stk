@@ -92,7 +92,7 @@ static volatile int32_t g_Spin = 0;       // busy loop sink
 
 // Kernel (KERNEL_SYNC is required by Wait/Wake)
 static Kernel<KERNEL_DYNAMIC | KERNEL_SYNC | (STK_TICKLESS_IDLE ? KERNEL_TICKLESS : 0),
-    _STK_KERNEL_TEST_TASKS_MAX, SwitchStrategyRR, PlatformDefault> g_Kernel;
+    _STK_KERNEL_TEST_TASKS_MAX, sched::SwitchStrategyRR, PlatformDefault> g_Kernel;
 
 /*! \class TestSync
     \brief Minimal synchronization object: just the wait list, signalled explicitly by the test.

@@ -107,7 +107,7 @@
       - All objects are heap-allocated with operator new/delete.
         For static deployments replace with a static pool allocator.
       - One global STK Kernel instance (g_StkKernel) is configured with
-        KERNEL_DYNAMIC | KERNEL_SYNC and SwitchStrategyFP32 (32 fixed-priority
+        KERNEL_DYNAMIC | KERNEL_SYNC and sched::SwitchStrategyFP32 (32 fixed-priority
         levels, same strategy used by the CMSIS wrapper).
         FreeRTOS priorities (0=lowest .. configMAX_PRIORITIES-1=highest) map
         directly to STK priority levels 0..configMAX_PRIORITIES-1.

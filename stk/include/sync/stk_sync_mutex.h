@@ -192,7 +192,7 @@ inline EWaitResult Mutex::TimedLockEx(Timeout timeout_ticks)
     {
         STK_ASSERT(!hw::IsInsideISR()); // API contract: caller must not be in ISR for a blocking call
 
-        // boost priority of the owner to avoid priority inversion (in case of SwitchStrategyFixedPriority,
+        // boost priority of the owner to avoid priority inversion (in case of sched::SwitchStrategyFixedPriority,
         // otherwise ignored by the kernel), noop if ISwitchStrategy::PRIORITY_INHERITANCE_API = 0
         svc->InheritWeight(owner_tid, GetUserTaskFromTid(current_tid)->GetWeight());
 

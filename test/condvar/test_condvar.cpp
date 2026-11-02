@@ -55,7 +55,7 @@ static volatile bool    g_TestComplete  = false;
 static volatile int32_t g_InstancesDone = 0;
 
 // Kernel (ConditionVariable requires KERNEL_SYNC)
-static Kernel<KERNEL_DYNAMIC | KERNEL_SYNC, _STK_CV_TEST_TASKS_MAX, SwitchStrategyRR, PlatformDefault> g_Kernel;
+static Kernel<KERNEL_DYNAMIC | KERNEL_SYNC, _STK_CV_TEST_TASKS_MAX, sched::SwitchStrategyRR, PlatformDefault> g_Kernel;
 
 // Test primitives (re-constructed per test via ResetTestState)
 static sync::Mutex             g_TestMutex;

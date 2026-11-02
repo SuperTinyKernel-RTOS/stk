@@ -2529,7 +2529,7 @@ int pthread_getschedparam(pthread_t thread, int *policy, struct sched_param *par
 }
 
 // Applies policy/priority to a running thread: the priority level is the task weight of the switch strategy
-// (SwitchStrategyFixedPriority), changed at run-time with stk::SetWeight()
+// (sched::SwitchStrategyFixedPriority), changed at run-time with stk::SetWeight()
 static int ApplySchedParam(pthread_t thread, int policy, int prio)
 {
     int result = 0;

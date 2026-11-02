@@ -14,8 +14,8 @@
     \brief    POSIX-named scheduling API (<sched.h>) for STK: sched_yield(), sched_get_priority_min/max()
               and struct sched_param. Implemented by stk_c_pthread.cpp (no dependency on the STK C API).
 
-    \details  The kernel must use SwitchStrategyFixedPriority: \c sched_priority is the fixed priority level of the
-              task (its weight), 0 is the lowest and MAX_PRIORITIES - 1 the highest (SwitchStrategyFP32: 0..31, the
+    \details  The kernel must use sched::SwitchStrategyFixedPriority: \c sched_priority is the fixed priority level of the
+              task (its weight), 0 is the lowest and MAX_PRIORITIES - 1 the highest (sched::SwitchStrategyFP32: 0..31, the
               default level is PRIORITY_NORMAL = MAX_PRIORITIES / 2). The priority of a running thread can be
               changed (pthread_setschedparam(), pthread_setschedprio()) through stk::SetWeight(). The policy is
               always decided by the switch strategy: SCHED_OTHER, SCHED_FIFO and SCHED_RR are accepted and
@@ -45,11 +45,11 @@ extern "C" {
 #define SCHED_RR    (2)
 
 /*! \def       STK_C_SCHED_PRIORITY_MIN / STK_C_SCHED_PRIORITY_MAX / STK_C_SCHED_PRIORITY_DEFAULT
-    \brief     Valid range of \c sched_priority (priority level = task weight of SwitchStrategyFixedPriority) and
+    \brief     Valid range of \c sched_priority (priority level = task weight of sched::SwitchStrategyFixedPriority) and
                the level of threads which do not ask for one (PRIORITY_NORMAL).
-    \note      Define STK_C_SCHED_PRIORITY_MAX (MAX_PRIORITIES - 1 of your SwitchStrategyFixedPriority instance,
-               31 for SwitchStrategyFP32) before including this header, or in the build system. The default level
-               follows from it: (MAX + 1) / 2, the same as SwitchStrategyFixedPriority::PRIORITY_NORMAL.
+    \note      Define STK_C_SCHED_PRIORITY_MAX (MAX_PRIORITIES - 1 of your sched::SwitchStrategyFixedPriority instance,
+               31 for sched::SwitchStrategyFP32) before including this header, or in the build system. The default level
+               follows from it: (MAX + 1) / 2, the same as sched::SwitchStrategyFixedPriority::PRIORITY_NORMAL.
 */
 #ifndef STK_C_SCHED_PRIORITY_MIN
     #define STK_C_SCHED_PRIORITY_MIN (0)

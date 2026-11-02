@@ -23,7 +23,7 @@ const uint8_t KernelMode =
 #endif
 ;
 
-static Kernel<KernelMode, _STK_BENCH_TASK_MAX + 1, SwitchStrategyRR, PlatformDefault> g_Kernel;
+static Kernel<KernelMode, _STK_BENCH_TASK_MAX + 1, sched::SwitchStrategyRR, PlatformDefault> g_Kernel;
 static volatile uint32_t g_Ticks = 0;
 static volatile bool g_Enable = false;
 

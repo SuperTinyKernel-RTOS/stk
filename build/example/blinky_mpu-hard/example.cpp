@@ -599,7 +599,7 @@ void RunExample()
     const uint8_t KernelMode = KERNEL_STATIC | KERNEL_SYNC | (STK_TICKLESS_IDLE ? KERNEL_TICKLESS : 0);
 
     // allocate scheduling kernel for 3 threads (tasks) with Round-Robin scheduling strategy
-    STK_MPU_KERNEL_DATA_SECTION static Kernel<KernelMode, 5, SwitchStrategyRR, PlatformDefault> kernel;
+    STK_MPU_KERNEL_DATA_SECTION static Kernel<KernelMode, 5, sched::SwitchStrategyRR, PlatformDefault> kernel;
 
     // for MPU configuration and MemFault/HardFault exceptions processing
     STK_MPU_KERNEL_DATA_SECTION static PlatformEventHandler event_overrider;

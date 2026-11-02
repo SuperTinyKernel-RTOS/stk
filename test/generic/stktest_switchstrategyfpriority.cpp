@@ -28,7 +28,7 @@ TEST_GROUP(SwitchStrategyFixedPriority)
 
 TEST(SwitchStrategyFixedPriority, GetFirstEmpty)
 {
-    SwitchStrategyFP32 rr;
+    sched::SwitchStrategyFP32 rr;
 
     try
     {
@@ -45,7 +45,7 @@ TEST(SwitchStrategyFixedPriority, GetFirstEmpty)
 
 TEST(SwitchStrategyFixedPriority, GetNextEmpty)
 {
-    Kernel<KERNEL_DYNAMIC, 1, SwitchStrategyFP32, PlatformTestMock> kernel;
+    Kernel<KERNEL_DYNAMIC, 1, sched::SwitchStrategyFP32, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task1;
     ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
 
@@ -61,7 +61,7 @@ TEST(SwitchStrategyFixedPriority, GetNextEmpty)
 
 TEST(SwitchStrategyFixedPriority, EndlessNext)
 {
-    Kernel<KERNEL_DYNAMIC, 3, SwitchStrategyFP32, PlatformTestMock> kernel;
+    Kernel<KERNEL_DYNAMIC, 3, sched::SwitchStrategyFP32, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task1, task2, task3;
     ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
 
@@ -100,7 +100,7 @@ TEST(SwitchStrategyFixedPriority, EndlessNext)
 TEST(SwitchStrategyFixedPriority, Algorithm)
 {
     // Create kernel with 3 tasks
-    Kernel<KERNEL_DYNAMIC, 3, SwitchStrategyFP32, PlatformTestMock> kernel;
+    Kernel<KERNEL_DYNAMIC, 3, sched::SwitchStrategyFP32, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task1, task2, task3;
 
     kernel.Initialize();
@@ -206,7 +206,7 @@ static void PrioritySleepRelaxCpu()
 
 TEST(SwitchStrategyFixedPriority, Priority)
 {
-    Kernel<KERNEL_STATIC, 2, SwitchStrategyFixedPriority<5>, PlatformTestMock> kernel;
+    Kernel<KERNEL_STATIC, 2, sched::SwitchStrategyFixedPriority<5>, PlatformTestMock> kernel;
     TaskMockW<1, ACCESS_USER> task1; // low priority
     TaskMockW<2, ACCESS_USER> task2; // high priority
     PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
@@ -249,7 +249,7 @@ TEST(SwitchStrategyFixedPriority, Priority)
 // kernel falls back to the legacy sleep-based yield, and must not touch the per-level cursor.
 TEST(SwitchStrategyFixedPriority, YieldLegacyReturnsFalse)
 {
-    Kernel<KERNEL_DYNAMIC, 3, SwitchStrategyFP32, PlatformTestMock> kernel;
+    Kernel<KERNEL_DYNAMIC, 3, sched::SwitchStrategyFP32, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task1, task2, task3;
     ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
 
@@ -279,7 +279,7 @@ TEST(SwitchStrategyFixedPriority, YieldLegacyReturnsFalse)
 
 TEST(SwitchStrategyFixedPriority, YieldLegacySingleTaskReturnsFalse)
 {
-    Kernel<KERNEL_DYNAMIC, 1, SwitchStrategyFP32, PlatformTestMock> kernel;
+    Kernel<KERNEL_DYNAMIC, 1, sched::SwitchStrategyFP32, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task1;
     ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
 
@@ -299,7 +299,7 @@ TEST(SwitchStrategyFixedPriority, YieldLegacySingleTaskReturnsFalse)
 // Yield on the task the cursor is on: next task at the same level is returned.
 TEST(SwitchStrategyFixedPriority, YieldNoSleepHandsToSuccessor)
 {
-    Kernel<KERNEL_DYNAMIC, 3, SwitchStrategyFP32_NSY, PlatformTestMock> kernel;
+    Kernel<KERNEL_DYNAMIC, 3, sched::SwitchStrategyFP32_NSY, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task1, task2, task3;
     ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
 
@@ -334,7 +334,7 @@ TEST(SwitchStrategyFixedPriority, YieldNoSleepHandsToSuccessor)
 // Yield by a task the cursor is NOT on: cursor is moved onto the yielding task.
 TEST(SwitchStrategyFixedPriority, YieldNoSleepMovesCursorOntoYieldingTask)
 {
-    Kernel<KERNEL_DYNAMIC, 3, SwitchStrategyFP32_NSY, PlatformTestMock> kernel;
+    Kernel<KERNEL_DYNAMIC, 3, sched::SwitchStrategyFP32_NSY, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task1, task2, task3;
     ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
 
@@ -358,7 +358,7 @@ TEST(SwitchStrategyFixedPriority, YieldNoSleepMovesCursorOntoYieldingTask)
 // Alone at its level: yield is handled and the same task is selected again.
 TEST(SwitchStrategyFixedPriority, YieldNoSleepSingleTask)
 {
-    Kernel<KERNEL_DYNAMIC, 1, SwitchStrategyFP32_NSY, PlatformTestMock> kernel;
+    Kernel<KERNEL_DYNAMIC, 1, sched::SwitchStrategyFP32_NSY, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task1;
     ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
 
@@ -380,7 +380,7 @@ TEST(SwitchStrategyFixedPriority, YieldNoSleepSingleTask)
 // Yield never hands the CPU to a lower priority level, and a higher level still wins.
 TEST(SwitchStrategyFixedPriority, YieldNoSleepNeverSelectsLowerPriority)
 {
-    Kernel<KERNEL_DYNAMIC, 3, SwitchStrategyFP32_NSY, PlatformTestMock> kernel;
+    Kernel<KERNEL_DYNAMIC, 3, sched::SwitchStrategyFP32_NSY, PlatformTestMock> kernel;
     TaskMockW<1, ACCESS_USER> low;
     TaskMockW<2, ACCESS_USER> high1, high2;
     ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
@@ -414,7 +414,7 @@ TEST(SwitchStrategyFixedPriority, YieldNoSleepNeverSelectsLowerPriority)
 // Yielding low-priority task keeps its place in its own level only: higher level is still selected.
 TEST(SwitchStrategyFixedPriority, YieldNoSleepLowPriorityYieldKeepsHigherSelected)
 {
-    Kernel<KERNEL_DYNAMIC, 3, SwitchStrategyFP32_NSY, PlatformTestMock> kernel;
+    Kernel<KERNEL_DYNAMIC, 3, sched::SwitchStrategyFP32_NSY, PlatformTestMock> kernel;
     TaskMockW<1, ACCESS_USER> low1, low2;
     TaskMockW<2, ACCESS_USER> high;
     ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
@@ -498,7 +498,7 @@ static void YieldSleepingRelaxCpu()
 
 TEST(SwitchStrategyFixedPriority, YieldNoSleepSleepingTaskNotHandled)
 {
-    Kernel<KERNEL_STATIC, 1, SwitchStrategyFP32_NSY, PlatformTestMock> kernel;
+    Kernel<KERNEL_STATIC, 1, sched::SwitchStrategyFP32_NSY, PlatformTestMock> kernel;
     TaskMockW<1, ACCESS_USER> task1;
     PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
 
@@ -522,7 +522,7 @@ TEST(SwitchStrategyFixedPriority, YieldNoSleepSleepingTaskNotHandled)
 
 TEST(SwitchStrategyFixedPriority, TimeSliceNotSupported)
 {
-    Kernel<KERNEL_STATIC, 1, SwitchStrategyFP32, PlatformTestMock> kernel;
+    Kernel<KERNEL_STATIC, 1, sched::SwitchStrategyFP32, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task;
     ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
 
@@ -534,6 +534,88 @@ TEST(SwitchStrategyFixedPriority, TimeSliceNotSupported)
 
     // not handled for any of the tasks (not supported by this strategy)
     CHECK_FALSE(strategy->OnTaskTimeSlice(k1));
+}
+
+// ============================================================================ //
+// ========================= More than 32 priorities ========================== //
+// ============================================================================ //
+
+// Highest level wins, peers rotate, lower levels wait, and a task added back at the top wins again.
+// Levels 1 and 40 sit in different bitmap words, HIGH is the topmost level of the strategy.
+template <class StrategyT, Weight HIGH>
+static void CheckHighPriorities()
+{
+    Kernel<KERNEL_DYNAMIC, 4, StrategyT, PlatformTestMock> kernel;
+    TaskMockW<1, ACCESS_USER>    low;
+    TaskMockW<40, ACCESS_USER>   mid1, mid2;
+    TaskMockW<HIGH, ACCESS_USER> high;
+    ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
+
+    kernel.Initialize();
+    kernel.AddTask(&low);
+    kernel.AddTask(&mid1);
+    kernel.AddTask(&mid2);
+    kernel.AddTask(&high);
+
+    CHECK_EQUAL_TEXT(&high, strategy->GetNext()->GetUserTask(), "expecting high");
+    CHECK_EQUAL_TEXT(&high, strategy->GetNext()->GetUserTask(), "expecting high again");
+
+    kernel.RemoveTask(&high);
+    CHECK_EQUAL_TEXT(&mid1, strategy->GetNext()->GetUserTask(), "expecting mid1");
+    CHECK_EQUAL_TEXT(&mid2, strategy->GetNext()->GetUserTask(), "expecting mid2");
+    CHECK_EQUAL_TEXT(&mid1, strategy->GetNext()->GetUserTask(), "expecting mid1 again");
+
+    kernel.RemoveTask(&mid1);
+    kernel.RemoveTask(&mid2);
+    CHECK_EQUAL_TEXT(&low, strategy->GetNext()->GetUserTask(), "expecting low");
+
+    kernel.AddTask(&high);
+    CHECK_EQUAL_TEXT(&high, strategy->GetNext()->GetUserTask(), "expecting re-added high");
+}
+
+TEST(SwitchStrategyFixedPriority, Priority64)
+{
+    CheckHighPriorities<sched::SwitchStrategyFP64, 63>();
+}
+
+TEST(SwitchStrategyFixedPriority, PriorityMultiWordBitmap)
+{
+    CheckHighPriorities<sched::SwitchStrategyFixedPriority<100>, 99>(); // PriorityBitmap<128>
+}
+
+TEST(SwitchStrategyFixedPriority, Priority1024)
+{
+    CheckHighPriorities<sched::SwitchStrategyFixedPriority<1024>, 1023>(); // PriorityBitmap<1024>, above 8 bits
+}
+
+// AddTask() must reject a weight outside [0, MAX_PRIORITIES) as given, not after narrowing it to the priority type.
+template <class StrategyT, Weight WEIGHT>
+static void CheckAddTaskAsserts()
+{
+    Kernel<KERNEL_DYNAMIC, 1, StrategyT, PlatformTestMock> kernel;
+    TaskMockW<WEIGHT, ACCESS_USER> task1;
+
+    kernel.Initialize();
+
+    try
+    {
+        g_TestContext.ExpectAssert(true);
+        kernel.AddTask(&task1);
+        CHECK_TEXT(false, "expecting assertion for weight out of range");
+    }
+    catch (TestAssertPassed &pass)
+    {
+        CHECK(true);
+        g_TestContext.ExpectAssert(false);
+    }
+}
+
+TEST(SwitchStrategyFixedPriority, AddTaskWeightOutOfRangeAsserts)
+{
+    CheckAddTaskAsserts<sched::SwitchStrategyFP32, 32>();                       // first level above the range
+    CheckAddTaskAsserts<sched::SwitchStrategyFP32, -1>();                       // negative
+    CheckAddTaskAsserts<sched::SwitchStrategyFP32, 65536 + 5>();                // would alias to level 5 after narrowing
+    CheckAddTaskAsserts<sched::SwitchStrategyFixedPriority<1024>, 1024>();      // first level above the maximum
 }
 
 } // namespace stk

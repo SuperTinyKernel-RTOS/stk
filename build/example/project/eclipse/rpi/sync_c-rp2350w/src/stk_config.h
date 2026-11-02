@@ -31,11 +31,11 @@
 // For C interface:
 #define STK_C_CPU_COUNT         (2)
 #define STK_C_KERNEL_MAX_TASKS  (3)
-#define STK_C_KERNEL_TYPE_CPU_0 Kernel<KERNEL_STATIC | KERNEL_SYNC | (STK_TICKLESS_IDLE ? KERNEL_TICKLESS : 0), 3, SwitchStrategyRR, PlatformDefault>
+#define STK_C_KERNEL_TYPE_CPU_0 Kernel<KERNEL_STATIC | KERNEL_SYNC | (STK_TICKLESS_IDLE ? KERNEL_TICKLESS : 0), 3, sched::SwitchStrategyRR, PlatformDefault>
 #if (STK_C_CPU_COUNT == 2)
 #undef STK_C_KERNEL_MAX_TASKS
 #define STK_C_KERNEL_MAX_TASKS  (4)
-#define STK_C_KERNEL_TYPE_CPU_1 Kernel<KERNEL_STATIC | KERNEL_SYNC | (STK_TICKLESS_IDLE ? KERNEL_TICKLESS : 0), 1, SwitchStrategyRR, PlatformDefault>
+#define STK_C_KERNEL_TYPE_CPU_1 Kernel<KERNEL_STATIC | KERNEL_SYNC | (STK_TICKLESS_IDLE ? KERNEL_TICKLESS : 0), 1, sched::SwitchStrategyRR, PlatformDefault>
 #endif
 
 #endif /* STK_CONFIG_H_ */
