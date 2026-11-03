@@ -65,6 +65,21 @@
 // Minimum stack size (in Words) – mirrors STK's own STACK_SIZE_MIN.
 #define CMSIS_STK_MIN_STACK_WORDS (STK_STACK_SIZE_MIN)
 
+// Private memory allocators (we define malloc, free here to overcome absence of declaration in
+// case of -ffreestanding compiler flag).
+extern "C" void *malloc(size_t size);
+extern "C" void free(void *ptr);
+void *stk::memory::MemoryAllocator::Allocate(size_t size) { return malloc(size); }
+void stk::memory::MemoryAllocator::Free(void *ptr) { free(ptr); }
+
+// Types.
+uint32_t osWatchdogAlarm_Handler(osThreadId_t thread_id);
+
+// +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+// Anonymous namespace to make local functions file-local.
+namespace {
+// +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
 // Returns a size of memory in stk::Word elements required for object allocation.
 template <typename T> static constexpr size_t StkGetWordCountForType()
 {
@@ -72,7 +87,7 @@ template <typename T> static constexpr size_t StkGetWordCountForType()
 }
 
 // Custom strlen replacement.
-static size_t CmsisStrlen(const char str[]) // MISRA: declared as array, not pointer to allow indexed access
+size_t CmsisStrlen(const char str[]) // MISRA: declared as array, not pointer to allow indexed access
 {
     size_t total_len = 0U;
     
@@ -84,53 +99,49 @@ static size_t CmsisStrlen(const char str[]) // MISRA: declared as array, not poi
     return total_len;
 }
 
-// Private memory allocators (we define malloc, free here to overcome absence of declaration in
-// case of -ffreestanding compiler flag).
-extern "C" void *malloc(size_t size);
-extern "C" void free(void *ptr);
-void *stk::memory::MemoryAllocator::Allocate(size_t size) { return malloc(size); }
-void stk::memory::MemoryAllocator::Free(void *ptr) { free(ptr); }
-
 // -----------------------------------------------------------------------------
 // Priority mapping:
-//   CMSIS range: osPriorityIdle(1) .. osPriorityISR(56)  ->  57 levels
-//   STK FP32 range: 0 .. 31                              ->  32 levels
-// Linear map: stk_prio = (cmsis_prio * 31) / 56
+//   CMSIS range: osPriorityIdle(1) .. osPriorityISR(56)  ->  56 distinct levels (osPriorityNone(0) is
+//                                                            "use default" and is never stored)
+//   STK FP64 range: 0 .. 63                              ->  64 levels
+// Identity map: stk_prio = cmsis_prio. Every CMSIS priority owns a dedicated STK priority level, so the
+// complete CMSIS priority space (including the "+1..+7" steps between the named values) is preserved
+// exactly: no two CMSIS priorities share a level and the relative order is never changed. STK levels 0
+// and 57..63 are not used by CMSIS threads.
 // -----------------------------------------------------------------------------
-static __stk_forceinline int32_t CmsisPrioToStk(osPriority_t p)
-{
-    int32_t result;
+using StkSwitchingStrategy = stk::sched::SwitchStrategyFP64_NSY;
 
-    if (p <= osPriorityIdle)
+static_assert(static_cast<int32_t>(osPriorityISR) <= static_cast<int32_t>(StkSwitchingStrategy::PRIORITY_HIGHEST),
+    "STK switch strategy must provide a dedicated priority level for every CMSIS priority");
+
+// Clamps a priority value into the CMSIS thread priority range [osPriorityIdle, osPriorityISR].
+__stk_forceinline int32_t ClampCmsisPrio(int32_t p)
+{
+    int32_t result = p;
+
+    if (result < static_cast<int32_t>(osPriorityIdle))
     {
-        result = 0;
+        result = static_cast<int32_t>(osPriorityIdle);
     }
-    else if (p >= osPriorityISR)
+    else if (result > static_cast<int32_t>(osPriorityISR))
     {
-        result = 31;
+        result = static_cast<int32_t>(osPriorityISR);
     }
     else
     {
-        result = ((static_cast<int32_t>(p) * 31) / 56);
+        // already in range
     }
 
     return result;
 }
-static __stk_forceinline osPriority_t StkPrioToCmsis(int32_t p)
+__stk_forceinline int32_t CmsisPrioToStk(osPriority_t p)
 {
-    // Inverse: cmsis_prio = (stk_prio * 56) / 31
-    int32_t r = (p * 56) / 31;
-    if (r < static_cast<int32_t>(osPriorityIdle))
-    {
-        r = static_cast<int32_t>(osPriorityIdle);
-    }
-
-    if (r > static_cast<int32_t>(osPriorityISR))
-    {
-        r = static_cast<int32_t>(osPriorityISR);
-    }
-
-    return static_cast<osPriority_t>(r);
+    return ClampCmsisPrio(static_cast<int32_t>(p));
+}
+__stk_forceinline osPriority_t StkPrioToCmsis(int32_t p)
+{
+    // Inverse of CmsisPrioToStk(): exact for every priority a CMSIS thread can have.
+    return static_cast<osPriority_t>(ClampCmsisPrio(p));
 }
 
 // -----------------------------------------------------------------------------
@@ -140,7 +151,7 @@ static __stk_forceinline osPriority_t StkPrioToCmsis(int32_t p)
 // For other resolutions the conversion uses the kernel's tick resolution.
 // osWaitForever -> WAIT_INFINITE.
 // -----------------------------------------------------------------------------
-static __stk_forceinline stk::Timeout CmsisTimeoutToStk(uint32_t ticks)
+__stk_forceinline stk::Timeout CmsisTimeoutToStk(uint32_t ticks)
 {
     stk::Timeout result;
 
@@ -165,7 +176,7 @@ static __stk_forceinline stk::Timeout CmsisTimeoutToStk(uint32_t ticks)
 // Map a failed timed wait to a CMSIS status: NO_WAIT -> osErrorResource (resource
 // not available), any other timeout -> osErrorTimeout.
 // -----------------------------------------------------------------------------
-static __stk_forceinline osStatus_t StkWaitFailToCmsis(stk::Timeout timeout)
+__stk_forceinline osStatus_t StkWaitFailToCmsis(stk::Timeout timeout)
 {
     return ((timeout == stk::NO_WAIT) ? osErrorResource : osErrorTimeout);
 }
@@ -178,7 +189,7 @@ static __stk_forceinline osStatus_t StkWaitFailToCmsis(stk::Timeout timeout)
 // are both reported as the generic osError instead of being disguised as a timeout.
 // A timeout keeps the usual mapping: NO_WAIT -> osErrorResource, otherwise -> osErrorTimeout.
 // -----------------------------------------------------------------------------
-static __stk_forceinline osStatus_t StkWaitResultToCmsis(stk::EWaitResult wr, stk::Timeout timeout)
+__stk_forceinline osStatus_t StkWaitResultToCmsis(stk::EWaitResult wr, stk::Timeout timeout)
 {
     osStatus_t result;
 
@@ -205,7 +216,7 @@ static __stk_forceinline osStatus_t StkWaitResultToCmsis(stk::EWaitResult wr, st
 // -----------------------------------------------------------------------------
 // ISR context check
 // -----------------------------------------------------------------------------
-static __stk_forceinline bool IsIrqContext()
+__stk_forceinline bool IsIrqContext()
 {
     return stk::hw::IsInsideISR();
 }
@@ -217,9 +228,9 @@ using StkKernel = stk::Kernel<stk::KERNEL_DYNAMIC | stk::KERNEL_SYNC
 #if STK_TICKLESS_IDLE
     | stk::KERNEL_TICKLESS
 #endif
-    , CMSIS_STK_MAX_THREADS, stk::sched::SwitchStrategyFP32_NSY, stk::PlatformDefault>;
+    , CMSIS_STK_MAX_THREADS, StkSwitchingStrategy, stk::PlatformDefault>;
 
-static StkKernel g_StkKernel;
+StkKernel g_StkKernel;
 
 // Weak linkage for user-overridable handlers (osWatchdogAlarm_Handler, osZoneSetup_Callback)
 #ifndef STK_CMSIS_WEAK
@@ -234,13 +245,13 @@ static StkKernel g_StkKernel;
 
 // Safety class / privileged protection state (no MPU is used: the state is recorded and the class based
 // operations are implemented on top of the thread list)
-static uint32_t g_KernelProtectClass       = 0U;     // class passed to osKernelProtect()
-static bool     g_KernelProtected          = false;
-static bool     g_PrivilegedThreadsBlocked = false;  // osThreadProtectPrivileged() was called
+uint32_t g_KernelProtectClass       = 0U;     // class passed to osKernelProtect()
+bool     g_KernelProtected          = false;
+bool     g_PrivilegedThreadsBlocked = false;  // osThreadProtectPrivileged() was called
 
 // True only while the scheduler is running (not before osKernelStart(), where kernel services such as
 // GetTicks(), Sleep() or GetTid() are not available). A locked scheduler (osKernelLock) is running too.
-static __stk_forceinline bool IsKernelRunning()
+__stk_forceinline bool IsKernelRunning()
 {
     const stk::IKernel::EKernelState state = g_StkKernel.GetState();
 
@@ -249,7 +260,7 @@ static __stk_forceinline bool IsKernelRunning()
 
 // CMSIS kernel lock is a binary state (not a counter): osKernelLock() returns the PREVIOUS state, nesting is
 // emulated by the caller with osKernelRestoreLock(). Maps the STK result to the CMSIS return value.
-static __stk_forceinline int32_t StkLockResultToCmsis(stk::ELockResult result)
+__stk_forceinline int32_t StkLockResultToCmsis(stk::ELockResult result)
 {
     int32_t value;
 
@@ -274,13 +285,13 @@ static __stk_forceinline int32_t StkLockResultToCmsis(stk::ELockResult result)
 //
 // StkThread wraps a single CMSIS thread.
 //
-//   Stack memory is provided either by the caller (static allocation) or
+//   Stack memory is provided either by the caller (allocation) or
 //   allocated dynamically from operator new[] (heap allocation).
 //
 //   The CMSIS function pointer + argument are stored here; the STK task's
 //   Run() method simply calls func(argument).
 //
-//   Priority is stored as STK weight (0..31) and returned via GetWeight().
+//   Priority is stored as STK weight (0..63, equal to the CMSIS priority) and returned via GetWeight().
 // -----------------------------------------------------------------------------
 
 // Detached threads which the kernel has already removed (OnExit() fired) and which are waiting to be freed
@@ -293,8 +304,8 @@ static __stk_forceinline int32_t StkLockResultToCmsis(stk::ELockResult result)
 // else before the reap corrupts the list. Reaping is also done in osThreadTerminate(), osThreadGetCount() and
 // osThreadEnumerate(), which narrows the window but does not close it.
 class StkThread;
-static StkThread *g_ZombieThreads = nullptr;
-static void StkWatchdogRelease(StkThread *th); // defined after the timer host support
+StkThread *g_ZombieThreads = nullptr;
+void StkWatchdogRelease(StkThread *th); // defined after the timer host support
 
 class StkThread final : public stk::ITask
 {
@@ -366,7 +377,7 @@ public:
     int32_t GetWeight()              const override { return m_stk_priority; }
     const char *GetTraceName()       const override { return m_name; }
     
-    static inline osThreadId_t ConvertTIdToThreadId(const stk::TId tid)
+    static __stk_forceinline osThreadId_t ConvertTIdToThreadId(const stk::TId tid)
     {
         // tid is hw::PtrToWord(this) where 'this' is the StkThread* - cast it back.
         return reinterpret_cast<osThreadId_t>(static_cast<void *>(
@@ -377,8 +388,8 @@ public:
     osThreadFunc_t               m_func;
     void                        *m_argument;
     const char                  *m_name;
-    volatile int32_t             m_stk_priority; // STK priority level 0..31
-    volatile osPriority_t        m_cmsis_priority; // original CMSIS priority (the STK mapping is lossy)
+    volatile int32_t             m_stk_priority; // STK priority level 0..63 (identity map of the CMSIS priority)
+    volatile osPriority_t        m_cmsis_priority; // original CMSIS priority (equals m_stk_priority: the mapping is lossless)
     uint8_t                      m_safety_class; // osSafetyClass() from attr_bits (0 if none)
     uint8_t                      m_zone;         // osThreadZone() from attr_bits (0 if none)
     volatile int8_t              m_wd_slot;      // index of the watchdog slot, -1 if the watchdog is not used
@@ -524,8 +535,8 @@ struct StkEventFlags
 // A single global TimerHost is created on first osTimerNew().
 // -----------------------------------------------------------------------------
 
-static stk::time::TimerHost *g_TimerHost = nullptr;
-static stk::Word             g_TimerHostBuf[StkGetWordCountForType<stk::time::TimerHost>()];
+stk::time::TimerHost *g_TimerHost = nullptr;
+stk::Word             g_TimerHostBuf[StkGetWordCountForType<stk::time::TimerHost>()];
 
 class StkTimer final : public stk::time::TimerHost::Timer
 {
@@ -551,13 +562,13 @@ public:
 
         // a failed Initialize() may leave tasks registered with the kernel which reference the host buffer,
         // so a failure is final: the buffer must not be reused
-        static bool s_init_failed = false;
+        bool s_init_failed = false;
 
         if ((g_TimerHost == nullptr) && !s_init_failed)
         {
             stk::time::TimerHost *const host = new (g_TimerHostBuf) stk::time::TimerHost();
 
-            // Weights are strategy-specific: the default (1) maps to the lowest FP32 priority and would starve
+            // Weights are strategy-specific: the default (1) maps to the lowest priority level and would starve
             // timers whenever a thread is busy. The tick task must be at least as urgent as the handler tasks.
             stk::time::TimerHost::Config cfg;
             cfg.tick_weight    = CmsisPrioToStk(osPriorityHigh);
@@ -589,7 +600,7 @@ public:
 
 // True if the task id belongs to a task of the shared TimerHost (tick or handler task, i.e. a timer callback runs
 // in it). Such tasks are not StkThread objects and must never be cast to StkThread.
-static bool StkIsTimerHostTid(const stk::TId tid)
+bool StkIsTimerHostTid(const stk::TId tid)
 {
     return ((g_TimerHost != nullptr) && g_TimerHost->IsHostTid(tid));
 }
@@ -597,12 +608,10 @@ static bool StkIsTimerHostTid(const stk::TId tid)
 // -----------------------------------------------------------------------------
 // Thread watchdog (osThreadFeedWatchdog / osWatchdogAlarm_Handler)
 //
-// Each armed watchdog occupies one slot of a static table, the slot is a TimerHost timer. Slots are static so
+// Each armed watchdog occupies one slot of a table, the slot is a TimerHost timer. Slots are so
 // that the host never references freed memory when a thread exits: StkWatchdogRelease() (called from
 // StkThread::OnExit()) only detaches the thread from the slot and queues an asynchronous Stop().
 // -----------------------------------------------------------------------------
-
-uint32_t osWatchdogAlarm_Handler(osThreadId_t thread_id);
 
 class StkWatchdog final : public stk::time::Timer
 {
@@ -631,9 +640,9 @@ public:
     StkThread *volatile m_thread;
 };
 
-static StkWatchdog g_Watchdogs[CMSIS_STK_MAX_THREADS];
+StkWatchdog g_Watchdogs[CMSIS_STK_MAX_THREADS];
 
-static void StkWatchdogRelease(StkThread *const th)
+void StkWatchdogRelease(StkThread *const th)
 {
     // may run from the kernel tick: no blocking calls
     const int32_t slot = th->m_wd_slot;
@@ -735,7 +744,7 @@ public:
         }
     }
 
-    static uint8_t *AllocBuffer(uint32_t cap, uint32_t msz)
+    uint8_t *AllocBuffer(uint32_t cap, uint32_t msz)
     {
         uint8_t *const ret = new (std::nothrow) uint8_t[static_cast<size_t>(cap) * msz];
         STK_ASSERT(ret != nullptr); // fail in Debug: increase Heap size in linker settings
@@ -758,7 +767,7 @@ public:
 // Sets obj->m_cb_owned = false for caller-supplied, true for heap.
 // Returns nullptr if heap fallback is needed but allocation fails.
 template <typename T, typename... Args>
-static T *PlacementNewOrHeap(void *mem, size_t size, const Args &... args)
+T *PlacementNewOrHeap(void *mem, size_t size, const Args &... args)
 {
     T *obj;
 
@@ -781,7 +790,7 @@ static T *PlacementNewOrHeap(void *mem, size_t size, const Args &... args)
 //   - m_cb_owned == false -> call destructor only (memory is caller's)
 //   - m_cb_owned == true  -> delete (destructor + free)
 template <typename T>
-static void ObjDestroy(T *obj)
+void ObjDestroy(T *obj)
 {
     if (obj->m_cb_owned)
     {
@@ -794,7 +803,7 @@ static void ObjDestroy(T *obj)
 }
 
 // Free detached threads that the kernel has finished removing (see StkThread::OnExit()). Task context only.
-static void StkReapZombieThreads()
+void StkReapZombieThreads()
 {
     StkThread *list;
 
@@ -814,7 +823,7 @@ static void StkReapZombieThreads()
 }
 
 // Helper: map CMSIS flags options -> STK EventFlags options bitmask.
-static __stk_forceinline uint32_t CmsisFlagsOptionsToStk(uint32_t options)
+__stk_forceinline uint32_t CmsisFlagsOptionsToStk(uint32_t options)
 {
     uint32_t stk_opts = stk::sync::EventFlags::OPT_WAIT_ANY; // default
 
@@ -832,7 +841,7 @@ static __stk_forceinline uint32_t CmsisFlagsOptionsToStk(uint32_t options)
 }
 
 // Helper: map STK EventFlags error sentinel -> CMSIS flags error code.
-static __stk_forceinline uint32_t StkFlagsResultToCmsis(uint32_t result)
+__stk_forceinline uint32_t StkFlagsResultToCmsis(uint32_t result)
 {
     uint32_t cmsis_result;
 
@@ -872,7 +881,7 @@ static __stk_forceinline uint32_t StkFlagsResultToCmsis(uint32_t result)
 // separately: on success the result is the WHOLE flags word as it was before the matched bits were
 // cleared, which is what osEventFlagsWait()/osThreadFlagsWait() are specified to return.
 // Argument and ISR checks are done here because the overload folds them into WAIT_RESULT_FAIL.
-static uint32_t CmsisFlagsWait(stk::sync::EventFlags &ef, uint32_t flags, uint32_t options, uint32_t timeout)
+uint32_t CmsisFlagsWait(stk::sync::EventFlags &ef, uint32_t flags, uint32_t options, uint32_t timeout)
 {
     uint32_t result;
     const stk::Timeout stk_timeout = CmsisTimeoutToStk(timeout);
@@ -910,6 +919,9 @@ static uint32_t CmsisFlagsWait(stk::sync::EventFlags &ef, uint32_t flags, uint32
     return result;
 }
 
+// +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+} // anonymous namespace
+// +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 // ===========================================================================
 // ==== Kernel Management Functions ====

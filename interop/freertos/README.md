@@ -12,13 +12,13 @@ If you have an existing FreeRTOS codebase, this wrapper offers a compelling path
 
 Measured on **STM32F407G-DISC1** (Cortex-M4 @ 168 MHz, GCC 14.2.1, April 2026), STK outperforms FreeRTOS across all task counts and compiler optimization levels:
 
-| Scenario | STK Throughput | FreeRTOS Throughput | STK Advantage |
-|---|---|---|---|
-| 16 tasks, `-Ofast` | **993,008** | 966,017 | **+2.8%** |
-| 8 tasks, `-Ofast` | **988,862** | 932,654 | **+6.0%** |
-| 4 tasks, `-Ofast` | **989,465** | 881,082 | **+12.3%** |
-| 16 tasks, `-Os` | **752,136** | 735,342 | **+2.3%** |
-| 4 tasks, `-Os` | **753,459** | 673,845 | **+11.8%** |
+| Scenario           | STK Throughput | FreeRTOS Throughput | STK Advantage |
+|--------------------|----------------|---------------------|---------------|
+| 16 tasks, `-Ofast` | **993,008**    | 966,017             | **+2.8%**     |
+| 8 tasks, `-Ofast`  | **988,862**    | 932,654             | **+6.0%**     |
+| 4 tasks, `-Ofast`  | **989,465**    | 881,082             | **+12.3%**    |
+| 16 tasks, `-Os`    | **752,136**    | 735,342             | **+2.3%**     |
+| 4 tasks, `-Os`     | **753,459**    | 673,845             | **+11.8%**    |
 
 *Score = CRC32 calculations completed within a fixed time window. Higher = more CPU time available for application work.*
 
@@ -28,11 +28,11 @@ At 16 tasks under `-Ofast`, STK delivers approximately **12% more total computat
 
 STK uses **~21% less RAM** than FreeRTOS in 4-task scenarios and maintains an ~8.5% RAM advantage at 16 tasks — without sacrificing any functionality.
 
-| Scenario | STK RAM | FreeRTOS RAM |
-|---|---|---|
-| 4 tasks | **6.9 KB** | 8.8 KB |
-| 8 tasks | **11.4 KB** | 13.3 KB |
-| 16 tasks | **20.3 KB** | 22.2 KB |
+| Scenario | STK RAM     | FreeRTOS RAM |
+|----------|-------------|--------------|
+| 4 tasks  | **6.9 KB**  | 8.8 KB       |
+| 8 tasks  | **11.4 KB** | 13.3 KB      |
+| 16 tasks | **20.3 KB** | 22.2 KB      |
 
 ### Composable, Brick-Block Kernel Design
 
@@ -44,19 +44,19 @@ This means once you migrate your project via this wrapper, you can incrementally
 
 FreeRTOS implements a single scheduling policy: fixed-priority preemptive with round-robin within each level. STK is the only known RTOS that implements all major scheduling strategies:
 
-| Strategy | Description |
-|---|---|
-| `sched::SwitchStrategyRoundRobin` | Equal time-slicing, 100% CPU utilization |
-| `sched::SwitchStrategySWRR` | Smooth Weighted Round-Robin for proportional CPU allocation |
-| `sched::SwitchStrategyFixedPriority` | FreeRTOS-equivalent, used by this wrapper |
-| `sched::SwitchStrategyRM` | Rate-Monotonic for hard real-time HRT tasks |
-| `sched::SwitchStrategyDM` | Deadline-Monotonic for hard real-time HRT tasks |
-| `sched::SwitchStrategyEDF` | Earliest-Deadline-First, provably optimal for single-processor |
-| `sched::SwitchStrategyMCAS` 🔒 | Mixed-Criticality Adaptive Scheduler (2-level) |
-| `sched::SwitchStrategyMCAS4` 🔒 | Mixed-Criticality Adaptive Scheduler (4-level, EWMA-based) |
-| Custom | Plug in your own via `ITaskSwitchStrategy` |
+| Strategy                             | Description                                                    |
+|--------------------------------------|----------------------------------------------------------------|
+| `sched::SwitchStrategyRoundRobin`    | Equal time-slicing, 100% CPU utilization                       |
+| `sched::SwitchStrategySWRR`          | Smooth Weighted Round-Robin for proportional CPU allocation    |
+| `sched::SwitchStrategyFixedPriority` | FreeRTOS-equivalent, used by this wrapper                      |
+| `sched::SwitchStrategyRM`            | Rate-Monotonic for hard real-time HRT tasks                    |
+| `sched::SwitchStrategyDM`            | Deadline-Monotonic for hard real-time HRT tasks                |
+| `sched::SwitchStrategyEDF`           | Earliest-Deadline-First, provably optimal for single-processor |
+| `sched::SwitchStrategyMCAS` 🔒       | Mixed-Criticality Adaptive Scheduler (2-level)                 |
+| `sched::SwitchStrategyMCAS4` 🔒      | Mixed-Criticality Adaptive Scheduler (4-level, EWMA-based)     |
+| Custom                               | Plug in your own via `ITaskSwitchStrategy`                     |
 
-The wrapper uses `sched::SwitchStrategyFP32` to exactly replicate FreeRTOS scheduling semantics. When you are ready, switching to EDF, SWRR, or a mixed-criticality strategy requires changing a single template parameter.
+The wrapper uses `sched::SwitchStrategyFixedPriority` to exactly replicate FreeRTOS scheduling semantics. When you are ready, switching to EDF, SWRR, or a mixed-criticality strategy requires changing a single template parameter.
 
 ### Hard Real-Time Mode
 
@@ -102,105 +102,105 @@ The following table documents every FreeRTOS API function and whether it is **fu
 
 ### Coverage Summary
 
-| API Group | Implemented | Partial / Stub | Total | Coverage |
-|---|---|---|---|---|
-| Heap / Port | 5 | 0 | 5 | **100%** |
-| Kernel Control | 10 | 0 | 10 | **100%** |
-| Task Management | 18 | 3 | 21 | **86%** |
-| Queue | 17 | 0 | 17 | **100%** |
-| Queue Sets | 5 | 0 | 5 | **100%** |
-| Semaphore / Mutex | 14 | 0 | 14 | **100%** |
-| Software Timers | 18 | 0 | 18 | **100%** |
-| Event Groups | 8 | 0 | 8 | **100%** |
-| Task Notifications | 15 | 0 | 15 | **100%** |
-| Thread-Local Storage | 2 | 0 | 2 | **100%** |
-| Stream Buffers | 13 | 0 | 13 | **100%** |
-| Message Buffers | 11 | 0 | 11 | **100%** |
-| **Total** | **137** | **2** | **139** | **~99%** |
+| API Group            | Implemented | Partial / Stub | Total   | Coverage |
+|----------------------|-------------|----------------|---------|----------|
+| Heap / Port          | 5           | 0              | 5       | **100%** |
+| Kernel Control       | 10          | 0              | 10      | **100%** |
+| Task Management      | 18          | 3              | 21      | **86%**  |
+| Queue                | 17          | 0              | 17      | **100%** |
+| Queue Sets           | 5           | 0              | 5       | **100%** |
+| Semaphore / Mutex    | 14          | 0              | 14      | **100%** |
+| Software Timers      | 18          | 0              | 18      | **100%** |
+| Event Groups         | 8           | 0              | 8       | **100%** |
+| Task Notifications   | 15          | 0              | 15      | **100%** |
+| Thread-Local Storage | 2           | 0              | 2       | **100%** |
+| Stream Buffers       | 13          | 0              | 13      | **100%** |
+| Message Buffers      | 11          | 0              | 11      | **100%** |
+| **Total**            | **137**     | **2**          | **139** | **~99%** |
 
 ### Heap / Port API
 
-| Function | Status | Notes |
-|---|---|---|
-| `pvPortMalloc` | ✅ Full | Delegates to `stk::memory::MemoryAllocator::Allocate`; `__stk_weak` override point |
-| `vPortFree` | ✅ Full | Delegates to `stk::memory::MemoryAllocator::Free`; `__stk_weak` override point |
-| `xPortGetFreeHeapSize` | ✅ Full | Reads from internal `s_MemStats` accounting |
-| `xPortGetMinimumEverFreeHeapSize` | ✅ Full | Watermark maintained inside `Allocate()` |
-| `vPortGetHeapStats` | ✅ Full | All `HeapStats_t` fields populated; free-block subdivision fields conservatively reported as `0`/`1` because the allocator delegates to `malloc` (no block-list traversal) |
+| Function                          | Status | Notes                                                                                                                                                                      |
+|-----------------------------------|--------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `pvPortMalloc`                    | ✅ Full | Delegates to `stk::memory::MemoryAllocator::Allocate`; `__stk_weak` override point                                                                                         |
+| `vPortFree`                       | ✅ Full | Delegates to `stk::memory::MemoryAllocator::Free`; `__stk_weak` override point                                                                                             |
+| `xPortGetFreeHeapSize`            | ✅ Full | Reads from internal `s_MemStats` accounting                                                                                                                                |
+| `xPortGetMinimumEverFreeHeapSize` | ✅ Full | Watermark maintained inside `Allocate()`                                                                                                                                   |
+| `vPortGetHeapStats`               | ✅ Full | All `HeapStats_t` fields populated; free-block subdivision fields conservatively reported as `0`/`1` because the allocator delegates to `malloc` (no block-list traversal) |
 
 ### Kernel Control API
 
-| Function | Status | Notes |
-|---|---|---|
-| `vTaskStartScheduler` | ✅ Full | Instantiates `FrtosKernel` with `KERNEL_DYNAMIC | KERNEL_SYNC`, `sched::SwitchStrategyFP32`, tickless if `STK_TICKLESS_IDLE=1` |
-| `vTaskEndScheduler` | ✅ Full | Enumerates all active tasks via `EnumerateTasksT`, calls `ScheduleTaskRemoval` on each, then calls `stk::Yield()` to let the scheduler drain them. `g_StkKernel.Start()` returns once all `KERNEL_DYNAMIC` tasks have exited |
-| `vTaskSuspendAll` | ✅ Full | Maps to `stk::hw::CriticalSection::Enter()` |
-| `xTaskResumeAll` | ✅ Full | Maps to `stk::hw::CriticalSection::Exit()`; always returns `pdFALSE` — no wrapper-level pending-switch tracking |
-| `xTaskGetTickCount` | ✅ Full | |
-| `xTaskGetTickCountFromISR` | ✅ Full | |
-| `uxTaskGetNumberOfTasks` | ✅ Full | |
-| `xTaskGetSchedulerState` | ✅ Full | Returns `taskSCHEDULER_RUNNING`, `taskSCHEDULER_SUSPENDED`, or `taskSCHEDULER_NOT_STARTED` |
-| `vPortEnterCritical` | ✅ Full | `stk::hw::CriticalSection::Enter()` |
-| `vPortExitCritical` | ✅ Full | `stk::hw::CriticalSection::Exit()` |
+| Function                   | Status | Notes                                                                                                                                                                                                                        |
+|----------------------------|--------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `vTaskStartScheduler`      | ✅ Full | Instantiates `FrtosKernel` with `KERNEL_DYNAMIC                                                                                                                                                                              | KERNEL_SYNC`, `sched::SwitchStrategyFP32`, tickless if `STK_TICKLESS_IDLE=1` |
+| `vTaskEndScheduler`        | ✅ Full | Enumerates all active tasks via `EnumerateTasksT`, calls `ScheduleTaskRemoval` on each, then calls `stk::Yield()` to let the scheduler drain them. `g_StkKernel.Start()` returns once all `KERNEL_DYNAMIC` tasks have exited |
+| `vTaskSuspendAll`          | ✅ Full | Maps to `stk::hw::CriticalSection::Enter()`                                                                                                                                                                                  |
+| `xTaskResumeAll`           | ✅ Full | Maps to `stk::hw::CriticalSection::Exit()`; always returns `pdFALSE` — no wrapper-level pending-switch tracking                                                                                                              |
+| `xTaskGetTickCount`        | ✅ Full |                                                                                                                                                                                                                              |
+| `xTaskGetTickCountFromISR` | ✅ Full |                                                                                                                                                                                                                              |
+| `uxTaskGetNumberOfTasks`   | ✅ Full |                                                                                                                                                                                                                              |
+| `xTaskGetSchedulerState`   | ✅ Full | Returns `taskSCHEDULER_RUNNING`, `taskSCHEDULER_SUSPENDED`, or `taskSCHEDULER_NOT_STARTED`                                                                                                                                   |
+| `vPortEnterCritical`       | ✅ Full | `stk::hw::CriticalSection::Enter()`                                                                                                                                                                                          |
+| `vPortExitCritical`        | ✅ Full | `stk::hw::CriticalSection::Exit()`                                                                                                                                                                                           |
 
 ### Task Management API
 
-| Function | Status | Notes |
-|---|---|---|
-| `xTaskCreate` | ✅ Full | |
-| `xTaskCreateStatic` | ✅ Full | Accepts caller-supplied TCB and stack buffers; falls back to heap when `NULL` is passed |
-| `xTaskCreateRestricted` | ✅ Full | MPU region parameters accepted and passed through; privilege enforced via `ACCESS_PRIVILEGED` / `ACCESS_USER` |
-| `xTaskCreateRestrictedStatic` | ✅ Full | Static variant of the above |
-| `vTaskDelete` | ✅ Full | |
-| `vTaskSuspend` | ✅ Full | |
-| `vTaskResume` | ✅ Full | |
-| `xTaskResumeFromISR` | ✅ Full | Always returns `pdFALSE`; STK handles preemption internally |
-| `xTaskAbortDelay` | ✅ Full | |
-| `vTaskDelay` | ✅ Full | |
-| `vTaskDelayUntil` | ✅ Full | |
-| `xTaskDelayUntil` | ✅ Full | |
-| `vTaskPrioritySet` | ✅ Full | |
-| `uxTaskPriorityGet` | ✅ Full | |
-| `uxTaskPriorityGetFromISR` | ✅ Full | |
-| `eTaskGetState` | ✅ Full | Returns `eRunning`, `eReady`, `eBlocked`, `eSuspended`, `eDeleted` |
-| `xTaskGetCurrentTaskHandle` | ✅ Full | |
-| `xTaskGetHandle` | ✅ Full | Linear scan over active task table by name |
-| `pcTaskGetName` | ✅ Full | |
-| `uxTaskGetStackHighWaterMark` | ✅ Full | Counts untouched `stk::Word` slots filled with `STK_STACK_MEMORY_FILLER` |
-| `uxTaskGetStackHighWaterMark2` | ✅ Full | Same as above; `configSTACK_DEPTH_TYPE` return variant |
-| `uxTaskGetSystemState` | ✅ Full | Populates `TaskStatus_t` array; `ulRunTimeCounter` and `ulRunTimeStamps` are always `0` (see `vTaskGetRunTimeStats`) |
-| `vTaskList` | ✅ Full | Produces standard FreeRTOS column format (`Name / State / Prio / Stack / Num`) |
-| `vTaskGetRunTimeStats` | ⚠️ Stub | Produces correct table format with task names; `Abs Time` and `% Time` columns are always `0` — STK has no per-task CPU run-time accumulator. Provided for link compatibility with middleware and diagnostic tools |
-| `vTaskSetThreadLocalStoragePointer` | ✅ Full | Up to `configNUM_THREAD_LOCAL_STORAGE_POINTERS` slots per task |
-| `pvTaskGetThreadLocalStoragePointer` | ✅ Full | |
+| Function                             | Status  | Notes                                                                                                                                                                                                              |
+|--------------------------------------|---------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `xTaskCreate`                        | ✅ Full  |                                                                                                                                                                                                                    |
+| `xTaskCreateStatic`                  | ✅ Full  | Accepts caller-supplied TCB and stack buffers; falls back to heap when `NULL` is passed                                                                                                                            |
+| `xTaskCreateRestricted`              | ✅ Full  | MPU region parameters accepted and passed through; privilege enforced via `ACCESS_PRIVILEGED` / `ACCESS_USER`                                                                                                      |
+| `xTaskCreateRestrictedStatic`        | ✅ Full  | Static variant of the above                                                                                                                                                                                        |
+| `vTaskDelete`                        | ✅ Full  |                                                                                                                                                                                                                    |
+| `vTaskSuspend`                       | ✅ Full  |                                                                                                                                                                                                                    |
+| `vTaskResume`                        | ✅ Full  |                                                                                                                                                                                                                    |
+| `xTaskResumeFromISR`                 | ✅ Full  | Always returns `pdFALSE`; STK handles preemption internally                                                                                                                                                        |
+| `xTaskAbortDelay`                    | ✅ Full  |                                                                                                                                                                                                                    |
+| `vTaskDelay`                         | ✅ Full  |                                                                                                                                                                                                                    |
+| `vTaskDelayUntil`                    | ✅ Full  |                                                                                                                                                                                                                    |
+| `xTaskDelayUntil`                    | ✅ Full  |                                                                                                                                                                                                                    |
+| `vTaskPrioritySet`                   | ✅ Full  |                                                                                                                                                                                                                    |
+| `uxTaskPriorityGet`                  | ✅ Full  |                                                                                                                                                                                                                    |
+| `uxTaskPriorityGetFromISR`           | ✅ Full  |                                                                                                                                                                                                                    |
+| `eTaskGetState`                      | ✅ Full  | Returns `eRunning`, `eReady`, `eBlocked`, `eSuspended`, `eDeleted`                                                                                                                                                 |
+| `xTaskGetCurrentTaskHandle`          | ✅ Full  |                                                                                                                                                                                                                    |
+| `xTaskGetHandle`                     | ✅ Full  | Linear scan over active task table by name                                                                                                                                                                         |
+| `pcTaskGetName`                      | ✅ Full  |                                                                                                                                                                                                                    |
+| `uxTaskGetStackHighWaterMark`        | ✅ Full  | Counts untouched `stk::Word` slots filled with `STK_STACK_MEMORY_FILLER`                                                                                                                                           |
+| `uxTaskGetStackHighWaterMark2`       | ✅ Full  | Same as above; `configSTACK_DEPTH_TYPE` return variant                                                                                                                                                             |
+| `uxTaskGetSystemState`               | ✅ Full  | Populates `TaskStatus_t` array; `ulRunTimeCounter` and `ulRunTimeStamps` are always `0` (see `vTaskGetRunTimeStats`)                                                                                               |
+| `vTaskList`                          | ✅ Full  | Produces standard FreeRTOS column format (`Name / State / Prio / Stack / Num`)                                                                                                                                     |
+| `vTaskGetRunTimeStats`               | ⚠️ Stub | Produces correct table format with task names; `Abs Time` and `% Time` columns are always `0` — STK has no per-task CPU run-time accumulator. Provided for link compatibility with middleware and diagnostic tools |
+| `vTaskSetThreadLocalStoragePointer`  | ✅ Full  | Up to `configNUM_THREAD_LOCAL_STORAGE_POINTERS` slots per task                                                                                                                                                     |
+| `pvTaskGetThreadLocalStoragePointer` | ✅ Full  |                                                                                                                                                                                                                    |
 
 ### Queue API
 
-| Function | Status | Notes |
-|---|---|---|
-| `xQueueCreate` | ✅ Full | Backed by `stk::sync::MessageQueue` |
-| `xQueueCreateStatic` | ✅ Full | Accepts caller-supplied storage; falls back to heap when `NULL` |
-| `vQueueDelete` | ✅ Full | |
-| `xQueueSend` | ✅ Full | Alias for `xQueueSendToBack` |
-| `xQueueSendToBack` | ✅ Full | |
-| `xQueueSendToFront` | ✅ Full | Backed by `stk::sync::MessageQueue::PutFront()` — inserts the message at the head of the ring buffer so it is returned first by the next `Get()`. Blocking with configurable timeout |
-| `xQueueReceive` | ✅ Full | |
-| `xQueuePeek` | ✅ Full | Backed by `stk::sync::MessageQueue::Peek()` — copies the oldest message atomically without consuming it. Blocking with configurable timeout. Safe under concurrent consumers |
-| `xQueuePeekFromISR` | ✅ Full | Backed by `TryPeek()` (= `Peek(NO_WAIT)`) — ISR-safe non-destructive read |
-| `xQueueReset` | ✅ Full | |
-| `xQueueOverwrite` | ✅ Full | Drops the oldest item if full, then sends |
-| `xQueueOverwriteFromISR` | ✅ Full | ISR-safe variant |
-| `uxQueueMessagesWaiting` | ✅ Full | |
-| `uxQueueMessagesWaitingFromISR` | ✅ Full | |
-| `uxQueueSpacesAvailable` | ✅ Full | |
-| `xQueueSendFromISR` | ✅ Full | |
-| `xQueueSendToBackFromISR` | ✅ Full | |
-| `xQueueSendToFrontFromISR` | ✅ Full | Backed by `TryPutFront()` (= `PutFront(NO_WAIT)`) — ISR-safe non-blocking head insert. `pxHigherPriorityTaskWoken` always `pdFALSE` |
-| `xQueueReceiveFromISR` | ✅ Full | |
-| `xQueueIsQueueEmptyFromISR` | ✅ Full | |
-| `xQueueIsQueueFullFromISR` | ✅ Full | |
-| `xQueueGetMutexHolder` | ✅ Full | |
-| `xQueueGetMutexHolderFromISR` | ✅ Full | |
+| Function                        | Status | Notes                                                                                                                                                                                |
+|---------------------------------|--------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `xQueueCreate`                  | ✅ Full | Backed by `stk::sync::MessageQueue`                                                                                                                                                  |
+| `xQueueCreateStatic`            | ✅ Full | Accepts caller-supplied storage; falls back to heap when `NULL`                                                                                                                      |
+| `vQueueDelete`                  | ✅ Full |                                                                                                                                                                                      |
+| `xQueueSend`                    | ✅ Full | Alias for `xQueueSendToBack`                                                                                                                                                         |
+| `xQueueSendToBack`              | ✅ Full |                                                                                                                                                                                      |
+| `xQueueSendToFront`             | ✅ Full | Backed by `stk::sync::MessageQueue::PutFront()` — inserts the message at the head of the ring buffer so it is returned first by the next `Get()`. Blocking with configurable timeout |
+| `xQueueReceive`                 | ✅ Full |                                                                                                                                                                                      |
+| `xQueuePeek`                    | ✅ Full | Backed by `stk::sync::MessageQueue::Peek()` — copies the oldest message atomically without consuming it. Blocking with configurable timeout. Safe under concurrent consumers         |
+| `xQueuePeekFromISR`             | ✅ Full | Backed by `TryPeek()` (= `Peek(NO_WAIT)`) — ISR-safe non-destructive read                                                                                                            |
+| `xQueueReset`                   | ✅ Full |                                                                                                                                                                                      |
+| `xQueueOverwrite`               | ✅ Full | Drops the oldest item if full, then sends                                                                                                                                            |
+| `xQueueOverwriteFromISR`        | ✅ Full | ISR-safe variant                                                                                                                                                                     |
+| `uxQueueMessagesWaiting`        | ✅ Full |                                                                                                                                                                                      |
+| `uxQueueMessagesWaitingFromISR` | ✅ Full |                                                                                                                                                                                      |
+| `uxQueueSpacesAvailable`        | ✅ Full |                                                                                                                                                                                      |
+| `xQueueSendFromISR`             | ✅ Full |                                                                                                                                                                                      |
+| `xQueueSendToBackFromISR`       | ✅ Full |                                                                                                                                                                                      |
+| `xQueueSendToFrontFromISR`      | ✅ Full | Backed by `TryPutFront()` (= `PutFront(NO_WAIT)`) — ISR-safe non-blocking head insert. `pxHigherPriorityTaskWoken` always `pdFALSE`                                                  |
+| `xQueueReceiveFromISR`          | ✅ Full |                                                                                                                                                                                      |
+| `xQueueIsQueueEmptyFromISR`     | ✅ Full |                                                                                                                                                                                      |
+| `xQueueIsQueueFullFromISR`      | ✅ Full |                                                                                                                                                                                      |
+| `xQueueGetMutexHolder`          | ✅ Full |                                                                                                                                                                                      |
+| `xQueueGetMutexHolderFromISR`   | ✅ Full |                                                                                                                                                                                      |
 
 ### Queue Set API *(requires `configUSE_QUEUE_SETS=1`)*
 
@@ -214,135 +214,135 @@ The following table documents every FreeRTOS API function and whether it is **fu
 
 ### Semaphore / Mutex API
 
-| Function | Status | Notes |
-|---|---|---|
-| `xSemaphoreCreateBinary` | ✅ Full | Backed by `stk::sync::Semaphore` (max=1, initial=0) |
-| `xSemaphoreCreateBinaryStatic` | ✅ Full | |
-| `xSemaphoreCreateCounting` | ✅ Full | Backed by `stk::sync::Semaphore` |
-| `xSemaphoreCreateCountingStatic` | ✅ Full | |
-| `xSemaphoreCreateMutex` | ✅ Full | Backed by `stk::sync::Mutex`; STK mutex is always recursive |
-| `xSemaphoreCreateMutexStatic` | ✅ Full | |
-| `xSemaphoreCreateRecursiveMutex` | ✅ Full | Equivalent to `xSemaphoreCreateMutex` — STK mutex is natively recursive |
-| `xSemaphoreCreateRecursiveMutexStatic` | ✅ Full | |
-| `vSemaphoreDelete` | ✅ Full | |
-| `xSemaphoreTake` | ✅ Full | |
-| `xSemaphoreTakeFromISR` | ✅ Full | |
-| `xSemaphoreTakeRecursive` | ✅ Full | |
-| `xSemaphoreGive` | ✅ Full | |
-| `xSemaphoreGiveRecursive` | ✅ Full | |
-| `xSemaphoreGiveFromISR` | ✅ Full | `pxHigherPriorityTaskWoken` always set to `pdFALSE` |
-| `uxSemaphoreGetCount` | ✅ Full | |
-| `xSemaphoreGetMutexHolder` | ✅ Full | |
-| `xSemaphoreGetMutexHolderFromISR` | ✅ Full | |
+| Function                               | Status | Notes                                                                   |
+|----------------------------------------|--------|-------------------------------------------------------------------------|
+| `xSemaphoreCreateBinary`               | ✅ Full | Backed by `stk::sync::Semaphore` (max=1, initial=0)                     |
+| `xSemaphoreCreateBinaryStatic`         | ✅ Full |                                                                         |
+| `xSemaphoreCreateCounting`             | ✅ Full | Backed by `stk::sync::Semaphore`                                        |
+| `xSemaphoreCreateCountingStatic`       | ✅ Full |                                                                         |
+| `xSemaphoreCreateMutex`                | ✅ Full | Backed by `stk::sync::Mutex`; STK mutex is always recursive             |
+| `xSemaphoreCreateMutexStatic`          | ✅ Full |                                                                         |
+| `xSemaphoreCreateRecursiveMutex`       | ✅ Full | Equivalent to `xSemaphoreCreateMutex` — STK mutex is natively recursive |
+| `xSemaphoreCreateRecursiveMutexStatic` | ✅ Full |                                                                         |
+| `vSemaphoreDelete`                     | ✅ Full |                                                                         |
+| `xSemaphoreTake`                       | ✅ Full |                                                                         |
+| `xSemaphoreTakeFromISR`                | ✅ Full |                                                                         |
+| `xSemaphoreTakeRecursive`              | ✅ Full |                                                                         |
+| `xSemaphoreGive`                       | ✅ Full |                                                                         |
+| `xSemaphoreGiveRecursive`              | ✅ Full |                                                                         |
+| `xSemaphoreGiveFromISR`                | ✅ Full | `pxHigherPriorityTaskWoken` always set to `pdFALSE`                     |
+| `uxSemaphoreGetCount`                  | ✅ Full |                                                                         |
+| `xSemaphoreGetMutexHolder`             | ✅ Full |                                                                         |
+| `xSemaphoreGetMutexHolderFromISR`      | ✅ Full |                                                                         |
 
 ### Software Timer API
 
-| Function | Status | Notes |
-|---|---|---|
-| `xTimerCreate` | ✅ Full | Backed by `stk::time::TimerHost`; host object created lazily on first call using static storage |
-| `xTimerCreateStatic` | ✅ Full | |
-| `xTimerDelete` | ✅ Full | `xTicksToWait` accepted for API compatibility but ignored — timer commands are synchronous |
-| `xTimerStart` | ✅ Full | `xTicksToWait` ignored |
-| `xTimerStop` | ✅ Full | `xTicksToWait` ignored |
-| `xTimerReset` | ✅ Full | `xTicksToWait` ignored |
-| `xTimerChangePeriod` | ✅ Full | `xTicksToWait` ignored |
-| `xTimerStartFromISR` | ✅ Full | `pxHigherPriorityTaskWoken` is not required by STK — preemption is handled internally by the scheduler. Always set to `pdFALSE`; `portYIELD_FROM_ISR(pdFALSE)` is a no-op |
-| `xTimerStopFromISR` | ✅ Full | Same note on `pxHigherPriorityTaskWoken` |
-| `xTimerResetFromISR` | ✅ Full | Same note on `pxHigherPriorityTaskWoken` |
-| `xTimerChangePeriodFromISR` | ✅ Full | Same note on `pxHigherPriorityTaskWoken` |
-| `xTimerPendFunctionCall` | ✅ Full | Executes deferred function via the timer task context |
-| `xTimerPendFunctionCallFromISR` | ✅ Full | ISR-safe variant |
-| `xTimerIsTimerActive` | ✅ Full | |
-| `pvTimerGetTimerID` | ✅ Full | |
-| `vTimerSetTimerID` | ✅ Full | |
-| `pcTimerGetName` | ✅ Full | |
-| `xTimerGetPeriod` | ✅ Full | |
-| `xTimerGetExpiryTime` | ✅ Full | |
+| Function                        | Status | Notes                                                                                                                                                                     |
+|---------------------------------|--------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `xTimerCreate`                  | ✅ Full | Backed by `stk::time::TimerHost`; host object created lazily on first call using static storage                                                                           |
+| `xTimerCreateStatic`            | ✅ Full |                                                                                                                                                                           |
+| `xTimerDelete`                  | ✅ Full | `xTicksToWait` accepted for API compatibility but ignored — timer commands are synchronous                                                                                |
+| `xTimerStart`                   | ✅ Full | `xTicksToWait` ignored                                                                                                                                                    |
+| `xTimerStop`                    | ✅ Full | `xTicksToWait` ignored                                                                                                                                                    |
+| `xTimerReset`                   | ✅ Full | `xTicksToWait` ignored                                                                                                                                                    |
+| `xTimerChangePeriod`            | ✅ Full | `xTicksToWait` ignored                                                                                                                                                    |
+| `xTimerStartFromISR`            | ✅ Full | `pxHigherPriorityTaskWoken` is not required by STK — preemption is handled internally by the scheduler. Always set to `pdFALSE`; `portYIELD_FROM_ISR(pdFALSE)` is a no-op |
+| `xTimerStopFromISR`             | ✅ Full | Same note on `pxHigherPriorityTaskWoken`                                                                                                                                  |
+| `xTimerResetFromISR`            | ✅ Full | Same note on `pxHigherPriorityTaskWoken`                                                                                                                                  |
+| `xTimerChangePeriodFromISR`     | ✅ Full | Same note on `pxHigherPriorityTaskWoken`                                                                                                                                  |
+| `xTimerPendFunctionCall`        | ✅ Full | Executes deferred function via the timer task context                                                                                                                     |
+| `xTimerPendFunctionCallFromISR` | ✅ Full | ISR-safe variant                                                                                                                                                          |
+| `xTimerIsTimerActive`           | ✅ Full |                                                                                                                                                                           |
+| `pvTimerGetTimerID`             | ✅ Full |                                                                                                                                                                           |
+| `vTimerSetTimerID`              | ✅ Full |                                                                                                                                                                           |
+| `pcTimerGetName`                | ✅ Full |                                                                                                                                                                           |
+| `xTimerGetPeriod`               | ✅ Full |                                                                                                                                                                           |
+| `xTimerGetExpiryTime`           | ✅ Full |                                                                                                                                                                           |
 
 ### Event Group API
 
-| Function | Status | Notes |
-|---|---|---|
-| `xEventGroupCreate` | ✅ Full | Backed by `stk::sync::EventFlags` (32-bit, bits 0–30 available; bit 31 reserved) |
-| `xEventGroupCreateStatic` | ✅ Full | |
-| `vEventGroupDelete` | ✅ Full | |
-| `xEventGroupSetBits` | ✅ Full | |
-| `xEventGroupClearBits` | ✅ Full | |
-| `xEventGroupGetBits` | ✅ Full | |
-| `xEventGroupWaitBits` | ✅ Full | Supports `ANY`/`ALL`/`NO_CLEAR` wait options |
-| `xEventGroupSetBitsFromISR` | ✅ Full | `pxHigherPriorityTaskWoken` always `pdFALSE` |
-| `xEventGroupClearBitsFromISR` | ✅ Full | |
-| `xEventGroupSync` | ✅ Full | |
+| Function                      | Status | Notes                                                                            |
+|-------------------------------|--------|----------------------------------------------------------------------------------|
+| `xEventGroupCreate`           | ✅ Full | Backed by `stk::sync::EventFlags` (32-bit, bits 0–30 available; bit 31 reserved) |
+| `xEventGroupCreateStatic`     | ✅ Full |                                                                                  |
+| `vEventGroupDelete`           | ✅ Full |                                                                                  |
+| `xEventGroupSetBits`          | ✅ Full |                                                                                  |
+| `xEventGroupClearBits`        | ✅ Full |                                                                                  |
+| `xEventGroupGetBits`          | ✅ Full |                                                                                  |
+| `xEventGroupWaitBits`         | ✅ Full | Supports `ANY`/`ALL`/`NO_CLEAR` wait options                                     |
+| `xEventGroupSetBitsFromISR`   | ✅ Full | `pxHigherPriorityTaskWoken` always `pdFALSE`                                     |
+| `xEventGroupClearBitsFromISR` | ✅ Full |                                                                                  |
+| `xEventGroupSync`             | ✅ Full |                                                                                  |
 
 ### Task Notification API
 
-| Function | Status | Notes |
-|---|---|---|
-| `xTaskNotifyGive` | ✅ Full | Index-0 alias |
-| `xTaskNotifyGiveIndexed` | ✅ Full | Only index 0 is functional |
-| `ulTaskNotifyTake` | ✅ Full | Uses per-task `stk::sync::Semaphore` for efficient blocking |
-| `ulTaskNotifyTakeIndexed` | ✅ Full | Only index 0 is functional |
-| `xTaskNotify` | ✅ Full | |
-| `xTaskNotifyIndexed` | ✅ Full | Only index 0 is functional |
-| `xTaskNotifyWait` | ✅ Full | |
-| `xTaskNotifyWaitIndexed` | ✅ Full | Only index 0 is functional |
-| `xTaskNotifyFromISR` | ✅ Full | `pxHigherPriorityTaskWoken` always `pdFALSE` |
-| `xTaskNotifyFromISRIndexed` | ✅ Full | Only index 0 is functional |
-| `xTaskNotifyAndQuery` | ✅ Full | |
-| `xTaskNotifyAndQueryIndexed` | ✅ Full | |
-| `xTaskNotifyAndQueryFromISR` | ✅ Full | |
-| `xTaskNotifyAndQueryFromISRIndexed` | ✅ Full | |
-| `xTaskNotifyStateClear` | ✅ Full | |
-| `xTaskNotifyStateClearIndexed` | ✅ Full | |
-| `ulTaskNotifyValueClear` | ✅ Full | |
-| `ulTaskNotifyValueClearIndexed` | ✅ Full | All indices up to `configTASK_NOTIFICATION_ARRAY_ENTRIES - 1` are supported; out-of-range indices return `0` |
+| Function                            | Status | Notes                                                                                                        |
+|-------------------------------------|--------|--------------------------------------------------------------------------------------------------------------|
+| `xTaskNotifyGive`                   | ✅ Full | Index-0 alias                                                                                                |
+| `xTaskNotifyGiveIndexed`            | ✅ Full | Only index 0 is functional                                                                                   |
+| `ulTaskNotifyTake`                  | ✅ Full | Uses per-task `stk::sync::Semaphore` for efficient blocking                                                  |
+| `ulTaskNotifyTakeIndexed`           | ✅ Full | Only index 0 is functional                                                                                   |
+| `xTaskNotify`                       | ✅ Full |                                                                                                              |
+| `xTaskNotifyIndexed`                | ✅ Full | Only index 0 is functional                                                                                   |
+| `xTaskNotifyWait`                   | ✅ Full |                                                                                                              |
+| `xTaskNotifyWaitIndexed`            | ✅ Full | Only index 0 is functional                                                                                   |
+| `xTaskNotifyFromISR`                | ✅ Full | `pxHigherPriorityTaskWoken` always `pdFALSE`                                                                 |
+| `xTaskNotifyFromISRIndexed`         | ✅ Full | Only index 0 is functional                                                                                   |
+| `xTaskNotifyAndQuery`               | ✅ Full |                                                                                                              |
+| `xTaskNotifyAndQueryIndexed`        | ✅ Full |                                                                                                              |
+| `xTaskNotifyAndQueryFromISR`        | ✅ Full |                                                                                                              |
+| `xTaskNotifyAndQueryFromISRIndexed` | ✅ Full |                                                                                                              |
+| `xTaskNotifyStateClear`             | ✅ Full |                                                                                                              |
+| `xTaskNotifyStateClearIndexed`      | ✅ Full |                                                                                                              |
+| `ulTaskNotifyValueClear`            | ✅ Full |                                                                                                              |
+| `ulTaskNotifyValueClearIndexed`     | ✅ Full | All indices up to `configTASK_NOTIFICATION_ARRAY_ENTRIES - 1` are supported; out-of-range indices return `0` |
 
 ### Stream Buffer API *(requires `configUSE_STREAM_BUFFERS=1`)*
 
 Backed by `stk::sync::Pipe` (element size = 1 byte), which provides native `WriteBulk` / `ReadBulk` / `TryWriteBulk` / `TryReadBulk` for efficient multi-byte transfers. Trigger-level blocking reuses `Pipe`'s own condition-variable wait loop — no busy-spin, no lost-wakeup race.
 
-| Function | Status |
-|---|---|
-| `xStreamBufferCreate` | ✅ Full |
-| `xStreamBufferCreateStatic` | ✅ Full |
-| `xStreamBufferCreateWithCallback` | ✅ Full |
+| Function                                | Status |
+|-----------------------------------------|--------|
+| `xStreamBufferCreate`                   | ✅ Full |
+| `xStreamBufferCreateStatic`             | ✅ Full |
+| `xStreamBufferCreateWithCallback`       | ✅ Full |
 | `xStreamBufferCreateStaticWithCallback` | ✅ Full |
-| `vStreamBufferDelete` | ✅ Full |
-| `xStreamBufferSend` | ✅ Full |
-| `xStreamBufferSendFromISR` | ✅ Full |
-| `xStreamBufferReceive` | ✅ Full |
-| `xStreamBufferReceiveFromISR` | ✅ Full |
-| `xStreamBufferBytesAvailable` | ✅ Full |
-| `xStreamBufferSpacesAvailable` | ✅ Full |
-| `xStreamBufferIsEmpty` | ✅ Full |
-| `xStreamBufferIsFull` | ✅ Full |
-| `xStreamBufferReset` | ✅ Full |
-| `xStreamBufferResetFromISR` | ✅ Full |
-| `xStreamBufferSetTriggerLevel` | ✅ Full |
-| `xStreamBufferGetTriggerLevel` | ✅ Full |
-| `xStreamBufferNextMessageLengthBytes` | ✅ Full |
+| `vStreamBufferDelete`                   | ✅ Full |
+| `xStreamBufferSend`                     | ✅ Full |
+| `xStreamBufferSendFromISR`              | ✅ Full |
+| `xStreamBufferReceive`                  | ✅ Full |
+| `xStreamBufferReceiveFromISR`           | ✅ Full |
+| `xStreamBufferBytesAvailable`           | ✅ Full |
+| `xStreamBufferSpacesAvailable`          | ✅ Full |
+| `xStreamBufferIsEmpty`                  | ✅ Full |
+| `xStreamBufferIsFull`                   | ✅ Full |
+| `xStreamBufferReset`                    | ✅ Full |
+| `xStreamBufferResetFromISR`             | ✅ Full |
+| `xStreamBufferSetTriggerLevel`          | ✅ Full |
+| `xStreamBufferGetTriggerLevel`          | ✅ Full |
+| `xStreamBufferNextMessageLengthBytes`   | ✅ Full |
 
 ### Message Buffer API *(requires `configUSE_STREAM_BUFFERS=1`)*
 
 Backed by a `stk::sync::MessageQueue` envelope FIFO paired with a `stk::memory::BlockMemoryPool` for zero-copy payload management. `TryPeek()` provides non-destructive length inspection without a `Get` + `PutFront` workaround.
 
-| Function | Status |
-|---|---|
-| `xMessageBufferCreate` | ✅ Full |
-| `xMessageBufferCreateStatic` | ✅ Full |
-| `xMessageBufferCreateWithCallback` | ✅ Full |
+| Function                                 | Status |
+|------------------------------------------|--------|
+| `xMessageBufferCreate`                   | ✅ Full |
+| `xMessageBufferCreateStatic`             | ✅ Full |
+| `xMessageBufferCreateWithCallback`       | ✅ Full |
 | `xMessageBufferCreateStaticWithCallback` | ✅ Full |
-| `vMessageBufferDelete` | ✅ Full |
-| `xMessageBufferSend` | ✅ Full |
-| `xMessageBufferSendFromISR` | ✅ Full |
-| `xMessageBufferReceive` | ✅ Full |
-| `xMessageBufferReceiveFromISR` | ✅ Full |
-| `xMessageBufferIsEmpty` | ✅ Full |
-| `xMessageBufferIsFull` | ✅ Full |
-| `xMessageBufferSpacesAvailable` | ✅ Full |
-| `xMessageBufferReset` | ✅ Full |
-| `xMessageBufferResetFromISR` | ✅ Full |
-| `xMessageBufferNextLengthBytes` | ✅ Full |
+| `vMessageBufferDelete`                   | ✅ Full |
+| `xMessageBufferSend`                     | ✅ Full |
+| `xMessageBufferSendFromISR`              | ✅ Full |
+| `xMessageBufferReceive`                  | ✅ Full |
+| `xMessageBufferReceiveFromISR`           | ✅ Full |
+| `xMessageBufferIsEmpty`                  | ✅ Full |
+| `xMessageBufferIsFull`                   | ✅ Full |
+| `xMessageBufferSpacesAvailable`          | ✅ Full |
+| `xMessageBufferReset`                    | ✅ Full |
+| `xMessageBufferResetFromISR`             | ✅ Full |
+| `xMessageBufferNextLengthBytes`          | ✅ Full |
 
 ---
 
@@ -384,17 +384,17 @@ Backed by a `stk::sync::MessageQueue` envelope FIFO paired with a `stk::memory::
 
 ## Known Limitations
 
-| Area | Behaviour |
-|---|---|
-| `xQueueSendToFrontFromISR` `pxHigherPriorityTaskWoken` | Always `pdFALSE`. STK handles preemption internally; no explicit yield from ISR is required |
-| Task notifications (index > 0) | Only notification index 0 is supported. Calls using higher indices compile and link successfully but operate on index 0 only. |
-| `pxHigherPriorityTaskWoken` | Always set to `pdFALSE` on all ISR-variant functions. STK handles preemption internally on the next scheduler tick; explicit `portYIELD_FROM_ISR` calls are accepted but produce no additional effect. |
-| `xTaskResumeAll` | Always returns `pdFALSE`. No wrapper-level pending context-switch tracking. |
-| `vTaskGetRunTimeStats` | Produces the expected table format with task names; `Abs Time` and `% Time` columns are always `0`. STK has its own tracing infrastructure (SEGGER SystemView). |
-| `uxTaskGetSystemState` `ulRunTimeCounter` | Always `0` for the same reason as above. |
-| `vPortGetHeapStats` free-block fields | `xSizeOfSmallestFreeBlockInBytes` and `xNumberOfFreeBlocks` are conservatively reported as `1` / `0` because the allocator delegates to platform `malloc` with no block-list traversal. |
-| SMP affinity | Ignored. STK uses a per-core AMP model. |
-| Trace / stats (`configGENERATE_RUN_TIME_STATS`) | Not implemented. Use SEGGER SystemView integration for task-level profiling. |
+| Area                                                   | Behaviour                                                                                                                                                                                              |
+|--------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `xQueueSendToFrontFromISR` `pxHigherPriorityTaskWoken` | Always `pdFALSE`. STK handles preemption internally; no explicit yield from ISR is required                                                                                                            |
+| Task notifications (index > 0)                         | Only notification index 0 is supported. Calls using higher indices compile and link successfully but operate on index 0 only.                                                                          |
+| `pxHigherPriorityTaskWoken`                            | Always set to `pdFALSE` on all ISR-variant functions. STK handles preemption internally on the next scheduler tick; explicit `portYIELD_FROM_ISR` calls are accepted but produce no additional effect. |
+| `xTaskResumeAll`                                       | Always returns `pdFALSE`. No wrapper-level pending context-switch tracking.                                                                                                                            |
+| `vTaskGetRunTimeStats`                                 | Produces the expected table format with task names; `Abs Time` and `% Time` columns are always `0`. STK has its own tracing infrastructure (SEGGER SystemView).                                        |
+| `uxTaskGetSystemState` `ulRunTimeCounter`              | Always `0` for the same reason as above.                                                                                                                                                               |
+| `vPortGetHeapStats` free-block fields                  | `xSizeOfSmallestFreeBlockInBytes` and `xNumberOfFreeBlocks` are conservatively reported as `1` / `0` because the allocator delegates to platform `malloc` with no block-list traversal.                |
+| SMP affinity                                           | Ignored. STK uses a per-core AMP model.                                                                                                                                                                |
+| Trace / stats (`configGENERATE_RUN_TIME_STATS`)        | Not implemented. Use SEGGER SystemView integration for task-level profiling.                                                                                                                           |
 
 ---
 
@@ -493,18 +493,18 @@ All subsequent FreeRTOS API calls (`xQueueCreate`, `xSemaphoreCreateMutex`, `xTi
 
 The following table summarizes the observable differences after swapping FreeRTOS for STK via this wrapper — without changing any application code.
 
-| Metric | FreeRTOS | STK (via wrapper) |
-|---|---|---|
-| Task throughput (4 tasks, -Ofast) | baseline | **+12%** |
-| Task throughput (16 tasks, -Ofast) | baseline | **+2.8%** |
-| Scheduling jitter (16 tasks, -Ofast) | baseline | **~17% lower** |
-| RAM usage (4 tasks) | baseline | **~21% lower** |
-| RAM usage (16 tasks) | baseline | **~8.5% lower** |
-| Hard real-time deadline enforcement | ❌ | ✅ (`KERNEL_HRT`) |
-| MPU privilege separation | limited | ✅ native |
-| Tickless idle | ✅ | ✅ (`STK_TICKLESS_IDLE=1`) |
-| x86 development / unit test mode | ❌ | ✅ |
-| Multiple scheduling strategies | ❌ | ✅ (8 built-in + custom) |
-| 100% scheduler unit test coverage | ❌ | ✅ |
-| SEGGER SystemView tracing | ✅ | ✅ |
-| MIT license | MIT (since FreeRTOS v10) | MIT |
+| Metric                               | FreeRTOS                 | STK (via wrapper)         |
+|--------------------------------------|--------------------------|---------------------------|
+| Task throughput (4 tasks, -Ofast)    | baseline                 | **+12%**                  |
+| Task throughput (16 tasks, -Ofast)   | baseline                 | **+2.8%**                 |
+| Scheduling jitter (16 tasks, -Ofast) | baseline                 | **~17% lower**            |
+| RAM usage (4 tasks)                  | baseline                 | **~21% lower**            |
+| RAM usage (16 tasks)                 | baseline                 | **~8.5% lower**           |
+| Hard real-time deadline enforcement  | ❌                        | ✅ (`KERNEL_HRT`)          |
+| MPU privilege separation             | limited                  | ✅ native                  |
+| Tickless idle                        | ✅                        | ✅ (`STK_TICKLESS_IDLE=1`) |
+| x86 development / unit test mode     | ❌                        | ✅                         |
+| Multiple scheduling strategies       | ❌                        | ✅ (8 built-in + custom)   |
+| 100% scheduler unit test coverage    | ❌                        | ✅                         |
+| SEGGER SystemView tracing            | ✅                        | ✅                         |
+| MIT license                          | MIT (since FreeRTOS v10) | MIT                       |

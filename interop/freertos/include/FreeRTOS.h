@@ -107,11 +107,15 @@
       - All objects are heap-allocated with operator new/delete.
         For static deployments replace with a static pool allocator.
       - One global STK Kernel instance (g_StkKernel) is configured with
-        KERNEL_DYNAMIC | KERNEL_SYNC and sched::SwitchStrategyFP32 (32 fixed-priority
-        levels, same strategy used by the CMSIS wrapper).
+        KERNEL_DYNAMIC | KERNEL_SYNC and
+        sched::SwitchStrategyFixedPriority<configMAX_PRIORITIES, true> (fixed-priority
+        levels with round-robin inside a level; the 'true' selects the no-sleep yield).
         FreeRTOS priorities (0=lowest .. configMAX_PRIORITIES-1=highest) map
         directly to STK priority levels 0..configMAX_PRIORITIES-1.
-        configMAX_PRIORITIES must be <= 32 (compile-time assertion in the .cpp).
+        configMAX_PRIORITIES must be in [1, 1024] (compile-time assertion in the .cpp);
+        the ready-priorities bitmap is selected automatically (uint32_t up to 32 levels,
+        uint64_t up to 64, stk::sched::PriorityBitmap above that). RAM use of the
+        strategy grows with the number of levels.
         The highest-priority ready task always preempts lower ones, exactly
         matching FreeRTOS fixed-priority preemptive scheduling semantics.
       - portMAX_DELAY (0xFFFFFFFF) is translated to stk::WAIT_INFINITE.
