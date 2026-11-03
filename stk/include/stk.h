@@ -2657,12 +2657,8 @@ protected:
 
             typename KernelTask::WaitObject &wait_obj = task->m_wait_obj[0];
 
-            // critical section: avoid race with OnTick
+            // critical section: mutex kept locked by the caller of OnTaskWait avoids race with OnTick
             {
-                // keep the task from being de-scheduled between ScheduleSleep() and the end of mutex->Unlock():
-                // otherwise a tick can switch it out (sleeping) while it still owns the mutex
-                const hw::CriticalSection::ScopedLock cs_;
-
                 // configure waiting
                 wait_obj.SetupWait(sync_obj, timeout);
 

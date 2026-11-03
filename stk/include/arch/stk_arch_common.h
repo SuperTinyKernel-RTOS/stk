@@ -24,7 +24,7 @@ namespace stk {
 class PlatformContext
 {
 public:
-    PlatformContext() : m_handler(nullptr), m_service(nullptr), m_stack_idle(nullptr),
+    constexpr PlatformContext() : m_handler(nullptr), m_service(nullptr), m_stack_idle(nullptr),
         m_stack_active(nullptr), m_tick_resolution(0U)
     {}
 
