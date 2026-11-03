@@ -17,6 +17,10 @@
 #include <arm_cmse.h>
 #endif
 
+#ifdef __ICCARM__
+    #include <xatomic.h>
+#endif
+
 #include "stk.h"
 #include "stk_arch.h"
 #include "arch/stk_arch_common.h"
@@ -108,6 +112,13 @@ using namespace stk;
 // ISR priorities:
 #define STK_CORTEX_M_ISR_PRIORITY_HIGHEST (0U)
 #define STK_CORTEX_M_ISR_PRIORITY_LOWEST  (0xFFU)
+
+#ifdef CONTROL_nPRIV_Msk
+//! BASEPRI value that masks every configurable-priority ISR except SVCall (priority level
+//! STK_CORTEX_M_SVCALL_ISR_PRIORITY). BASEPRI keeps only the top __NVIC_PRIO_BITS bits.
+#define STK_CORTEX_M_BASEPRI_CS \
+    (static_cast<uint32_t>(STK_CORTEX_M_SVCALL_ISR_PRIORITY + 1U) << (8U - __NVIC_PRIO_BITS))
+#endif
 
 //! Number of registers kept in the stack.
 #if STK_CORTEX_M_MANAGE_LR
@@ -232,10 +243,23 @@ enum ESvcCommandId : uint8_t
 #endif
 };
 
+// Shortcuts:
+#define STK_ASM_EXIT_FROM_HANDLER  "BX LR"  // use in naked exception/ISR handlers
+#define STK_ASM_DISABLE_INTERRUPTS "CPSID i"
+#define STK_ASM_ENABLE_INTERRUPTS  "CPSIE i"
+
+// Wrapper to survive LTO optimization.
+#if STK_SEGGER_SYSVIEW
+extern "C" __stk_attr_used void StkSystemView_RecordEnterISR()
+{
+   SEGGER_SYSVIEW_RecordEnterISR();
+}
+#endif
+
 // ----------------------------------------------------------------------------
 //! ARM Cortex-M register helpers.
-namespace stk {
-namespace hw {
+namespace {
+namespace hw_int {
 namespace reg {
 // ----------------------------------------------------------------------------
 
@@ -249,7 +273,7 @@ enum ERegMask : Word
 };
 
 //! Clear the LSB to ensure strict halfword instruction alignment.
-static inline Word ClearThumbBit(Word REG_PC) noexcept
+__stk_forceinline Word ClearThumbBit(Word REG_PC) noexcept
 {
     return (REG_PC & ~static_cast<Word>(ERegMask::MASK_THUMB_BIT));
 }
@@ -269,7 +293,7 @@ enum ERegMask : Word
 };
 
 //! Enable Thumb state execution by setting the T bit.
-static inline Word SetThumbExecution(Word REG_XPSR) noexcept
+__stk_forceinline Word SetThumbExecution(Word REG_XPSR) noexcept
 {
     return (REG_XPSR | static_cast<Word>(ERegMask::MASK_T_BIT));
 }
@@ -292,19 +316,19 @@ enum ERegMask : Word
 };
 
 //! Make unprivileged.
-__stk_attr_unused static inline Word SetUnprivileged(Word REG_CONTROL) noexcept
+__stk_attr_unused inline Word SetUnprivileged(Word REG_CONTROL) noexcept
 {
     return (REG_CONTROL | static_cast<Word>(ERegMask::MASK_nPRIV));
 }
 
 //! Make privileged.
-__stk_attr_unused static inline Word SetPrivileged(Word REG_CONTROL) noexcept
+__stk_attr_unused inline Word SetPrivileged(Word REG_CONTROL) noexcept
 {
     return (REG_CONTROL & ~static_cast<Word>(ERegMask::MASK_nPRIV));
 }
 
 //! Set Stack Pointer selection to PSP.
-__stk_attr_unused static inline Word SetSPSelectionToPSP(Word REG_CONTROL) noexcept
+__stk_attr_unused inline Word SetSPSelectionToPSP(Word REG_CONTROL) noexcept
 {
     return (REG_CONTROL | static_cast<Word>(ERegMask::MASK_SPSEL));
 }
@@ -313,8 +337,8 @@ __stk_attr_unused static inline Word SetSPSelectionToPSP(Word REG_CONTROL) noexc
 
 // ----------------------------------------------------------------------------
 } // namespace reg
-} // namespace hw
-} // namespace stk
+} // namespace hw_int
+} // namespace
 // ----------------------------------------------------------------------------
 
 // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -322,9 +346,9 @@ __stk_attr_unused static inline Word SetSPSelectionToPSP(Word REG_CONTROL) noexc
 // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 // ----------------------------------------------------------------------------
-namespace stk {
-namespace hw {
-namespace mpu {
+namespace {
+namespace hw_int {
+namespace pmsa {
 // ----------------------------------------------------------------------------
 
 // Helpers to extract effective physical bounds [start, end_inclusive]
@@ -335,11 +359,11 @@ struct RegionBounds
     bool valid;
 };
 
-static inline RegionBounds GetRegionBounds(const MpuRegionConfig &cfg)
+__stk_forceinline RegionBounds GetRegionBounds(const MpuRegionConfig &cfg)
 {
     RegionBounds result = { 0U, 0U, false };
 
-    if ((cfg.size != 0U) && (cfg.access_perm != EMpuAccess::ACCESS_NONE))
+    if ((cfg.size != 0U) && (cfg.access_perm != hw::mpu::EMpuAccess::ACCESS_NONE))
     {
     #if STK_ARCH_ARMV8_M
         // PMSAv8: 32-byte aligned base and size
@@ -357,7 +381,7 @@ static inline RegionBounds GetRegionBounds(const MpuRegionConfig &cfg)
     return result;
 }
 
-static inline bool IsOverlapping(const RegionBounds &a, const RegionBounds &b)
+__stk_forceinline bool IsOverlapping(const RegionBounds &a, const RegionBounds &b)
 {
 #if STK_ARCH_ARMV8_M
     // standard closed-interval collision test [start, end]
@@ -370,7 +394,7 @@ static inline bool IsOverlapping(const RegionBounds &a, const RegionBounds &b)
 #endif
 }
 
-static void ValidateNoOverlaps(const MpuRegionConfig dynamic_cfg_list[], size_t dynamic_cfg_count,
+void ValidateNoOverlaps(const MpuRegionConfig dynamic_cfg_list[], size_t dynamic_cfg_count,
     const MpuRegionConfig static_cfg_list[], size_t static_cfg_count)
 {
     // 1. Validate internal overlaps within dynamic list
@@ -419,14 +443,18 @@ static void ValidateNoOverlaps(const MpuRegionConfig dynamic_cfg_list[], size_t 
 }
 
 // ----------------------------------------------------------------------------
-} // namespace mpu
-} // namespace hw
-} // namespace stk
+} // namespace pmsa
+} // namespace hw_int
+} // namespace
 // ----------------------------------------------------------------------------
 
 // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 #endif
 // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+// ----------------------------------------------------------------------------
+namespace {
+// ----------------------------------------------------------------------------
 
 #if defined(_STK_CORTEX_M_TRUSTZONE) && (STK_CORTEX_M_TZ_REGISTER_COUNT != 0U)
 /*! \struct TrustZoneFrame
@@ -495,40 +523,53 @@ struct TaskFrame
     hw::ExceptionFrame exc;        //!< ARMv7-M hardware exception frame.
 };
 
-// Shortcuts:
-#define STK_ASM_EXIT_FROM_HANDLER  "BX LR"  // use in naked exception/ISR handlers
-#define STK_ASM_DISABLE_INTERRUPTS "CPSID i"
-#define STK_ASM_ENABLE_INTERRUPTS  "CPSIE i"
+// ----------------------------------------------------------------------------
+} // namespace
+// ----------------------------------------------------------------------------
 
-// Local static functions:
-namespace stk {
-static void OnTaskRun(ITask *runnable);
-static void OnTaskExit();
-static void OnSchedulerSleep();
-static void OnSchedulerSleepOverride();
-static void OnSchedulerExit();
+// Local functions of the driver:
+// ----------------------------------------------------------------------------
+namespace {
+namespace drv {
+// ----------------------------------------------------------------------------
+
+void OnTaskRun(ITask *runnable);
+void OnTaskExit();
+void OnSchedulerSleep();
+void OnSchedulerSleepOverride();
+void OnSchedulerExit();
 #if STK_SEGGER_SYSVIEW
-static void SendSysDesc()
+void SendSysDesc()
 {
     SEGGER_SYSVIEW_SendSysDesc("SuperTinyKernel RTOS (STK)");
 }
 #endif
-} // namespace stk
 
-// Wrapper to survive LTO optimization.
-#if STK_SEGGER_SYSVIEW
-extern "C" __stk_attr_used void StkSystemView_RecordEnterISR()
-{
-    SEGGER_SYSVIEW_RecordEnterISR();
-}
-#endif
+// ----------------------------------------------------------------------------
+} // namespace drv
+} // namespace
+// ----------------------------------------------------------------------------
+
+/*! \var    g_StkLastPanicId
+    \brief  Panic id cache for post-mortem inspection.
+    \note   Intentionally outside of the anonymous namespace: external C linkage keeps an unmangled,
+            stable symbol name for debuggers and tools; __stk_attr_used prevents it from being discarded.
+*/
+extern "C" volatile EKernelPanicId g_StkLastPanicId;
+__stk_attr_used
+STK_MPU_KERNEL_BSS_SECTION
+volatile EKernelPanicId g_StkLastPanicId = KERNEL_PANIC_NONE;
+
+// ----------------------------------------------------------------------------
+namespace {
+// ----------------------------------------------------------------------------
 
 // Local static variables:
 STK_MPU_KERNEL_BSS_SECTION
 #if STK_CORE_FREQ_UNIFIED
-static uint32_t s_StkSystemCoreClock[1U];
+uint32_t s_StkSystemCoreClock[1U];
 #else
-static uint32_t s_StkSystemCoreClock[STK_ARCH_CPU_COUNT];
+uint32_t s_StkSystemCoreClock[STK_ARCH_CPU_COUNT];
 #endif
 
 /*! \brief   Cached spin-lock timeout budget expressed in retry-loop iteration count.
@@ -540,20 +581,16 @@ static uint32_t s_StkSystemCoreClock[STK_ARCH_CPU_COUNT];
     \see     HW_InitSpinlockTimeout, STK_SPINLOCK_TIMEOUT_US, STK_SPINLOCK_MIN_CYCLES_PER_ITER
 */
 STK_MPU_KERNEL_DATA_SECTION
-static uint32_t s_StkSpinlockTimeoutIters = 0xFFFFFFFU;
+uint32_t s_StkSpinlockTimeoutIters = 0xFFFFFFFU;
 
 //! Global lock to synchronize critical sections of multiple cores.
 STK_MPU_KERNEL_BSS_SECTION
-static volatile bool s_StkCortexmCsuLock = false;
-
-//! Panic id cache for post-mortem inspection.
-STK_MPU_KERNEL_BSS_SECTION
-static volatile EKernelPanicId g_StkLastPanicId = KERNEL_PANIC_NONE;
+volatile bool s_StkCortexmCsuLock = false;
 
 /*! \brief     Start scheduler.
     \note      Triggered via SVC. This will transition CPU to SVC Handler.
 */
-static __stk_forceinline void HW_StartScheduler()
+__stk_forceinline void HW_StartScheduler()
 {
     __asm volatile("SVC %0"
         : /* output: none */
@@ -564,7 +601,7 @@ static __stk_forceinline void HW_StartScheduler()
 
 /*! \brief     Force an immediate context switch.
 */
-static __stk_forceinline void HW_ForceContextSwitch(TId id)
+__stk_forceinline void HW_ForceContextSwitch(TId id)
 {
     __asm volatile(
         "MOV r0, %0     \n"     /* move id parameter into r0 */
@@ -585,7 +622,7 @@ static __stk_forceinline void HW_ForceContextSwitch(TId id)
                mode, use the privileged API directly to avoid SVC exception overhead.
     \see       HW_UnprivExitCriticalSection, StkSVCHandlerMain
 */
-static __stk_forceinline void HW_UnprivEnterCriticalSection()
+__stk_forceinline void HW_UnprivEnterCriticalSection()
 {
     __asm volatile("SVC %0"
         : /* output: none */
@@ -603,7 +640,7 @@ static __stk_forceinline void HW_UnprivEnterCriticalSection()
                \c HW_UnprivEnterCriticalSection() call on the same thread context.
     \see       HW_UnprivEnterCriticalSection, StkSVCHandlerMain
 */
-static __stk_forceinline void HW_UnprivExitCriticalSection()
+__stk_forceinline void HW_UnprivExitCriticalSection()
 {
     __asm volatile("SVC %0"
         : /* output: none */
@@ -614,7 +651,7 @@ static __stk_forceinline void HW_UnprivExitCriticalSection()
 
 /*! \brief     Disable CPU interrupts.
 */
-static __stk_forceinline void HW_DisableInterrupts()
+__stk_forceinline void HW_DisableInterrupts()
 {
 #if (defined(__clang__) && defined(__ARMCOMPILER_VERSION)) || defined(__ICCARM__)
     __asm volatile(STK_ASM_DISABLE_INTERRUPTS ::: "memory");
@@ -625,7 +662,7 @@ static __stk_forceinline void HW_DisableInterrupts()
 
 /*! \brief     Enable CPU interrupts.
 */
-static __stk_forceinline void HW_EnableInterrupts()
+__stk_forceinline void HW_EnableInterrupts()
 {
 #if (defined(__clang__) && defined(__ARMCOMPILER_VERSION)) || defined(__ICCARM__)
     __asm volatile(STK_ASM_ENABLE_INTERRUPTS ::: "memory");
@@ -638,7 +675,7 @@ static __stk_forceinline void HW_EnableInterrupts()
     \return    true if interrupts are disabled (PRIMASK bit 0 is set).
 */
 __stk_attr_unused
-static __stk_forceinline bool HW_InterruptsDisabled()
+__stk_forceinline bool HW_InterruptsDisabled()
 {
 #if (defined(__clang__) && defined(__ARMCOMPILER_VERSION)) || defined(__ICCARM__)
     Word primask;
@@ -652,7 +689,7 @@ static __stk_forceinline bool HW_InterruptsDisabled()
 /*! \brief     Enter critical section.
     \return    Session value which has to be supplied to HW_ExitCriticalSection().
 */
-static __stk_forceinline uint32_t HW_CriticalSectionStart()
+__stk_forceinline uint32_t HW_CriticalSectionStart()
 {
     const uint32_t ses = __get_PRIMASK();
     HW_DisableInterrupts();
@@ -667,7 +704,7 @@ static __stk_forceinline uint32_t HW_CriticalSectionStart()
 /*! \brief     Exit critical section.
     \param[in] ses: Session value obtained by HW_EnterCriticalSection().
 */
-static __stk_forceinline void HW_CriticalSectionEnd(uint32_t ses)
+__stk_forceinline void HW_CriticalSectionEnd(uint32_t ses)
 {
     // ensure all memory work is finished before re-enabling
     __DSB();
@@ -678,7 +715,7 @@ static __stk_forceinline void HW_CriticalSectionEnd(uint32_t ses)
 
 /*! \brief     Enter low-power/sleep mode.
 */
-static __stk_forceinline void HW_EnterSleepMode()
+__stk_forceinline void HW_EnterSleepMode()
 {
     SCB->SCR &= ~SCB_SCR_SLEEPDEEP_Msk; // disable deep-sleep, go into a WAIT mode (sleep)
     __DSB();                            // ensure store takes effect (see ARM info)
@@ -687,8 +724,6 @@ static __stk_forceinline void HW_EnterSleepMode()
 
 // IAR wrappers for: __atomic_test_and_set, __atomic_clear.
 #ifdef __ICCARM__
-    #include <xatomic.h>
-
     #define __ATOMIC_RELAXED __MEMORY_ORDER_RELAXED__
     #define __ATOMIC_CONSUME __MEMORY_ORDER_CONSUME__
     #define __ATOMIC_ACQUIRE __MEMORY_ORDER_ACQUIRE__
@@ -696,7 +731,7 @@ static __stk_forceinline void HW_EnterSleepMode()
     #define __ATOMIC_ACQ_REL __MEMORY_ORDER_ACQ_REL__
     #define __ATOMIC_SEQ_CST __MEMORY_ORDER_SEQ_CST__
 
-    static __stk_forceinline bool __atomic_test_and_set(volatile bool *ptr, int memorder)
+    __stk_forceinline bool __atomic_test_and_set(volatile bool *ptr, int memorder)
     {
     #ifdef __ICCARM__
       STK_STATIC_ASSERT(sizeof(std::__iar_atomic_flag) == sizeof(bool));
@@ -705,7 +740,7 @@ static __stk_forceinline void HW_EnterSleepMode()
         return std::__iar_atomic_flag_test_and_set(ptr, memorder);
     }
 
-    static __stk_forceinline void __atomic_clear(volatile bool *ptr, int memorder)
+    __stk_forceinline void __atomic_clear(volatile bool *ptr, int memorder)
     {
     #ifdef __ICCARM__
       STK_STATIC_ASSERT(sizeof(std::__iar_atomic_flag) == sizeof(bool));
@@ -728,7 +763,7 @@ static __stk_forceinline void HW_EnterSleepMode()
                a preceding successful HW_SpinLockTryLock() or HW_SpinLockLock().
     \see       HW_SpinLockLock, HW_SpinLockUnlock
 */
-static __stk_forceinline bool HW_SpinLockTryLock(volatile bool &slock)
+__stk_forceinline bool HW_SpinLockTryLock(volatile bool &slock)
 {
     return !__atomic_test_and_set(&slock, __ATOMIC_ACQUIRE);
 }
@@ -745,7 +780,7 @@ static __stk_forceinline bool HW_SpinLockTryLock(volatile bool &slock)
     \note      ISR-safe.
     \see       HW_SpinLockTryLock, HW_SpinLockLock
 */
-static __stk_forceinline void HW_SpinLockUnlock(volatile bool &slock)
+__stk_forceinline void HW_SpinLockUnlock(volatile bool &slock)
 {
     if (slock == false)
     {
@@ -781,7 +816,7 @@ static __stk_forceinline void HW_SpinLockUnlock(volatile bool &slock)
                in the application.
     \see       HW_SpinLockLock, HW_SpinLockUnlock
 */
-static __stk_forceinline bool HW_SpinLockTryLock(volatile bool &slock)
+__stk_forceinline bool HW_SpinLockTryLock(volatile bool &slock)
 {
     bool success = (STK_SIO_SPINLOCK == 0 ? false : ((slock) = true, true));
     __stk_dmb();
@@ -805,7 +840,7 @@ static __stk_forceinline bool HW_SpinLockTryLock(volatile bool &slock)
     \note      ISR-safe.
     \see       HW_SpinLockTryLock, HW_SpinLockLock
 */
-static __stk_forceinline void HW_SpinLockUnlock(volatile bool &slock)
+__stk_forceinline void HW_SpinLockUnlock(volatile bool &slock)
 {
     if (!slock)
         STK_KERNEL_PANIC(KERNEL_PANIC_SPINLOCK_DEADLOCK); // release attempt of unowned lock
@@ -832,7 +867,7 @@ static __stk_forceinline void HW_SpinLockUnlock(volatile bool &slock)
     \note      ISR-safe, but temporarily disables interrupts during the test-and-set.
     \see       HW_SpinLockLock, HW_SpinLockUnlock
 */
-static __stk_forceinline bool HW_SpinLockTryLock(volatile bool &slock)
+__stk_forceinline bool HW_SpinLockTryLock(volatile bool &slock)
 {
     const uint32_t ses = HW_CriticalSectionStart();
 
@@ -860,7 +895,7 @@ static __stk_forceinline bool HW_SpinLockTryLock(volatile bool &slock)
     \note      ISR-safe.
     \see       HW_SpinLockTryLock, HW_SpinLockLock
 */
-static __stk_forceinline void HW_SpinLockUnlock(volatile bool &slock)
+__stk_forceinline void HW_SpinLockUnlock(volatile bool &slock)
 {
     if (!slock)
         STK_KERNEL_PANIC(KERNEL_PANIC_SPINLOCK_DEADLOCK); // release attempt of unowned lock
@@ -889,7 +924,7 @@ static __stk_forceinline void HW_SpinLockUnlock(volatile bool &slock)
                implementation uses a critical section internally and will deadlock.
     \see       HW_SpinLockTryLock, HW_SpinLockUnlock, HW_InitSpinlockTimeout
 */
-static __stk_forceinline void HW_SpinLockLock(volatile bool &slock)
+__stk_forceinline void HW_SpinLockLock(volatile bool &slock)
 {
     uint32_t timeout_itrs = s_StkSpinlockTimeoutIters;
     while (!HW_SpinLockTryLock(slock))
@@ -903,9 +938,297 @@ static __stk_forceinline void HW_SpinLockLock(volatile bool &slock)
     }
 }
 
-// -----------------------------------------------------------------------------
-namespace stk {
-// -----------------------------------------------------------------------------
+/*! \brief  Get current exception (not 0 if inside ISR).
+    \note   On ARM Cortex-M, reading IPSR from unprivileged mode silently returns 0.
+    \return Exception number (Handler Mode) or 0 (Thread Mode).
+*/
+__stk_forceinline Word HW_GetCurrentException()
+{
+    return __get_IPSR();
+}
+
+/*! \brief  Check if caller is in Handler Mode (IPSR != 0), i.e. inside ISR.
+*/
+__stk_forceinline bool HW_IsHandlerMode()
+{
+    return (HW_GetCurrentException() != 0U);
+}
+
+/*! \brief  Check if caller context is Privileged (nPRIV == 0).
+    \note   ARM Cortex-M0 is always Privileged, M0 does not support privileges.
+*/
+__stk_forceinline bool HW_IsPrivilegedContext()
+{
+#ifdef CONTROL_nPRIV_Msk
+    return ((__get_CONTROL() & CONTROL_nPRIV_Msk) == 0U);
+#else
+    return true;
+#endif
+}
+
+/*! \brief  Get SP of the calling process.
+    \return SP register value.
+*/
+__stk_forceinline Word HW_GetCallerSP()
+{
+    // use SP (R13) directly: __get_PSP() returns 0 in unprivileged thread mode
+    Word sp;
+    __asm volatile("MOV %0, SP" : "=r" (sp));
+    return sp;
+}
+
+/*! \brief Schedule context switch via the PendSV interrupt.
+*/
+__stk_forceinline void HW_ScheduleContextSwitch()
+{
+    SCB->ICSR = SCB_ICSR_PENDSVSET_Msk;
+}
+
+/*! \brief Clear FPU state.
+*/
+__stk_forceinline void HW_ClearFpuState()
+{
+#if STK_CORTEX_M_FPU
+    __set_CONTROL(__get_CONTROL() & ~CONTROL_FPCA_Msk);
+#endif
+}
+
+/*! \brief   Enable full hardware Floating Point Unit (FPU) access across privilege modes and TrustZone domains.
+    \details Configures Coprocessor Access Control Registers (CPACR, NSACR) to grant full Secure and Non-Secure
+             access to CP10 and CP11 coprocessors. Enables automatic and lazy FP state preservation (`ASPEN`,
+             `LSPEN`) in FPCCR (and FPCCR_NS under TrustZone) to reduce context-switch overhead, and
+             permits Unprivileged (User mode) access to FPU registers and FPSCR.
+    \note    `TS` (Treat-as-Secure) and `LSPENS` are intentionally not configured here.
+    \see     STK_CORTEX_M_FPU, _STK_CORTEX_M_TRUSTZONE
+*/
+void HW_EnableFullFpuAccess()
+{
+#if defined(STK_CORTEX_M_FPU) && (STK_CORTEX_M_FPU != 0)
+
+    // Compile-time constant bitmasks
+    constexpr uint32_t SCB_CPACR_CP10_FULL_ACCESS = (3UL << 20U); // enable CP10
+    constexpr uint32_t SCB_CPACR_CP11_FULL_ACCESS = (3UL << 22U); // enable CP11
+
+    /* -------------------------------------------------------------------------- */
+    /* 1. ARMv7-M & ARMv8-M Base: Grant Privileged & Unprivileged Access          */
+    /* -------------------------------------------------------------------------- */
+    uint32_t cpacr_val = SCB->CPACR;
+    cpacr_val |= (SCB_CPACR_CP10_FULL_ACCESS | SCB_CPACR_CP11_FULL_ACCESS);
+    SCB->CPACR = cpacr_val;
+
+#if defined(_STK_CORTEX_M_TRUSTZONE)
+    constexpr uint32_t SCB_NSACR_CP10_ACCESS = (1UL << 10U); // allow Non-Secure access to CP10
+    constexpr uint32_t SCB_NSACR_CP11_ACCESS = (1UL << 11U); // allow Non-Secure access to CP11
+
+    /* -------------------------------------------------------------------------- */
+    /* 2. ARMv8-M TrustZone (Secure State Configuration)                          */
+    /* -------------------------------------------------------------------------- */
+
+    // grant Non-Secure access to CP10 and CP11
+    uint32_t nsacr_val = SCB->NSACR;
+    nsacr_val |= (SCB_NSACR_CP10_ACCESS | SCB_NSACR_CP11_ACCESS);
+    SCB->NSACR = nsacr_val;
+
+    // grant Full Access in Non-Secure State
+    uint32_t ns_cpacr_val = SCB_NS->CPACR;
+    ns_cpacr_val |= (SCB_CPACR_CP10_FULL_ACCESS | SCB_CPACR_CP11_FULL_ACCESS);
+    SCB_NS->CPACR = ns_cpacr_val;
+
+    // configure Lazy Stacking for Secure & Non-Secure states
+    uint32_t fpccr_val = FPU->FPCCR;
+    fpccr_val |= (static_cast<uint32_t>(FPU_FPCCR_ASPEN_Msk) | static_cast<uint32_t>(FPU_FPCCR_LSPEN_Msk));
+    FPU->FPCCR = fpccr_val;
+
+    uint32_t ns_fpccr_val = FPU_NS->FPCCR;
+    ns_fpccr_val |= (static_cast<uint32_t>(FPU_FPCCR_ASPEN_Msk) | static_cast<uint32_t>(FPU_FPCCR_LSPEN_Msk));
+    FPU_NS->FPCCR = ns_fpccr_val;
+
+#else
+    /* -------------------------------------------------------------------------- */
+    /* 3. Non-TrustZone / ARMv7-M FPU Control                                     */
+    /* -------------------------------------------------------------------------- */
+    uint32_t fpccr_val = FPU->FPCCR;
+    fpccr_val |= (static_cast<uint32_t>(FPU_FPCCR_ASPEN_Msk) | static_cast<uint32_t>(FPU_FPCCR_LSPEN_Msk));
+    FPU->FPCCR = fpccr_val;
+#endif
+
+    // ensure barriers complete FPU configuration before execution proceeds
+    __DSB();
+    __ISB();
+
+#endif /* defined(STK_CORTEX_M_FPU) && (STK_CORTEX_M_FPU != 0) */
+}
+
+/*! \brief  Get core clock frequency.
+    \return Frequency in Hz.
+*/
+__stk_forceinline uint32_t HW_CoreClockFrequency()
+{
+#if STK_CORE_FREQ_UNIFIED
+    return s_StkSystemCoreClock[0];
+#else
+    return s_StkSystemCoreClock[STK_ARCH_GET_CPU_ID()];
+#endif
+}
+
+/*! \brief Clear pending switch by PendSV exception.
+*/
+__stk_forceinline void HW_ClearPendingSwitch()
+{
+    SCB->ICSR = SCB_ICSR_PENDSVCLR_Msk;
+}
+
+/*! \brief Start SysTick timer peripheral.
+*/
+__stk_forceinline void HW_SysTickStart(uint32_t period_ticks)
+{
+    const Ticks period_ticks_64 = static_cast<Ticks>(period_ticks);
+
+    const uint32_t result = SysTick_Config(static_cast<uint32_t>(ConvertTimeUsToClockCycles(HW_CoreClockFrequency(), period_ticks_64)));
+    STK_ASSERT(result == 0U);
+    STK_UNUSED(result);
+
+    // QEMU workaround (Launchpad Bug #1872237):
+    // SysTick_Config() writes VAL=0 before setting ENABLE=1. On QEMU,
+    // systick_reload() silently discards VAL writes while ENABLE=0, leaving
+    // the internal tick accumulator stale from the previous period;
+    // writing VAL=0 here, after ENABLE=1 is already set, forces a correct reload.
+    // This is a no-op on real Cortex-M hardware (spec: ARMv7-M ARM B3.3.1)
+    SysTick->VAL = 0U;
+}
+
+/*! \brief Stop SysTick timer peripheral.
+*/
+__stk_forceinline void HW_SysTickStop()
+{
+    SysTick->CTRL = 0U;
+    SCB->ICSR = SCB_ICSR_PENDSTCLR_Msk;
+}
+
+/*! \brief  Pause SysTick timer peripheral.
+*/
+__stk_attr_unused /* can be unused due to configuration */
+__stk_forceinline void HW_SysTickDisable()
+{
+    SysTick->CTRL &= ~SysTick_CTRL_ENABLE_Msk;
+}
+
+/*! \brief  Get SysTick current value.
+    \return Value of SysTick->VAL register.
+*/
+__stk_forceinline uint32_t HW_SysTickValue()
+{
+    return SysTick->VAL;
+}
+
+/*! \brief  Get SysTick value after it was disabled.
+    \return Value of SysTick->VAL register.
+*/
+__stk_attr_unused /* can be unused due to configuration */
+__stk_forceinline uint32_t HW_SysTickValueAfterDisable()
+{
+    // is required for QEMU which then resets SysTick->VAL and thus we can't
+    // calculate elapsed time correctly
+    __DSB();
+
+    // check for a QEMU case and discard elapsed result
+    uint32_t ticks = HW_SysTickValue();
+    if (ticks == 0U)
+    {
+        ticks = SysTick->LOAD;
+    }
+
+    return ticks;
+}
+
+/*! \brief     Get number of elapsed ticks of the current period of SysTick timer peripheral.
+    \param[in] val: a value of SysTick->VAL register.
+*/
+__stk_attr_unused /* can be unused due to configuration */
+__stk_forceinline uint32_t HW_SysTickElapsed(uint32_t ticks)
+{
+    return SysTick->LOAD - ticks;
+}
+
+/*! \brief Rearm SysTick timer peripheral with new period.
+    \note  SysTick peripheral becomes enabled.
+*/
+__stk_attr_unused /* can be unused due to configuration */
+__stk_forceinline void HW_SysTickRearm(uint32_t ticks)
+{
+    SysTick->LOAD  = ticks - 1U;
+    SysTick->VAL   = 0U;
+    SysTick->CTRL |= SysTick_CTRL_ENABLE_Msk;
+}
+
+/*! \brief Enable DWT Cycle Counter (CYCCNT).
+*/
+__stk_forceinline void HW_DWTEnableCounter()
+{
+    // enable Trace and Debug blocks (DWT, ITM, ETM, TPIU)
+#if defined(CoreDebug)
+    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+#elif defined(DCB)
+    DCB->DEMCR |= DCB_DEMCR_TRCENA_Msk;
+#endif
+    __DSB();
+
+    // LAR (Lock Access Register) is mandatory for Cortex-M7 to allow register writes,
+    // it is typically not implemented or deprecated on M0, M3, M4, and M33
+#if (__CORTEX_M == 7U)
+    DWT->LAR = 0xC5ACCE55; // unlock DWT unit using standard CoreSight magic key
+    __DSB();
+#endif
+
+#if defined(DWT)
+    // do not interfere with already enabled and running counter
+    if ((DWT->CTRL & DWT_CTRL_CYCCNTENA_Msk) != DWT_CTRL_CYCCNTENA_Msk)
+    {
+        DWT->CYCCNT = 0U;                     // reset counter value to zero
+        DWT->CTRL  |= DWT_CTRL_CYCCNTENA_Msk; // start counter
+    }
+#endif
+}
+
+/*! \brief   Get current DWT Counter (CYCCNT) value.
+    \return  Counter value.
+    \warning Counter value us prone to periodic wrapping.
+*/
+__stk_forceinline uint32_t HW_DWTGetCounter()
+{
+#if defined(DWT)
+    return DWT->CYCCNT;
+#else
+    return 0U;
+#endif
+}
+
+/*! \brief     Recompute the spin-lock timeout from the current core clock.
+    \details   Converts the STK_SPINLOCK_TIMEOUT_US real-time budget into a retry-loop
+               iteration count using the conservative (underestimated)
+               STK_SPINLOCK_MIN_CYCLES_PER_ITER cost-per-iteration, so the resulting
+               timeout means the same real-world duration regardless of optimization
+               level, LTO, or core clock configuration. Called once per core from
+               Context::Initialize(); safe to call redundantly from multiple cores since
+               it is idempotent for a given clock frequency.
+    \note      Clamped against a zero/unconfigured clock and against overflow, so a
+               misconfigured clock tree cannot produce an immediate false-positive
+               KERNEL_PANIC_SPINLOCK_DEADLOCK on the very first lock attempt.
+*/
+void HW_InitSpinlockTimeout()
+{
+    const Cycles cycles_budget = ConvertTimeUsToClockCycles(HW_CoreClockFrequency(), STK_SPINLOCK_TIMEOUT_US);
+    const Cycles iters = cycles_budget / STK_SPINLOCK_MIN_CYCLES_PER_ITER;
+
+    // floor guards against a zero/not-yet-configured clock; ceiling guards against overflow
+    // when narrowing to uint32_t
+    s_StkSpinlockTimeoutIters = static_cast<uint32_t>(
+        stk::Min(stk::Max(iters, static_cast<Cycles>(0x1000U)), static_cast<Cycles>(0xFFFFFFFFU)));
+}
+
+// ----------------------------------------------------------------------------
+namespace drv {
+// ----------------------------------------------------------------------------
 
 /*! SaveJmp/RestoreJmp ----------------------------------------------------------
 
@@ -1100,300 +1423,22 @@ void RestoreJmp(JmpFrame &/*f*/, int32_t /*val*/)
     );
 }
 
-// -----------------------------------------------------------------------------
-} // namespace stk
-// -----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
+} // namespace drv
+// ----------------------------------------------------------------------------
 
-/*! \brief  Get current exception (not 0 if inside ISR).
-    \note   On ARM Cortex-M, reading IPSR from unprivileged mode silently returns 0.
-    \return Exception number (Handler Mode) or 0 (Thread Mode).
-*/
-static __stk_forceinline Word HW_GetCurrentException()
-{
-    return __get_IPSR();
-}
-
-/*! \brief  Check if caller is in Handler Mode (IPSR != 0), i.e. inside ISR.
-*/
-static __stk_forceinline bool HW_IsHandlerMode()
-{
-    return (HW_GetCurrentException() != 0U);
-}
-
-/*! \brief  Check if caller context is Privileged (nPRIV == 0).
-    \note   ARM Cortex-M0 is always Privileged, M0 does not support privileges.
-*/
-static __stk_forceinline bool HW_IsPrivilegedContext()
-{
-#ifdef CONTROL_nPRIV_Msk
-    return ((__get_CONTROL() & CONTROL_nPRIV_Msk) == 0U);
-#else
-    return true;
-#endif
-}
-
-/*! \brief  Get SP of the calling process.
-    \return SP register value.
-*/
-static __stk_forceinline Word HW_GetCallerSP()
-{
-    // use SP (R13) directly: __get_PSP() returns 0 in unprivileged thread mode
-    Word sp;
-    __asm volatile("MOV %0, SP" : "=r" (sp));
-    return sp;
-}
-
-/*! \brief Schedule context switch via the PendSV interrupt.
-*/
-static __stk_forceinline void HW_ScheduleContextSwitch()
-{
-    SCB->ICSR = SCB_ICSR_PENDSVSET_Msk;
-}
-
-/*! \brief Clear FPU state.
-*/
-static __stk_forceinline void HW_ClearFpuState()
-{
-#if STK_CORTEX_M_FPU
-    __set_CONTROL(__get_CONTROL() & ~CONTROL_FPCA_Msk);
-#endif
-}
-
-/*! \brief   Enable full hardware Floating Point Unit (FPU) access across privilege modes and TrustZone domains.
-    \details Configures Coprocessor Access Control Registers (CPACR, NSACR) to grant full Secure and Non-Secure
-             access to CP10 and CP11 coprocessors. Enables lazy stacking (`LSPEN`, `LSPENS`) to reduce
-             context-switch overhead, sets Treat-as-Secure (`TS`), and permits Unprivileged (User mode)
-             access to FPU registers and FPSCR.
-    \see     STK_CORTEX_M_FPU, _STK_CORTEX_M_TRUSTZONE
-*/
-static __stk_forceinline void HW_EnableFullFpuAccess(void)
-{
-#if defined(STK_CORTEX_M_FPU) && (STK_CORTEX_M_FPU != 0)
-
-    // Compile-time constant bitmasks
-    constexpr uint32_t SCB_CPACR_CP10_FULL_ACCESS = (3UL << 20U); // enable CP10
-    constexpr uint32_t SCB_CPACR_CP11_FULL_ACCESS = (3UL << 22U); // enable CP11
-
-    /* -------------------------------------------------------------------------- */
-    /* 1. ARMv7-M & ARMv8-M Base: Grant Privileged & Unprivileged Access          */
-    /* -------------------------------------------------------------------------- */
-    uint32_t cpacr_val = SCB->CPACR;
-    cpacr_val |= (SCB_CPACR_CP10_FULL_ACCESS | SCB_CPACR_CP11_FULL_ACCESS);
-    SCB->CPACR = cpacr_val;
-
-#if defined(_STK_CORTEX_M_TRUSTZONE)
-    constexpr uint32_t SCB_NSACR_CP10_ACCESS = (1UL << 10U); // allow Non-Secure access to CP10
-    constexpr uint32_t SCB_NSACR_CP11_ACCESS = (1UL << 11U); // allow Non-Secure access to CP11
-
-    /* -------------------------------------------------------------------------- */
-    /* 2. ARMv8-M TrustZone (Secure State Configuration)                          */
-    /* -------------------------------------------------------------------------- */
-
-    // grant Non-Secure access to CP10 and CP11
-    uint32_t nsacr_val = SCB->NSACR;
-    nsacr_val |= (SCB_NSACR_CP10_ACCESS | SCB_NSACR_CP11_ACCESS);
-    SCB->NSACR = nsacr_val;
-
-    // grant Full Access in Non-Secure State
-    uint32_t ns_cpacr_val = SCB_NS->CPACR;
-    ns_cpacr_val |= (SCB_CPACR_CP10_FULL_ACCESS | SCB_CPACR_CP11_FULL_ACCESS);
-    SCB_NS->CPACR = ns_cpacr_val;
-
-    // configure Lazy Stacking for Secure & Non-Secure states
-    uint32_t fpccr_val = FPU->FPCCR;
-    fpccr_val |= (static_cast<uint32_t>(FPU_FPCCR_ASPEN_Msk) | static_cast<uint32_t>(FPU_FPCCR_LSPEN_Msk));
-    FPU->FPCCR = fpccr_val;
-
-    uint32_t ns_fpccr_val = FPU_NS->FPCCR;
-    ns_fpccr_val |= (static_cast<uint32_t>(FPU_FPCCR_ASPEN_Msk) | static_cast<uint32_t>(FPU_FPCCR_LSPEN_Msk));
-    FPU_NS->FPCCR = ns_fpccr_val;
-
-#else
-    /* -------------------------------------------------------------------------- */
-    /* 3. Non-TrustZone / ARMv7-M FPU Control                                     */
-    /* -------------------------------------------------------------------------- */
-    uint32_t fpccr_val = FPU->FPCCR;
-    fpccr_val |= (static_cast<uint32_t>(FPU_FPCCR_ASPEN_Msk) | static_cast<uint32_t>(FPU_FPCCR_LSPEN_Msk));
-    FPU->FPCCR = fpccr_val;
-#endif
-
-    // ensure barriers complete FPU configuration before execution proceeds
-    __DSB();
-    __ISB();
-
-#endif /* defined(STK_CORTEX_M_FPU) && (STK_CORTEX_M_FPU != 0) */
-}
-
-/*! \brief  Get core clock frequency.
-    \return Frequency in Hz.
-*/
-static __stk_forceinline uint32_t HW_CoreClockFrequency()
-{
-#if STK_CORE_FREQ_UNIFIED
-    return s_StkSystemCoreClock[0];
-#else
-    return s_StkSystemCoreClock[STK_ARCH_GET_CPU_ID()];
-#endif
-}
-
-/*! \brief Clear pending switch by PendSV exception.
-*/
-static __stk_forceinline void HW_ClearPendingSwitch()
-{
-    SCB->ICSR = SCB_ICSR_PENDSVCLR_Msk;
-}
-
-/*! \brief Start SysTick timer peripheral.
-*/
-static __stk_forceinline void HW_SysTickStart(uint32_t period_ticks)
-{
-    const Ticks period_ticks_64 = static_cast<Ticks>(period_ticks);
-  
-    const uint32_t result = SysTick_Config(static_cast<uint32_t>(ConvertTimeUsToClockCycles(HW_CoreClockFrequency(), period_ticks_64)));
-    STK_ASSERT(result == 0U);
-    STK_UNUSED(result);
-
-    // QEMU workaround (Launchpad Bug #1872237):
-    // SysTick_Config() writes VAL=0 before setting ENABLE=1. On QEMU,
-    // systick_reload() silently discards VAL writes while ENABLE=0, leaving
-    // the internal tick accumulator stale from the previous period;
-    // writing VAL=0 here, after ENABLE=1 is already set, forces a correct reload.
-    // This is a no-op on real Cortex-M hardware (spec: ARMv7-M ARM B3.3.1)
-    SysTick->VAL = 0U;
-}
-
-/*! \brief Stop SysTick timer peripheral.
-*/
-static __stk_forceinline void HW_SysTickStop()
-{
-    SysTick->CTRL = 0U;
-    SCB->ICSR = SCB_ICSR_PENDSTCLR_Msk;
-}
-
-/*! \brief  Pause SysTick timer peripheral.
-*/
-__stk_attr_unused /* can be unused due to configuration */
-static __stk_forceinline void HW_SysTickDisable()
-{
-    SysTick->CTRL &= ~SysTick_CTRL_ENABLE_Msk;
-}
-
-/*! \brief  Get SysTick current value.
-    \return Value of SysTick->VAL register.
-*/
-static __stk_forceinline uint32_t HW_SysTickValue()
-{
-    return SysTick->VAL;
-}
-
-/*! \brief  Get SysTick value after it was disabled.
-    \return Value of SysTick->VAL register.
-*/
-__stk_attr_unused /* can be unused due to configuration */
-static __stk_forceinline uint32_t HW_SysTickValueAfterDisable()
-{
-    // is required for QEMU which then resets SysTick->VAL and thus we can't
-    // calculate elapsed time correctly
-    __DSB();
-
-    // check for a QEMU case and discard elapsed result
-    uint32_t ticks = HW_SysTickValue();
-    if (ticks == 0U)
-    {
-        ticks = SysTick->LOAD;
-    }
-
-    return ticks;
-}
-
-/*! \brief     Get number of elapsed ticks of the current period of SysTick timer peripheral.
-    \param[in] val: a value of SysTick->VAL register.
-*/
-__stk_attr_unused /* can be unused due to configuration */
-static __stk_forceinline uint32_t HW_SysTickElapsed(uint32_t ticks)
-{
-    return SysTick->LOAD - ticks;
-}
-
-/*! \brief Rearm SysTick timer peripheral with new period.
-    \note  SysTick peripheral becomes enabled.
-*/
-__stk_attr_unused /* can be unused due to configuration */
-static __stk_forceinline void HW_SysTickRearm(uint32_t ticks)
-{
-    SysTick->LOAD  = ticks - 1U;
-    SysTick->VAL   = 0U;
-    SysTick->CTRL |= SysTick_CTRL_ENABLE_Msk;
-}
-
-/*! \brief Enable DWT Cycle Counter (CYCCNT).
-*/
-static __stk_forceinline void HW_DWTEnableCounter()
-{
-    // enable Trace and Debug blocks (DWT, ITM, ETM, TPIU)
-#if defined(CoreDebug)
-    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
-#elif defined(DCB)
-    DCB->DEMCR |= DCB_DEMCR_TRCENA_Msk;
-#endif
-    __DSB();
-
-    // LAR (Lock Access Register) is mandatory for Cortex-M7 to allow register writes,
-    // it is typically not implemented or deprecated on M0, M3, M4, and M33
-#if (__CORTEX_M == 7U)
-    DWT->LAR = 0xC5ACCE55; // unlock DWT unit using standard CoreSight magic key
-    __DSB();
-#endif
-
-#if defined(DWT)
-    // do not interfere with already enabled and running counter
-    if ((DWT->CTRL & DWT_CTRL_CYCCNTENA_Msk) != DWT_CTRL_CYCCNTENA_Msk)
-    {
-        DWT->CYCCNT = 0U;                     // reset counter value to zero
-        DWT->CTRL  |= DWT_CTRL_CYCCNTENA_Msk; // start counter
-    }
-#endif
-}
-
-/*! \brief   Get current DWT Counter (CYCCNT) value.
-    \return  Counter value.
-    \warning Counter value us prone to periodic wrapping.
-*/
-static __stk_forceinline uint32_t HW_DWTGetCounter()
-{
-#if defined(DWT)
-    return DWT->CYCCNT;
-#else
-    return 0U;
-#endif
-}
-
-/*! \brief     Recompute the spin-lock timeout from the current core clock.
-    \details   Converts the STK_SPINLOCK_TIMEOUT_US real-time budget into a retry-loop
-               iteration count using the conservative (underestimated)
-               STK_SPINLOCK_MIN_CYCLES_PER_ITER cost-per-iteration, so the resulting
-               timeout means the same real-world duration regardless of optimization
-               level, LTO, or core clock configuration. Called once per core from
-               Context::Initialize(); safe to call redundantly from multiple cores since
-               it is idempotent for a given clock frequency.
-    \note      Clamped against a zero/unconfigured clock and against overflow, so a
-               misconfigured clock tree cannot produce an immediate false-positive
-               KERNEL_PANIC_SPINLOCK_DEADLOCK on the very first lock attempt.
-*/
-static void HW_InitSpinlockTimeout()
-{
-    const Cycles cycles_budget = ConvertTimeUsToClockCycles(HW_CoreClockFrequency(), STK_SPINLOCK_TIMEOUT_US);
-    const Cycles iters = cycles_budget / STK_SPINLOCK_MIN_CYCLES_PER_ITER;
-
-    // floor guards against a zero/not-yet-configured clock; ceiling guards against overflow
-    // when narrowing to uint32_t
-    s_StkSpinlockTimeoutIters = static_cast<uint32_t>(
-        stk::Min(stk::Max(iters, static_cast<Cycles>(0x1000U)), static_cast<Cycles>(0xFFFFFFFFU)));
-}
+// ----------------------------------------------------------------------------
+} // namespace
+// ----------------------------------------------------------------------------
 
 // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 #if STK_MPU
 // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+// ----------------------------------------------------------------------------
+namespace stk {
+namespace mpu {
+// ----------------------------------------------------------------------------
 
 /*! \class ScopedPrivilegeBoost
     \brief RAII utility to temporarily elevate thread mode execution to privileged status.
@@ -1463,9 +1508,14 @@ ScopedPrivilegeBoost::ScopedPrivilegeBoost()
 }
 
 // ----------------------------------------------------------------------------
-namespace stk {
-namespace hw {
-namespace mpu {
+} // namespace stk
+} // namespace mpu
+// ----------------------------------------------------------------------------
+
+// ----------------------------------------------------------------------------
+namespace {
+namespace hw_int {
+namespace pmsa {
 // ----------------------------------------------------------------------------
 
 /*! \brief     Compute MPU register values for a region without touching hardware.
@@ -1561,19 +1611,19 @@ void Enable(bool enable, uint32_t control_flags, bool non_secure);
              Attr2 [23:16] = 0x44 (Normal Write-Through Cacheable)
              Attr3 [31:24] = 0xFF (Normal Write-Back Cacheable)
 */
-static constexpr uint32_t MAIR0_PMSAV8_INIT = 0xFF440400U;
+constexpr uint32_t MAIR0_PMSAV8_INIT = 0xFF440400U;
 
 /*! \var     MAIR1_PMSAV8_INIT.
     \brief   MPU MAIR1 register configuration: Reserved/Unused by EMpuType indices.
     \see     EMpuType
 */
-static constexpr uint32_t MAIR1_PMSAV8_INIT = 0x00000000U;
+constexpr uint32_t MAIR1_PMSAV8_INIT = 0x00000000U;
 
 /*! \var     RLAR_ENABLE_FLAG
     \brief   MPU Region Limit Address Register enable bit mask (Bit 0).
              Writing 1 enables the region in hardware; writing 0 disables region matching.
 */
-static constexpr Word RLAR_ENABLE_FLAG = (1U << 0U);
+constexpr Word RLAR_ENABLE_FLAG = (1U << 0U);
 
 /*! \fn      RBAR_DISABLED_REGION
     \brief   Generates a safe non-zero base address word for disabled/inactive MPU regions.
@@ -1583,7 +1633,7 @@ static constexpr Word RLAR_ENABLE_FLAG = (1U << 0U);
     \param   region_idx: Index of the target MPU region (reserved for API parity).
     \return  Word containing the safe memory base address for disabled slots.
 */
-static __stk_forceinline Word RBAR_DISABLED_REGION(uint32_t region_idx)
+__stk_forceinline Word RBAR_DISABLED_REGION(uint32_t region_idx)
 {
     STK_UNUSED(region_idx);
     return SCB->VTOR;
@@ -1594,13 +1644,13 @@ static __stk_forceinline Word RBAR_DISABLED_REGION(uint32_t region_idx)
     \details Clears the EN bit (Bit 0) and limit address to 0, ensuring the PMSAv8
              hardware engine ignores this region during memory access evaluation.
 */
-static constexpr Word RLAR_DISABLED_REGION = 0U;
+constexpr Word RLAR_DISABLED_REGION = 0U;
 #else
 /*! \var     RASR_ENABLE_FLAG
     \brief   MPU Region Attribute and Size Register enable bit mask (Bit 0).
              Writing 1 enables the region in hardware; writing 0 disables the region completely.
 */
-static constexpr Word RASR_ENABLE_FLAG = (1U << 0U);
+constexpr Word RASR_ENABLE_FLAG = (1U << 0U);
 
 /*! \fn      RBAR_DISABLED_REGION
     \brief   Generates the default Base Address Register word for an inactive ARMv7-M MPU region slot.
@@ -1610,20 +1660,20 @@ static constexpr Word RASR_ENABLE_FLAG = (1U << 0U);
     \param   region_idx: Index of the target MPU region (0 to 15).
     \return  Word formatted as `(VALID=1 | region_idx)` with base address zeroed out.
 */
-static constexpr Word RBAR_DISABLED_REGION(uint32_t region_idx) { return (1U << 4U) | (region_idx & 0xFU); }
+constexpr Word RBAR_DISABLED_REGION(uint32_t region_idx) { return (1U << 4U) | (region_idx & 0xFU); }
 
 /*! \var     RASR_DISABLED_REGION
     \brief   Default Attribute and Size Register state for disabled ARMv7-M regions.
     \details Writing 0 clears the `ENABLE` bit (Bit 0) along with size and access fields,
              causing the PMSAv7 hardware to bypass region checking for this slot.
 */
-static constexpr Word RASR_DISABLED_REGION = 0U;
+constexpr Word RASR_DISABLED_REGION = 0U;
 #endif
 
 // ----------------------------------------------------------------------------
-} // namespace mpu
-} // namespace hw
-} // namespace stk
+} // namespace pmsa
+} // namespace hw_int
+} // namespace
 // ----------------------------------------------------------------------------
 
 // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -1653,13 +1703,17 @@ static constexpr Word RASR_DISABLED_REGION = 0U;
     #endif
 #endif
 
+// ----------------------------------------------------------------------------
+namespace {
+// ----------------------------------------------------------------------------
+
 #if STK_MPU
 /*! \brief   Default inactive/disabled MPU region configuration instance.
     \details Represents an unmapped region descriptor (address 0, size 0, no access permissions,
              strongly-ordered memory type) used to clear or reset unused hardware MPU slots.
     \see     MpuRegionConfig, STK_MPU
 */
-static constexpr MpuRegionConfig s_StkDisabledMpuRegion =
+constexpr MpuRegionConfig s_StkDisabledMpuRegion =
 {
     .addr        = 0U,                             //!< Base memory address (0).
     .size        = 0U,                             //!< Region size in bytes (0).
@@ -1671,13 +1725,11 @@ static constexpr MpuRegionConfig s_StkDisabledMpuRegion =
 #endif
 
 //! Internal context.
-namespace stk {
-STK_MPU_KERNEL_DATA_SECTION
-static struct Context final : public PlatformContext
+struct Context final : public PlatformContext
 {
     typedef IPlatform::IEventOverrider eovrd_t;
 
-    Context() : PlatformContext(), m_exit_buf(), m_overrider(nullptr),
+    constexpr Context() : PlatformContext(), m_exit_buf(), m_overrider(nullptr),
     #if STK_CORTEX_M_TRUSTZONE_FRAME
         m_overrider_ns(nullptr),
     #endif
@@ -1693,7 +1745,7 @@ static struct Context final : public PlatformContext
         InitializeBase(handler, service, exit_trap, resolution_us);
 
         STK_STATIC_ASSERT_DESC_N(SP, offsetof(Stack, SP) == 0U,
-            "expect Stack::mode member at offset of 0 (first member)");
+            "expect Stack::SP member at offset of 0 (first member)");
     #if STK_MPU
         STK_STATIC_ASSERT_DESC_N(mpu,
             (STK_MPU_TASK_REGIONS <= 4U)
@@ -1826,7 +1878,11 @@ static struct Context final : public PlatformContext
     {
         bool released = false;
 
-        STK_ASSERT(m_csu_nesting != 0U);
+        if (m_csu_nesting == 0U)
+        {
+            // invariant violated: unbalanced Exit, uint8_t would wrap to 255 and the lock would never release
+            STK_KERNEL_PANIC(KERNEL_PANIC_CS_NESTING_OVERFLOW);
+        }
         --m_csu_nesting;
 
         if (m_csu_nesting == 0U)
@@ -1908,7 +1964,7 @@ static struct Context final : public PlatformContext
             HW_EnterSleepMode();
         }
     }
-    
+
     uint32_t GetTickResolutionInClockCycles()
     {
         const Ticks resolution_ticks = static_cast<Ticks>(m_tick_resolution);
@@ -1942,7 +1998,7 @@ static struct Context final : public PlatformContext
                     // table applied by ConfigureStatic() below.
                     for (uint32_t index = 0U; index < STK_CORTEX_M_MPU_REGIONS_MAX; ++index)
                     {
-                        hw::mpu::DisableRegion(index, non_secure);
+                        hw_int::pmsa::DisableRegion(index, non_secure);
                     }
                 }
 
@@ -1958,11 +2014,11 @@ static struct Context final : public PlatformContext
                     control_flags |= MPU_CTRL_HFNMIENA_Msk;
                 }
 
-                hw::mpu::ConfigureStatic(cfg->regions.GetPtr(), cfg->regions.GetSize(), control_flags, non_secure);
+                hw_int::pmsa::ConfigureStatic(cfg->regions.GetPtr(), cfg->regions.GetSize(), control_flags, non_secure);
             }
             else
             {
-                hw::mpu::Enable(false, 0, non_secure);
+                hw_int::pmsa::Enable(false, 0, non_secure);
             }
         }
     }
@@ -2001,7 +2057,7 @@ static struct Context final : public PlatformContext
     void Resume(Timeout elapsed_ticks);
 #endif
 
-    JmpFrame      m_exit_buf;       //!< saved context of the exit point
+    drv::JmpFrame m_exit_buf;       //!< saved context of the exit point
     eovrd_t      *m_overrider;      //!< platform events overrider
 #if STK_CORTEX_M_TRUSTZONE_FRAME
     eovrd_t      *m_overrider_ns;   //!< platform events overrider (TrustZone, Non-Secure)
@@ -2014,9 +2070,24 @@ static struct Context final : public PlatformContext
     uint8_t       m_csu_nesting;    //!< depth of user critical session nesting
     volatile bool m_started;        //!< 'true' when in started state
     bool          m_exiting;        //!< 'true' when is exiting the scheduling process
-}
-s_StkPlatformContext[STK_ARCH_CPU_COUNT];
-} // namespace stk
+};
+
+/*! \var s_StkPlatformContext
+    \brief Shared static context instance.
+*/
+STK_MPU_KERNEL_DATA_SECTION
+Context s_StkPlatformContext[STK_ARCH_CPU_COUNT];
+
+// ----------------------------------------------------------------------------
+} // namespace
+// ----------------------------------------------------------------------------
+
+// ----------------------------------------------------------------------------
+// Make file local content (anonymous namespace).
+namespace {
+// ----------------------------------------------------------------------------
+
+#if (__CORTEX_M >= 3U)
 
 //! High resolution clock for Cortex-M3+ using DWT peripheral.
 class HiResClockDWT
@@ -2065,7 +2136,12 @@ HiResClockDWT *HiResClockDWT::GetInstance()
     return &clock;
 }
 
+typedef HiResClockDWT HiResClockImpl;
+
+#endif // #if (__CORTEX_M >= 3U)
+
 //! High resolution clock implementation for Cortex-M0.
+#if (__CORTEX_M < 3U)
 class HiResClockM0
 {
 public:
@@ -2074,14 +2150,27 @@ public:
     Cycles GetCycles()
     {
         const Ticks resolution_ticks = static_cast<Ticks>(GetContext().m_tick_resolution);
-      
-        // On M0, combine the coarse OS ticks with the fine-grained SysTick counter
-        const Cycles cycles = ConvertTimeUsToClockCycles(HW_CoreClockFrequency(), (stk::GetTicks() * resolution_ticks));
+        const Cycles tick_cycles     = ConvertTimeUsToClockCycles(HW_CoreClockFrequency(), resolution_ticks);
 
-        const uint32_t val   = HW_SysTickValue(); // down-counter (cycles remaining in current tick)
-        const uint32_t load  = SysTick->LOAD;     // current reload value
-        const uint32_t delta = load - val;        // delta
-        
+        // tick counter cannot advance while the critical section is held (SysTick ISR is deferred)
+        Cycles cycles = ConvertTimeUsToClockCycles(HW_CoreClockFrequency(), (stk::GetTicks() * resolution_ticks));
+
+        bool     wrapped = ((SCB->ICSR & SCB_ICSR_PENDSTSET_Msk) != 0U);
+        uint32_t val     = HW_SysTickValue();
+        if (!wrapped && ((SCB->ICSR & SCB_ICSR_PENDSTSET_Msk) != 0U))
+        {
+            // counter wrapped between the two reads: re-sample the post-wrap value
+            wrapped = true;
+            val     = HW_SysTickValue();
+        }
+        if (wrapped)
+        {
+            cycles += tick_cycles; // the tick whose ISR is still pending
+        }
+
+        const uint32_t load  = SysTick->LOAD;
+        const uint32_t delta = load - val;
+
         const Cycles delta_cycles = static_cast<Cycles>(delta);
 
         // total elapsed cycles
@@ -2103,11 +2192,13 @@ HiResClockM0 *HiResClockM0::GetInstance()
     return &clock;
 }
 
-#if (__CORTEX_M >= 3U)
-    typedef HiResClockDWT HiResClockImpl;
-#else
-    typedef HiResClockM0 HiResClockImpl;
-#endif
+typedef HiResClockM0 HiResClockImpl;
+
+#endif //#if (__CORTEX_M < 3U)
+
+// ----------------------------------------------------------------------------
+} // anonymous namespace
+// ----------------------------------------------------------------------------
 
 __stk_attr_noinline  // keep out of inlining to preserve stack frame
 __stk_attr_noreturn  // never returns - a trap
@@ -2135,11 +2226,11 @@ void PlatformArmCortexM::ProcessTick()
 Timeout Context::ReloadTickPeriod(Timeout ticks_requested)
 {
     Timeout clamped_ticks;
-  
+
     const uint32_t SYSTICK_MAX_LOAD = 0x00FFFFFFU; // SysTick LOAD register is 24-bit
     const uint32_t tick_resolution = GetTickResolutionInClockCycles();
     if (tick_resolution != 0U)
-    {       
+    {
         // guard against uint32_t overflow in the reload calculation
         STK_ASSERT((static_cast<uint64_t>(ticks_requested) * tick_resolution) <= UINT32_MAX);
 
@@ -2197,7 +2288,7 @@ Timeout Context::ReloadTickPeriod(Timeout ticks_requested)
         STK_ASSERT(false);
         clamped_ticks = NO_WAIT;
     }
-    
+
     // return actual clamped ticks armed
     return clamped_ticks;
 }
@@ -2564,6 +2655,14 @@ extern "C" __stk_attr_naked void STK_PENDSV_HANDLER()
     register Stack   *p_st_idle   __asm("r3")  = p_ctx->m_stack_idle;
     register Stack   *p_st_active __asm("r2")  = p_ctx->m_stack_active;
     #endif
+#else
+    #ifdef __ICCARM__
+    register Stack *p_st_idle   = GetContext().m_stack_idle;
+    register Stack *p_st_active = GetContext().m_stack_active;
+    #else
+    register Stack *p_st_idle   __asm("r3") = GetContext().m_stack_idle;
+    register Stack *p_st_active __asm("r2") = GetContext().m_stack_active;
+    #endif
 #endif
 
     __asm volatile(
@@ -2718,7 +2817,6 @@ extern "C" __stk_attr_naked void STK_PENDSV_HANDLER()
 
     : /* output: none */
     : [access_mode_of]  "i" (offsetof(Stack, access_mode))
-#if (STK_ARCH_CPU_COUNT > 1U)
     #ifdef __ICCARM__
     , [st_idle]         "r3" (p_st_idle)
     , [st_active]       "r2" (p_st_active)
@@ -2726,10 +2824,6 @@ extern "C" __stk_attr_naked void STK_PENDSV_HANDLER()
     , [st_idle]         "r" (p_st_idle)
     , [st_active]       "r" (p_st_active)
     #endif
-#else
-    , [st_idle]         "r" (GetContext().m_stack_idle)
-    , [st_active]       "r" (GetContext().m_stack_active)
-#endif
 #if STK_MPU_STACK_GUARD
     , [mpu_start_of]    "i" (&MPU->RBAR)
     , [mpu_reg_of]      "i" (offsetof(Stack, mpu.region[0].addr))
@@ -2778,10 +2872,33 @@ extern "C" __stk_attr_naked void STK_PENDSV_HANDLER()
     );
 }
 
-namespace stk {
+// ----------------------------------------------------------------------------
+namespace {
+// ----------------------------------------------------------------------------
+
 __stk_attr_naked void OnTaskStart()
 {
     // note: HW_DisableInterrupts() must be called prior calling this function
+
+#if (STK_ARCH_CPU_COUNT > 1U)
+    // optimize register utilization and prevent compiler from using r4-r11
+    // registers before they are saved. Use r12 IPC scratch register for that
+    // and calculate offset for p_ctx only once; instruct assembler to use
+    // r2 for holding pointer to the Active stack
+    #ifdef __ICCARM__
+    register Context *p_ctx       = &GetContext();
+    register Stack   *p_st_active = p_ctx->m_stack_active;
+    #else
+    register Context *p_ctx       __asm("r12") = &GetContext();
+    register Stack   *p_st_active __asm("r2")  = p_ctx->m_stack_active;
+    #endif
+#else
+    #ifdef __ICCARM__
+    register Stack *p_st_active = GetContext().m_stack_active;
+    #else
+    register Stack *p_st_active __asm("r2") = GetContext().m_stack_active;
+    #endif
+#endif
 
     __asm volatile(
     STK_ASM_SYNTAX_UNIFIED
@@ -2853,7 +2970,11 @@ __stk_attr_naked void OnTaskStart()
 
     : /* output: none */
     : [access_mode_of]  "i" (offsetof(Stack, access_mode))
-    , [st_active]       "r" (GetContext().m_stack_active)
+    #ifdef __ICCARM__
+    , [st_active]       "r2" (p_st_active)
+    #else
+    , [st_active]       "r" (p_st_active)
+    #endif
 #if !STK_CORTEX_M_MANAGE_LR
     , [exc_ret]         "i" (STK_CORTEX_M_EXC_RETURN_THREAD_PSP)
 #endif
@@ -2904,7 +3025,10 @@ __stk_attr_naked void OnTaskStart()
 #endif
     );
 }
-} // namespace stk
+
+// ----------------------------------------------------------------------------
+} // namespace
+// ----------------------------------------------------------------------------
 
 void Context::Start()
 {
@@ -2914,7 +3038,7 @@ void Context::Start()
     HW_EnableFullFpuAccess();
 
     // save jump location of the Exit trap
-    STK_UNUSED(SaveJmp(m_exit_buf));
+    STK_UNUSED(drv::SaveJmp(m_exit_buf));
     if (m_exiting)
     {
         // notify kernel about a full stop
@@ -2965,7 +3089,7 @@ void Context::OnStart()
 Timeout Context::Suspend()
 {
     Timeout sleep_ticks;
-  
+
     const uint32_t tick_resolution = GetTickResolutionInClockCycles();
     if (tick_resolution != 0U)
     {
@@ -3004,7 +3128,7 @@ Timeout Context::Suspend()
         STK_ASSERT(false);
         sleep_ticks = NO_WAIT;
     }
-    
+
     return sleep_ticks;
 }
 #endif // STK_TICKLESS_IDLE
@@ -3039,8 +3163,12 @@ extern "C" __stk_attr_used void StkSVCHandlerMain(Word *svc_args)
 
     // priority 0 (NMI, HardFault) unaffected: SVC (priority 0 per OnStart()) remains
     // reachable so SVC_EXIT_CRITICAL can always unwind
-    STK_STATIC_ASSERT_DESC_N(NVIC, __NVIC_PRIO_BITS < 32U,
-        "NVIC priority bit width exceeds safe shift range");
+    STK_STATIC_ASSERT_DESC_N(NVIC, (__NVIC_PRIO_BITS >= 1U) && (__NVIC_PRIO_BITS <= 8U),
+        "NVIC priority bit width out of range");
+#ifdef CONTROL_nPRIV_Msk
+    STK_STATIC_ASSERT_DESC_N(SVC_PRIO, (STK_CORTEX_M_SVCALL_ISR_PRIORITY + 1U) < (1U << __NVIC_PRIO_BITS),
+        "SVCall priority leaves no lower level to mask: BASEPRI would be 0 (masking disabled)");
+#endif
 
     // 'volatile': R0 is written back to stacked memory, compiler must not eliminate the store
     volatile hw::ExceptionFrame *const exc_frame = reinterpret_cast<volatile hw::ExceptionFrame *>(svc_args);
@@ -3097,7 +3225,7 @@ extern "C" __stk_attr_used void StkSVCHandlerMain(Word *svc_args)
 #ifdef CONTROL_nPRIV_Msk
     case SVC_ENTER_CRITICAL: {
         const uint32_t saved_basepri = __get_BASEPRI();
-        __set_BASEPRI(static_cast<uint32_t>(1U) << __NVIC_PRIO_BITS); // mask all configurable-priority interrupts
+        __set_BASEPRI(STK_CORTEX_M_BASEPRI_CS); // mask all ISRs with priority lower than SVCall
         __DSB(); // BASEPRI write visible to bus before SVC return
         __ISB(); // pipeline flush: mask in effect at first caller instruction
 
@@ -3227,14 +3355,14 @@ extern "C" __stk_attr_naked void STK_HARDFAULT_HANDLER()
 #endif // STK_USE_HARDFAULT_HANDLER
 
 STK_MPU_SHARED_CODE_SECTION
-void stk::OnTaskRun(ITask *runnable)
+void drv::OnTaskRun(ITask *runnable)
 {
     STK_ASSERT(runnable != nullptr);
     runnable->Run();
 }
 
 STK_MPU_SHARED_CODE_SECTION
-void stk::OnTaskExit()
+void drv::OnTaskExit()
 {
     const Context &ctx = GetContext();
 
@@ -3263,7 +3391,7 @@ void stk::OnTaskExit()
 }
 
 STK_MPU_KERNEL_CODE_SECTION
-void stk::OnSchedulerSleep()
+void drv::OnSchedulerSleep()
 {
     // if hit here, increase the size of STK_SLEEP_TRAP_STACK_SIZE
     STK_STATIC_ASSERT(STK_SLEEP_TRAP_STACK_SIZE >= STK_STACK_SIZE_MIN);
@@ -3280,7 +3408,7 @@ void stk::OnSchedulerSleep()
 }
 
 STK_MPU_KERNEL_CODE_SECTION
-void stk::OnSchedulerSleepOverride()
+void drv::OnSchedulerSleepOverride()
 {
     // if hit here, increase the size of STK_SLEEP_TRAP_STACK_SIZE
     STK_STATIC_ASSERT(STK_SLEEP_TRAP_STACK_SIZE >= STK_STACK_SIZE_MIN);
@@ -3297,13 +3425,13 @@ void stk::OnSchedulerSleepOverride()
 }
 
 STK_MPU_KERNEL_CODE_SECTION
-void stk::OnSchedulerExit()
+void drv::OnSchedulerExit()
 {
     __set_CONTROL(0U); // switch to MSP
     __set_PSP(0U);     // clear PSP (for a clean register state)
 
     // jump back to SaveJmp's return site with m_exiting already set to true
-    RestoreJmp(GetContext().m_exit_buf, 0);
+    drv::RestoreJmp(GetContext().m_exit_buf, 0);
 }
 
 void PlatformArmCortexM::Initialize(IEventHandler *event_handler, IKernelService *service, uint32_t resolution_us,
@@ -3318,7 +3446,11 @@ void PlatformArmCortexM::Start()
 }
 
 #if STK_MPU_STACK_GUARD
-static void ConfigureTaskMpu(IPlatform::IEventOverrider *overrider, Stack *stack, IStackMemory *stack_memory,
+// ----------------------------------------------------------------------------
+namespace {
+// ----------------------------------------------------------------------------
+
+void ConfigureTaskMpu(IPlatform::IEventOverrider *overrider, Stack *stack, IStackMemory *stack_memory,
     ITask *user_task, bool non_secure)
 {
 #if !STK_CORTEX_M_TRUSTZONE_FRAME
@@ -3349,17 +3481,17 @@ static void ConfigureTaskMpu(IPlatform::IEventOverrider *overrider, Stack *stack
                 .exec        = hw::mpu::EMpuExec::EXEC_NEVER
             };
 
-            const hw::mpu::RegionBounds bounds_s = hw::mpu::GetRegionBounds(stack_guard_cfg);
+            const hw_int::pmsa::RegionBounds bounds_s = hw_int::pmsa::GetRegionBounds(stack_guard_cfg);
 
             size_t regions_count = regions->GetSize();
             bool stack_guard_canceled = false;
 
             for (size_t i = 0U; i < regions_count; ++i)
             {
-                const hw::mpu::RegionBounds bounds_i = hw::mpu::GetRegionBounds((*regions)[i]);
+                const hw_int::pmsa::RegionBounds bounds_i = hw_int::pmsa::GetRegionBounds((*regions)[i]);
 
                 // cancel stack region in favour of memory coverage by task's instance
-                if (hw::mpu::IsOverlapping(bounds_s, bounds_i))
+                if (hw_int::pmsa::IsOverlapping(bounds_s, bounds_i))
                 {
                     stack_guard_canceled = true;
                     break;
@@ -3396,12 +3528,20 @@ static void ConfigureTaskMpu(IPlatform::IEventOverrider *overrider, Stack *stack
 #endif
 
     // any slots beyond cfg_count are left disabled by ConfigureDynamic() itself
-    hw::mpu::ConfigureDynamic(task_mpu, task_mpu_cfg, cfg_count, overrider, non_secure);
+    hw_int::pmsa::ConfigureDynamic(task_mpu, task_mpu_cfg, cfg_count, overrider, non_secure);
 }
+
+// ----------------------------------------------------------------------------
+} // namespace
+// ----------------------------------------------------------------------------
 #endif // STK_MPU_STACK_GUARD
 
 #if STK_CORTEX_M_TRUSTZONE_FRAME
-static void ConfigureTaskTrustZone(Stack *stack, IStackMemory *stack_memory, ITask *user_task, bool non_secure)
+// ----------------------------------------------------------------------------
+namespace {
+// ----------------------------------------------------------------------------
+
+void ConfigureTaskTrustZone(Stack *stack, IStackMemory *stack_memory, ITask *user_task, bool non_secure)
 {
     // write TrustZoneFrame immediately above stack->SP (below the r4-r11 region);
     // frame layout in memory (low -> high address, matching STMDB push order in PendSV):
@@ -3413,7 +3553,7 @@ static void ConfigureTaskTrustZone(Stack *stack, IStackMemory *stack_memory, ITa
     // since PrivilegeFrame::CONTROL occupies the lowest word of the saved region
     TrustZoneFrame *const tz_frame = hw::WordToPtr<TrustZoneFrame>(stack->SP + (STK_CORTEX_M_PRIV_REGISTER_COUNT * sizeof(Word)));
     tz_frame->PSP_NS     = 0U;
-    tz_frame->CONTROL_NS = hw::reg::CONTROL::DEFAULT_INIT;
+    tz_frame->CONTROL_NS = hw_int::reg::CONTROL::DEFAULT_INIT;
     tz_frame->PSPLIM     = 0U; // unlimited for Secure task
     tz_frame->PSPLIM_NS  = 0U; // unlimited for Secure task
 
@@ -3427,11 +3567,11 @@ static void ConfigureTaskTrustZone(Stack *stack, IStackMemory *stack_memory, ITa
 
         // NS thread Privilege status
         tz_frame->CONTROL_NS = (((stack->access_mode & ACCESS_PRIVILEGED) != 0U) ?
-            hw::reg::CONTROL::SetPrivileged(tz_frame->CONTROL_NS) :
-            hw::reg::CONTROL::SetUnprivileged(tz_frame->CONTROL_NS));
+            hw_int::reg::CONTROL::SetPrivileged(tz_frame->CONTROL_NS) :
+            hw_int::reg::CONTROL::SetUnprivileged(tz_frame->CONTROL_NS));
 
         // NS thread is using PSP_NS
-        tz_frame->CONTROL_NS = hw::reg::CONTROL::SetSPSelectionToPSP(tz_frame->CONTROL_NS);
+        tz_frame->CONTROL_NS = hw_int::reg::CONTROL::SetSPSelectionToPSP(tz_frame->CONTROL_NS);
 
         // for a fresh NS task, PSP_NS starts at the top of its NS stack
         // (the hardware exception frame was placed there by the caller)
@@ -3451,6 +3591,10 @@ static void ConfigureTaskTrustZone(Stack *stack, IStackMemory *stack_memory, ITa
         tz_frame->PSPLIM = hw::PtrToWord(stack_memory->GetStack());
     }
 }
+
+// ----------------------------------------------------------------------------
+} // namespace
+// ----------------------------------------------------------------------------
 #endif // STK_CORTEX_M_TRUSTZONE_FRAME
 
 void PlatformArmCortexM::InitStack(EStackType stack_type, Stack *stack, IStackMemory *stack_memory, ITask *user_task)
@@ -3491,19 +3635,19 @@ void PlatformArmCortexM::InitStack(EStackType stack_type, Stack *stack, IStackMe
     switch (stack_type)
     {
     case STACK_USER_TASK: {
-        task_frame->exc.PC = hw::PtrToWord(&OnTaskRun);
-        task_frame->exc.LR = hw::PtrToWord(&OnTaskExit);
+        task_frame->exc.PC = hw::PtrToWord(&drv::OnTaskRun);
+        task_frame->exc.LR = hw::PtrToWord(&drv::OnTaskExit);
         task_frame->exc.R0 = hw::PtrToWord(user_task);
         break; }
 
     case STACK_SLEEP_TRAP: {
-        task_frame->exc.PC = hw::PtrToWord(ctx.m_overrider != nullptr ? &OnSchedulerSleepOverride : &OnSchedulerSleep);
+        task_frame->exc.PC = hw::PtrToWord(ctx.m_overrider != nullptr ? &drv::OnSchedulerSleepOverride : &drv::OnSchedulerSleep);
         task_frame->exc.LR = STK_STACK_MEMORY_FILLER; // should not attempt to exit
         task_frame->exc.R0 = 0U;
         break; }
 
     case STACK_EXIT_TRAP: {
-        task_frame->exc.PC = hw::PtrToWord(&OnSchedulerExit);
+        task_frame->exc.PC = hw::PtrToWord(&drv::OnSchedulerExit);
         task_frame->exc.LR = STK_STACK_MEMORY_FILLER; // should not attempt to exit
         task_frame->exc.R0 = 0U;
         break; }
@@ -3515,11 +3659,11 @@ void PlatformArmCortexM::InitStack(EStackType stack_type, Stack *stack, IStackMe
 
     // ensure the Program Counter is properly aligned to halfword boundaries
     // by clearing the Thumb state tracking bit from the physical target address
-    task_frame->exc.PC = hw::reg::PC::ClearThumbBit(task_frame->exc.PC);
+    task_frame->exc.PC = hw_int::reg::PC::ClearThumbBit(task_frame->exc.PC);
 
     // initialize the Execution Program Status Register (EPSR) with the T-bit enabled,
     // which is required for all ARM Cortex-M processors to execute instructions
-    task_frame->exc.xPSR = hw::reg::XPSR::SetThumbExecution(hw::reg::XPSR::DEFAULT_INIT);
+    task_frame->exc.xPSR = hw_int::reg::XPSR::SetThumbExecution(hw_int::reg::XPSR::DEFAULT_INIT);
 
 #if STK_CORTEX_M_MANAGE_LR
     // set the EXC_RETURN value to target Thread Mode using the Process Stack Pointer (PSP)
@@ -3539,8 +3683,8 @@ void PlatformArmCortexM::InitStack(EStackType stack_type, Stack *stack, IStackMe
         PrivilegeFrame *const priv_frame = hw::WordToPtr<PrivilegeFrame>(stack->SP);
 
         priv_frame->CONTROL = (((stack->access_mode & ACCESS_PRIVILEGED) != 0U) ?
-            hw::reg::CONTROL::SetPrivileged(hw::reg::CONTROL::DEFAULT_INIT) :
-            hw::reg::CONTROL::SetUnprivileged(hw::reg::CONTROL::DEFAULT_INIT));
+            hw_int::reg::CONTROL::SetPrivileged(hw_int::reg::CONTROL::DEFAULT_INIT) :
+            hw_int::reg::CONTROL::SetUnprivileged(hw_int::reg::CONTROL::DEFAULT_INIT));
     }
 #endif
 
@@ -3569,6 +3713,26 @@ void PlatformArmCortexM::InitStack(EStackType stack_type, Stack *stack, IStackMe
 #ifdef _STK_CORTEX_M_TRUSTZONE
 // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
+/*! \brief  Build cmse_check_pointed_object() flags for validating a Non-Secure caller's pointer.
+    \details Requires the object to be in Non-Secure memory and writable by the caller. The access
+             is validated with the caller's own privilege level, so that an unprivileged Non-Secure
+             caller cannot use a gateway to reach memory it has no permission to access itself:
+             - Handler Mode (IPSR != 0) is always privileged;
+             - Thread Mode is unprivileged when CONTROL_NS.nPRIV is set.
+    \note    Evaluated at gateway entry, where IPSR and CONTROL_NS still describe the Non-Secure caller.
+*/
+__stk_forceinline int NSC_GetCallerAccessFlags()
+{
+    int flags = (CMSE_NONSECURE | CMSE_MPU_READWRITE);
+
+    if ((HW_GetCurrentException() == 0U) && ((__TZ_get_CONTROL_NS() & CONTROL_nPRIV_Msk) != 0U))
+    {
+        flags |= CMSE_MPU_UNPRIV;
+    }
+
+    return flags;
+}
+
 /*! \brief  NSC gateway: hw::CriticalSection::Enter.
 */
 STK_TZ_NSC_GATEWAY
@@ -3590,7 +3754,7 @@ void NSC_stk_hw_CriticalSection_Exit(const hw::CriticalSection::Session ses)
 STK_TZ_NSC_GATEWAY
 void NSC_stk_hw_SpinLock_Lock(hw::SpinLock *sl)
 {
-    if ((sl != nullptr) && (cmse_check_pointed_object(sl,  CMSE_NONSECURE) != nullptr))
+    if ((sl != nullptr) && (cmse_check_pointed_object(sl, NSC_GetCallerAccessFlags()) != nullptr))
     {
         sl->Lock();
     }
@@ -3601,7 +3765,7 @@ void NSC_stk_hw_SpinLock_Lock(hw::SpinLock *sl)
 STK_TZ_NSC_GATEWAY
 void NSC_stk_hw_SpinLock_Unlock(hw::SpinLock *sl)
 {
-    if ((sl != nullptr) && (cmse_check_pointed_object(sl,  CMSE_NONSECURE) != nullptr))
+    if ((sl != nullptr) && (cmse_check_pointed_object(sl, NSC_GetCallerAccessFlags()) != nullptr))
     {
         sl->Unlock();
     }
@@ -3614,7 +3778,7 @@ bool NSC_stk_hw_SpinLock_TryLock(hw::SpinLock *sl)
 {
     bool locked;
 
-    if ((sl != nullptr) && (cmse_check_pointed_object(sl,  CMSE_NONSECURE) != nullptr))
+    if ((sl != nullptr) && (cmse_check_pointed_object(sl, NSC_GetCallerAccessFlags()) != nullptr))
     {
         locked = sl->TryLock();
     }
@@ -3756,7 +3920,7 @@ TId PlatformArmCortexM::GetTid() const
             result = TID_NONE;
         }
     }
-    
+
     return result;
 }
 
@@ -3841,7 +4005,14 @@ void PlatformArmCortexM::SetCpuFrequency(uint8_t core_id, uint32_t frequency)
     }
 }
 
+// ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 #if STK_MPU
+// ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+// ----------------------------------------------------------------------------
+namespace {
+// ----------------------------------------------------------------------------
+
 /*! \class KernelServiceSvcProxy
     \brief Proxy wrapper providing unprivileged tasks secure access to privileged kernel services.
 
@@ -3854,8 +4025,7 @@ void PlatformArmCortexM::SetCpuFrequency(uint8_t core_id, uint32_t frequency)
           This proxy allows user-space tasks to invoke kernel APIs safely. The privilege elevation
           occurs only for the duration of the targeted kernel service execution.
 */
-STK_MPU_SHARED_DATA_SECTION
-static class KernelServiceSvcProxy final : public stk::IKernelService
+class KernelServiceSvcProxy final : public stk::IKernelService
 {
 public:
     /*! \brief Default constructor.
@@ -3887,100 +4057,130 @@ public:
     stk::Weight SetWeight(stk::TId tid, stk::Weight weight) override;
     stk::Timeout SetTimeSlice(stk::TId tid, stk::Timeout ticks) override;
     void ExitTask() override;
-}
+    ELockResult LockScheduler() override;
+    ELockResult UnlockScheduler() override;
+    ELockResult RestoreSchedulerLock(bool locked) override;
+};
+
 /*! \var s_KernelServiceSvcProxy
     \brief Shared static proxy instance exposed to unprivileged context calls.
 */
-s_StkKernelServiceUnprivProxy;
+STK_MPU_SHARED_DATA_SECTION
+KernelServiceSvcProxy s_StkKernelServiceUnprivProxy;
+
+// ----------------------------------------------------------------------------
+} // namespace
+// ----------------------------------------------------------------------------
 
 STK_MPU_SHARED_CODE_SECTION
 stk::TId KernelServiceSvcProxy::GetTid() const
 {
-    const ScopedPrivilegeBoost pb;
+    const mpu::ScopedPrivilegeBoost pb;
     return GetContext().m_service->GetTid();
 }
 
 STK_MPU_SHARED_CODE_SECTION
 stk::Ticks KernelServiceSvcProxy::GetTicks() const
 {
-    const ScopedPrivilegeBoost pb;
+    const mpu::ScopedPrivilegeBoost pb;
     return GetContext().m_service->GetTicks();
 }
 
 STK_MPU_SHARED_CODE_SECTION
 uint32_t KernelServiceSvcProxy::GetTickResolution() const
 {
-    const ScopedPrivilegeBoost pb;
+    const mpu::ScopedPrivilegeBoost pb;
     return GetContext().m_tick_resolution;
 }
 
 STK_MPU_SHARED_CODE_SECTION
 stk::Cycles KernelServiceSvcProxy::GetSysTimerCount() const
 {
-    const ScopedPrivilegeBoost pb;
+    const mpu::ScopedPrivilegeBoost pb;
     return GetContext().m_service->GetSysTimerCount();
 }
 
 STK_MPU_SHARED_CODE_SECTION
 uint32_t KernelServiceSvcProxy::GetSysTimerFrequency() const
 {
-    const ScopedPrivilegeBoost pb;
+    const mpu::ScopedPrivilegeBoost pb;
     return GetContext().m_service->GetSysTimerFrequency();
 }
 
 STK_MPU_SHARED_CODE_SECTION
 void KernelServiceSvcProxy::Delay(stk::Timeout ticks)
 {
-    const ScopedPrivilegeBoost pb;
+    const mpu::ScopedPrivilegeBoost pb;
     GetContext().m_service->Delay(ticks);
 }
 
 STK_MPU_SHARED_CODE_SECTION
 void KernelServiceSvcProxy::Sleep(stk::Timeout ticks)
 {
-    const ScopedPrivilegeBoost pb;
+    const mpu::ScopedPrivilegeBoost pb;
     GetContext().m_service->Sleep(ticks);
 }
 
 STK_MPU_SHARED_CODE_SECTION
 bool KernelServiceSvcProxy::SleepUntil(stk::Ticks timestamp)
 {
-    const ScopedPrivilegeBoost pb;
+    const mpu::ScopedPrivilegeBoost pb;
     return GetContext().m_service->SleepUntil(timestamp);
 }
 
 STK_MPU_SHARED_CODE_SECTION
 void KernelServiceSvcProxy::SleepCancel(stk::TId task_id)
 {
-    const ScopedPrivilegeBoost pb;
+    const mpu::ScopedPrivilegeBoost pb;
     GetContext().m_service->SleepCancel(task_id);
 }
 
 STK_MPU_SHARED_CODE_SECTION
 void KernelServiceSvcProxy::SwitchToNext()
 {
-    const ScopedPrivilegeBoost pb;
+    const mpu::ScopedPrivilegeBoost pb;
     GetContext().m_service->SwitchToNext();
 }
 
 STK_MPU_SHARED_CODE_SECTION
 void KernelServiceSvcProxy::ExitTask()
 {
-    const ScopedPrivilegeBoost pb;
+    const mpu::ScopedPrivilegeBoost pb;
     GetContext().m_service->ExitTask();
+}
+
+STK_MPU_SHARED_CODE_SECTION
+ELockResult KernelServiceSvcProxy::LockScheduler()
+{
+    const mpu::ScopedPrivilegeBoost pb;
+    return GetContext().m_service->LockScheduler();
+}
+
+STK_MPU_SHARED_CODE_SECTION
+ELockResult KernelServiceSvcProxy::UnlockScheduler()
+{
+    const mpu::ScopedPrivilegeBoost pb;
+    return GetContext().m_service->UnlockScheduler();
+}
+
+STK_MPU_SHARED_CODE_SECTION
+ELockResult KernelServiceSvcProxy::RestoreSchedulerLock(bool locked)
+{
+    const mpu::ScopedPrivilegeBoost pb;
+    return GetContext().m_service->RestoreSchedulerLock(locked);
 }
 
 STK_MPU_SHARED_CODE_SECTION
 stk::EWaitResult KernelServiceSvcProxy::Wait(stk::ISyncObject *sobj, stk::IMutex *mutex, stk::Timeout timeout)
 {
-    const ScopedPrivilegeBoost pb;
+    const mpu::ScopedPrivilegeBoost pb;
     return GetContext().m_service->Wait(sobj, mutex, timeout);
 }
 
 STK_MPU_SHARED_CODE_SECTION
 void KernelServiceSvcProxy::Wake(stk::ISyncObject *sobj, bool all)
 {
-    const ScopedPrivilegeBoost pb;
+    const mpu::ScopedPrivilegeBoost pb;
     GetContext().m_service->Wake(sobj, all);
 }
 
@@ -4000,32 +4200,34 @@ void KernelServiceSvcProxy::Resume(stk::Timeout elapsed_ticks)
 STK_MPU_SHARED_CODE_SECTION
 void KernelServiceSvcProxy::InheritWeight(stk::TId tid, stk::Weight weight)
 {
-    const ScopedPrivilegeBoost pb;
+    const mpu::ScopedPrivilegeBoost pb;
     GetContext().m_service->InheritWeight(tid, weight);
 }
 
 STK_MPU_SHARED_CODE_SECTION
 void KernelServiceSvcProxy::RestoreWeight(stk::TId tid, stk::ISyncObject *sobj)
 {
-    const ScopedPrivilegeBoost pb;
+    const mpu::ScopedPrivilegeBoost pb;
     GetContext().m_service->RestoreWeight(tid, sobj);
 }
 
 STK_MPU_SHARED_CODE_SECTION
 stk::Weight KernelServiceSvcProxy::SetWeight(stk::TId tid, stk::Weight weight)
 {
-    const ScopedPrivilegeBoost pb;
+    const mpu::ScopedPrivilegeBoost pb;
     return GetContext().m_service->SetWeight(tid, weight);
 }
 
 STK_MPU_SHARED_CODE_SECTION
 stk::Timeout KernelServiceSvcProxy::SetTimeSlice(stk::TId tid, stk::Timeout ticks)
 {
-    const ScopedPrivilegeBoost pb;
+    const mpu::ScopedPrivilegeBoost pb;
     return GetContext().m_service->SetTimeSlice(tid, ticks);
 }
 
+// ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 #endif // STK_MPU
+// ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 IKernelService *IKernelService::GetInstance()
 {
@@ -4147,10 +4349,10 @@ void stk::hw::SetTls(Word tp)
 #if STK_MPU
 // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-void hw::mpu::ConfigureRegion(MpuRegion &reg, const struct MpuRegionConfig &cfg, uint32_t region_idx)
+void hw_int::pmsa::ConfigureRegion(MpuRegion &reg, const struct MpuRegionConfig &cfg, uint32_t region_idx)
 {
 #if STK_ARCH_ARMV8_M
-    if ((cfg.size != 0U) && (cfg.access_perm != EMpuAccess::ACCESS_NONE))
+    if ((cfg.size != 0U) && (cfg.access_perm != hw::mpu::EMpuAccess::ACCESS_NONE))
     {
         // hardware rules: both Base and Limit addresses must be 32-byte aligned.
         STK_ASSERT((cfg.addr & 31U) == 0U);
@@ -4167,17 +4369,17 @@ void hw::mpu::ConfigureRegion(MpuRegion &reg, const struct MpuRegionConfig &cfg,
         const uint32_t end_byte_addr = cfg.addr + cfg.size - 1U;
         // clear the bottom 5 bits to isolate the base of the final 32-byte window
         const uint32_t limit_addr = end_byte_addr & ~31U;
-        reg.attr = limit_addr | (static_cast<uint32_t>(cfg.mem_type) << 1U) | hw::mpu::RLAR_ENABLE_FLAG;
+        reg.attr = limit_addr | (static_cast<uint32_t>(cfg.mem_type) << 1U) | RLAR_ENABLE_FLAG;
     }
     else
     {
         // disabled region
-        reg.addr = hw::mpu::RBAR_DISABLED_REGION(region_idx);
-        reg.attr = hw::mpu::RLAR_DISABLED_REGION;
+        reg.addr = RBAR_DISABLED_REGION(region_idx);
+        reg.attr = RLAR_DISABLED_REGION;
     }
 #else
     // legacy ARMv7-M Attribute layout
-    if ((cfg.size != 0U) && (cfg.access_perm != EMpuAccess::ACCESS_NONE))
+    if ((cfg.size != 0U) && (cfg.access_perm != hw::mpu::EMpuAccess::ACCESS_NONE))
     {
         // hardware rules: must be a strict power-of-two size, naturally aligned
         STK_ASSERT((cfg.size & (cfg.size - 1U)) == 0U);
@@ -4197,26 +4399,52 @@ void hw::mpu::ConfigureRegion(MpuRegion &reg, const struct MpuRegionConfig &cfg,
             static_cast<uint32_t>(cfg.mem_type) |
             static_cast<uint32_t>(cfg.exec));
 
-        reg.attr = attr | (size_field << 1U) | hw::mpu::RASR_ENABLE_FLAG;
+        reg.attr = attr | (size_field << 1U) | RASR_ENABLE_FLAG;
     }
     else
     {
         // disabled region: clear out base address entirely to prevent false matches,
         // point to the target hardware index slot and strip the RASR enable flag
-        reg.addr = hw::mpu::RBAR_DISABLED_REGION(region_idx);
-        reg.attr = hw::mpu::RASR_DISABLED_REGION;
+        reg.addr = RBAR_DISABLED_REGION(region_idx);
+        reg.attr = RASR_DISABLED_REGION;
     }
 #endif
 }
 
-void hw::mpu::ApplyRegion(const MpuRegion &reg, uint32_t index, bool non_secure)
+// ----------------------------------------------------------------------------
+// Make file local content (anonymous namespace).
+namespace {
+// ----------------------------------------------------------------------------
+
+//! Select MPU instance: MPU_NS alias is only available when building the Secure side of ARMv8-M TrustZone.
+__stk_forceinline MPU_Type *GetMpu(bool non_secure)
 {
-#if STK_ARCH_ARMV8_M && !STK_TZ_NON_SECURE
-    MPU_Type *const MPU_ptr = (non_secure ? MPU_NS : MPU);
+#if STK_ARCH_ARMV8_M && STK_TZ_SECURE
+    return non_secure ? MPU_NS : MPU;
 #else
-    MPU_Type *const MPU_ptr = MPU;
-    STK_UNUSED(non_secure);
+    STK_UNUSED(non_secure); // no Secure/Non-Secure MPU alias
+    return MPU;
 #endif
+}
+
+//! Select SCB instance: SCB_NS alias is only available when building the Secure side of ARMv8-M TrustZone.
+__stk_forceinline SCB_Type *GetScb(bool non_secure)
+{
+#if STK_ARCH_ARMV8_M && STK_TZ_SECURE
+    return non_secure ? SCB_NS : SCB;
+#else
+    STK_UNUSED(non_secure); // no Secure/Non-Secure SCB alias
+    return SCB;
+#endif
+}
+
+// ----------------------------------------------------------------------------
+} // namespace
+// ----------------------------------------------------------------------------
+
+void hw_int::pmsa::ApplyRegion(const MpuRegion &reg, uint32_t index, bool non_secure)
+{
+    MPU_Type *const MPU_ptr = GetMpu(non_secure);
 
     MPU_ptr->RNR = index;
     __DSB();
@@ -4230,18 +4458,12 @@ void hw::mpu::ApplyRegion(const MpuRegion &reg, uint32_t index, bool non_secure)
 #endif
 }
 
-void hw::mpu::Enable(bool enable, uint32_t control_flags, bool non_secure)
+void hw_int::pmsa::Enable(bool enable, uint32_t control_flags, bool non_secure)
 {
     __stk_dmb();
 
-#if STK_ARCH_ARMV8_M && !STK_TZ_NON_SECURE
-    MPU_Type *const MPU_ptr = (non_secure ? MPU_NS : MPU);
-    SCB_Type *const SCB_ptr = (non_secure ? SCB_NS : SCB);
-#else
-    MPU_Type *const MPU_ptr = MPU;
-    SCB_Type *const SCB_ptr = SCB;
-    STK_UNUSED(non_secure);
-#endif
+    MPU_Type *const MPU_ptr = GetMpu(non_secure);
+    SCB_Type *const SCB_ptr = GetScb(non_secure);
 
     if (enable)
     {
@@ -4262,25 +4484,20 @@ void hw::mpu::Enable(bool enable, uint32_t control_flags, bool non_secure)
     __ISB();
 }
 
-void hw::mpu::DisableRegion(uint32_t index, bool non_secure)
+void hw_int::pmsa::DisableRegion(uint32_t index, bool non_secure)
 {
-#if STK_ARCH_ARMV8_M && !STK_TZ_NON_SECURE
-    MPU_Type *const MPU_ptr = (non_secure ? MPU_NS : MPU);
-#else
-    MPU_Type *const MPU_ptr = MPU;
-    STK_UNUSED(non_secure); // no Secure/Non-Secure MPU alias on ARMv7-M
-#endif
+    MPU_Type *const MPU_ptr = GetMpu(non_secure);
 
     MPU_ptr->RNR = index;
 
 #if STK_ARCH_ARMV8_M
-    MPU_ptr->RLAR = hw::mpu::RLAR_DISABLED_REGION;
+    MPU_ptr->RLAR = RLAR_DISABLED_REGION;
 #else
-    MPU_ptr->RASR = hw::mpu::RASR_DISABLED_REGION;
+    MPU_ptr->RASR = RASR_DISABLED_REGION;
 #endif
 }
 
-void hw::mpu::ConfigureStatic(const MpuRegionConfig cfg_list[], size_t cfg_count, uint32_t control_flags,
+void hw_int::pmsa::ConfigureStatic(const MpuRegionConfig cfg_list[], size_t cfg_count, uint32_t control_flags,
     bool non_secure)
 {
     STK_ASSERT((cfg_list != nullptr) || (cfg_count == 0U));
@@ -4320,12 +4537,7 @@ void hw::mpu::ConfigureStatic(const MpuRegionConfig cfg_list[], size_t cfg_count
     // note: ARMv7-M does not require RNR to be set as region index is embedded into RBAR,
     // though we do it for a consistency with ARMv8-M here
     {
-    #if STK_ARCH_ARMV8_M && STK_TZ_SECURE
-        MPU_Type *const MPU_ptr = (non_secure ? MPU_NS : MPU);
-    #else
-        MPU_Type *const MPU_ptr = MPU;
-        STK_UNUSED(non_secure); // no Secure/Non-Secure MPU alias on ARMv7-M
-    #endif
+        MPU_Type *const MPU_ptr = GetMpu(non_secure);
 
     #if STK_ARCH_ARMV8_M
         // configure memory attributes
@@ -4340,7 +4552,7 @@ void hw::mpu::ConfigureStatic(const MpuRegionConfig cfg_list[], size_t cfg_count
     Enable(true, control_flags, non_secure);
 }
 
-void hw::mpu::ConfigureDynamic(TaskMpu &task_mpu, const struct MpuRegionConfig cfg_list[],
+void hw_int::pmsa::ConfigureDynamic(TaskMpu &task_mpu, const struct MpuRegionConfig cfg_list[],
     const size_t cfg_count, IPlatform::IEventOverrider *overrider, bool non_secure)
 {
     STK_ASSERT((cfg_list != nullptr) || (cfg_count == 0U));
@@ -4394,7 +4606,10 @@ void hw::mpu::ConfigureDynamic(TaskMpu &task_mpu, const struct MpuRegionConfig c
 // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 #if STK_MPU
-static void FaultContext_FillMpu(FaultContext::Mpu &mpu_ctx, MPU_Type *mpu_inst)
+// ----------------------------------------------------------------------------
+namespace stk {
+// ----------------------------------------------------------------------------
+void FaultContext_FillMpu(FaultContext::Mpu &mpu_ctx, MPU_Type *mpu_inst)
 {
     mpu_ctx.CTRL = mpu_inst->CTRL;
 #if STK_ARCH_ARMV8_M
@@ -4418,6 +4633,9 @@ static void FaultContext_FillMpu(FaultContext::Mpu &mpu_ctx, MPU_Type *mpu_inst)
     }
     mpu_inst->RNR = saved_rnr;
 }
+// ----------------------------------------------------------------------------
+} // namespace stk
+// ----------------------------------------------------------------------------
 #endif // STK_MPU
 
 void FaultContext::Fill(const Word *stacked_regs, Word exc_return)

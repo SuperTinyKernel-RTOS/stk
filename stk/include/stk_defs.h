@@ -788,19 +788,19 @@ namespace stk {
     \note  Arguments are evaluated exactly once, safe for any expression type.
 */
 template <typename T>
-static constexpr T Min(T a, T b) noexcept { return ((a < b) ? a : b); }
+static constexpr __stk_forceinline T Min(T a, T b) noexcept { return ((a < b) ? a : b); }
 
 /*! \brief Compile-time maximum of two values.
     \note  Arguments are evaluated exactly once, safe for any expression type.
 */
 template <typename T>
-static constexpr T Max(T a, T b) noexcept { return ((a > b) ? a : b); }
+static constexpr __stk_forceinline T Max(T a, T b) noexcept { return ((a > b) ? a : b); }
 
 /*! \brief Aligns a value towards the next larger size multiple.
     \note  Arguments are evaluated exactly once, safe for any expression type.
 */
 template <typename T>
-static constexpr T Align(T v, T align) noexcept
+static constexpr __stk_forceinline T Align(T v, T align) noexcept
 {
     return ((v + align - static_cast<T>(1U)) / align) * align;
 }
@@ -809,7 +809,7 @@ static constexpr T Align(T v, T align) noexcept
     \note  Arguments are evaluated exactly once. The 'align' parameter MUST be a power of two.
 */
 template <typename T>
-static constexpr T AlignPow2(T v, T align) noexcept
+static constexpr __stk_forceinline T AlignPow2(T v, T align) noexcept
 {
     return (v + align - static_cast<T>(1U)) & ~(align - static_cast<T>(1U));
 }

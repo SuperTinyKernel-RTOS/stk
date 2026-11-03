@@ -960,7 +960,7 @@ HiResClockMTIME *HiResClockMTIME::GetInstance()
 STK_MPU_KERNEL_DATA_SECTION
 static struct Context final : public PlatformContext
 {
-    explicit Context() : PlatformContext(), m_stack_main(), m_stack_isr(), m_stack_isr_mem(),
+    constexpr Context() : PlatformContext(), m_stack_main(), m_stack_isr(), m_stack_isr_mem(),
         m_exit_buf(), m_overrider(nullptr), m_specific(nullptr), m_tick_period(0), m_last_mtime(0ULL),
     #if STK_TICKLESS_IDLE
         m_sleep_ticks(0),
