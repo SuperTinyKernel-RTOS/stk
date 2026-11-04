@@ -145,23 +145,23 @@ static struct Context final : public PlatformContext
 {
     explicit Context()
         : m_overrider(nullptr),
-            m_sleep_trap(nullptr),
-            m_exit_trap(nullptr),
-            m_winmm_dll(nullptr),
-            m_timer_thread(nullptr),
-            m_switch_event(nullptr),
-            m_pending_switch_id(TID_NONE),
-            m_tls(TLS_OUT_OF_INDEXES),
-            m_tasks(),
-            m_task_threads(),
-            m_timer_tid(0),
-        #if STK_TICKLESS_IDLE
-            m_sleep_ticks(0),
-        #endif
-            m_cs(),
-            m_csu_nesting(0),
-            m_started(false),
-            m_stop_signal(false)
+        m_sleep_trap(nullptr),
+        m_exit_trap(nullptr),
+        m_winmm_dll(nullptr),
+        m_timer_thread(nullptr),
+        m_switch_event(nullptr),
+        m_pending_switch_id(TID_NONE),
+        m_tls(TLS_OUT_OF_INDEXES),
+        m_tasks(),
+        m_task_threads(),
+        m_timer_tid(0),
+    #if STK_TICKLESS_IDLE
+        m_sleep_ticks(0),
+    #endif
+        m_cs(),
+        m_csu_nesting(0),
+        m_started(false),
+        m_stop_signal(false)
     {}
 
     void Initialize(IPlatform::IEventHandler *handler, IKernelService *service, Stack *exit_trap,
