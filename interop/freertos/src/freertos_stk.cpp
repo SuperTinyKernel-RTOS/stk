@@ -75,6 +75,16 @@
 // Minimum usable stack in STK Words.
 #define FREERTOS_STK_MIN_STACK_WORDS  STK_STACK_SIZE_MIN
 
+// Private memory allocators (we define malloc, free here to overcome absence of declaration in
+// case of -ffreestanding compiler flag).
+extern "C" void *malloc(size_t size);
+extern "C" void free(void *ptr);
+
+// +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+// Anonymous namespace to make local functions file-local.
+namespace {
+// +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
 // Returns a size of memory in stk::Word elements required for object allocation.
 template <typename T> static constexpr size_t StkGetWordCountForType()
 {
@@ -82,7 +92,7 @@ template <typename T> static constexpr size_t StkGetWordCountForType()
 }
 
 // Custom strcmp replacement.
-static int32_t FreertosStrcmp(const char str1[], const char str2[]) // MISRA: declared as array, not pointer to allow indexed access
+int32_t FreertosStrcmp(const char str1[], const char str2[]) // MISRA: declared as array, not pointer to allow indexed access
 {
     size_t index = 0U;
     int32_t result = 0;
@@ -100,76 +110,15 @@ static int32_t FreertosStrcmp(const char str1[], const char str2[]) // MISRA: de
     return result;
 }
 
-// -----------------------------------------------------------------------------
-// Private memory allocators (we define malloc, free here to overcome absence of declaration in
-// case of -ffreestanding compiler flag).
-// Similar to FreeRTOS's heap_3.c.
-// -----------------------------------------------------------------------------
-
-extern "C" void *malloc(size_t size);
-extern "C" void free(void *ptr);
-
-static stk::memory::MemoryAllocator::Stats s_MemStats(configTOTAL_HEAP_SIZE);
-
-void *stk::memory::MemoryAllocator::Allocate(size_t size)
-{
-    if (size == 0)
-        return nullptr;
-
-    // align to platform word
-    const size_t alignment = alignof(size_t);
-
-    // add header and round up to the nearest multiple of 'alignment'
-    size = (size + sizeof(size_t) + (alignment - 1)) & ~(alignment - 1);
-
-    stk::hw::CriticalSection::ScopedLock cs_;
-
-    if (s_MemStats.GetAvailable() < size)
-        return nullptr;
-
-    size_t *region = static_cast<size_t *>(malloc(size));
-    if (region != nullptr)
-    {
-        s_MemStats.RecordAllocate(size);
-
-        // save size
-        region[0] = size;
-
-        // set to usable memory region skipping header
-        region = region + 1;
-    }
-
-    return region;
-}
-
-void stk::memory::MemoryAllocator::Free(void *ptr)
-{
-    if (ptr == nullptr)
-        return;
-
-    stk::hw::CriticalSection::ScopedLock cs_;
-
-    // get region
-    size_t *region = static_cast<size_t *>(ptr) - 1;
-    size_t size = region[0];
-
-    free(region);
-
-    s_MemStats.RecordFree(size);
-}
-
-stk::memory::MemoryAllocator::Stats stk::memory::MemoryAllocator::GetStats()
-{
-    return s_MemStats;
-}
+stk::memory::MemoryAllocator::Stats s_MemStats(configTOTAL_HEAP_SIZE);
 
 // ===========================================================================
 // Internal helpers
 // ===========================================================================
 
 // Heap-allocate an object (operator new with nothrow).
-template <typename T, typename... Args>
-static T *ObjAlloc(Args &&...args)
+template <typename T, typename... Args> 
+__stk_forceinline T *ObjAlloc(Args &&...args)
 {
     T *obj = nullptr;
 
@@ -182,7 +131,7 @@ static T *ObjAlloc(Args &&...args)
 
 // Delete an object previously created by ObjAlloc.
 template <typename T>
-static void ObjFree(T *obj)
+__stk_forceinline void ObjFree(T *obj)
 {
     if (obj != nullptr)
     {
@@ -199,7 +148,7 @@ static void ObjFree(T *obj)
 // Heap-allocate a raw byte array of 'count' elements of type T via pvPortMalloc.
 // Equivalent to: new (std::nothrow) T[count]
 template <typename T>
-static T *ObjAllocArray(size_t count)
+__stk_forceinline T *ObjAllocArray(size_t count)
 {
     if (count == 0U)
         return nullptr;
@@ -210,7 +159,7 @@ static T *ObjAllocArray(size_t count)
 
 // Free a raw array previously allocated by ObjAllocArray (no destructor calls).
 // Equivalent to: delete[] ptr
-static inline void ObjFreeArray(void *ptr)
+__stk_forceinline void ObjFreeArray(void *ptr)
 {
     vPortFree(ptr);
 }
@@ -219,7 +168,7 @@ static inline void ObjFreeArray(void *ptr)
 // but is not tracked by m_cb_owned (e.g. self-deleting timers, error-path cleanup).
 // Equivalent to: delete obj
 template <typename T>
-static void ObjFreeRaw(T *obj)
+__stk_forceinline void ObjFreeRaw(T *obj)
 {
     if (obj != nullptr)
     {
@@ -229,124 +178,43 @@ static void ObjFreeRaw(T *obj)
 }
 
 // -----------------------------------------------------------------------------
-// Heap API — pvPortMalloc / vPortFree
-//
-// Both functions delegate directly to stk::memory::MemoryAllocator::Allocate
-// and ::Free, which are the single allocation seam for the entire wrapper.
-// Redefining those two functions (e.g. to point at a static pool allocator)
-// automatically redirects both internal STK allocations and any application
-// code that calls pvPortMalloc / vPortFree.
-// -----------------------------------------------------------------------------
-
-__stk_weak void *pvPortMalloc(size_t xWantedSize)
-{
-    return stk::memory::MemoryAllocator::Allocate(xWantedSize);
-}
-
-__stk_weak void vPortFree(void *pv)
-{
-    stk::memory::MemoryAllocator::Free(pv);
-}
-
-// -----------------------------------------------------------------------------
-// Heap query API — xPortGetFreeHeapSize / xPortGetMinimumEverFreeHeapSize /
-//                  vPortGetHeapStats / MemoryAllocator::GetStats
-//
-// All three functions read directly from s_MemStats, which is the single
-// authoritative accounting structure maintained by Allocate() and Free().
-//
-// xPortGetFreeHeapSize
-//   Returns GetAvailable() — the number of bytes not yet handed out.
-//   This is a point-in-time snapshot and may lag by one allocation if called
-//   concurrently, matching FreeRTOS heap_4/heap_5 behaviour.
-//
-// xPortGetMinimumEverFreeHeapSize
-//   Returns the minimum value GetAvailable() has ever reached since
-//   system start (i.e. the high-water mark of heap pressure).  The watermark
-//   is updated inside Allocate() immediately after the 'allocated' counter is
-//   incremented, so it is always <= the current free value.
-//
-// vPortGetHeapStats
-//   Fills a HeapStats_t snapshot consistent with the FreeRTOS heap_4/heap_5
-//   contract.  Fields that require a traversal of free-block lists (number of
-//   free blocks, smallest/largest free block) are not available without a
-//   block-list allocator; they are reported as 0 and 1 respectively to signal
-//   "at least one contiguous region exists" without asserting false precision.
-//
-// MemoryAllocator::GetStats
-//   Returns the raw Stats struct for STK-native callers.
-// -----------------------------------------------------------------------------
-
-size_t xPortGetFreeHeapSize(void)
-{
-    return s_MemStats.GetAvailable();
-}
-
-size_t xPortGetMinimumEverFreeHeapSize(void)
-{
-    return s_MemStats.min_ever_free;
-}
-
-void vPortGetHeapStats(HeapStats_t *pxHeapStats)
-{
-    if (pxHeapStats == nullptr)
-        return;
-
-    const stk::memory::MemoryAllocator::Stats snap = s_MemStats;
-    const size_t free_now = snap.GetAvailable();
-
-    (*pxHeapStats) = {};
-
-    // Fields derived directly from s_MemStats accounting.
-    pxHeapStats->xAvailableHeapSpaceInBytes      = free_now;
-    pxHeapStats->xMinimumEverFreeBytesRemaining  = snap.min_ever_free;
-    pxHeapStats->xNumberOfSuccessfulAllocations  = snap.allocate_count;
-    pxHeapStats->xNumberOfSuccessfulFrees        = snap.free_count;
-
-    // Fields that require free-block-list traversal are unavailable without a
-    // block-list allocator (we delegate to malloc).  Report conservative values:
-    //   - largest free block  : current free bytes (treat heap as one region)
-    //   - smallest free block : 0  (unknown subdivision)
-    //   - number of free blocks: 1  (at least one region exists while free > 0)
-    pxHeapStats->xSizeOfLargestFreeBlockInBytes  = free_now;
-    pxHeapStats->xSizeOfSmallestFreeBlockInBytes = (free_now > 0U) ? 1U : 0U;
-    pxHeapStats->xNumberOfFreeBlocks             = (free_now > 0U) ? 1U : 0U;
-}
-
-// -----------------------------------------------------------------------------
 // Priority mapping:
 //   FreeRTOS range       : 0 (lowest/idle) .. configMAX_PRIORITIES-1 (highest)
-//   STK FP32 level range : 0               .. 31
+//   STK fixed-priority   : 0               .. configMAX_PRIORITIES-1
 //
 //   sched::SwitchStrategyFixedPriority interprets GetWeight() as the raw priority
 //   level directly (not a proportional weight).  Higher numeric value means
 //   higher priority and strictly preempts all lower levels.  The mapping is
 //   therefore a direct clamp — no shift needed:
 //
-//     stk_priority = clamp(freertos_priority, 0, 31)
+//     stk_priority = clamp(freertos_priority, 0, configMAX_PRIORITIES - 1)
 //
-//   configMAX_PRIORITIES must be <= 32 (compile-time assertion below).
-//   If it is less than 32, only levels 0..configMAX_PRIORITIES-1 are used
-//   and the upper FP32 slots remain empty, which is perfectly fine.
+//   The strategy is instantiated with MAX_PRIORITIES = configMAX_PRIORITIES and picks the ready-priorities
+//   bitmap automatically (stk::sched::ReadyBitmapSelect): uint32_t for up to 32 levels, uint64_t for up to 64
+//   and the multi-word stk::sched::PriorityBitmap above that. Highest-priority lookup stays O(1) for all of
+//   them. configMAX_PRIORITIES must be in [1, 1024] (compile-time assertion below, 1024 is the capacity of
+//   stk::sched::PriorityBitmap). Note that RAM cost grows with the number of levels: the strategy keeps one
+//   task list head and one cursor per level.
 // -----------------------------------------------------------------------------
 
-// Enforce that configMAX_PRIORITIES fits within the 32-level FP32 strategy.
-static_assert(configMAX_PRIORITIES <= 32U,
-    "configMAX_PRIORITIES exceeds sched::SwitchStrategyFP32's 32 priority levels. "
-    "Reduce configMAX_PRIORITIES or instantiate sched::SwitchStrategyFixedPriority "
-    "with a larger MAX_PRIORITIES template parameter and update FrtosKernel.");
+// Enforce that configMAX_PRIORITIES fits within the default ready-priorities bitmap of the strategy.
+static_assert((configMAX_PRIORITIES >= 1U) && (configMAX_PRIORITIES <= 1024U),
+    "configMAX_PRIORITIES must be in the range [1, 1024], the capacity of the default priority bitmap "
+    "(stk::sched::PriorityBitmap). For more levels supply a custom ReadyBitmap type with a "
+    "stk::sched::PriorityBitmapTraits specialization as the 3rd template parameter of FrtosKernel's "
+    "stk::sched::SwitchStrategyFixedPriority.");
 
-static inline int32_t FrtosPrioToStkWeight(UBaseType_t p)
+__stk_forceinline int32_t FrtosPrioToStkWeight(UBaseType_t p)
 {
     // Clamp to [0 .. configMAX_PRIORITIES-1] then pass through directly:
-    // STK FP32 level == FreeRTOS priority (both 0 = lowest).
+    // STK fixed-priority level == FreeRTOS priority (both 0 = lowest).
     if (p >= (UBaseType_t)configMAX_PRIORITIES)
         p = (UBaseType_t)configMAX_PRIORITIES - 1U;
 
     return static_cast<int32_t>(p);
 }
 
-static inline UBaseType_t StkWeightToFrtosPrio(int32_t w)
+__stk_forceinline UBaseType_t StkWeightToFrtosPrio(int32_t w)
 {
     if (w < 0)
         return 0U;
@@ -365,7 +233,7 @@ static inline UBaseType_t StkWeightToFrtosPrio(int32_t w)
 //   0                          -> stk::NO_WAIT
 //   N                          -> N  (ticks pass through directly)
 // -----------------------------------------------------------------------------
-static inline stk::Timeout FrtosTimeoutToStk(TickType_t t)
+__stk_forceinline stk::Timeout FrtosTimeoutToStk(TickType_t t)
 {
     if (t == portMAX_DELAY)
         return stk::WAIT_INFINITE;
@@ -379,7 +247,7 @@ static inline stk::Timeout FrtosTimeoutToStk(TickType_t t)
 // -----------------------------------------------------------------------------
 // ISR context check
 // -----------------------------------------------------------------------------
-static inline bool IsIrqContext()
+__stk_forceinline bool IsIrqContext()
 {
     return stk::hw::IsInsideISR();
 }
@@ -388,36 +256,29 @@ static inline bool IsIrqContext()
 // Global kernel type alias.
 // KERNEL_DYNAMIC  : tasks can be created/deleted at runtime.
 // KERNEL_SYNC     : enables all synchronisation primitives.
-// sched::SwitchStrategyFP32: Fixed-priority preemptive, 32 levels (0=lowest, 31=highest),
-//   with round-robin within each level.  This exactly mirrors FreeRTOS scheduling
+// sched::SwitchStrategyFixedPriority<configMAX_PRIORITIES, true>: Fixed-priority preemptive,
+//   configMAX_PRIORITIES levels (0=lowest, configMAX_PRIORITIES-1=highest), with round-robin within each level;
+//   'true' = no-sleep yield (Yield() hands the CPU to same-priority peers only).  This exactly mirrors FreeRTOS scheduling
 //   semantics: the highest-priority ready task always runs immediately.
 // -----------------------------------------------------------------------------
+using StkSwitchingStrategy = stk::sched::SwitchStrategyFixedPriority<configMAX_PRIORITIES, true>;
 using FrtosKernel = stk::Kernel<stk::KERNEL_DYNAMIC | stk::KERNEL_SYNC
 #if STK_TICKLESS_IDLE
     | stk::KERNEL_TICKLESS
 #endif
     , FREERTOS_STK_MAX_TASKS,
-    stk::sched::SwitchStrategyFP32,
+    StkSwitchingStrategy,
     stk::PlatformDefault>;
 
-static FrtosKernel g_StkKernel;
+FrtosKernel g_StkKernel;
 
-// -----------------------------------------------------------------------------
-// vPortEnterCritical / vPortExitCritical (back taskENTER/EXIT_CRITICAL macros)
-// -----------------------------------------------------------------------------
-void vPortEnterCritical(void)
+// Ensure kernel is initialized.
+void EnsureKernelInitialized()
 {
-    stk::hw::CriticalSection::Enter();
-}
-
-void vPortExitCritical(void)
-{
-    stk::hw::CriticalSection::Exit();
-}
-
-void taskYIELD_impl(void)
-{
-    stk::Yield();
+    if (g_StkKernel.GetState() == stk::IKernel::KSTATE_INACTIVE)
+    {
+        g_StkKernel.Initialize(); // default 1 ms tick resolution
+    }
 }
 
 // ===========================================================================
@@ -437,7 +298,7 @@ struct FrtosTask;
 // Deleted tasks which the kernel has already removed (OnExit() fired) and whose TCB and/or stack are heap-owned,
 // waiting to be freed from task context by ReapDeletedTasks(). Chained via FrtosTask::m_zombie_next. Pushed only
 // from the kernel tick (OnExit(), the tick can not be preempted), detached only inside a critical section.
-static FrtosTask *g_ZombieTasks = nullptr;
+FrtosTask *g_ZombieTasks = nullptr;
 
 struct FrtosTask : public stk::ITask
 {
@@ -508,7 +369,7 @@ struct FrtosTask : public stk::ITask
     TaskFunction_t    m_func;
     void             *m_argument;
     const char       *m_name;
-    volatile int32_t  m_weight;       // STK SWRR weight (priority+1)
+    volatile int32_t  m_weight;       // STK fixed priority level (== FreeRTOS priority)
     stk::Word        *m_stack;
     size_t            m_stack_size;   // Words
     bool              m_stack_owned;
@@ -518,7 +379,7 @@ struct FrtosTask : public stk::ITask
     uint32_t          m_task_number;  // monotonic serial, assigned at construction
 
     // Monotonic counter incremented once per FrtosTask construction.
-    // Stored as a file-scope static so all tasks share a single sequence.
+    // Stored as a file-scope so all tasks share a single sequence.
     static uint32_t s_task_counter;
 
     // Thread-local storage slots (configNUM_THREAD_LOCAL_STORAGE_POINTERS entries).
@@ -561,14 +422,34 @@ uint32_t FrtosTask::s_task_counter = 0U;
 #   error "freertos_stk.cpp: TId -> task pointer conversion is not available on the TrustZone non-secure port"
 #endif
 
-static inline FrtosTask *FrtosTaskFromTid(stk::TId tid)
+__stk_forceinline FrtosTask *FrtosTaskFromTid(stk::TId tid)
 {
     return static_cast<FrtosTask *>(stk::GetUserTaskFromTid(tid));
 }
 
-static inline stk::TId FrtosTidFromTask(const FrtosTask *t)
+__stk_forceinline stk::TId FrtosTidFromTask(const FrtosTask *t)
 {
     return stk::GetTidFromUserTask(t);
+}
+
+// Free the deleted tasks which the kernel has finished removing (see FrtosTask::OnExit()). Task context only.
+void ReapDeletedTasks()
+{
+    FrtosTask *list;
+
+    {
+        stk::sync::ScopedCriticalSection cs_;
+
+        list          = g_ZombieTasks;
+        g_ZombieTasks = nullptr;
+    }
+
+    while (list != nullptr)
+    {
+        FrtosTask *const next = list->m_zombie_next;
+        ObjFree(list);
+        list = next;
+    }
 }
 
 // ===========================================================================
@@ -614,7 +495,7 @@ struct FrtosQueue
             ObjFreeArray(m_mq.GetBuffer());
     }
 
-    static uint8_t *AllocBuffer(uint32_t cap, uint32_t msg_size)
+    uint8_t *AllocBuffer(uint32_t cap, uint32_t msg_size)
     {
         return ObjAllocArray<uint8_t>(static_cast<size_t>(cap) * msg_size);
     }
@@ -675,7 +556,7 @@ enum class SemKind : uint8_t
 // The switch enumerates only the valid SemKind enumerators; any other byte
 // value falls through to the default and returns SemKind::None, making the
 // check both exhaustive and forward-safe.
-static SemKind GetSemKindFromHandle(const void *obj)
+SemKind GetSemKindFromHandle(const void *obj)
 {
     const uint8_t first_byte = *static_cast<const uint8_t *>(obj);
 
@@ -872,7 +753,7 @@ struct FrtosQueueSet
 //   set          — the FrtosQueueSet that member belongs to.
 // -----------------------------------------------------------------------------
 template <typename THost>
-static inline void QueueSetNotify(void *member_handle, THost *host)
+__stk_forceinline void QueueSetNotify(void *member_handle, THost *host)
 {
 #if configUSE_QUEUE_SETS
     // m_set is non-null only when the member was registered with xQueueAddToSet.
@@ -894,12 +775,10 @@ static inline void QueueSetNotify(void *member_handle, THost *host)
 
 #if configUSE_TIMERS
 
-static void EnsureKernelInitialized(); // defined below
-
-static stk::time::TimerHost *g_TimerHost = nullptr;
+stk::time::TimerHost *g_TimerHost = nullptr;
 
 // Static storage for the TimerHost (avoids heap for the host object itself).
-static stk::Word g_TimerHostBuf[StkGetWordCountForType<stk::time::TimerHost>()];
+stk::Word g_TimerHostBuf[StkGetWordCountForType<stk::time::TimerHost>()];
 
 struct FrtosTimer : public stk::time::Timer
 {
@@ -950,7 +829,7 @@ struct FrtosTimer : public stk::time::Timer
 // Map TimerHost::EResult (RES_OK == 0, errors < 0) to FreeRTOS pdPASS / pdFAIL.
 // RES_OK and RES_QUEUED (command queued from a context which can not wait) mean "accepted".
 // \a inactive_ok: RES_INACTIVE is also success (stopping a dormant timer is not an error in FreeRTOS).
-static inline BaseType_t TimerResToFrtos(stk::time::TimerHost::EResult res, bool inactive_ok = false)
+__stk_forceinline BaseType_t TimerResToFrtos(stk::time::TimerHost::EResult res, bool inactive_ok = false)
 {
     const bool ok = (res == stk::time::TimerHost::RES_OK) ||
                     (res == stk::time::TimerHost::RES_QUEUED) ||
@@ -968,7 +847,7 @@ static inline BaseType_t TimerResToFrtos(stk::time::TimerHost::EResult res, bool
 // the callback pointer and its two parameters.  All in-flight calls live in a
 // statically-allocated ring-buffer:
 //
-//   static stk::sync::PipeT<PendCall, FREERTOS_STK_PEND_CALL_QUEUE_SIZE>
+//   stk::sync::PipeT<PendCall, FREERTOS_STK_PEND_CALL_QUEUE_SIZE>
 //       g_PendCallPipe;
 //
 // FrtosPendDrainer is a singleton Timer that is started once (as a
@@ -989,7 +868,7 @@ static inline BaseType_t TimerResToFrtos(stk::time::TimerHost::EResult res, bool
 //
 // Lifecycle of g_PendDrainer
 // --------------------------
-//   Constructed in static storage (g_PendDrainerBuf) on first use.
+//   Constructed in storage (g_PendDrainerBuf) on first use.
 //   Started as a 1-tick auto-reload timer so OnExpired() is called every tick
 //   while the pipe is non-empty.  To avoid burning timer ticks when idle the
 //   drainer stops itself when it finds the pipe empty, and is re-started by
@@ -1005,11 +884,11 @@ struct PendCall
 };
 
 // Static ring-buffer — capacity set by FREERTOS_STK_PEND_CALL_QUEUE_SIZE.
-static stk::sync::PipeT<PendCall, FREERTOS_STK_PEND_CALL_QUEUE_SIZE> g_PendCallPipe;
+stk::sync::PipeT<PendCall, FREERTOS_STK_PEND_CALL_QUEUE_SIZE> g_PendCallPipe;
 
 // Static storage for the singleton drainer timer (avoids a heap allocation).
-static stk::Word g_PendDrainerBuf[StkGetWordCountForType<stk::time::Timer>()];
-static stk::time::Timer *g_PendDrainer = nullptr;
+stk::Word g_PendDrainerBuf[StkGetWordCountForType<stk::time::Timer>()];
+stk::time::Timer *g_PendDrainer = nullptr;
 
 // Singleton drainer: drains g_PendCallPipe each time it fires, then stops
 // itself when the pipe is empty to avoid unnecessary timer ticks.
@@ -1033,7 +912,7 @@ struct FrtosPendDrainer : public stk::time::Timer
 
 // Ensure the drainer timer is constructed and started (idempotent; ISR-unsafe).
 // Must be called from task context only (same restriction as EnsureTimerHost).
-static bool EnsurePendDrainer()
+bool EnsurePendDrainer()
 {
     if (g_PendDrainer == nullptr)
         g_PendDrainer = new (g_PendDrainerBuf) FrtosPendDrainer();
@@ -1047,7 +926,7 @@ static bool EnsurePendDrainer()
 // If the drainer is already active this is a no-op (Restart would re-arm it,
 // which is fine; the extra tick is harmless).
 // Returns false if the drainer could not be armed (not created yet, host not ready, command queue full).
-static bool KickPendDrainerFromISR()
+bool KickPendDrainerFromISR()
 {
     if ((g_PendDrainer == nullptr) || (g_TimerHost == nullptr))
         return false;
@@ -1076,6 +955,41 @@ struct FrtosEventGroup
     stk::sync::EventFlags::SyncContext m_sync; // rendezvous state of xEventGroupSync()
     bool                               m_cb_owned;
 };
+
+// Translate legacy STK EventFlags result -> FreeRTOS bits representation (used by the Set/Clear calls;
+// the wait calls use EventFlags::WaitEx() and need no translation).
+//
+// Success path: return the matched bits directly.
+// Error path  : return the caller-supplied snapshot of the flags word taken
+//               immediately after the timeout (or an aborted wait, see
+//               xTaskAbortDelay(): ERROR_CANCELED) was confirmed.  FreeRTOS documents
+//               that xEventGroupWaitBits() returns the flags value *at the time
+//               of timeout*, not zero, so callers can distinguish which bits were
+//               set even though the wait condition was not fully satisfied.
+//               Pass snapshot = 0U for call sites where a timeout return of 0
+//               is the correct contract (e.g. xEventGroupSync).
+__stk_forceinline EventBits_t StkFlagsToFrtos(uint32_t result, EventBits_t snapshot = 0U)
+{
+    if (stk::sync::EventFlags::IsError(result))
+        return snapshot; // timeout, aborted wait (ERROR_CANCELED) or error — return flags snapshot
+
+    return static_cast<EventBits_t>(result);
+}
+
+// Build STK EventFlags options from FreeRTOS xWaitForAllBits / xClearOnExit.
+__stk_forceinline uint32_t BuildStkFlagsOpts(BaseType_t xClearOnExit,
+                                          BaseType_t xWaitForAllBits)
+{
+    uint32_t opts = stk::sync::EventFlags::OPT_WAIT_ANY;
+
+    if (xWaitForAllBits == pdTRUE)
+        opts |= stk::sync::EventFlags::OPT_WAIT_ALL;
+
+    if (xClearOnExit == pdFALSE)
+        opts |= stk::sync::EventFlags::OPT_NO_CLEAR;
+
+    return opts;
+}
 
 #endif // configUSE_EVENT_GROUPS
 
@@ -1140,7 +1054,7 @@ struct FrtosStreamBuffer
 // in a block pool block.  On Receive() the envelope is popped, payload copied
 // out, and the block returned to the pool.
 //
-// Layout of the caller-supplied flat buffer for the static constructor:
+// Layout of the caller-supplied flat buffer for the constructor:
 //   [ block_pool_storage | envelope_queue_storage ]
 // where
 //   block_pool_storage  = xMessageCount * AlignBlockSize(xMaxMessageSize)
@@ -1213,15 +1127,271 @@ struct FrtosMessageBuffer
     StreamBufferCallbackFunction_t m_recv_cb;      //!< optional callback fired after a successful Receive
 };
 
+// Derive slot count from a flat byte budget.
+size_t MsgBufSlotCount(size_t budget_bytes, size_t max_msg_size)
+{
+    const size_t block_size = stk::memory::BlockMemoryPool::AlignBlockSize(max_msg_size);
+    const size_t slot_cost  = block_size + FrtosMessageBuffer::ENVELOPE_SIZE;
+
+    if (slot_cost == 0U)
+        return 0U;
+
+    return budget_bytes / slot_cost;
+}
+
 #endif // configUSE_STREAM_BUFFERS
 
-// Ensure kernel is initialized.
-static void EnsureKernelInitialized()
+// -----------------------------------------------------------------------------
+// xQueueGetMutexHolder / xQueueGetMutexHolderFromISR Helper
+// -----------------------------------------------------------------------------
+
+#if configUSE_MUTEXES
+
+// Helper: given a raw QueueHandle_t, return the FrtosSemaphore* if the handle
+// is actually a mutex-kind semaphore, or nullptr otherwise.
+__stk_forceinline FrtosSemaphore *QueueHandleAsMutex(QueueHandle_t xQueue)
 {
-    if (g_StkKernel.GetState() == stk::IKernel::KSTATE_INACTIVE)
+    if (xQueue == nullptr)
+        return nullptr;
+
+    // GetSemKindFromHandle() returns SemKind::None for FrtosQueue handles
+    // (and any unrecognised object), SemKind::Counting or SemKind::Mutex for
+    // FrtosSemaphore handles.  Only SemKind::Mutex carries an owner field.
+    if (GetSemKindFromHandle(xQueue) != SemKind::Mutex)
+        return nullptr;
+
+    return static_cast<FrtosSemaphore *>(xQueue);
+}
+
+#endif // configUSE_MUTEXES
+
+// -----------------------------------------------------------------------------
+// Task Notification Helpers
+// -----------------------------------------------------------------------------
+
+#if configUSE_TASK_NOTIFICATIONS
+
+// -----------------------------------------------------------------------------
+// Internal helper: validate slot index and resolve a NULL handle to self.
+// Returns the FrtosTask pointer on success, nullptr on failure.
+// -----------------------------------------------------------------------------
+FrtosTask *ResolveNotifyTarget(TaskHandle_t xTask, UBaseType_t uxIndex)
+{
+    STK_ASSERT(uxIndex < (UBaseType_t)configTASK_NOTIFICATION_ARRAY_ENTRIES);
+
+    if (uxIndex >= (UBaseType_t)configTASK_NOTIFICATION_ARRAY_ENTRIES)
+        return nullptr;
+
+    if (xTask == nullptr)
+        xTask = xTaskGetCurrentTaskHandle();
+
+    return static_cast<FrtosTask *>(xTask);
+}
+
+// -----------------------------------------------------------------------------
+// Internal helper: apply a notification action to a slot under a held CS.
+// Returns pdPASS / pdFAIL (mirrors the public xTaskNotify contract).
+// -----------------------------------------------------------------------------
+BaseType_t NotifyApplyAction(FrtosTask::NotifySlot &slot,
+                                    uint32_t               ulValue,
+                                    eNotifyAction          eAction)
+{
+    switch (eAction)
     {
-        g_StkKernel.Initialize(); // default 1 ms tick resolution
+    case eNoAction:
+        break;
+
+    case eSetBits:
+        slot.value |= ulValue;
+        break;
+
+    case eIncrement:
+        slot.value++;
+        break;
+
+    case eSetValueWithOverwrite:
+        slot.value = ulValue;
+        break;
+
+    case eSetValueWithoutOverwrite:
+        if (slot.pending)
+            return pdFAIL; // value not consumed yet
+        slot.value   = ulValue;
+        slot.pending = true;
+        break;
+
+    default:
+        return pdFAIL;
     }
+
+    return pdPASS;
+}
+
+#endif // configUSE_TASK_NOTIFICATIONS
+
+// +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+} // anonymous namespace
+// +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+// -----------------------------------------------------------------------------
+// Private memory allocators (we define malloc, free here to overcome absence of declaration in
+// case of -ffreestanding compiler flag).
+// Similar to FreeRTOS's heap_3.c.
+// -----------------------------------------------------------------------------
+
+void *stk::memory::MemoryAllocator::Allocate(size_t size)
+{
+    if (size == 0)
+        return nullptr;
+
+    // align to platform word
+    const size_t alignment = alignof(size_t);
+
+    // add header and round up to the nearest multiple of 'alignment'
+    size = (size + sizeof(size_t) + (alignment - 1)) & ~(alignment - 1);
+
+    stk::hw::CriticalSection::ScopedLock cs_;
+
+    if (s_MemStats.GetAvailable() < size)
+        return nullptr;
+
+    size_t *region = static_cast<size_t *>(malloc(size));
+    if (region != nullptr)
+    {
+        s_MemStats.RecordAllocate(size);
+
+        // save size
+        region[0] = size;
+
+        // set to usable memory region skipping header
+        region = region + 1;
+    }
+
+    return region;
+}
+
+void stk::memory::MemoryAllocator::Free(void *ptr)
+{
+    if (ptr == nullptr)
+        return;
+
+    stk::hw::CriticalSection::ScopedLock cs_;
+
+    // get region
+    size_t *region = static_cast<size_t *>(ptr) - 1;
+    size_t size = region[0];
+
+    free(region);
+
+    s_MemStats.RecordFree(size);
+}
+
+stk::memory::MemoryAllocator::Stats stk::memory::MemoryAllocator::GetStats()
+{
+    return s_MemStats;
+}
+
+// -----------------------------------------------------------------------------
+// Heap API — pvPortMalloc / vPortFree
+//
+// Both functions delegate directly to stk::memory::MemoryAllocator::Allocate
+// and ::Free, which are the single allocation seam for the entire wrapper.
+// Redefining those two functions (e.g. to point at a static pool allocator)
+// automatically redirects both internal STK allocations and any application
+// code that calls pvPortMalloc / vPortFree.
+// -----------------------------------------------------------------------------
+
+__stk_weak void *pvPortMalloc(size_t xWantedSize)
+{
+    return stk::memory::MemoryAllocator::Allocate(xWantedSize);
+}
+
+__stk_weak void vPortFree(void *pv)
+{
+    stk::memory::MemoryAllocator::Free(pv);
+}
+
+// -----------------------------------------------------------------------------
+// Heap query API — xPortGetFreeHeapSize / xPortGetMinimumEverFreeHeapSize /
+//                  vPortGetHeapStats / MemoryAllocator::GetStats
+//
+// All three functions read directly from s_MemStats, which is the single
+// authoritative accounting structure maintained by Allocate() and Free().
+//
+// xPortGetFreeHeapSize
+//   Returns GetAvailable() — the number of bytes not yet handed out.
+//   This is a point-in-time snapshot and may lag by one allocation if called
+//   concurrently, matching FreeRTOS heap_4/heap_5 behaviour.
+//
+// xPortGetMinimumEverFreeHeapSize
+//   Returns the minimum value GetAvailable() has ever reached since
+//   system start (i.e. the high-water mark of heap pressure).  The watermark
+//   is updated inside Allocate() immediately after the 'allocated' counter is
+//   incremented, so it is always <= the current free value.
+//
+// vPortGetHeapStats
+//   Fills a HeapStats_t snapshot consistent with the FreeRTOS heap_4/heap_5
+//   contract.  Fields that require a traversal of free-block lists (number of
+//   free blocks, smallest/largest free block) are not available without a
+//   block-list allocator; they are reported as 0 and 1 respectively to signal
+//   "at least one contiguous region exists" without asserting false precision.
+//
+// MemoryAllocator::GetStats
+//   Returns the raw Stats struct for STK-native callers.
+// -----------------------------------------------------------------------------
+
+size_t xPortGetFreeHeapSize(void)
+{
+    return s_MemStats.GetAvailable();
+}
+
+size_t xPortGetMinimumEverFreeHeapSize(void)
+{
+    return s_MemStats.min_ever_free;
+}
+
+void vPortGetHeapStats(HeapStats_t *pxHeapStats)
+{
+    if (pxHeapStats == nullptr)
+        return;
+
+    const stk::memory::MemoryAllocator::Stats snap = s_MemStats;
+    const size_t free_now = snap.GetAvailable();
+
+    (*pxHeapStats) = {};
+
+    // Fields derived directly from s_MemStats accounting.
+    pxHeapStats->xAvailableHeapSpaceInBytes      = free_now;
+    pxHeapStats->xMinimumEverFreeBytesRemaining  = snap.min_ever_free;
+    pxHeapStats->xNumberOfSuccessfulAllocations  = snap.allocate_count;
+    pxHeapStats->xNumberOfSuccessfulFrees        = snap.free_count;
+
+    // Fields that require free-block-list traversal are unavailable without a
+    // block-list allocator (we delegate to malloc).  Report conservative values:
+    //   - largest free block  : current free bytes (treat heap as one region)
+    //   - smallest free block : 0  (unknown subdivision)
+    //   - number of free blocks: 1  (at least one region exists while free > 0)
+    pxHeapStats->xSizeOfLargestFreeBlockInBytes  = free_now;
+    pxHeapStats->xSizeOfSmallestFreeBlockInBytes = (free_now > 0U) ? 1U : 0U;
+    pxHeapStats->xNumberOfFreeBlocks             = (free_now > 0U) ? 1U : 0U;
+}
+
+// -----------------------------------------------------------------------------
+// vPortEnterCritical / vPortExitCritical (back taskENTER/EXIT_CRITICAL macros)
+// -----------------------------------------------------------------------------
+void vPortEnterCritical(void)
+{
+    stk::hw::CriticalSection::Enter();
+}
+
+void vPortExitCritical(void)
+{
+    stk::hw::CriticalSection::Exit();
+}
+
+void taskYIELD_impl(void)
+{
+    stk::Yield();
 }
 
 // ===========================================================================
@@ -1290,26 +1460,6 @@ BaseType_t xTaskGetSchedulerState(void)
 // ===========================================================================
 // Task management
 // ===========================================================================
-
-// Free the deleted tasks which the kernel has finished removing (see FrtosTask::OnExit()). Task context only.
-static void ReapDeletedTasks()
-{
-    FrtosTask *list;
-
-    {
-        stk::sync::ScopedCriticalSection cs_;
-
-        list          = g_ZombieTasks;
-        g_ZombieTasks = nullptr;
-    }
-
-    while (list != nullptr)
-    {
-        FrtosTask *const next = list->m_zombie_next;
-        ObjFree(list);
-        list = next;
-    }
-}
 
 BaseType_t xTaskCreate(TaskFunction_t  pvTaskCode,
                        const char     *pcName,
@@ -2149,7 +2299,7 @@ BaseType_t xQueueSendFromISR(QueueHandle_t  xQueue,
         QueueSetNotify(xQueue, q);
 
     // STK handles the wake-up internally; the wrapper does not need to
-    // request an explicit yield from ISR because SWRR re-evaluates on the
+    // request an explicit yield from ISR because the scheduler re-evaluates on the
     // next tick.  Set the flag to pdFALSE to avoid spurious portYIELD_FROM_ISR.
     if (pxHigherPriorityTaskWoken != nullptr)
         *pxHigherPriorityTaskWoken = pdFALSE;
@@ -2255,22 +2405,6 @@ BaseType_t xQueueIsQueueFullFromISR(const QueueHandle_t xQueue)
 // -----------------------------------------------------------------------------
 
 #if configUSE_MUTEXES
-
-// Helper: given a raw QueueHandle_t, return the FrtosSemaphore* if the handle
-// is actually a mutex-kind semaphore, or nullptr otherwise.
-static inline FrtosSemaphore *QueueHandleAsMutex(QueueHandle_t xQueue)
-{
-    if (xQueue == nullptr)
-        return nullptr;
-
-    // GetSemKindFromHandle() returns SemKind::None for FrtosQueue handles
-    // (and any unrecognised object), SemKind::Counting or SemKind::Mutex for
-    // FrtosSemaphore handles.  Only SemKind::Mutex carries an owner field.
-    if (GetSemKindFromHandle(xQueue) != SemKind::Mutex)
-        return nullptr;
-
-    return static_cast<FrtosSemaphore *>(xQueue);
-}
 
 TaskHandle_t xQueueGetMutexHolder(QueueHandle_t xQueue)
 {
@@ -3268,41 +3402,6 @@ TickType_t xTimerGetExpiryTime(TimerHandle_t xTimer)
 
 #if configUSE_EVENT_GROUPS
 
-// Translate legacy STK EventFlags result -> FreeRTOS bits representation (used by the Set/Clear calls;
-// the wait calls use EventFlags::WaitEx() and need no translation).
-//
-// Success path: return the matched bits directly.
-// Error path  : return the caller-supplied snapshot of the flags word taken
-//               immediately after the timeout (or an aborted wait, see
-//               xTaskAbortDelay(): ERROR_CANCELED) was confirmed.  FreeRTOS documents
-//               that xEventGroupWaitBits() returns the flags value *at the time
-//               of timeout*, not zero, so callers can distinguish which bits were
-//               set even though the wait condition was not fully satisfied.
-//               Pass snapshot = 0U for call sites where a timeout return of 0
-//               is the correct contract (e.g. xEventGroupSync).
-static inline EventBits_t StkFlagsToFrtos(uint32_t result, EventBits_t snapshot = 0U)
-{
-    if (stk::sync::EventFlags::IsError(result))
-        return snapshot; // timeout, aborted wait (ERROR_CANCELED) or error — return flags snapshot
-
-    return static_cast<EventBits_t>(result);
-}
-
-// Build STK EventFlags options from FreeRTOS xWaitForAllBits / xClearOnExit.
-static inline uint32_t BuildStkFlagsOpts(BaseType_t xClearOnExit,
-                                          BaseType_t xWaitForAllBits)
-{
-    uint32_t opts = stk::sync::EventFlags::OPT_WAIT_ANY;
-
-    if (xWaitForAllBits == pdTRUE)
-        opts |= stk::sync::EventFlags::OPT_WAIT_ALL;
-
-    if (xClearOnExit == pdFALSE)
-        opts |= stk::sync::EventFlags::OPT_NO_CLEAR;
-
-    return opts;
-}
-
 EventGroupHandle_t xEventGroupCreate(void)
 {
     if (IsIrqContext())
@@ -3484,62 +3583,6 @@ EventBits_t xEventGroupSync(EventGroupHandle_t xEventGroup,
 // ===========================================================================
 
 #if configUSE_TASK_NOTIFICATIONS
-
-// -----------------------------------------------------------------------------
-// Internal helper: validate slot index and resolve a NULL handle to self.
-// Returns the FrtosTask pointer on success, nullptr on failure.
-// -----------------------------------------------------------------------------
-static FrtosTask *ResolveNotifyTarget(TaskHandle_t xTask, UBaseType_t uxIndex)
-{
-    STK_ASSERT(uxIndex < (UBaseType_t)configTASK_NOTIFICATION_ARRAY_ENTRIES);
-
-    if (uxIndex >= (UBaseType_t)configTASK_NOTIFICATION_ARRAY_ENTRIES)
-        return nullptr;
-
-    if (xTask == nullptr)
-        xTask = xTaskGetCurrentTaskHandle();
-
-    return static_cast<FrtosTask *>(xTask);
-}
-
-// -----------------------------------------------------------------------------
-// Internal helper: apply a notification action to a slot under a held CS.
-// Returns pdPASS / pdFAIL (mirrors the public xTaskNotify contract).
-// -----------------------------------------------------------------------------
-static BaseType_t NotifyApplyAction(FrtosTask::NotifySlot &slot,
-                                    uint32_t               ulValue,
-                                    eNotifyAction          eAction)
-{
-    switch (eAction)
-    {
-    case eNoAction:
-        break;
-
-    case eSetBits:
-        slot.value |= ulValue;
-        break;
-
-    case eIncrement:
-        slot.value++;
-        break;
-
-    case eSetValueWithOverwrite:
-        slot.value = ulValue;
-        break;
-
-    case eSetValueWithoutOverwrite:
-        if (slot.pending)
-            return pdFAIL; // value not consumed yet
-        slot.value   = ulValue;
-        slot.pending = true;
-        break;
-
-    default:
-        return pdFAIL;
-    }
-
-    return pdPASS;
-}
 
 // ===========================================================================
 // Indexed API
@@ -4383,18 +4426,6 @@ StreamBufferHandle_t xStreamBufferCreateStaticWithCallback(
 
 static_assert(sizeof(StaticMessageBuffer_t) >= sizeof(FrtosMessageBuffer),
     "Increase STATIC_MESSAGE_BUFFER_TCB_SIZE_WORDS in FreeRTOS.h.");
-
-// Derive slot count from a flat byte budget.
-static size_t MsgBufSlotCount(size_t budget_bytes, size_t max_msg_size)
-{
-    const size_t block_size = stk::memory::BlockMemoryPool::AlignBlockSize(max_msg_size);
-    const size_t slot_cost  = block_size + FrtosMessageBuffer::ENVELOPE_SIZE;
-
-    if (slot_cost == 0U)
-        return 0U;
-
-    return budget_bytes / slot_cost;
-}
 
 MessageBufferHandle_t xMessageBufferCreate(size_t xBufferSizeBytes,
                                             size_t xMaxMessageSize)
