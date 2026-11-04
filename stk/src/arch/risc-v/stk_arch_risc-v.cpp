@@ -249,6 +249,10 @@ using namespace stk;
     #define STK_MSI_HANDLER riscv_mtvec_msi
 #endif
 
+// ----------------------------------------------------------------------------
+namespace {
+// ----------------------------------------------------------------------------
+
 /*! \struct TaskFrame
     \brief  Complete initial task register frame laid out at the bottom of a new stack
             (lowest address), matching the layout the ISR context-save/restore assembly
@@ -261,8 +265,8 @@ using namespace stk;
       [2] X1/RA   - return address (x1)
       [3] X2/SP   - stack pointer slot (skipped by save/restore, zero-initialised)
       [4] X3/GP   - global pointer slot, repurposed as FSR when FPU present
-      [5..N] X4–X15 (RV32E), or X4–X31 (RV32I/RV64)
-      [N+1..] F0–F31 (when FPU present)
+      [5..N] X4-X15 (RV32E), or X4-X31 (RV32I/RV64)
+      [N+1..] F0-F31 (when FPU present)
 
     Only MEPC, MSTATUS, X1 (RA), X3 (FSR), and X10 (first argument) are set by
     InitStack, all other slots are left STK_STACK_MEMORY_FILLER-initialised by InitStackMemory.
@@ -316,16 +320,108 @@ struct TaskFrame
     // FREGBYTES may differ from REGBYTES (32-bit FP on a 64-bit integer machine).
     // Declared as Word arrays for uniform struct sizing; the FP load/store
     // instructions address them by byte offset and tolerate the type mismatch.
-    Word F[32];   //!< f0–f31, all STK_STACK_MEMORY_FILLER-initialised (round-to-nearest set via X3_FSR).
+    Word F[32];   //!< f0-f31, all STK_STACK_MEMORY_FILLER-initialised (round-to-nearest set via X3_FSR).
 #endif
 };
+
+// ----------------------------------------------------------------------------
+} // namespace
+// ----------------------------------------------------------------------------
+
+// Local functions of the driver:
+// ----------------------------------------------------------------------------
+namespace {
+namespace drv {
+// ----------------------------------------------------------------------------
+
+void OnTaskRun(ITask *task);
+void OnTaskExit();
+void OnSchedulerSleep();
+void OnSchedulerSleepOverride();
+void OnSchedulerExit();
+
+// ----------------------------------------------------------------------------
+} // namespace drv
+} // namespace
+// ----------------------------------------------------------------------------
+
+/*! Pointer Cache --------------------------------------------------------------
+
+    ISR assembly pointer cache: stack pointers used by naked ISR handlers for
+    context switching. Indexed by hart id (0 for single-core builds). Declared
+    volatile to prevent the compiler from caching reads. Using per-hart pointers
+    fully decouples ISR assembly from Context layout and sizeof.
+
+    \note   Intentionally outside of the anonymous namespace: the ISR assembly references
+            these symbols by name ("la reg, sym"), therefore they require external C linkage
+            to keep an unmangled, stable symbol name; __stk_attr_used prevents LTO discarding.
+*/
+extern "C" {
+
+/*! \brief  Pointer to the idle task stack, per hart. Written by scheduler,
+            read by STK_MSI_HANDLER.
+*/
+extern Stack *volatile s_StkRiscvStackIdle[STK_ARCH_CPU_COUNT];
+
+/*! \brief  Pointer to the active task stack, per hart. Written by scheduler,
+            read by STK_MSI_HANDLER (PendSV) or STK_SYSTICK_HANDLER (non-PendSV).
+*/
+extern Stack *volatile s_StkRiscvStackActive[STK_ARCH_CPU_COUNT];
+
+/*! \brief  Pointer to the private ISR stack, per hart. Written once by
+            Context::OnStart, read by both ISR handlers.
+*/
+extern Stack *volatile s_StkRiscvStackIsr[STK_ARCH_CPU_COUNT];
+
+#ifdef _STK_RISCV_USE_PENDSV
+/*! \brief  Scratch storage for the SP of the task interrupted by STK_SYSTICK_HANDLER, per hart.
+    \note   Written and read exclusively by STK_SYSTICK_HANDLER. Never touched by
+            STK_MSI_HANDLER, making it safe across mutual preemption without
+            requiring mscratch or a full Stack struct.
+*/
+extern volatile Word s_StkRiscvSpIsrInt[STK_ARCH_CPU_COUNT];
+#endif
+
+/*! \var    g_StkLastPanicId
+    \brief  Panic id cache for post-mortem inspection.
+    \note   External C linkage keeps an unmangled, stable symbol name for debuggers and tools.
+*/
+extern volatile EKernelPanicId g_StkLastPanicId;
+
+} // extern "C"
+
+__stk_attr_used
+STK_MPU_KERNEL_BSS_SECTION
+Stack *volatile s_StkRiscvStackIdle[STK_ARCH_CPU_COUNT];
+
+__stk_attr_used
+STK_MPU_KERNEL_BSS_SECTION
+Stack *volatile s_StkRiscvStackActive[STK_ARCH_CPU_COUNT];
+
+__stk_attr_used
+STK_MPU_KERNEL_BSS_SECTION
+Stack *volatile s_StkRiscvStackIsr[STK_ARCH_CPU_COUNT];
+
+#ifdef _STK_RISCV_USE_PENDSV
+__stk_attr_used
+STK_MPU_KERNEL_BSS_SECTION
+volatile Word s_StkRiscvSpIsrInt[STK_ARCH_CPU_COUNT];
+#endif
+
+__stk_attr_used
+STK_MPU_KERNEL_BSS_SECTION
+volatile EKernelPanicId g_StkLastPanicId = KERNEL_PANIC_NONE;
+
+// ----------------------------------------------------------------------------
+namespace {
+// ----------------------------------------------------------------------------
 
 // Local static variables:
 STK_MPU_KERNEL_BSS_SECTION
 #if STK_CORE_FREQ_UNIFIED
-static uint32_t s_StkSystemCoreClock[1U];
+uint32_t s_StkSystemCoreClock[1U];
 #else
-static uint32_t s_StkSystemCoreClock[STK_ARCH_CPU_COUNT];
+uint32_t s_StkSystemCoreClock[STK_ARCH_CPU_COUNT];
 #endif
 
 /*! \brief    Cached spin-lock timeout, in retry-loop iterations.
@@ -337,63 +433,23 @@ static uint32_t s_StkSystemCoreClock[STK_ARCH_CPU_COUNT];
               still has a bounded, non-zero timeout instead of panicking immediately.
 */
 STK_MPU_KERNEL_DATA_SECTION
-static uint32_t s_StkSpinlockTimeoutIters = 0xFFFFFFFU;
+uint32_t s_StkSpinlockTimeoutIters = 0xFFFFFFFU;
 
 /*! \brief  Global lock to synchronize critical sections of multiple cores.
 */
 STK_MPU_KERNEL_BSS_SECTION
-static volatile bool s_StkRiscvCsuLock = false;
-
-//! Panic id cache for post-mortem inspection.
-STK_MPU_KERNEL_BSS_SECTION
-static volatile EKernelPanicId g_StkLastPanicId = KERNEL_PANIC_NONE;
-
-/*! Pointer Cache --------------------------------------------------------------
-
-    ISR assembly pointer cache: stack pointers used by naked ISR handlers for
-    context switching. Indexed by hart id (0 for single-core builds). Declared
-    volatile to prevent the compiler from caching reads. Using per-hart pointers
-    fully decouples ISR assembly from Context layout and sizeof.
-*/
-
-/*! \brief  Pointer to the idle task stack, per hart. Written by scheduler,
-            read by STK_MSI_HANDLER.
-*/
-STK_MPU_KERNEL_BSS_SECTION
-Stack *volatile s_StkRiscvStackIdle[STK_ARCH_CPU_COUNT];
-
-#ifdef _STK_RISCV_USE_PENDSV
-/*! \brief  Scratch storage for the SP of the task interrupted by STK_SYSTICK_HANDLER, per hart.
-    \note   Written and read exclusively by STK_SYSTICK_HANDLER. Never touched by
-            STK_MSI_HANDLER, making it safe across mutual preemption without
-            requiring mscratch or a full Stack struct.
-*/
-STK_MPU_KERNEL_BSS_SECTION
-volatile Word s_StkRiscvSpIsrInt[STK_ARCH_CPU_COUNT];
-#endif
-
-/*! \brief  Pointer to the active task stack, per hart. Written by scheduler,
-            read by STK_MSI_HANDLER (PendSV) or STK_SYSTICK_HANDLER (non-PendSV).
-*/
-STK_MPU_KERNEL_BSS_SECTION
-Stack *volatile s_StkRiscvStackActive[STK_ARCH_CPU_COUNT];
-
-/*! \brief  Pointer to the private ISR stack, per hart. Written once by
-            Context::OnStart, read by both ISR handlers.
-*/
-STK_MPU_KERNEL_BSS_SECTION
-Stack *volatile s_StkRiscvStackIsr[STK_ARCH_CPU_COUNT];
+volatile bool s_StkRiscvCsuLock = false;
 
 /*! \brief  Order all predecessor Read/Write with all successor Read/Write (similar to ARM's __DSB(DSB ISH)).
 */
-static __stk_forceinline void __DSB()
+__stk_forceinline void __DSB()
 {
     __asm volatile("fence rw, rw" ::: "memory");
 }
 
 /*! \brief  Flush the instruction cache and pipeline (similar to ARM's __ISB).
 */
-static __stk_forceinline void __ISB()
+__stk_forceinline void __ISB()
 {
 #ifdef __riscv_zifencei
     __asm volatile("fence.i" ::: "memory");
@@ -404,7 +460,7 @@ static __stk_forceinline void __ISB()
 
 /*! \brief  Put core into a low-power state (similar to ARM's __WFI).
 */
-static __stk_forceinline void __WFI()
+__stk_forceinline void __WFI()
 {
     __asm volatile("wfi");
 }
@@ -412,21 +468,21 @@ static __stk_forceinline void __WFI()
 /*! \brief  Triggers scheduler startup via M-mode environment call (mcause = RISCV_EXCP_ENVIRONMENT_CALL_FROM_M_MODE).
     \note   Caught by STK_SVC_HANDLER which detects m_starting and calls Context::OnStart().
 */
-static __stk_forceinline void HW_StartScheduler()
+__stk_forceinline void HW_StartScheduler()
 {
     __asm volatile("ecall");
 }
 
 /*! \brief  Get current (caller's) Hart Id.
 */
-static __stk_forceinline uint8_t HW_GetHartId()
+__stk_forceinline uint8_t HW_GetHartId()
 {
     return STK_ARCH_GET_CPU_ID();
 }
 
 /*! \brief  Disable CPU interrupts.
 */
-static __stk_forceinline void HW_DisableInterrupts()
+__stk_forceinline void HW_DisableInterrupts()
 {
     __asm volatile("csrrci zero, mstatus, %0"
     : /* output: none */
@@ -436,7 +492,7 @@ static __stk_forceinline void HW_DisableInterrupts()
 
 /*! \brief  Enable CPU interrupts.
 */
-static __stk_forceinline void HW_EnableInterrupts()
+__stk_forceinline void HW_EnableInterrupts()
 {
     __asm volatile("csrrsi zero, mstatus, %0"
     : /* output: none */
@@ -447,7 +503,7 @@ static __stk_forceinline void HW_EnableInterrupts()
 /*! \brief  Enter critical section.
     \return Session value which has to be supplied to HW_ExitCriticalSection().
 */
-static __stk_forceinline Word HW_EnterCriticalSection()
+__stk_forceinline Word HW_EnterCriticalSection()
 {
     Word ses;
     __asm volatile("csrrci %0, mstatus, %1"
@@ -461,7 +517,7 @@ static __stk_forceinline Word HW_EnterCriticalSection()
 /*! \brief     Exit critical section.
     \param[in] ses: Session value obtained by HW_EnterCriticalSection().
 */
-static __stk_forceinline void HW_ExitCriticalSection(Word ses)
+__stk_forceinline void HW_ExitCriticalSection(Word ses)
 {
     __asm volatile("csrrs zero, mstatus, %0"
     : /* output: none */
@@ -471,7 +527,7 @@ static __stk_forceinline void HW_ExitCriticalSection(Word ses)
 
 /*! \brief  Enter low-power/sleep mode.
 */
-static __stk_forceinline void HW_EnterSleepMode()
+__stk_forceinline void HW_EnterSleepMode()
 {
     __DSB(); // data barrier
     __WFI(); // enter standby mode until time slot expires
@@ -479,7 +535,7 @@ static __stk_forceinline void HW_EnterSleepMode()
 
 /*! \brief  Stop machine timer.
 */
-static __stk_forceinline void HW_StopMTimer()
+__stk_forceinline void HW_StopMTimer()
 {
     clear_csr(mie, MIP_MTIP);
 }
@@ -487,7 +543,7 @@ static __stk_forceinline void HW_StopMTimer()
 /*! \brief     Switch context by scheduling PendSV interrupt.
     \param[in] hart: Hard id.
 */
-static __stk_forceinline void HW_ScheduleContextSwitch(uint8_t hart)
+__stk_forceinline void HW_ScheduleContextSwitch(uint8_t hart)
 {
     // Pend Machine Software Interrupt (MSI) - equivalent of ARM's PENDSVSET
     volatile uint32_t *msip = (volatile uint32_t *)(STK_RISCV_CLINT_BASE_ADDR);
@@ -500,7 +556,7 @@ static __stk_forceinline void HW_ScheduleContextSwitch(uint8_t hart)
            always enabled, since Context::OnForceContextSwitch() relies on it for
            asynchronous/forced switches even on the single-handler (non-PendSV) tick path.
 */
-static __stk_forceinline void HW_ClearPendingSwitch()
+__stk_forceinline void HW_ClearPendingSwitch()
 {
     clear_csr(mie, MIP_MSIP);
 }
@@ -508,7 +564,7 @@ static __stk_forceinline void HW_ClearPendingSwitch()
 /*! \brief  Get CPU core clock frequency.
     \return Frequency in Hz.
 */
-static __stk_forceinline uint32_t HW_CoreClockFrequency()
+__stk_forceinline uint32_t HW_CoreClockFrequency()
 {
 #if STK_CORE_FREQ_UNIFIED
     return s_StkSystemCoreClock[0];
@@ -521,7 +577,7 @@ static __stk_forceinline uint32_t HW_CoreClockFrequency()
     \note   By default mtime is driven by a fixed 1 MHz reference, independent of the CPU PLL.
     \return Frequency in Hz.
 */
-static __stk_forceinline uint32_t HW_MtimeClockFrequency()
+__stk_forceinline uint32_t HW_MtimeClockFrequency()
 {
     return STK_TIMER_CLOCK_FREQUENCY; // timer frequency, e.g. 1 MHz
 }
@@ -531,7 +587,7 @@ static __stk_forceinline uint32_t HW_MtimeClockFrequency()
     \note   mtime is a free-running 64-bit counter driven by a fixed-frequency
             reference clock (not the CPU clock).
 */
-static __stk_forceinline uint64_t HW_GetMtime()
+__stk_forceinline uint64_t HW_GetMtime()
 {
 #if ( __riscv_xlen > 32)
     return *(hw::WordToPtr<volatile uint64_t>(STK_RISCV_CLINT_MTIME_ADDR));
@@ -555,7 +611,7 @@ static __stk_forceinline uint64_t HW_GetMtime()
 /*! \brief     Set mtimecmp register.
     \param[in] time_next: Time at which to trigger next ISR.
 */
-static __stk_forceinline void HW_SetMtimecmp(uint64_t time_next)
+__stk_forceinline void HW_SetMtimecmp(uint64_t time_next)
 {
 #if STK_RISCV_CLINT_MTIMECMP_PER_HART
     const uint8_t hart = HW_GetHartId();
@@ -588,14 +644,14 @@ static __stk_forceinline void HW_SetMtimecmp(uint64_t time_next)
     \return    Elapsed mtime counts. Unsigned subtraction handles the rare
                64-bit wrap (every ~585 years at 1 GHz) correctly.
 */
-static __stk_forceinline uint64_t HW_GetMtimeElapsed(uint64_t since)
+__stk_forceinline uint64_t HW_GetMtimeElapsed(uint64_t since)
 {
     return HW_GetMtime() - since;
 }
 
 /*! \brief     Enable cycle counter on CPU core.
 */
-static __stk_forceinline void HW_EnableCycleCounter()
+__stk_forceinline void HW_EnableCycleCounter()
 {
     __asm volatile("csrci mcountinhibit, 0x1");
 }
@@ -603,7 +659,7 @@ static __stk_forceinline void HW_EnableCycleCounter()
 /*! \brief     Get value of cycle counter (for the hart of the caller).
     \return    Counter value in cycles.
 */
-static __stk_forceinline Cycles HW_GetCycleCounter()
+__stk_forceinline Cycles HW_GetCycleCounter()
 {
     uint32_t high, low, check;
     do
@@ -619,7 +675,7 @@ static __stk_forceinline Cycles HW_GetCycleCounter()
 
 /*! \brief Get SP of the calling process.
 */
-static __stk_forceinline Word HW_GetCallerSP()
+__stk_forceinline Word HW_GetCallerSP()
 {
     Word sp;
     __asm volatile("mv %0, sp"
@@ -632,7 +688,7 @@ static __stk_forceinline Word HW_GetCallerSP()
 
 /*! \brief Start critical section.
 */
-static __stk_forceinline void HW_CriticalSectionStart(Word &ses)
+__stk_forceinline void HW_CriticalSectionStart(Word &ses)
 {
     ses = HW_EnterCriticalSection();
 
@@ -643,7 +699,7 @@ static __stk_forceinline void HW_CriticalSectionStart(Word &ses)
 
 /*! \brief End critical section.
 */
-static __stk_forceinline void HW_CriticalSectionEnd(Word ses)
+__stk_forceinline void HW_CriticalSectionEnd(Word ses)
 {
     // ensure all memory work is finished before re-enabling
     __DSB();
@@ -668,7 +724,7 @@ static __stk_forceinline void HW_CriticalSectionEnd(Word ses)
                a preceding successful HW_SpinLockTryLock() or HW_SpinLockLock().
     \see       HW_SpinLockLock, HW_SpinLockUnlock
 */
-static __stk_forceinline bool HW_SpinLockTryLock(volatile bool &lock)
+__stk_forceinline bool HW_SpinLockTryLock(volatile bool &lock)
 {
     return !__atomic_test_and_set(&lock, __ATOMIC_ACQUIRE);
 }
@@ -693,7 +749,7 @@ static __stk_forceinline bool HW_SpinLockTryLock(volatile bool &lock)
                spin until the timeout expires and then trigger STK_KERNEL_PANIC().
     \see       HW_SpinLockTryLock, HW_SpinLockUnlock, HW_InitSpinlockTimeout
 */
-static __stk_forceinline void HW_SpinLockLock(volatile bool &lock)
+__stk_forceinline void HW_SpinLockLock(volatile bool &lock)
 {
     uint32_t timeout = s_StkSpinlockTimeoutIters;
     while (!HW_SpinLockTryLock(lock))
@@ -723,10 +779,12 @@ static __stk_forceinline void HW_SpinLockLock(volatile bool &lock)
     \note      ISR-safe.
     \see       HW_SpinLockTryLock, HW_SpinLockLock
 */
-static __stk_forceinline void HW_SpinLockUnlock(volatile bool &lock)
+__stk_forceinline void HW_SpinLockUnlock(volatile bool &lock)
 {
     if (!lock)
+    {
         STK_KERNEL_PANIC(KERNEL_PANIC_SPINLOCK_DEADLOCK); // release attempt of unowned lock
+    }
 
     // ensure all data writes (like scheduling metadata) are flushed before the lock is released:
     // __atomic_clear with __ATOMIC_RELEASE provides the required store-release barrier,
@@ -749,7 +807,7 @@ static __stk_forceinline void HW_SpinLockUnlock(volatile bool &lock)
                misconfigured clock tree cannot produce an immediate false-positive
                KERNEL_PANIC_SPINLOCK_DEADLOCK on the very first lock attempt.
 */
-static void HW_InitSpinlockTimeout()
+void HW_InitSpinlockTimeout()
 {
     const Cycles cycles_budget = ConvertTimeUsToClockCycles(HW_CoreClockFrequency(), STK_SPINLOCK_TIMEOUT_US);
     const Cycles iters = cycles_budget / STK_SPINLOCK_MIN_CYCLES_PER_ITER;
@@ -760,7 +818,9 @@ static void HW_InitSpinlockTimeout()
         stk::Min(stk::Max(iters, static_cast<Cycles>(0x1000U)), static_cast<Cycles>(0xFFFFFFFFU)));
 }
 
-//! ----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
+namespace drv {
+// ----------------------------------------------------------------------------
 
 /*! SaveJmp/RestoreJmp ---------------------------------------------------------
 
@@ -899,7 +959,18 @@ void RestoreJmp(JmpFrame &/*f*/, int32_t /*val*/)
     );
 }
 
-//! ----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
+} // namespace drv
+// ----------------------------------------------------------------------------
+
+// ----------------------------------------------------------------------------
+} // namespace
+// ----------------------------------------------------------------------------
+
+// ----------------------------------------------------------------------------
+// Make file local content (anonymous namespace).
+namespace {
+// ----------------------------------------------------------------------------
 
 //! High resolution clock based on MTIME.
 #if STK_SUBMICORSECOND_PRECISION_TIMER
@@ -956,9 +1027,16 @@ HiResClockMTIME *HiResClockMTIME::GetInstance()
 }
 #endif // !STK_SUBMICORSECOND_PRECISION_TIMER
 
+// ----------------------------------------------------------------------------
+} // anonymous namespace
+// ----------------------------------------------------------------------------
+
+// ----------------------------------------------------------------------------
+namespace {
+// ----------------------------------------------------------------------------
+
 //! Internal context.
-STK_MPU_KERNEL_DATA_SECTION
-static struct Context final : public PlatformContext
+struct Context final : public PlatformContext
 {
     constexpr Context() : PlatformContext(), m_stack_main(), m_stack_isr(), m_stack_isr_mem(),
         m_exit_buf(), m_overrider(nullptr), m_specific(nullptr), m_tick_period(0), m_last_mtime(0ULL),
@@ -1252,24 +1330,33 @@ static struct Context final : public PlatformContext
     typedef PlatformRiscV::ISpecificEventHandler                     sehndl_t;
     typedef StackMemoryWrapper<STK_RISCV_ISR_STACK_SIZE>::MemoryType isrmem_t;
 
-    Stack     m_stack_main;    //!< main stack info
-    Stack     m_stack_isr;     //!< ISR stack info
-    isrmem_t  m_stack_isr_mem; //!< ISR stack memory
-    JmpFrame  m_exit_buf;      //!< saved context of the exit point
-    eovrd_t  *m_overrider;     //!< platform events overrider
-    sehndl_t *m_specific;      //!< platform-specific event handler
-    uint32_t  m_tick_period;   //!< system tick periodicity (microseconds, ticks)
-    uint64_t  m_last_mtime;    //!< mtime captured at previous OnTick entry
+    Stack         m_stack_main;    //!< main stack info
+    Stack         m_stack_isr;     //!< ISR stack info
+    isrmem_t      m_stack_isr_mem; //!< ISR stack memory
+    drv::JmpFrame m_exit_buf;      //!< saved context of the exit point
+    eovrd_t      *m_overrider;     //!< platform events overrider
+    sehndl_t     *m_specific;      //!< platform-specific event handler
+    uint32_t      m_tick_period;   //!< system tick periodicity (microseconds, ticks)
+    uint64_t      m_last_mtime;    //!< mtime captured at previous OnTick entry
 #if STK_TICKLESS_IDLE
-    Timeout   m_sleep_ticks;   //!< tick count programmed for the current/last period
+    Timeout       m_sleep_ticks;   //!< tick count programmed for the current/last period
 #endif
-    Word      m_csu;           //!< user critical session
-    uint8_t   m_csu_nesting;   //!< depth of user critical session nesting
-    bool      m_starting;      //!< 'true' when in is being started
-    bool      m_started;       //!< 'true' when in started state
-    volatile bool m_exiting;   //!< 'true' when is exiting the scheduling process
-}
-s_StkPlatformContext[STK_ARCH_CPU_COUNT];
+    Word          m_csu;           //!< user critical session
+    uint8_t       m_csu_nesting;   //!< depth of user critical session nesting
+    bool          m_starting;      //!< 'true' when in is being started
+    bool          m_started;       //!< 'true' when in started state
+    volatile bool m_exiting;       //!< 'true' when is exiting the scheduling process
+};
+
+/*! \var s_StkPlatformContext
+    \brief Shared static context instance (one per hart).
+*/
+STK_MPU_KERNEL_DATA_SECTION
+Context s_StkPlatformContext[STK_ARCH_CPU_COUNT];
+
+// ----------------------------------------------------------------------------
+} // namespace
+// ----------------------------------------------------------------------------
 
 __stk_attr_noinline // keep out of inlining to preserve stack frame
 __stk_attr_noreturn // never returns - a trap
@@ -1501,7 +1588,12 @@ void PlatformRiscV::ProcessTick()
     STK_ASM_LOAD_CONTEXT_FP\
     "addi sp, sp, " REGSIZE   " \n" /* shrink stack memory of registers */
 
-static __stk_forceinline void HW_LoadContextAndExit()
+// ----------------------------------------------------------------------------
+// Make file local content (anonymous namespace): helpers which depend on Context.
+namespace {
+// ----------------------------------------------------------------------------
+
+__stk_forceinline void HW_LoadContextAndExit()
 {
     __asm volatile(
     LREG " t0, %0               \n" // load the first member (SP) into t0
@@ -1515,7 +1607,7 @@ static __stk_forceinline void HW_LoadContextAndExit()
     : "t0", "t1", "a2", "a3", "a4", "a5", "gp", "memory");
 }
 
-static __stk_forceinline void HW_EnableFullFpuAccess()
+__stk_forceinline void HW_EnableFullFpuAccess()
 {
 #if (STK_RISCV_FPU != 0)
     __asm volatile(
@@ -1526,7 +1618,7 @@ static __stk_forceinline void HW_EnableFullFpuAccess()
 #endif
 }
 
-static __stk_forceinline void HW_ClearFpuState()
+__stk_forceinline void HW_ClearFpuState()
 {
 #if (STK_RISCV_FPU != 0)
     __asm volatile(
@@ -1537,7 +1629,7 @@ static __stk_forceinline void HW_ClearFpuState()
 #endif
 }
 
-static __stk_forceinline void HW_SaveMainSP()
+__stk_forceinline void HW_SaveMainSP()
 {
     __asm volatile(
     SREG " sp, %0"
@@ -1546,7 +1638,7 @@ static __stk_forceinline void HW_SaveMainSP()
     : "memory" /* protect against compiler reordering */ );
 }
 
-static __stk_forceinline void HW_LoadMainSP()
+__stk_forceinline void HW_LoadMainSP()
 {
     __asm volatile(
     LREG " sp, %0"
@@ -1564,14 +1656,14 @@ static __stk_forceinline void HW_LoadMainSP()
               bit[31]    = 1 for asynchronous interrupt, 0 for synchronous exception.
               bits[30:0] = cause code, unique per interrupt/exception source.
 */
-static __stk_forceinline Word HW_GetCurrentException()
+__stk_forceinline Word HW_GetCurrentException()
 {
     Word mcause;
     __asm volatile("csrr %0, mcause" : "=r"(mcause));
     return mcause;
 }
 
-static __stk_forceinline bool HW_IsHandlerMode()
+__stk_forceinline bool HW_IsHandlerMode()
 {
     const Word current_sp = HW_GetCallerSP();
 
@@ -1583,10 +1675,14 @@ static __stk_forceinline bool HW_IsHandlerMode()
     return ((current_sp >= isr_stack_base) && (current_sp < isr_stack_top));
 }
 
-static __stk_forceinline void OnTaskStart()
+__stk_forceinline void OnTaskStart()
 {
     HW_LoadContextAndExit();
 }
+
+// ----------------------------------------------------------------------------
+} // namespace
+// ----------------------------------------------------------------------------
 
 // __stk_attr_used for LTO
 extern "C" STK_RISCV_ISR_SECTION __stk_attr_used void TrySwitchContext()
@@ -1748,9 +1844,10 @@ DESIGN RULES - must be obeyed to work correctly at all optimisation levels:
     text, i.e. before the register save - trashing uninitialized registers.
 
  2. All addresses are linker symbols loaded via "la" inside the asm.
-    s_StkRiscvStackActive and s_StkRiscvStackIsr are plain file-scope globals. "la reg, sym"
-    emits a PC-relative load that is resolved at link time, it produces no
-    compiler-generated code outside the asm string.
+    s_StkRiscvStackActive and s_StkRiscvStackIsr are plain file-scope globals
+    with C linkage (declared extern "C" above). "la reg, sym" emits a PC-relative
+    load that is resolved at link time, it produces no compiler-generated code
+    outside the asm string.
 
  3. Stack pointer indexing uses sizeof(Stack*) == REGBYTES.
     For multi-hart builds the array index is hart * REGBYTES, which is a
@@ -1885,6 +1982,7 @@ void Context::OnStart()
 STK_RISCV_ISR void STK_SVC_HANDLER()
 {
     const Word cause = HW_GetCurrentException();
+    Context &ctx = GetContext();
 
     /*if (cause & (1UL << (__riscv_xlen - 1)))
     {
@@ -1899,11 +1997,13 @@ STK_RISCV_ISR void STK_SVC_HANDLER()
     if (cause == IRQ_M_EXT)
     {
         // not starting scheduler, then try to forward ecall to user
-        if (!GetContext().m_starting)
+        if (!ctx.m_starting)
         {
             // forward event to user
-            if (GetContext().m_specific != nullptr)
-                GetContext().m_specific->OnException(cause);
+            if (ctx.m_specific != nullptr)
+            {
+                ctx.m_specific->OnException(cause);
+            }
 
             // switch to the next instruction of the caller space (PC) after the return
             write_csr(mepc, read_csr(mepc) + sizeof(Word));
@@ -1914,7 +2014,7 @@ STK_RISCV_ISR void STK_SVC_HANDLER()
             HW_DisableInterrupts();
 
             // configure scheduling
-            GetContext().OnStart();
+            ctx.OnStart();
 
             // start first task
             OnTaskStart();
@@ -1922,10 +2022,10 @@ STK_RISCV_ISR void STK_SVC_HANDLER()
     }
     else
     {
-        if (GetContext().m_specific != nullptr)
+        if (ctx.m_specific != nullptr)
         {
             // forward event to user
-            GetContext().m_specific->OnException(cause);
+            ctx.m_specific->OnException(cause);
         }
         else
         {
@@ -1937,17 +2037,19 @@ STK_RISCV_ISR void STK_SVC_HANDLER()
     }
 }
 
-static void OnTaskRun(ITask *task)
+void drv::OnTaskRun(ITask *task)
 {
     task->Run();
 }
 
-static void OnTaskExit()
+void drv::OnTaskExit()
 {
+    const Context &ctx = GetContext();
+
     Word cs;
     HW_CriticalSectionStart(cs);
 
-    GetContext().m_handler->OnTaskExit(GetContext().m_stack_active);
+    ctx.m_handler->OnTaskExit(ctx.m_stack_active);
 
     HW_CriticalSectionEnd(cs);
 
@@ -1958,7 +2060,8 @@ static void OnTaskExit()
     }
 }
 
-static STK_RISCV_ISR_SECTION void OnSchedulerSleep()
+STK_RISCV_ISR_SECTION
+void drv::OnSchedulerSleep()
 {
     // if hit here, increase the size of STK_SLEEP_TRAP_STACK_SIZE
     STK_STATIC_ASSERT(STK_SLEEP_TRAP_STACK_SIZE >= STK_STACK_SIZE_MIN);
@@ -1973,7 +2076,8 @@ static STK_RISCV_ISR_SECTION void OnSchedulerSleep()
     }
 }
 
-static STK_RISCV_ISR_SECTION void OnSchedulerSleepOverride()
+STK_RISCV_ISR_SECTION
+void drv::OnSchedulerSleepOverride()
 {
     // if hit here, increase the size of STK_SLEEP_TRAP_STACK_SIZE
     STK_STATIC_ASSERT(STK_SLEEP_TRAP_STACK_SIZE >= STK_STACK_SIZE_MIN);
@@ -1988,13 +2092,13 @@ static STK_RISCV_ISR_SECTION void OnSchedulerSleepOverride()
     }
 }
 
-static void OnSchedulerExit()
+void drv::OnSchedulerExit()
 {
     // switch to main stack
     HW_LoadMainSP();
 
     // jump to the exit from the IKernel::Start()
-    RestoreJmp(GetContext().m_exit_buf, 0);
+    drv::RestoreJmp(GetContext().m_exit_buf, 0);
 }
 
 void PlatformRiscV::Initialize(IEventHandler *event_handler, IKernelService *service, uint32_t resolution_us, Stack *exit_trap)
@@ -2007,7 +2111,7 @@ void Context::Start()
     m_exiting = false;
 
     // save jump location of the Exit trap
-    SaveJmp(m_exit_buf);
+    STK_UNUSED(drv::SaveJmp(m_exit_buf));
     if (m_exiting)
     {
         // notify kernel about a full stop
@@ -2101,18 +2205,18 @@ void PlatformRiscV::InitStack(EStackType stack_type, Stack *stack, IStackMemory 
     switch (stack_type)
     {
     case STACK_USER_TASK: {
-        task_frame->MEPC   = hw::PtrToWord(&OnTaskRun);
-        task_frame->X1_RA  = hw::PtrToWord(&OnTaskExit);
+        task_frame->MEPC   = hw::PtrToWord(&drv::OnTaskRun);
+        task_frame->X1_RA  = hw::PtrToWord(&drv::OnTaskExit);
         task_frame->X10_A0 = hw::PtrToWord(user_task);
         break; }
 
     case STACK_SLEEP_TRAP: {
-        task_frame->MEPC  = hw::PtrToWord(GetContext().m_overrider != nullptr ? &OnSchedulerSleepOverride : &OnSchedulerSleep);
+        task_frame->MEPC  = hw::PtrToWord(GetContext().m_overrider != nullptr ? &drv::OnSchedulerSleepOverride : &drv::OnSchedulerSleep);
         task_frame->X1_RA = STK_STACK_MEMORY_FILLER; // should not attempt to exit
         break; }
 
     case STACK_EXIT_TRAP: {
-        task_frame->MEPC  = hw::PtrToWord(&OnSchedulerExit);
+        task_frame->MEPC  = hw::PtrToWord(&drv::OnSchedulerExit);
         task_frame->X1_RA = STK_STACK_MEMORY_FILLER; // should not attempt to exit
         break; }
 
@@ -2206,7 +2310,7 @@ EWaitResult PlatformRiscV::Wait(ISyncObject *sync_obj, IMutex *mutex, Timeout ti
 TId PlatformRiscV::GetTid() const
 {
     TId result;
-  
+
     if (HW_IsHandlerMode())
     {
         // to avoid the collision with TID_ISR_N mask, extract and fit into available space:
@@ -2225,7 +2329,7 @@ TId PlatformRiscV::GetTid() const
     }
     else
     {
-        Context &ctx = GetContext();
+        const Context &ctx = GetContext();
 
         if (ctx.m_started)
         {
@@ -2236,7 +2340,7 @@ TId PlatformRiscV::GetTid() const
             result = TID_NONE;
         }
     }
-    
+
     return result;
 }
 
@@ -2261,10 +2365,11 @@ void PlatformRiscV::Resume(Timeout elapsed_ticks)
 void PlatformRiscV::ProcessHardFault()
 {
     bool is_handled = false;
+    const Context &ctx = GetContext();
 
-    if (GetContext().m_overrider != nullptr)
+    if (ctx.m_overrider != nullptr)
     {
-        is_handled = GetContext().m_overrider->OnHardFault();
+        is_handled = ctx.m_overrider->OnHardFault();
     }
 
     if (!is_handled)
