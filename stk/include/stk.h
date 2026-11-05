@@ -1042,28 +1042,35 @@ protected:
         void Delay(Timeout ticks) override
         {
             STK_ASSERT(!hw::IsInsideISR());
+            STK_ASSERT(m_kernel->IsStarted());
             STK_ASSERT(ticks >= 0);
 
-            Ticks now = GetTicks();
-            const Ticks deadline = now + ticks;
-            STK_ASSERT(deadline >= now);
-
-            for (; now < deadline; now = GetTicks())
+            if (m_kernel->IsStarted())
             {
-                __stk_relax_cpu();
+                Ticks now = GetTicks();
+                const Ticks deadline = now + ticks;
+                STK_ASSERT(deadline >= now);
+
+                for (; now < deadline; now = GetTicks())
+                {
+                    __stk_relax_cpu();
+                }
             }
         }
 
-        void Sleep(Timeout ticks) override
+        bool Sleep(Timeout ticks) override
         {
             STK_ASSERT(!hw::IsInsideISR());
+            STK_ASSERT(m_kernel->IsStarted());
             STK_ASSERT(ticks >= 0);
+
+            bool result = false;
 
             if __stk_constexpr_cpp17 (!IsHrtMode())
             {
                 if (!m_kernel->IsLocked())
                 {
-                    m_kernel->m_platform.Sleep(ticks);
+                    return m_kernel->OnTaskSleep(GetCallerSP(), ticks);
                 }
                 else
                 {
@@ -1076,11 +1083,15 @@ protected:
                 // sleeping is not supported in HRT mode, task will sleep according to its periodicity and workload
                 STK_ASSERT(false);
             }
+
+            return result;
         }
 
         bool SleepUntil(Ticks timestamp) override
         {
             STK_ASSERT(!hw::IsInsideISR());
+            STK_ASSERT(m_kernel->IsStarted());
+            STK_ASSERT(timestamp >= 0);
 
             bool result = false;
 
@@ -1088,7 +1099,7 @@ protected:
             {
                 if (!m_kernel->IsLocked())
                 {
-                    result = m_kernel->m_platform.SleepUntil(timestamp);
+                    result = m_kernel->OnTaskSleepUntil(GetCallerSP(), timestamp);
                 }
                 else
                 {
@@ -1119,7 +1130,7 @@ protected:
 
             if (!m_kernel->IsLocked())
             {
-                m_kernel->m_platform.SwitchToNext();
+                m_kernel->OnTaskSwitch(GetCallerSP());
             }
             else
             {
@@ -1134,12 +1145,12 @@ protected:
 
             if __stk_constexpr_cpp17 (IsDynamicMode())
             {
-                KernelTask *const self = m_kernel->FindTaskBySP(m_kernel->m_platform.GetCallerSP());
+                KernelTask *const self = m_kernel->FindTaskBySP(GetCallerSP());
                 STK_ASSERT(self != nullptr);
 
                 // same path as returning from ITask::Run() (exit trap): marks the task sleeping infinitely and
                 // pending for removal, the kernel removes it on the next tick and calls ITask::OnExit()
-                m_kernel->OnTaskExit(self->GetUserStackPtr());
+                m_kernel->OnTaskExitImpl(self);
 
                 // switch out and never come back: the task is not scheduled anymore
                 for (;;)
@@ -1162,7 +1173,7 @@ protected:
             {
                 if (!m_kernel->IsLocked())
                 {
-                    result = m_kernel->m_platform.Wait(sobj, mutex, ticks);
+                    result = m_kernel->OnTaskWait(GetCallerSP(), sobj, mutex, ticks);
                 }
                 else
                 {
@@ -1346,6 +1357,15 @@ protected:
         {
             // using WriteVolatile64() to guarantee correct lockless reading order by ReadVolatile64
             hw::WriteVolatile64(&m_ticks, m_ticks + advance);
+        }
+
+        /*! \brief     Get caller's Stack Pointer (SP).
+            \note      Valid for a Thread process only.
+            \return    Current value of the Stack Pointer (SP) of the calling process.
+        */
+        __stk_forceinline Word GetCallerSP() const
+        {
+            return m_kernel->m_platform.GetCallerSP();
         }
 
         Kernel        *m_kernel; //!< Pointer to the Kernel.
@@ -1935,35 +1955,41 @@ public:
         \return    Previous lock state, or LOCK_FAIL / LOCK_FAIL_ISR.
         \see       IKernel::SetSchedulerLock for the contract of the lock holder
     */
-    ELockResult SetSchedulerLock(bool lock) override
+    ELockResult SetSchedulerLock(bool lock)
     {
-        ELockResult result = LOCK_FAIL;
+        ELockResult result;
 
-        if (hw::IsInsideISR())
-        {
-            result = LOCK_FAIL_ISR;
-        }
-        else
         if __stk_constexpr_cpp17 (!IsHrtMode())
         {
-            // critical section: avoid race with OnTick and the forced context switch path
-            const hw::CriticalSection::ScopedLock cs_;
+            if (hw::IsInsideISR())
+            {
+                result = LOCK_FAIL_ISR;
+            }
+            else
+            {
+                // critical section: avoid race with OnTick and the forced context switch path
+                const hw::CriticalSection::ScopedLock cs_;
 
-            if (m_kstate == KSTATE_RUNNING)
-            {
-                result   = LOCK_WAS_UNLOCKED;
-                m_kstate = (lock ? KSTATE_LOCKED : KSTATE_RUNNING);
+                if (m_kstate == KSTATE_RUNNING)
+                {
+                    result   = LOCK_WAS_UNLOCKED;
+                    m_kstate = (lock ? KSTATE_LOCKED : KSTATE_RUNNING);
+                }
+                else
+                if (m_kstate == KSTATE_LOCKED)
+                {
+                    result   = LOCK_WAS_LOCKED;
+                    m_kstate = (lock ? KSTATE_LOCKED : KSTATE_RUNNING);
+                }
+                else
+                {
+                    result = LOCK_FAIL;
+                }
             }
-            else
-            if (m_kstate == KSTATE_LOCKED)
-            {
-                result   = LOCK_WAS_LOCKED;
-                m_kstate = (lock ? KSTATE_LOCKED : KSTATE_RUNNING);
-            }
-            else
-            {
-                // KSTATE_INACTIVE, KSTATE_READY, KSTATE_SUSPENDED: LOCK_FAIL
-            }
+        }
+        else
+        {
+            result = LOCK_FAIL;
         }
 
         return result;
@@ -2493,7 +2519,10 @@ protected:
         return switch_context;
     }
 
-    void OnTaskSwitch(Word caller_SP) override
+#ifdef _STK_UNDER_TEST
+    virtual
+#endif
+    void OnTaskSwitch(Word caller_SP)
     {
         // let the strategy handle the yield without putting the task to sleep (e.g. to hand
         // the CPU to same-priority peers only), not applicable in HRT mode where Yield()
@@ -2527,7 +2556,7 @@ protected:
                 }
                 else
                 {
-                    OnTaskSleep(caller_SP, YIELD_TICKS);
+                    OnTaskSleepImpl(task, YIELD_TICKS);
                 }
             }
             else
@@ -2541,12 +2570,19 @@ protected:
         }
     }
 
-    void OnTaskSleep(Word caller_SP, Timeout ticks) override
+    bool OnTaskSleep(Word caller_SP, Timeout ticks)
     {
         KernelTask *const task = FindTaskBySP(caller_SP);
         STK_ASSERT(task != nullptr);
 
-        // // critical section: make change to HRT state and sleep time atomic
+        return OnTaskSleepImpl(task, ticks);
+    }
+
+    bool OnTaskSleepImpl(KernelTask *const task, Timeout ticks)
+    {
+        bool result = true;
+
+        // critical section: make change to HRT state and sleep time atomic
         {
             const hw::CriticalSection::ScopedLock cs_;
 
@@ -2564,13 +2600,22 @@ protected:
                 SEGGER_SYSVIEW_OnTaskStopReady(task->GetUserStackPtr()->tid, TRACE_EVENT_SLEEP);
             #endif
             }
+            else
+            {
+                result = false;
+            }
         }
 
         // note: we do not spin long here, kernel will switch this task out from scheduling on the next tick
-        task->BusyWaitWhileSleeping(this);
+        if (result)
+        {
+            task->BusyWaitWhileSleeping(this);
+        }
+
+        return result;
     }
 
-    bool OnTaskSleepUntil(Word caller_SP, Ticks timestamp) override
+    bool OnTaskSleepUntil(Word caller_SP, Ticks timestamp)
     {
         KernelTask *const task = FindTaskBySP(caller_SP);
         STK_ASSERT(task != nullptr);
@@ -2586,7 +2631,7 @@ protected:
 
             if (delta > 0)
             {
-                const Ticks infinite_ticks = WAIT_INFINITE;              
+                const Ticks infinite_ticks = WAIT_INFINITE;
                 task->ScheduleSleep(static_cast<Timeout>(Min(delta, infinite_ticks)));
 
                 // trace blocked on on SleepUntil
@@ -2609,32 +2654,14 @@ protected:
         return result;
     }
 
-    void OnTaskExit(Stack *stack) override
+    void OnTaskExit(const Stack *stack) override
     {
         if __stk_constexpr_cpp17 (IsDynamicMode())
         {
             KernelTask *const task = FindTaskByStack(stack);
             STK_ASSERT(task != nullptr);
 
-            // contract violation: the lock holder must not exit while holding the lock, see IKernelService::LockScheduler.
-            // Unlike Sleep/Yield/Wait the exit can not be refused (ExitTask() does not return, returning from
-            // ITask::Run() lands in the exit trap), so in release the exit proceeds and the lock is released
-            // when the task leaves the CPU (see OnForceContextSwitch)
-            STK_ASSERT(!(IsLocked() && (task == m_task_now)));
-
-            // task is being stopped and will terminate
-        #if STK_SEGGER_SYSVIEW
-            SEGGER_SYSVIEW_OnTaskStopExec();
-        #endif
-
-            // critical section: avoid race with OnTick
-            {
-                // make change to HRT/sleep/removal state atomic (same as OnTaskSleep/OnTaskSleepUntil)
-                const hw::CriticalSection::ScopedLock cs_;
-
-                // notify kernel to execute removal (asynchronous operation)
-                task->ScheduleRemoval(this);
-            }
+            OnTaskExitImpl(task);
         }
         else
         {
@@ -2643,7 +2670,30 @@ protected:
         }
     }
 
-    EWaitResult OnTaskWait(Word caller_SP, ISyncObject *sync_obj, IMutex *mutex, Timeout timeout) override
+    void OnTaskExitImpl(KernelTask *const task)
+    {
+        // contract violation: the lock holder must not exit while holding the lock, see IKernelService::LockScheduler.
+        // Unlike Sleep/Yield/Wait the exit can not be refused (ExitTask() does not return, returning from
+        // ITask::Run() lands in the exit trap), so in release the exit proceeds and the lock is released
+        // when the task leaves the CPU (see OnForceContextSwitch)
+        STK_ASSERT(!(IsLocked() && (task == m_task_now)));
+
+        // task is being stopped and will terminate
+    #if STK_SEGGER_SYSVIEW
+        SEGGER_SYSVIEW_OnTaskStopExec();
+    #endif
+
+        // critical section: avoid race with OnTick
+        {
+            // make change to HRT/sleep/removal state atomic (same as OnTaskSleep/OnTaskSleepUntil)
+            const hw::CriticalSection::ScopedLock cs_;
+
+            // notify kernel to execute removal (asynchronous operation)
+            task->ScheduleRemoval(this);
+        }
+    }
+
+    EWaitResult OnTaskWait(Word caller_SP, ISyncObject *sync_obj, IMutex *mutex, Timeout timeout)
     {
         if __stk_constexpr_cpp17 (IsSyncMode())
         {

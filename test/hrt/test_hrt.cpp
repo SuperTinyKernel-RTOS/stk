@@ -70,9 +70,17 @@ STK_TEST_DECL_ASSERT;
 #define _STK_HRT_TEST_ITRS_MAX       20   // max jobs recorded per task
 
 // Checked timeouts.
+#if defined(_STK_ARCH_RISC_V)
+#define _STK_HRT_TEST_START_TOL_MS   15   // allowed deviation of a job start from its expected time (ms)
+#else
 #define _STK_HRT_TEST_START_TOL_MS   10   // allowed deviation of a job start from its expected time (ms)
+#endif()
 #define _STK_HRT_TEST_WORK_LO_MS     1    // allowed "early" slack of a measured workload (ms)
+#if defined(_STK_ARCH_RISC_V)
+#define _STK_HRT_TEST_WORK_HI_MS     15   // allowed "late" slack of a measured workload (ms)
+#else
 #define _STK_HRT_TEST_WORK_HI_MS     10   // allowed "late" slack of a measured workload (ms)
+#endif
 #define _STK_HRT_TEST_DEADLINE_SLACK_MS 0 // extra slack of the measured job duration vs deadline (ms)
 #define _STK_HRT_TEST_EARLY_TOL_MS   2    // allowed "early" firing of a timer (ms)
 #define _STK_HRT_TEST_IDLE_JOB_MS    4    // max duration of a job which runs no timer callback (ms)

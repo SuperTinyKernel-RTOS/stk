@@ -176,9 +176,10 @@ private:
     {
         const int64_t start = GetTimeNowMs();
 
-        stk::Sleep(ToTicks(Duration(m_task_id)));
+        const bool slept = stk::Sleep(ToTicks(Duration(m_task_id)));
 
         const int64_t end = GetTimeNowMs();
+        g_Result[m_task_id]  = slept ? 1 : 0; // Sleep(N > 0) must report true
         g_Elapsed[m_task_id] = (int32_t)(end - start);
         g_WakeMs[m_task_id]  = (int32_t)end;
         g_Done[m_task_id] = 1;
@@ -195,6 +196,12 @@ private:
 
                 if (!IsSleepOk(g_Elapsed[i], Duration((uint8_t)i)))
                     ok = false;
+
+                if (g_Result[i] != 1)
+                {
+                    printf("sleep duration: task %d Sleep() returned false, expected true\n", (int)i);
+                    ok = false;
+                }
             }
 
             if (!((g_WakeMs[1] <= g_WakeMs[2]) && (g_WakeMs[2] <= g_WakeMs[0])))
@@ -212,8 +219,8 @@ private:
 
 /*! \class SleepEdgeTask
     \brief Single task: Sleep(0) and the minimum non-zero sleep Sleep(1).
-    \note  Sleep(0) must return promptly (it neither sleeps nor yields); Sleep(1) must not return
-           immediately, each call lasts at least one tick.
+    \note  Sleep(0) must return promptly (it neither sleeps nor yields) and report false (nothing slept);
+           Sleep(1) must not return immediately, each call lasts at least one tick and reports true.
 */
 template <EAccessMode _AccessMode>
 class SleepEdgeTask : public Task<_STK_SLEEP_STACK_SIZE, _AccessMode>
@@ -229,25 +236,36 @@ private:
     void Run()
     {
         // Sleep(0) x N
+        // Sleep(0) does not sleep: it must report false every time
+        int32_t zero_true = 0;
         const int64_t t0 = GetTimeNowMs();
         for (int32_t i = 0; i < m_iterations; ++i)
         {
-            stk::Sleep(0);
+            if (stk::Sleep(0))
+                ++zero_true;
             ++g_Counter[0];
         }
         const int32_t zero_ms = (int32_t)(GetTimeNowMs() - t0);
 
-        // Sleep(1) x 20
+        // Sleep(1) x 20: a real sleep, must report true every time
         enum { ONE_TICK_ITERS = 20 };
+        int32_t one_false = 0;
         const int64_t t1 = GetTimeNowMs();
         for (int32_t i = 0; i < ONE_TICK_ITERS; ++i)
-            stk::Sleep(1);
+        {
+            if (!stk::Sleep(1))
+                ++one_false;
+        }
         const int32_t one_ms = (int32_t)(GetTimeNowMs() - t1);
 
-        printf("sleep edge: %d x Sleep(0) in %d ms (limit %d), %d x Sleep(1) in %d ms\n",
-            (int)m_iterations, (int)zero_ms, (int)_STK_SLEEP_TEST_FAST_MS, (int)ONE_TICK_ITERS, (int)one_ms);
+        printf("sleep edge: %d x Sleep(0) in %d ms (limit %d, returned true %d times), "
+               "%d x Sleep(1) in %d ms (returned false %d times)\n",
+            (int)m_iterations, (int)zero_ms, (int)_STK_SLEEP_TEST_FAST_MS, (int)zero_true,
+            (int)ONE_TICK_ITERS, (int)one_ms, (int)one_false);
 
         bool ok = (g_Counter[0] == m_iterations) &&
+                  (zero_true == 0) &&
+                  (one_false == 0) &&
                   (zero_ms < _STK_SLEEP_TEST_FAST_MS) &&
                   (one_ms >= ONE_TICK_ITERS) &&
                   (one_ms <= (3 * ONE_TICK_ITERS + _STK_SLEEP_TEST_HI_MS));
@@ -497,13 +515,14 @@ private:
         switch (m_scenario)
         {
         case SC_SLEEP_CANCEL:
-            stk::Sleep(ToTicks(_STK_SLEEP_TEST_LONG_MS));
+            // a cancelled sleep still did sleep: Sleep() reports true
+            g_Result[0] = stk::Sleep(ToTicks(_STK_SLEEP_TEST_LONG_MS)) ? 1 : 0;
             break;
         case SC_SLEEPUNTIL_CANCEL:
             g_Result[0] = stk::SleepUntil(GetTicks() + ToTicks(_STK_SLEEP_TEST_LONG_MS)) ? 1 : 0;
             break;
         case SC_CANCELWAIT_ON_SLEEP:
-            stk::Sleep(ToTicks(CANCELWAIT_SLEEP_MS));
+            g_Result[0] = stk::Sleep(ToTicks(CANCELWAIT_SLEEP_MS)) ? 1 : 0;
             break;
         default:
             g_Result[0] = DoWait(WaitTimeout());
@@ -579,11 +598,12 @@ private:
         {
         case SC_SLEEP_CANCEL:
         case SC_SLEEPUNTIL_CANCEL:
-            ok = IsCancelledEarly(e);
+            // the task did go to sleep, so the API reports true even though the sleep was cut short
+            ok = IsCancelledEarly(e) && (r == 1);
             break;
         case SC_CANCELWAIT_ON_SLEEP:
-            // no-op: the sleep must last in full
-            ok = IsSleepOk(e, CANCELWAIT_SLEEP_MS);
+            // no-op: the sleep must last in full and report true
+            ok = IsSleepOk(e, CANCELWAIT_SLEEP_MS) && (r == 1);
             break;
         case SC_WAIT_TIMEOUT:
             ok = (r == WAIT_RESULT_TIMEOUT) && IsSleepOk(e, SHORT_WAIT_MS);
@@ -657,9 +677,15 @@ private:
             if ((i & 1) != 0)
             {
                 const Ticks t0 = GetTicks();
-                stk::Sleep(d);
+                const bool slept = stk::Sleep(d);
 
                 if ((GetTicks() - t0) < d)
+                    ++g_Early[m_task_id];
+
+                // d >= 1: Sleep() must always report true (counted as an early/invalid result otherwise).
+                // Not checked for SleepUntil(): the tick may advance between GetTicks() and the call,
+                // making the target legitimately "already reached" (false).
+                if (!slept)
                     ++g_Early[m_task_id];
             }
             else

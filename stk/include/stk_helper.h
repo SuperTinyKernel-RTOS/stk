@@ -493,10 +493,11 @@ static __stk_forceinline uint32_t GetSysTimerFrequency()
     \param[in] tick_count: Sleep time (in ticks). 0 does not cause yield, use Yield instead. Negative will cause an assertion.
     \warning   ISR-unsafe. Calling from an ISR context is not permitted and will trigger an assertion.
     \warning   Must not be called while the scheduler is locked (see LockScheduler): asserts in debug builds, no-op in release builds.
+    \return    True if sleep succeeded, false otherwise.
 */
-static __stk_forceinline void Sleep(Timeout tick_count)
+static __stk_forceinline bool Sleep(Timeout tick_count)
 {
-    IKernelService::GetInstance()->Sleep(tick_count);
+    return IKernelService::GetInstance()->Sleep(tick_count);
 }
 
 /*! \brief     Put calling process into a sleep state.
@@ -507,10 +508,11 @@ static __stk_forceinline void Sleep(Timeout tick_count)
     \param[in] ms: Sleep time (milliseconds). 0 does not cause yield, use Yield instead. Negative will cause an assertion.
     \warning   ISR-unsafe. Calling from an ISR context is not permitted and will trigger an assertion.
     \warning   Must not be called while the scheduler is locked (see LockScheduler): asserts in debug builds, no-op in release builds.
+    \return    True if sleep succeeded, false otherwise.
 */
-static __stk_forceinline void SleepMs(Timeout ms)
+static __stk_forceinline bool SleepMs(Timeout ms)
 {
-    Sleep(GetTicksFromMsClampedToTimeout(ms));
+    return Sleep(GetTicksFromMsClampedToTimeout(ms));
 }
 
 /*! \brief     Put calling process into a sleep state until the specified timestamp.
@@ -529,8 +531,8 @@ static __stk_forceinline bool SleepUntil(Ticks timestamp)
 
 /*! \brief     Cancel sleep of the task.
     \param[in] task_id: Id of the task.
-    \details   Ends a sleep started by Sleep()/SleepUntil() early. If the task is instead blocked on a
-               synchronization object (KERNEL_SYNC mode, e.g. Mutex, Semaphore, Event, ConditionVariable,
+    \details   Ends a sleep started by Sleep()/SleepUntil()/Wait() early. If the task is instead blocked on a
+               synchronization object (KERNEL_SYNC mode: e.g. Mutex, Semaphore, Event, ConditionVariable,
                MessageQueue), the wait is cancelled the same way as IKernel::CancelTaskWait() does: the
                task is removed from the object's wait list and its IKernelService::Wait() returns
                \c WAIT_RESULT_CANCELED (not \c WAIT_RESULT_TIMEOUT or \c WAIT_RESULT_SIGNAL, no

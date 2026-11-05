@@ -16,64 +16,6 @@ namespace test {
 // ============================== Kernel ====================================== //
 // ============================================================================ //
 
-template <uint8_t TMode, uint32_t TSize, class TStrategy, class TPlatform>
-class KernelMock : public Kernel<TMode, TSize, TStrategy, TPlatform>
-{
-    typedef Kernel<TMode, TSize, TStrategy, TPlatform> BaseType;
-
-public:
-    uint8_t m_fsm_state_mock = KernelMock::FSM_STATE_NONE;
-
-    // Override the getter to bypass the ROM table during tests
-    typename BaseType::EFsmState GetNewFsmState(typename BaseType::KernelTask *&next) override
-    {
-        if (m_fsm_state_mock != (uint8_t)KernelMock::FSM_STATE_NONE)
-            return static_cast<typename BaseType::EFsmState>(m_fsm_state_mock);
-
-        return BaseType::GetNewFsmState(next);
-    }
-
-    void ForceUpdateInvalidFsmState(bool max_val)
-    {
-        m_fsm_state_mock = KernelMock::FSM_STATE_MAX + (max_val ? 0 : 1);
-
-        Stack *idle = nullptr, *active = nullptr;
-        KernelMock::UpdateFsmState(idle, active);
-    }
-
-    // Expose protected Kernel::OnForceContextSwitch() so it can be driven directly,
-    // simulating the ISR callback issued by the platform driver's ForceContextSwitch()
-    bool CallForceContextSwitch(TId id, Stack *&idle, Stack *&active)
-    {
-        return KernelMock::OnForceContextSwitch(id, idle, active);
-    }
-
-    // Expose protected Kernel::TryAllocateNewTask() so it can be driven directly (both AddTask() overloads use it,
-    // it always validates the collision with the already added tasks).
-    // Returns the result, 'bound' receives the user task bound to the allocated slot (nullptr if none).
-    EAddResult CallTryAllocateNewTask(ITask *user_task, ITask **bound = nullptr)
-    {
-        EAddResult result = ADD_FAIL_INVALID;
-
-        typename BaseType::KernelTask *const task = BaseType::TryAllocateNewTask(user_task, result);
-
-        if (bound != nullptr)
-        {
-            *bound = (task != nullptr) ? task->GetUserTask() : nullptr;
-        }
-
-        return result;
-    }
-
-    // Put the currently running task into a pending-sleep state directly (bypasses
-    // KernelTask::BusyWaitWhileSleeping()'s spin-loop, which is not applicable in this
-    // single-threaded test harness)
-    void ScheduleSleepOnActiveTask(Timeout ticks)
-    {
-        BaseType::ScheduleSleepOnActiveTask(ticks);
-    }
-};
-
 TEST_GROUP(Kernel)
 {
     void setup() {}
@@ -358,10 +300,9 @@ TEST(Kernel, AddTaskDynamicResultInvalid)
 
 TEST(Kernel, AddTaskFromIsr)
 {
-    Kernel<KERNEL_DYNAMIC, 2, sched::SwitchStrategyRR, PlatformTestMock> kernel;
+    KernelMock<KERNEL_DYNAMIC, 2, sched::SwitchStrategyRR, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task1, task2;
     ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
-    PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
 
     kernel.Initialize();
     kernel.AddTask(&task1);
@@ -378,7 +319,7 @@ TEST(Kernel, AddTaskFromIsr)
 
     CHECK_EQUAL(ADD_OK, result);
     CHECK_EQUAL_TEXT(2, strategy->GetSize(), "task2 must be added immediately");
-    CHECK_EQUAL_TEXT(0, platform->m_switch_to_next_nr, "ISR must not switch out the interrupted task");
+    CHECK_EQUAL_TEXT(0, kernel.m_switch_to_next_nr, "ISR must not switch out the interrupted task");
     CHECK_EQUAL_TEXT(0, g_AddTaskWhenStartedRelaxCpuCount, "ISR must not wait");
     CHECK_EQUAL_TEXT(0, g_CriticalSectionState, "critical section must be released");
 }
@@ -729,7 +670,7 @@ static void YieldPendingTaskExitRelaxCpu()
 
 TEST(Kernel, TaskExitWhileYieldPending)
 {
-    Kernel<KERNEL_DYNAMIC, 2, sched::SwitchStrategyRR_NSY, PlatformTestMock> kernel;
+    KernelMock<KERNEL_DYNAMIC, 2, sched::SwitchStrategyRR_NSY, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task1, task2;
     PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
     ITaskSwitchStrategy *strategy = kernel.GetSwitchStrategy();
@@ -753,7 +694,7 @@ TEST(Kernel, TaskExitWhileYieldPending)
     Yield();
 
     CHECK_EQUAL(1, g_YieldPendingTaskExitRelaxCpuContext.counter);
-    CHECK_EQUAL(1, platform->m_switch_to_next_nr);
+    CHECK_EQUAL(1, kernel.m_switch_to_next_nr);
 
     // the exiting task is switched out, task2 gets the CPU (removal itself is processed on the next tick)
     CHECK_EQUAL((Word)task2.GetStack(), active->SP);
@@ -766,7 +707,7 @@ TEST(Kernel, TaskExitWhileYieldPending)
 
     // the remaining task still yields normally (to itself, as the only runnable task)
     Yield();
-    CHECK_EQUAL(2, platform->m_switch_to_next_nr);
+    CHECK_EQUAL(2, kernel.m_switch_to_next_nr);
     CHECK_EQUAL(1, strategy->GetSize());
     CHECK_EQUAL((Word)task2.GetStack(), active->SP);
 }
@@ -804,7 +745,7 @@ static void YieldTicklessRelaxCpu()
 
 TEST(Kernel, YieldNsyTickless)
 {
-    Kernel<KERNEL_STATIC | KERNEL_TICKLESS, 3, sched::SwitchStrategyRR_NSY, PlatformTestMock> kernel;
+    KernelMock<KERNEL_STATIC | KERNEL_TICKLESS, 3, sched::SwitchStrategyRR_NSY, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task1, task2, task3;
     PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
     Stack *&active = platform->m_stack_active;
@@ -834,7 +775,7 @@ TEST(Kernel, YieldNsyTickless)
     Yield();
     CHECK_EQUAL((Word)task1.GetStack(), active->SP);
 
-    CHECK_EQUAL(3, platform->m_switch_to_next_nr);
+    CHECK_EQUAL(3, kernel.m_switch_to_next_nr);
 }
 
 TEST(Kernel, YieldNsyTicklessCoalescedTick)
@@ -1301,7 +1242,7 @@ TEST(Kernel, ForceContextSwitchPendingYield)
     // then spins in BusyWaitWhileYielding() until the ISR processes ForceContextSwitch(task1_id)
     Yield();
 
-    CHECK_EQUAL(1, platform->m_switch_to_next_nr);
+    CHECK_EQUAL(1, kernel.m_switch_to_next_nr);
 
     // the yield is consumed by OnForceContextSwitch (the busy-wait was released without any tick)
     CHECK_EQUAL(1, g_ForceContextSwitchYieldRelaxCpuContext.counter);
@@ -1407,7 +1348,7 @@ TEST(Kernel, TaskSwitchNsyDeclinedYieldSleeps)
 
     Yield();
 
-    CHECK_EQUAL(1, platform->m_switch_to_next_nr);
+    CHECK_EQUAL(1, kernel.m_switch_to_next_nr);
 
     // legacy yield: task1 slept for YIELD_TICKS (1 sleep-entry tick + 1 tick to wake up), whereas a yield
     // handled by the strategy would be released by the very first tick
@@ -1439,7 +1380,7 @@ TEST(Kernel, TaskSwitchNsyUnknownSP)
     g_TestContext.ExpectAssert(true);
     g_TestContext.RethrowAssertException(false);
 
-    platform->EventTaskSwitch(0xdeadbeef);
+    kernel.EventTaskSwitch(0xdeadbeef);
 
     g_TestContext.RethrowAssertException(true);
     g_TestContext.ExpectAssert(false);
@@ -1529,7 +1470,7 @@ TEST(Kernel, YieldNsyAfterWakeFromSleepTrap)
     // returns to itself, the kernel must not fall into the sleep trap
     Yield();
 
-    CHECK_EQUAL(1, platform->m_switch_to_next_nr);
+    CHECK_EQUAL(1, kernel.m_switch_to_next_nr);
     CHECK_EQUAL(1, g_YieldNsyWakeRelaxCpuContext.counter);
     CHECK_EQUAL((Word)task2.GetStack(), active->SP);
 
@@ -1548,7 +1489,7 @@ TEST(Kernel, YieldNsyAfterWakeFromSleepTrap)
     // task1 yields to the other task
     Yield();
 
-    CHECK_EQUAL(2, platform->m_switch_to_next_nr);
+    CHECK_EQUAL(2, kernel.m_switch_to_next_nr);
     CHECK_EQUAL((Word)task2.GetStack(), active->SP);
 }
 
@@ -2037,7 +1978,7 @@ TEST(Kernel, OnCancelWait)
 
 TEST(Kernel, OnTaskNotFoundBySP)
 {
-    Kernel<KERNEL_STATIC, 1, sched::SwitchStrategyRR, PlatformTestMock> kernel;
+    KernelMock<KERNEL_STATIC, 1, sched::SwitchStrategyRR, PlatformTestMock> kernel;
     TaskMock<ACCESS_PRIVILEGED> task1;
     PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
 
@@ -2050,7 +1991,7 @@ TEST(Kernel, OnTaskNotFoundBySP)
     try
     {
         g_TestContext.ExpectAssert(true);
-        platform->EventTaskSwitch(0xdeadbeef);
+        kernel.EventTaskSwitch(0xdeadbeef);
         CHECK(false); // non existent task must not succeed
     }
     catch (TestAssertPassed &pass)
@@ -2062,7 +2003,7 @@ TEST(Kernel, OnTaskNotFoundBySP)
 
 TEST(Kernel, OnTaskSkipFreedTask)
 {
-    Kernel<KERNEL_DYNAMIC, 2, sched::SwitchStrategyRR, PlatformTestMock> kernel;
+    KernelMock<KERNEL_DYNAMIC, 2, sched::SwitchStrategyRR, PlatformTestMock> kernel;
     TaskMock<ACCESS_PRIVILEGED> task1, task2;
     PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
     Stack *&active = platform->m_stack_active;
@@ -2086,7 +2027,7 @@ TEST(Kernel, OnTaskSkipFreedTask)
         // we loop through all tasks in attempt to find non existent SP (0xdeadbeef)
         // by this FindTaskBySP() is invoked and will loop thorugh the exited task1's
         // slot
-        platform->EventTaskSwitch(0xdeadbeef);
+        kernel.EventTaskSwitch(0xdeadbeef);
         CHECK(false); // exited task must be successfully skipped by FindTaskBySP()
     }
     catch (TestAssertPassed &pass)
@@ -3534,8 +3475,7 @@ TEST(Kernel, HrtOnlyAPI)
 
 TEST(Kernel, SyncNotEnabledFailsOnWait)
 {
-    Kernel<KERNEL_STATIC, 1, sched::SwitchStrategyRR, PlatformTestMock> kernel;
-    PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
+    KernelMock<KERNEL_STATIC, 1, sched::SwitchStrategyRR, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task;
 
     kernel.Initialize();
@@ -3565,7 +3505,7 @@ TEST(Kernel, SyncNotEnabledFailsOnWait)
     try
     {
         g_TestContext.ExpectAssert(true);
-        platform->EventTaskWait(0, nullptr, nullptr, 0);
+        kernel.EventTaskWait(0, nullptr, nullptr, 0);
         CHECK_TRUE(false); // kernel does not support waiting without KERNEL_SYNC;
     }
     catch (TestAssertPassed &pass)
@@ -3577,7 +3517,7 @@ TEST(Kernel, SyncNotEnabledFailsOnWait)
     // test return NULL
     g_TestContext.ExpectAssert(true);
     g_TestContext.RethrowAssertException(false);
-    wresult = platform->EventTaskWait(0, nullptr, nullptr, 0);
+    wresult = kernel.EventTaskWait(0, nullptr, nullptr, 0);
     g_TestContext.RethrowAssertException(true);
     g_TestContext.ExpectAssert(false);
     CHECK_EQUAL(WAIT_RESULT_FAIL, wresult);
@@ -4983,7 +4923,7 @@ static void LockDelayRelaxCpu()
 // Delay() is a busy-wait: it is allowed under the lock, ticks keep running and the holder keeps the CPU
 TEST(Kernel, LockedDelayAllowed)
 {
-    Kernel<KERNEL_STATIC, 2, sched::SwitchStrategyRR, PlatformTestMock> kernel;
+    KernelMock<KERNEL_STATIC, 2, sched::SwitchStrategyRR, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task1, task2;
     PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
 
@@ -5112,9 +5052,8 @@ TEST(Kernel, LockedSleepUntilIsNoop)
 
 TEST(Kernel, LockedYieldIsNoop)
 {
-    Kernel<KERNEL_STATIC, 2, sched::SwitchStrategyRR, PlatformTestMock> kernel;
+    KernelMock<KERNEL_STATIC, 2, sched::SwitchStrategyRR, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task1, task2;
-    PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
     IKernelTask *ktask1;
 
     kernel.Initialize();
@@ -5132,7 +5071,7 @@ TEST(Kernel, LockedYieldIsNoop)
     // release build: the platform is never asked to switch, task is not put to sleep
     LockCallNoRethrow([]() { stk::Yield(); });
 
-    CHECK_EQUAL_TEXT(0, platform->m_switch_to_next_nr, "Yield must not reach the platform while locked");
+    CHECK_EQUAL_TEXT(0, kernel.m_switch_to_next_nr, "Yield must not reach the platform while locked");
     CHECK_FALSE(ktask1->IsSleeping());
     CHECK_EQUAL(IKernel::KSTATE_LOCKED, kernel.GetState());
 }

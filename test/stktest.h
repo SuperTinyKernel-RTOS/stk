@@ -87,7 +87,6 @@ public:
         m_service           = NULL;
         m_started           = false;
         m_hard_fault        = false;
-        m_switch_to_next_nr = 0U;
         m_exit_trap         = NULL;
         m_resolution        = 0;
         m_context_switch_nr = 0U;
@@ -159,27 +158,6 @@ public:
         return m_systimer_freq;
     }
 
-    void SwitchToNext() override
-    {
-        m_event_handler->OnTaskSwitch(GetCallerSP());
-        ++m_switch_to_next_nr;
-    }
-
-    void Sleep(Timeout ticks) override
-    {
-        m_event_handler->OnTaskSleep(GetCallerSP(), ticks);
-    }
-
-    bool SleepUntil(Ticks timestamp) override
-    {
-        return m_event_handler->OnTaskSleepUntil(GetCallerSP(), timestamp);
-    }
-
-    EWaitResult Wait(ISyncObject *sobj, IMutex *mutex, Timeout timeout)
-    {
-        return m_event_handler->OnTaskWait(GetCallerSP(), sobj, mutex, timeout);
-    }
-
     void ProcessHardFault() override
     {
         m_hard_fault = true;
@@ -225,21 +203,6 @@ public:
         m_event_handler->OnTaskExit(stack);
     }
 
-    void EventTaskSwitch(size_t caller_SP)
-    {
-        m_event_handler->OnTaskSwitch(caller_SP);
-    }
-
-    void EventTaskSleep(size_t caller_SP, uint32_t sleep_ticks)
-    {
-        m_event_handler->OnTaskSleep(caller_SP, sleep_ticks);
-    }
-
-    EWaitResult EventTaskWait(size_t caller_SP, ISyncObject *sync_obj, IMutex *mutex, Timeout timeout)
-    {
-        return m_event_handler->OnTaskWait(caller_SP, sync_obj, mutex, timeout);
-    }
-
     size_t GetCallerSP() const override
     {
         return m_stack_active->SP;
@@ -279,7 +242,6 @@ public:
     uint32_t         m_ticks_count;
     bool             m_started;
     bool             m_hard_fault;
-    uint32_t         m_switch_to_next_nr;
     IEventOverrider *m_overrider;
     Stack           *m_stack_idle;
     Stack           *m_stack_active;
@@ -346,9 +308,10 @@ public:
         (void)ticks;
     }
 
-    void Sleep(Timeout ticks) override
+    bool Sleep(Timeout ticks) override
     {
         (void)ticks;
+        return false;
     }
 
     bool SleepUntil(Ticks timestamp) override
@@ -516,6 +479,93 @@ struct SyncObjectMock : public SyncObjectBase
 {
     void WakeOne() override { SyncObjectBase::WakeOne(); }
     void WakeAll() override { SyncObjectBase::WakeAll(); }
+};
+
+template <uint8_t TMode, uint32_t TSize, class TStrategy, class TPlatform>
+class KernelMock : public Kernel<TMode, TSize, TStrategy, TPlatform>
+{
+    typedef Kernel<TMode, TSize, TStrategy, TPlatform> BaseType;
+
+protected:
+    // Counts every task switch, whether it comes from KernelService::SwitchToNext() or from a test calling EventTaskSwitch() directly
+    void OnTaskSwitch(Word sp) override
+    {
+        ++m_switch_to_next_nr;
+        BaseType::OnTaskSwitch(sp);
+    }
+
+public:
+    uint8_t m_fsm_state_mock = KernelMock::FSM_STATE_NONE;
+    uint32_t m_switch_to_next_nr = 0U;
+
+    // Override the getter to bypass the ROM table during tests
+    typename BaseType::EFsmState GetNewFsmState(typename BaseType::KernelTask *&next) override
+    {
+        if (m_fsm_state_mock != (uint8_t)KernelMock::FSM_STATE_NONE)
+            return static_cast<typename BaseType::EFsmState>(m_fsm_state_mock);
+
+        return BaseType::GetNewFsmState(next);
+    }
+
+    void ForceUpdateInvalidFsmState(bool max_val)
+    {
+        m_fsm_state_mock = KernelMock::FSM_STATE_MAX + (max_val ? 0 : 1);
+
+        Stack *idle = nullptr, *active = nullptr;
+        KernelMock::UpdateFsmState(idle, active);
+    }
+
+    // Expose protected Kernel::OnForceContextSwitch() so it can be driven directly,
+    // simulating the ISR callback issued by the platform driver's ForceContextSwitch()
+    bool CallForceContextSwitch(TId id, Stack *&idle, Stack *&active)
+    {
+        return KernelMock::OnForceContextSwitch(id, idle, active);
+    }
+
+    // Expose protected Kernel::TryAllocateNewTask() so it can be driven directly (both AddTask() overloads use it,
+    // it always validates the collision with the already added tasks).
+    // Returns the result, 'bound' receives the user task bound to the allocated slot (nullptr if none).
+    EAddResult CallTryAllocateNewTask(ITask *user_task, ITask **bound = nullptr)
+    {
+        EAddResult result = ADD_FAIL_INVALID;
+
+        typename BaseType::KernelTask *const task = BaseType::TryAllocateNewTask(user_task, result);
+
+        if (bound != nullptr)
+        {
+            *bound = (task != nullptr) ? task->GetUserTask() : nullptr;
+        }
+
+        return result;
+    }
+
+    // Put the currently running task into a pending-sleep state directly (bypasses
+    // KernelTask::BusyWaitWhileSleeping()'s spin-loop, which is not applicable in this
+    // single-threaded test harness)
+    void ScheduleSleepOnActiveTask(Timeout ticks)
+    {
+        BaseType::ScheduleSleepOnActiveTask(ticks);
+    }
+
+    void EventTaskSwitch(Word sp)
+    {
+        KernelMock::OnTaskSwitch(sp); // counted once, inside the override
+    }
+
+    bool EventTaskSleep(Word sp, Timeout t)
+    {
+        return BaseType::OnTaskSleep(sp, t);
+    }
+
+    bool EventTaskSleepUntil(Word sp, Ticks ts)
+    {
+        return BaseType::OnTaskSleepUntil(sp, ts);
+    }
+
+    EWaitResult EventTaskWait(Word sp, ISyncObject *s, IMutex *m, Timeout t)
+    {
+        return BaseType::OnTaskWait(sp, s, m, t);
+    }
 };
 
 } // namespace test

@@ -281,13 +281,9 @@ static struct Context final : public PlatformContext
     void Cleanup();
     void ProcessTick();
     void SwitchContext();
-    void SwitchToNext();
     void ForceContextSwitch(TId id);
     void OnForceContextSwitch();
     void ReportTaskExit(TaskContext *task);
-    void Sleep(Timeout ticks);
-    bool SleepUntil(Ticks timestamp);
-    EWaitResult Wait(ISyncObject *sync_obj, IMutex *mutex, Timeout timeout);
     void Stop();
     Word GetCallerSP() const;
     TId GetTid() const;
@@ -632,11 +628,6 @@ TId Context::GetTid() const
     return result;
 }
 
-void Context::SwitchToNext()
-{
-    m_handler->OnTaskSwitch(GetCallerSP());
-}
-
 void Context::ForceContextSwitch(TId id)
 {
     if (GetCurrentThreadId() == m_timer_tid)
@@ -707,21 +698,6 @@ DWORD WINAPI Context::TaskContext::OnTaskRun(LPVOID param)
     GetContext().ReportTaskExit(self);
 
     return 0; // thread terminates, SuspendThread() on a finished thread is harmless
-}
-
-void Context::Sleep(Timeout ticks)
-{
-    m_handler->OnTaskSleep(GetCallerSP(), ticks);
-}
-
-bool Context::SleepUntil(Ticks timestamp)
-{
-    return m_handler->OnTaskSleepUntil(GetCallerSP(), timestamp);
-}
-
-EWaitResult Context::Wait(ISyncObject *sync_obj, IMutex *mutex, Timeout timeout)
-{
-    return m_handler->OnTaskWait(GetCallerSP(), sync_obj, mutex, timeout);
 }
 
 void Context::Stop()
@@ -816,29 +792,9 @@ uint32_t PlatformX86Win32::GetSysTimerFrequency() const
     return HiResClockQPC::GetInstance()->GetFrequency();
 }
 
-void PlatformX86Win32::SwitchToNext()
-{
-    GetContext().SwitchToNext();
-}
-
 void PlatformX86Win32::ForceContextSwitch(TId id)
 {
     GetContext().ForceContextSwitch(id);
-}
-
-void PlatformX86Win32::Sleep(Timeout ticks)
-{
-    GetContext().Sleep(ticks);
-}
-
-bool PlatformX86Win32::SleepUntil(Ticks timestamp)
-{
-    return GetContext().SleepUntil(timestamp);
-}
-
-EWaitResult PlatformX86Win32::Wait(ISyncObject *sync_obj, IMutex *mutex, Timeout timeout)
-{
-    return GetContext().Wait(sync_obj, mutex, timeout);
 }
 
 void PlatformX86Win32::ProcessTick()
