@@ -1141,9 +1141,9 @@ public:
         */
         virtual void OnStart(Stack *&enable) = 0;
 
-        /*! \brief  Called by driver to notify that scheduling is stopped.
-            \note   Resets internal kernel state so that Start() may be called again
-                    (KERNEL_DYNAMIC mode only). Has no effect in KERNEL_STATIC mode.
+        /*! \brief      Called by driver to notify that scheduling is stopped.
+            \note       Resets internal kernel state so that Start() may be called again
+                        (KERNEL_DYNAMIC mode only). Has no effect in KERNEL_STATIC mode.
         */
         virtual void OnStop() = 0;
 
@@ -1168,36 +1168,10 @@ public:
         #endif
         ) = 0;
 
-        /*! \brief      Called by Thread process (via IKernelService::SwitchToNext) to switch to a next task.
-            \param[in]  caller_SP: Value of Stack Pointer (SP) register (for locating the calling process inside the kernel).
-        */
-        virtual void OnTaskSwitch(Word caller_SP) = 0;
-
-        /*! \brief      Called by Thread process (via IKernelService::Sleep) for exclusion of the calling process from scheduling (sleeping).
-            \param[in]  caller_SP: Value of Stack Pointer (SP) register (for locating the calling process inside the kernel).
-            \param[in]  ticks: Time to sleep (ticks).
-        */
-        virtual void OnTaskSleep(Word caller_SP, Timeout ticks) = 0;
-
-        /*! \brief      Called by Thread process (via IKernelService::SleepUntil) for exclusion of the calling process from scheduling (sleeping).
-            \param[in]  caller_SP: Value of Stack Pointer (SP) register (for locating the calling process inside the kernel).
-            \param[in]  timestamp: Absolute timestamp (ticks).
-            \return     True if sleep succeeded, false otherwise.
-        */
-        virtual bool OnTaskSleepUntil(Word caller_SP, Ticks timestamp) = 0;
-
         /*! \brief      Called from the Thread process when task finished (its Run function exited by return).
             \param[out] stack: Stack of the exited task.
         */
-        virtual void OnTaskExit(Stack *stack) = 0;
-
-        /*! \brief      Called from the Thread process when task needs to wait.
-            \param[in]  caller_SP: Value of Stack Pointer (SP) register (for locating the calling process inside the kernel).
-            \param[in]  sync_obj: ISyncObject instance (passed by Wait).
-            \param[in]  mutex: IMutex instance (passed by Wait).
-            \param[in]  timeout: Time to sleep (ticks).
-        */
-        virtual EWaitResult OnTaskWait(Word caller_SP, ISyncObject *sync_obj, IMutex *mutex, Timeout timeout) = 0;
+        virtual void OnTaskExit(const Stack *stack) = 0;
 
         /*! \brief      Called from the Thread process when for getting task/thread id of the process.
             \param[in]  caller_SP: Value of Stack Pointer (SP) register (for locating the calling process inside the kernel).
@@ -1325,40 +1299,9 @@ public:
     */
     virtual uint32_t GetSysTimerFrequency() const = 0;
 
-    /*! \brief     Switch to a next task.
-    */
-    virtual void SwitchToNext() = 0;
-
     /*! \brief     Force context switch.
     */
     virtual void ForceContextSwitch(TId id) = 0;
-
-    /*! \brief     Put calling process into a sleep state.
-        \note      Unlike Delay this function does not waste CPU cycles and allows kernel to put CPU into a low-power state.
-        \param[in] ticks: Time to sleep (ticks).
-    */
-    virtual void Sleep(Timeout ticks) = 0;
-
-    /*! \brief     Put calling process into a sleep state until the specified timestamp.
-        \note      Unlike Delay this function does not waste CPU cycles and allows kernel to put CPU into a low-power state.
-        \note      Unsupported in HRT mode (see stk::KERNEL_HRT); in HRT mode tasks sleep automatically according to their periodicity and workload.
-        \param[in] timestamp: Absolute timestamp (ticks).
-        \warning   ISR-unsafe. Calling from an ISR context is not permitted and will trigger an assertion.
-        \return    True if sleep succeeded, false otherwise.
-    */
-    virtual bool SleepUntil(Ticks timestamp) = 0;
-
-    /*! \brief     Put calling process into a waiting state until synchronization object is signaled or timeout occurs.
-        \note      This function implements core blocking logic using the Monitor pattern to ensure atomicity between state check and suspension.
-        \note      The kernel automatically unlocks the provided \a mutex before the task is suspended and re-locks it before this function returns.
-        \param[in] sobj: Synchronization object to wait on.
-        \param[in] mutex: Mutex protecting the state of the synchronization object.
-        \param[in] timeout: Maximum wait time (ticks). Use \c WAIT_INFINITE to block indefinitely, use \c NO_WAIT to poll without blocking.
-        \return    Wait result.
-        \see       ISyncObject, IMutex, EWaitResult
-        \warning   ISR-unsafe.
-    */
-    virtual EWaitResult Wait(ISyncObject *sobj, IMutex *mutex, Timeout timeout) = 0;
 
     /*! \brief     Process one tick.
         \note      Normally system tick is processed by the platform driver implementation.
@@ -1933,7 +1876,7 @@ public:
         \warning   Must not be called while the scheduler is locked (see LockScheduler): asserts in debug builds,
                    no-op in release builds.
     */
-    virtual void Sleep(Timeout ticks) = 0;
+    virtual bool Sleep(Timeout ticks) = 0;
 
     /*! \brief     Put calling process into a sleep state until the specified timestamp.
         \note      Unlike Delay this function does not waste CPU cycles and allows kernel to put CPU into a low-power state.

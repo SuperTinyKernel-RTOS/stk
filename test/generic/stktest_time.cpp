@@ -31,7 +31,7 @@ namespace stk
         Cycles GetSysTimerCount() const override { return 0; }
         uint32_t GetSysTimerFrequency() const override { return 0; }
         void Delay(Timeout ticks) override { (void)ticks; }
-        void Sleep(Timeout ticks) override { (void)ticks; }
+        bool Sleep(Timeout ticks) override { (void)ticks; return false; }
         bool SleepUntil(Ticks timestamp) override { (void)timestamp; return false; }
         void SleepCancel(TId task_id) override { (void)task_id; }
         void SwitchToNext() override {}

@@ -3870,29 +3870,9 @@ uint32_t PlatformArmCortexM::GetSysTimerFrequency() const
     return HW_CoreClockFrequency();
 }
 
-void PlatformArmCortexM::SwitchToNext()
-{
-    GetContext().m_handler->OnTaskSwitch(HW_GetCallerSP());
-}
-
 void PlatformArmCortexM::ForceContextSwitch(TId id)
 {
     HW_ForceContextSwitch(id);
-}
-
-void PlatformArmCortexM::Sleep(Timeout ticks)
-{
-    GetContext().m_handler->OnTaskSleep(HW_GetCallerSP(), ticks);
-}
-
-bool PlatformArmCortexM::SleepUntil(Ticks timestamp)
-{
-    return GetContext().m_handler->OnTaskSleepUntil(HW_GetCallerSP(), timestamp);
-}
-
-EWaitResult PlatformArmCortexM::Wait(ISyncObject *sync_obj, IMutex *mutex, Timeout timeout)
-{
-    return GetContext().m_handler->OnTaskWait(HW_GetCallerSP(), sync_obj, mutex, timeout);
 }
 
 TId PlatformArmCortexM::GetTid() const
@@ -4044,7 +4024,7 @@ public:
     stk::Cycles GetSysTimerCount() const override;
     uint32_t GetSysTimerFrequency() const override;
     void Delay(stk::Timeout ticks) override;
-    void Sleep(stk::Timeout ticks) override;
+    bool Sleep(stk::Timeout ticks) override;
     bool SleepUntil(stk::Ticks timestamp) override;
     void SleepCancel(stk::TId task_id) override;
     void SwitchToNext() override;
@@ -4115,10 +4095,10 @@ void KernelServiceSvcProxy::Delay(stk::Timeout ticks)
 }
 
 STK_MPU_SHARED_CODE_SECTION
-void KernelServiceSvcProxy::Sleep(stk::Timeout ticks)
+bool KernelServiceSvcProxy::Sleep(stk::Timeout ticks)
 {
     const mpu::ScopedPrivilegeBoost pb;
-    GetContext().m_service->Sleep(ticks);
+    return GetContext().m_service->Sleep(ticks);
 }
 
 STK_MPU_SHARED_CODE_SECTION

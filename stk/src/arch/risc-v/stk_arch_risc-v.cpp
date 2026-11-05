@@ -2274,11 +2274,6 @@ uint32_t PlatformRiscV::GetSysTimerFrequency() const
     return HW_MtimeClockFrequency();
 }
 
-void PlatformRiscV::SwitchToNext()
-{
-    GetContext().m_handler->OnTaskSwitch(HW_GetCallerSP());
-}
-
 void PlatformRiscV::ForceContextSwitch(TId id)
 {
     Word cs;
@@ -2290,21 +2285,6 @@ void PlatformRiscV::ForceContextSwitch(TId id)
     ctx.OnForceContextSwitch(id);
 
     HW_CriticalSectionEnd(cs);
-}
-
-void PlatformRiscV::Sleep(Timeout ticks)
-{
-    GetContext().m_handler->OnTaskSleep(HW_GetCallerSP(), ticks);
-}
-
-bool PlatformRiscV::SleepUntil(Ticks timestamp)
-{
-    return GetContext().m_handler->OnTaskSleepUntil(HW_GetCallerSP(), timestamp);
-}
-
-EWaitResult PlatformRiscV::Wait(ISyncObject *sync_obj, IMutex *mutex, Timeout timeout)
-{
-    return GetContext().m_handler->OnTaskWait(HW_GetCallerSP(), sync_obj, mutex, timeout);
 }
 
 TId PlatformRiscV::GetTid() const

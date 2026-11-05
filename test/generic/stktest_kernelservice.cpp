@@ -262,7 +262,7 @@ static void SwitchToNextRelaxCpu()
 
 TEST(KernelService, SwitchToNext)
 {
-    Kernel<KERNEL_STATIC, 2, sched::SwitchStrategyRR, PlatformTestMock> kernel;
+    KernelMock<KERNEL_STATIC, 2, sched::SwitchStrategyRR, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task1, task2;
     PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
     Stack *&active = platform->m_stack_active;
@@ -285,18 +285,18 @@ TEST(KernelService, SwitchToNext)
     g_SwitchToNextRelaxCpuContext.task1    = &task1;
     g_SwitchToNextRelaxCpuContext.task2    = &task2;
 
-    // task1 calls SwitchToNext (to test path: IKernelService::SwitchToNext -> IPlatform::SwitchToNext -> Kernel::SwitchToNext)
+    // task1 calls SwitchToNext (to test path: IKernelService::SwitchToNext -> Kernel::SwitchToNext)
     Yield();
-    CHECK_EQUAL(1, platform->m_switch_to_next_nr);
+    CHECK_EQUAL(1, kernel.m_switch_to_next_nr);
 
     // task2 is active again
     CHECK_EQUAL(active->SP, (size_t)task2.GetStack());
 
     // task2 calls SwitchToNext
-    platform->EventTaskSwitch(active->SP);
+    kernel.EventTaskSwitch(active->SP);
 
     // task1 calls SwitchToNext (task1 = active, task2 = idle)
-    platform->EventTaskSwitch(active->SP + 1); // add shift to test IsMemoryOfSP
+    kernel.EventTaskSwitch(active->SP + 1); // add shift to test IsMemoryOfSP
 
     // after a switch task 2 is active again
     CHECK_EQUAL(active->SP, (size_t)task2.GetStack());
@@ -304,7 +304,7 @@ TEST(KernelService, SwitchToNext)
 
 TEST(KernelService, SwitchToNextInactiveTask)
 {
-    Kernel<KERNEL_STATIC, 2, sched::SwitchStrategyRR, PlatformTestMock> kernel;
+    KernelMock<KERNEL_STATIC, 2, sched::SwitchStrategyRR, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task1, task2;
     PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
     Stack *&active = platform->m_stack_active;
@@ -327,7 +327,7 @@ TEST(KernelService, SwitchToNextInactiveTask)
     g_SwitchToNextRelaxCpuContext.task1    = nullptr;
     g_SwitchToNextRelaxCpuContext.task2    = nullptr;
 
-    platform->EventTaskSwitch(platform->m_stack_idle->SP + 1); // add shift to test IsMemoryOfSP
+    kernel.EventTaskSwitch(platform->m_stack_idle->SP + 1); // add shift to test IsMemoryOfSP
 }
 
 static struct SleepRelaxCpuContext
@@ -527,6 +527,25 @@ TEST(KernelService, SleepUntilMissDeadline)
 
     // task2 is still active as it did not sleep
     CHECK_EQUAL_TEXT(active->SP, (size_t)task2.GetStack(), "expecting task2 after sleep");
+}
+
+TEST(KernelService, SleepBadTicks)
+{
+    KernelMock<KERNEL_STATIC, 1, sched::SwitchStrategyRR, PlatformTestMock> kernel;
+    TaskMock<ACCESS_USER> task1;
+    PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
+
+    kernel.Initialize();
+    kernel.AddTask(&task1);
+    kernel.Start();
+
+    g_RelaxCpuHandler = SleepRelaxCpu;
+    g_SleepRelaxCpuContext.Clear();
+    g_SleepRelaxCpuContext.platform = platform;
+    g_SleepRelaxCpuContext.task1    = &task1;
+
+    // negative ticks shall be rejected by the kernel
+    CHECK_FALSE(kernel.EventTaskSleep(platform->GetCallerSP(), -1));
 }
 
 static struct SleepAllAndWakeRelaxCpuContext
@@ -755,7 +774,7 @@ static void YieldNsyRelaxCpu()
 
 TEST(KernelService, YieldNoSleepYieldSwitchesToNextTask)
 {
-    Kernel<KERNEL_STATIC, 3, sched::SwitchStrategyRR_NSY, PlatformTestMock> kernel;
+    KernelMock<KERNEL_STATIC, 3, sched::SwitchStrategyRR_NSY, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task1, task2, task3;
     PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
     Stack *&active = platform->m_stack_active;
@@ -776,7 +795,7 @@ TEST(KernelService, YieldNoSleepYieldSwitchesToNextTask)
     // task1 calls Yield: IKernelService::SwitchToNext -> Kernel::OnTaskSwitch -> OnTaskYield (handled)
     // -> ScheduleYield -> BusyWaitWhileYielding (must return, pending yield consumed)
     Yield();
-    CHECK_EQUAL(1, platform->m_switch_to_next_nr);
+    CHECK_EQUAL(1, kernel.m_switch_to_next_nr);
 
     // CPU is handed over to the next task in the rotation
     CHECK_EQUAL(active->SP, (size_t)task2.GetStack());
@@ -820,7 +839,7 @@ TEST(KernelService, YieldNoSleepYieldKeepsTaskRunnable)
 
 TEST(KernelService, YieldNoSleepYieldSingleTask)
 {
-    Kernel<KERNEL_STATIC, 1, sched::SwitchStrategyRR_NSY, PlatformTestMock> kernel;
+    KernelMock<KERNEL_STATIC, 1, sched::SwitchStrategyRR_NSY, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task;
     PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
     Stack *&active = platform->m_stack_active;
@@ -837,7 +856,7 @@ TEST(KernelService, YieldNoSleepYieldSingleTask)
 
     // alone task yields: strategy hands the CPU back to the same task, the kernel must not fall into the sleep trap
     Yield();
-    CHECK_EQUAL(1, platform->m_switch_to_next_nr);
+    CHECK_EQUAL(1, kernel.m_switch_to_next_nr);
     CHECK_EQUAL(active->SP, (size_t)task.GetStack());
 
     g_RelaxCpuHandler = NULL;
@@ -849,7 +868,7 @@ TEST(KernelService, YieldNoSleepYieldSingleTask)
 
 TEST(KernelService, YieldNoSleepYieldRepeated)
 {
-    Kernel<KERNEL_STATIC, 2, sched::SwitchStrategyRR_NSY, PlatformTestMock> kernel;
+    KernelMock<KERNEL_STATIC, 2, sched::SwitchStrategyRR_NSY, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task1, task2;
     PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
     Stack *&active = platform->m_stack_active;
@@ -875,12 +894,12 @@ TEST(KernelService, YieldNoSleepYieldRepeated)
     Yield();
     CHECK_EQUAL(active->SP, (size_t)task2.GetStack());
 
-    CHECK_EQUAL(3, platform->m_switch_to_next_nr);
+    CHECK_EQUAL(3, kernel.m_switch_to_next_nr);
 }
 
 TEST(KernelService, YieldNoSleepYieldHrtSingleTask)
 {
-    Kernel<KERNEL_DYNAMIC | KERNEL_HRT, 1, sched::SwitchStrategyRR_NSY, PlatformTestMock> kernel;
+    KernelMock<KERNEL_DYNAMIC | KERNEL_HRT, 1, sched::SwitchStrategyRR_NSY, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task;
     PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
 
@@ -897,7 +916,7 @@ TEST(KernelService, YieldNoSleepYieldHrtSingleTask)
     // in HRT mode Yield() signals work completion: Kernel::OnTaskSwitch must NOT take the NOSLEEP_YIELD path
     // but sleep the task until its next period (same as for non-NSY strategies)
     Yield();
-    CHECK_EQUAL(1, platform->m_switch_to_next_nr);
+    CHECK_EQUAL(1, kernel.m_switch_to_next_nr);
 
     // the task has been put to sleep: the busy-wait must have been released by the tick handler
     CHECK_TRUE(g_YieldNsyRelaxCpuContext.counter != 0);
@@ -952,7 +971,7 @@ static void YieldNsyTraceRelaxCpu()
 
 TEST(KernelService, YieldNoSleepYieldHrtHandsOverToNextTask)
 {
-    Kernel<KERNEL_DYNAMIC | KERNEL_HRT, 2, sched::SwitchStrategyRR_NSY, PlatformTestMock> kernel;
+    KernelMock<KERNEL_DYNAMIC | KERNEL_HRT, 2, sched::SwitchStrategyRR_NSY, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task1, task2;
     PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
     Stack *&active = platform->m_stack_active;
@@ -971,7 +990,7 @@ TEST(KernelService, YieldNoSleepYieldHrtHandsOverToNextTask)
     // task1 completes its job and blocks inside Yield() until it is rescheduled (the mock spins ticks
     // in the busy-wait loop, exactly as the real time passes while the task is blocked)
     Yield();
-    CHECK_EQUAL(1, platform->m_switch_to_next_nr);
+    CHECK_EQUAL(1, kernel.m_switch_to_next_nr);
 
     // the first tick (sleep entry) removes task1 from the runnable set: task2 gets the CPU
     CHECK_TRUE(g_YieldNsyTraceRelaxCpuContext.count != 0);
@@ -1073,7 +1092,7 @@ static void YieldNsySleepingPeerRelaxCpu()
 
 TEST(KernelService, YieldNoSleepYieldSkipsSleepingPeer)
 {
-    Kernel<KERNEL_STATIC, 3, sched::SwitchStrategyRR_NSY, PlatformTestMock> kernel;
+    KernelMock<KERNEL_STATIC, 3, sched::SwitchStrategyRR_NSY, PlatformTestMock> kernel;
     TaskMock<ACCESS_USER> task1, task2, task3;
     PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
     Stack *&active = platform->m_stack_active;
@@ -1107,7 +1126,7 @@ TEST(KernelService, YieldNoSleepYieldSkipsSleepingPeer)
     // task1 yields: sleeping task2 (its former successor) is skipped, the CPU goes to task3
     CHECK_EQUAL(g_YieldNsySleepingPeerRelaxCpuContext.sp_after_yield2, (size_t)task3.GetStack());
 
-    CHECK_EQUAL(2, platform->m_switch_to_next_nr);
+    CHECK_EQUAL(2, kernel.m_switch_to_next_nr);
     CHECK_FALSE(g_YieldNsySleepingPeerRelaxCpuContext.sleeping_active);
 
     g_RelaxCpuHandler = NULL;

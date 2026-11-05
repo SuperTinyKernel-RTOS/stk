@@ -48,11 +48,7 @@ public:
     uint32_t GetTickResolution() const override;
     Cycles GetSysTimerCount() const override;
     uint32_t GetSysTimerFrequency() const override;
-    void SwitchToNext() override;
     void ForceContextSwitch(TId id) override;
-    void Sleep(Timeout ticks) override;
-    bool SleepUntil(Ticks timestamp) override;
-    EWaitResult Wait(ISyncObject *sync_obj, IMutex *mutex, Timeout timeout) override;
     void ProcessTick() override;
     void ProcessHardFault() override;
     void SetEventOverrider(IEventOverrider *overrider, bool non_secure) override;
