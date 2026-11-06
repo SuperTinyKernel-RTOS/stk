@@ -313,6 +313,8 @@ struct MemoryAllocator
         {
             alignment = sizeof(void *);
         }
+
+        // guard against unlinked weak symbols
         STK_ASSERT(IsAvailable());
 
         const size_t extra = ((alignment - 1U) + sizeof(void *));
@@ -339,6 +341,7 @@ struct MemoryAllocator
     */
     static inline void FreeAligned(void *ptr)
     {
+        // guard against unlinked weak symbols
         STK_ASSERT(IsAvailable());
 
         if ((ptr != nullptr) && IsAvailable())
@@ -364,6 +367,7 @@ struct MemoryAllocator
 
         TElement *ptr = nullptr;
 
+        // guard against unlinked weak symbols
         STK_ASSERT(IsAvailable());
 
         if (IsAvailable())
@@ -401,6 +405,7 @@ struct MemoryAllocator
 
         const size_t max_size = static_cast<size_t>(~static_cast<size_t>(0U));
 
+        // guard against unlinked weak symbols
         STK_ASSERT(IsAvailable());
 
         if ((count != 0U) && (count <= (max_size / sizeof(TElement))) && IsAvailable())
@@ -417,6 +422,41 @@ struct MemoryAllocator
                     }
                 }
             }
+        }
+
+        return ptr;
+    }
+
+    /*! \brief     Allocate an array of trivial elements without constructor overhead.
+        \details   Enforces at compile time that TElement is a trivial type via static assertion.
+                   Allocates raw memory via Allocate() and leaves it uninitialized (similar to malloc),
+                   avoiding any placement-new constructor loops.
+        \param[in] count: Number of elements to allocate.
+        \return    Pointer to the first element, nullptr if allocation failed, count is 0,
+                   or count * sizeof(TElement) overflows.
+        \note      Pair with Free() (or FreeArrayT) to release the memory.
+    */
+    template <typename TElement>
+    static inline TElement *AllocateTrivialArrayT(size_t count)
+    {
+        // ensure the type is strictly trivial at compile time
+        STK_STATIC_ASSERT_DESC(std::is_trivial<TElement>::value,
+            "TElement must be a trivial type");
+
+        // ensure alignment does not exceed allocator guarantees
+        STK_STATIC_ASSERT_DESC(alignof(TElement) <= ALIGNMENT,
+            "TElement alignment exceeds MemoryAllocator::ALIGNMENT");
+
+        TElement *ptr = nullptr;
+        const size_t max_size = static_cast<size_t>(~static_cast<size_t>(0U));
+
+        // guard against unlinked weak symbols
+        STK_ASSERT(IsAvailable());
+
+        if ((count != 0U) && (count <= (max_size / sizeof(TElement))) && IsAvailable())
+        {
+            ptr = static_cast<TElement *>(Allocate(count * sizeof(TElement)));
+            // note: no placement new loop is needed here because TElement is trivial
         }
 
         return ptr;
@@ -465,6 +505,28 @@ struct MemoryAllocator
                 STK_UNUSED(count);
             }
 
+            Free(ptr);
+        }
+    }
+
+    /*! \brief     Free an array of trivial elements allocated via AllocateTrivialArrayT().
+        \details   Enforces at compile time that TElement is a trivial type via static assertion.
+                   Bypasses destructor loops entirely and directly releases the memory via Free().
+        \param[in] ptr: Pointer to the first element. nullptr is allowed and results in noop.
+    */
+    template <typename TElement>
+    static inline void FreeTrivialArrayT(TElement ptr[])
+    {
+        // ensure the type is strictly trivial at compile time
+        STK_STATIC_ASSERT_DESC(std::is_trivial<TElement>::value,
+            "TElement must be a trivial type");
+
+        // guard against unlinked weak symbols
+        STK_ASSERT(IsAvailable());
+
+        if ((ptr != nullptr) && IsAvailable())
+        {
+            // note: trivial types have trivial destructors, so no destructor loops are needed
             Free(ptr);
         }
     }

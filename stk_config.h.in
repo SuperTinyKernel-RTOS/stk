@@ -13,6 +13,10 @@
 // note: Replace below includes with includes provided by the vendor of your board.
 // note: Rename this file to stk_config.h and place to your project folder which references includes (normally where main.cpp is, see /example).
 
+// =============================================================================
+// ARCHITECTURE & DEVICE SELECTION
+// =============================================================================
+
 // Device-specific include file, example for NXP K66 MCU:
 //#include "MK66F18.h"
 //#include "cmsis_device.h"
@@ -21,31 +25,153 @@
 #include _STK_DEVICE_INC
 #endif
 
-// Define for Arm Cortex-M4 MCU
+// Define for Arm Cortex-M MCU family
 #cmakedefine _STK_ARCH_ARM_CORTEX_M
 
-// Define for RISC-V
+// Define for RISC-V architecture
 #cmakedefine _STK_ARCH_RISC_V
 
-// Define for x86, Windows
+// Define for x86 / Windows simulation & testing
 #cmakedefine _STK_ARCH_X86_WIN32
 
-//  ISR handlers
+
+// =============================================================================
+// ISR HANDLERS & INTERRUPT CONFIGURATION
+// =============================================================================
+
 #if defined(_STK_ARCH_ARM_CORTEX_M) || defined(_STK_ARCH_RISC_V)
     // Redefine if SysTick handler name is different from SysTick_Handler
     #cmakedefine STK_SYSTICK_HANDLER @STK_SYSTICK_HANDLER@
 
-    // Redefine if PendSv handler name is different from PendSV_Handler
+    // Redefine if PendSV handler name is different from PendSV_Handler
     #cmakedefine STK_PENDSV_HANDLER @STK_PENDSV_HANDLER@
 
     // Redefine if SVC handler name is different from SVC_Handler
     #cmakedefine STK_SVC_HANDLER @STK_SVC_HANDLER@
 #endif
 
-// Tickless mode
+
+// =============================================================================
+// TICKLESS / DYNAMIC-TICK MODE
+// =============================================================================
+
+// Enable tickless (dynamic-tick) low-power operation during idle periods (0 or 1)
 #cmakedefine STK_TICKLESS_IDLE @STK_TICKLESS_IDLE@
 
-// TLS
+// Use DWT timer on ARM Cortex-M3/M4/M7/M33 for precise tick calculation (0 or 1)
+#cmakedefine STK_TICKLESS_USE_ARM_DWT @STK_TICKLESS_USE_ARM_DWT@
+
+// Maximum number of kernel ticks the hardware timer may be suppressed in one interval
+#cmakedefine STK_TICKLESS_TICKS_MAX @STK_TICKLESS_TICKS_MAX@
+
+
+// =============================================================================
+// THREAD-LOCAL STORAGE (TLS)
+// =============================================================================
+
+// Enable per-task thread-local storage (0 or 1)
 #cmakedefine STK_TLS @STK_TLS@
+
+// Store TLS pointer in dedicated CPU register (r9 on Cortex-M, tp on RISC-V)
+#cmakedefine STK_TLS_PREFER_REGISTER @STK_TLS_PREFER_REGISTER@
+
+
+// =============================================================================
+// MEMORY PROTECTION UNIT (MPU) & ARM TRUSTZONE
+// =============================================================================
+
+// Enable hardware MPU support (0 or 1)
+#cmakedefine STK_MPU @STK_MPU@
+
+// Reprogram stack guard MPU region on every context switch (0 or 1)
+#cmakedefine STK_MPU_STACK_GUARD @STK_MPU_STACK_GUARD@
+
+// Number of MPU region slots reserved per task (2, 4, 6, 8, 12, or 16)
+#cmakedefine STK_MPU_TASK_REGIONS @STK_MPU_TASK_REGIONS@
+#cmakedefine STK_MPU_TASK_REGIONS_NS @STK_MPU_TASK_REGIONS_NS@
+
+// ARM TrustZone Secure (1) or Non-Secure (1) build flags
+#cmakedefine STK_TZ_SECURE @STK_TZ_SECURE@
+#cmakedefine STK_TZ_NON_SECURE @STK_TZ_NON_SECURE@
+
+
+// =============================================================================
+// SYMMETRIC MULTI-PROCESSING (SMP) & CORE SETTINGS
+// =============================================================================
+
+// Number of physical CPU cores available to the scheduler
+#cmakedefine STK_ARCH_CPU_COUNT @STK_ARCH_CPU_COUNT@
+
+// Set to 1 if all CPU cores have the same frequency, 0 otherwise
+#cmakedefine STK_CORE_FREQ_UNIFIED @STK_CORE_FREQ_UNIFIED@
+
+
+// =============================================================================
+// STACK, SAFETY & RUNTIME GUARDS
+// =============================================================================
+
+// Allow workarounds for smaller/faster binary that break safety standards (0 or 1)
+#cmakedefine STK_STRICT_COMPLIANCY @STK_STRICT_COMPLIANCY@
+
+// Check stack health on every context switch (0 or 1)
+#cmakedefine STK_STACK_GUARD @STK_STACK_GUARD@
+
+// Include task ID in Stack descriptor for tracing/MPU (0 or 1)
+#cmakedefine STK_STACK_NEEDS_TASK_ID @STK_STACK_NEEDS_TASK_ID@
+
+// Minimum stack size in elements of Word
+#cmakedefine STK_STACK_SIZE_MIN @STK_STACK_SIZE_MIN@
+
+// Stack size for the sleep trap in elements of Word
+#cmakedefine STK_SLEEP_TRAP_STACK_SIZE @STK_SLEEP_TRAP_STACK_SIZE@
+
+// Sentinel value written to stack at initialization (watermark pattern)
+#cmakedefine STK_STACK_MEMORY_FILLER @STK_STACK_MEMORY_FILLER@
+
+// Maximum allowable recursion depth for critical section entry
+#cmakedefine STK_CS_NESTINGS_MAX @STK_CS_NESTINGS_MAX@
+
+
+// =============================================================================
+// SYNCHRONIZATION & DEBUG TRACING
+// =============================================================================
+
+// Enable debug/string names for synchronization primitives (0 or 1)
+#cmakedefine STK_SYNC_DEBUG_NAMES @STK_SYNC_DEBUG_NAMES@
+
+// Enable SEGGER SystemView tracing integration (0 or 1)
+#cmakedefine STK_SEGGER_SYSVIEW @STK_SEGGER_SYSVIEW@
+
+
+// =============================================================================
+// SOFTWARE TIMERS & MEMORY ALLOCATOR
+// =============================================================================
+
+// Number of threads handling timers in TimerHost
+#cmakedefine STK_TIMER_THREADS_COUNT @STK_TIMER_THREADS_COUNT@
+
+// Stack size of the timer handler tasks
+#cmakedefine STK_TIMER_HANDLER_STACK_SIZE @STK_TIMER_HANDLER_STACK_SIZE@
+
+// Capacity of the command queue of TimerHost
+#cmakedefine STK_TIMER_COMMAND_QUEUE_SIZE @STK_TIMER_COMMAND_QUEUE_SIZE@
+
+// Enable C++ placement new operator support in memory allocator (0 or 1)
+#cmakedefine STK_MEMORY_PLACEMENT_NEW @STK_MEMORY_PLACEMENT_NEW@
+
+
+// =============================================================================
+// CUSTOM HANDLERS & OVERRIDES
+// =============================================================================
+
+// Custom kernel panic handler macro or function override
+//#define STK_PANIC_HANDLER(id) MyCustomPanicHandler(id)
+
+// Redirect runtime assertions to a custom handler function
+//#define _STK_ASSERT_REDIRECT
+
+// Provide custom optimized implementations for memory routines
+//#define _STK_CUSTOM_MEMCPY
+//#define _STK_CUSTOM_MEMSET
 
 #endif /* STK_CONFIG_H_ */

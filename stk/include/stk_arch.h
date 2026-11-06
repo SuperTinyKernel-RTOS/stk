@@ -757,7 +757,7 @@ inline void STK_MEMCPY(void *const dest, const void *const src, size_t size)
         }
     }
 }
-#endif
+#endif // STK_MEMCPY
 
 //! Implementation of STK_MEMSET.
 #ifndef _STK_CUSTOM_MEMSET
@@ -788,7 +788,7 @@ inline void STK_MEMSET(void *const dest, uint8_t value, size_t size)
         }
     }
 }
-#endif
+#endif // STK_MEMSET
 
 } // namespace stk
 

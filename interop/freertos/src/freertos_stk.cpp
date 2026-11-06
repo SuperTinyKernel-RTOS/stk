@@ -28,8 +28,9 @@
  *                       object type in every API function, reinterpret_cast of the task stack
  *                       pointer to StackType_t * in vTaskGetInfo(), and the static object storage
  *                       of the Static*_t structures.
- *      Rule 18-4-1    : malloc()/free() back the default pvPortMalloc()/vPortFree() (weak, may be
- *                       overridden by the application) and placement new is used to construct the
+ *      Rule 18-4-1    : stk::memory::MemoryAllocator (supplied by the application) backs the default
+ *                       pvPortMalloc()/vPortFree() (weak, may be overridden) and the internal
+ *                       allocations; placement new is used to construct the
  *                       kernel objects (ObjAlloc / ObjAllocArray) in both dynamic and static
  *                       (xTaskCreateStatic, xQueueCreateStatic, ...) variants.
  *      Rule 18-0-1,
@@ -75,10 +76,13 @@
 // Minimum usable stack in STK Words.
 #define FREERTOS_STK_MIN_STACK_WORDS  STK_STACK_SIZE_MIN
 
-// Private memory allocators (we define malloc, free here to overcome absence of declaration in
-// case of -ffreestanding compiler flag).
-extern "C" void *malloc(size_t size);
-extern "C" void free(void *ptr);
+// Dynamic memory: every heap allocation made by this file (TCBs, stacks, queue/stream buffers, ...) goes
+// through stk::memory::MemoryAllocator. The application must provide its implementation (Allocate/Free/
+// GetStats, e.g. by compiling stk_memory_allocator_default.h in one translation unit or by defining its own):
+// it is intentionally NOT defined here.
+#if !STK_MEMORY_HAS_HEAP
+#error "FreeRTOS wrapper requires heap support: STK_MEMORY_PLACEMENT_NEW=1 and STK_MEMORY_NO_HEAP=0"
+#endif
 
 // +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 // Anonymous namespace to make local functions file-local.
@@ -110,8 +114,6 @@ int32_t FreertosStrcmp(const char str1[], const char str2[]) // MISRA: declared 
     return result;
 }
 
-stk::memory::MemoryAllocator::Stats s_MemStats(configTOTAL_HEAP_SIZE);
-
 // ===========================================================================
 // Internal helpers
 // ===========================================================================
@@ -120,13 +122,7 @@ stk::memory::MemoryAllocator::Stats s_MemStats(configTOTAL_HEAP_SIZE);
 template <typename T, typename... Args> 
 __stk_forceinline T *ObjAlloc(Args &&...args)
 {
-    T *obj = nullptr;
-
-    void *ptr = pvPortMalloc(sizeof(T));
-    if (ptr != nullptr)
-        obj = new (ptr) T(static_cast<Args &&>(args)...);
-
-    return obj;
+    return stk::memory::MemoryAllocator::AllocateOneT<T>(args...);
 }
 
 // Delete an object previously created by ObjAlloc.
@@ -135,17 +131,18 @@ __stk_forceinline void ObjFree(T *obj)
 {
     if (obj != nullptr)
     {
-        // read the flag first: the object must not be touched after its destructor has run
-        const bool heap_owned = obj->m_cb_owned;
-
-        obj->~T();
-
-        if (heap_owned)
-            vPortFree(obj);
+        if (obj->m_cb_owned)
+        {
+            stk::memory::MemoryAllocator::FreeOneT(obj); // virtual destructor + Free()
+        }
+        else
+        {
+            obj->~T();
+        }
     }
 }
 
-// Heap-allocate a raw byte array of 'count' elements of type T via pvPortMalloc.
+// Heap-allocate a raw byte array of 'count' elements of type T via MemoryAllocator::Allocate.
 // Equivalent to: new (std::nothrow) T[count]
 template <typename T>
 __stk_forceinline T *ObjAllocArray(size_t count)
@@ -153,15 +150,15 @@ __stk_forceinline T *ObjAllocArray(size_t count)
     if (count == 0U)
         return nullptr;
 
-    void *ptr = pvPortMalloc(sizeof(T) * count);
-    return static_cast<T *>(ptr);
+    return stk::memory::MemoryAllocator::AllocateTrivialArrayT<T>(count);
 }
 
 // Free a raw array previously allocated by ObjAllocArray (no destructor calls).
 // Equivalent to: delete[] ptr
-__stk_forceinline void ObjFreeArray(void *ptr)
+template <typename T>
+__stk_forceinline void ObjFreeArray(T *ptr)
 {
-    vPortFree(ptr);
+    stk::memory::MemoryAllocator::FreeTrivialArrayT(ptr);
 }
 
 // Destroy and free a single heap-allocated object that was created by ObjAlloc
@@ -173,7 +170,7 @@ __stk_forceinline void ObjFreeRaw(T *obj)
     if (obj != nullptr)
     {
         obj->~T();
-        vPortFree(obj);
+        stk::memory::MemoryAllocator::Free(obj);
     }
 }
 
@@ -198,7 +195,7 @@ __stk_forceinline void ObjFreeRaw(T *obj)
 // -----------------------------------------------------------------------------
 
 // Enforce that configMAX_PRIORITIES fits within the default ready-priorities bitmap of the strategy.
-static_assert((configMAX_PRIORITIES >= 1U) && (configMAX_PRIORITIES <= 1024U),
+STK_STATIC_ASSERT_DESC((configMAX_PRIORITIES >= 1U) && (configMAX_PRIORITIES <= 1024U),
     "configMAX_PRIORITIES must be in the range [1, 1024], the capacity of the default priority bitmap "
     "(stk::sched::PriorityBitmap). For more levels supply a custom ReadyBitmap type with a "
     "stk::sched::PriorityBitmapTraits specialization as the 3rd template parameter of FrtosKernel's "
@@ -1234,71 +1231,13 @@ BaseType_t NotifyApplyAction(FrtosTask::NotifySlot &slot,
 // +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 // -----------------------------------------------------------------------------
-// Private memory allocators (we define malloc, free here to overcome absence of declaration in
-// case of -ffreestanding compiler flag).
-// Similar to FreeRTOS's heap_3.c.
-// -----------------------------------------------------------------------------
-
-void *stk::memory::MemoryAllocator::Allocate(size_t size)
-{
-    if (size == 0)
-        return nullptr;
-
-    // align to platform word
-    const size_t alignment = alignof(size_t);
-
-    // add header and round up to the nearest multiple of 'alignment'
-    size = (size + sizeof(size_t) + (alignment - 1)) & ~(alignment - 1);
-
-    stk::hw::CriticalSection::ScopedLock cs_;
-
-    if (s_MemStats.GetAvailable() < size)
-        return nullptr;
-
-    size_t *region = static_cast<size_t *>(malloc(size));
-    if (region != nullptr)
-    {
-        s_MemStats.RecordAllocate(size);
-
-        // save size
-        region[0] = size;
-
-        // set to usable memory region skipping header
-        region = region + 1;
-    }
-
-    return region;
-}
-
-void stk::memory::MemoryAllocator::Free(void *ptr)
-{
-    if (ptr == nullptr)
-        return;
-
-    stk::hw::CriticalSection::ScopedLock cs_;
-
-    // get region
-    size_t *region = static_cast<size_t *>(ptr) - 1;
-    size_t size = region[0];
-
-    free(region);
-
-    s_MemStats.RecordFree(size);
-}
-
-stk::memory::MemoryAllocator::Stats stk::memory::MemoryAllocator::GetStats()
-{
-    return s_MemStats;
-}
-
-// -----------------------------------------------------------------------------
 // Heap API — pvPortMalloc / vPortFree
 //
 // Both functions delegate directly to stk::memory::MemoryAllocator::Allocate
-// and ::Free, which are the single allocation seam for the entire wrapper.
-// Redefining those two functions (e.g. to point at a static pool allocator)
-// automatically redirects both internal STK allocations and any application
-// code that calls pvPortMalloc / vPortFree.
+// and ::Free, which are the single allocation seam for the entire wrapper and
+// are provided by the application (not by this file). Internal STK allocations
+// of this wrapper call MemoryAllocator directly, application code that calls
+// pvPortMalloc / vPortFree ends up in the same allocator.
 // -----------------------------------------------------------------------------
 
 __stk_weak void *pvPortMalloc(size_t xWantedSize)
@@ -1315,8 +1254,9 @@ __stk_weak void vPortFree(void *pv)
 // Heap query API — xPortGetFreeHeapSize / xPortGetMinimumEverFreeHeapSize /
 //                  vPortGetHeapStats / MemoryAllocator::GetStats
 //
-// All three functions read directly from s_MemStats, which is the single
-// authoritative accounting structure maintained by Allocate() and Free().
+// All three functions read the statistics of the application-provided
+// stk::memory::MemoryAllocator::GetStats(), which is the single authoritative
+// accounting structure maintained by its Allocate() and Free().
 //
 // xPortGetFreeHeapSize
 //   Returns GetAvailable() — the number of bytes not yet handed out.
@@ -1342,12 +1282,12 @@ __stk_weak void vPortFree(void *pv)
 
 size_t xPortGetFreeHeapSize(void)
 {
-    return s_MemStats.GetAvailable();
+    return stk::memory::MemoryAllocator::GetStats().GetAvailable();
 }
 
 size_t xPortGetMinimumEverFreeHeapSize(void)
 {
-    return s_MemStats.min_ever_free;
+    return stk::memory::MemoryAllocator::GetStats().min_ever_free;
 }
 
 void vPortGetHeapStats(HeapStats_t *pxHeapStats)
@@ -1355,12 +1295,12 @@ void vPortGetHeapStats(HeapStats_t *pxHeapStats)
     if (pxHeapStats == nullptr)
         return;
 
-    const stk::memory::MemoryAllocator::Stats snap = s_MemStats;
+    const stk::memory::MemoryAllocator::Stats snap = stk::memory::MemoryAllocator::GetStats();
     const size_t free_now = snap.GetAvailable();
 
     (*pxHeapStats) = {};
 
-    // Fields derived directly from s_MemStats accounting.
+    // Fields derived directly from the allocator statistics.
     pxHeapStats->xAvailableHeapSpaceInBytes      = free_now;
     pxHeapStats->xMinimumEverFreeBytesRemaining  = snap.min_ever_free;
     pxHeapStats->xNumberOfSuccessfulAllocations  = snap.allocate_count;
@@ -1484,9 +1424,8 @@ BaseType_t xTaskCreate(TaskFunction_t  pvTaskCode,
     t->m_weight    = FrtosPrioToStkWeight(uxPriority);
 
     // Determine stack size in Words.
-    size_t stack_words = (usStackDepth > 0U)
-                         ? static_cast<size_t>(usStackDepth)
-                         : FREERTOS_STK_DEFAULT_STACK_WORDS;
+    size_t stack_words = (usStackDepth > 0U) ? static_cast<size_t>(usStackDepth) :
+        FREERTOS_STK_DEFAULT_STACK_WORDS;
 
     if (stack_words < FREERTOS_STK_MIN_STACK_WORDS)
         stack_words = FREERTOS_STK_MIN_STACK_WORDS;
@@ -1531,7 +1470,7 @@ TaskHandle_t xTaskCreateStatic(TaskFunction_t  pvTaskCode,
 
     // Placement-new the FrtosTask control block into the caller-supplied TCB
     // buffer.  Static assert guards against the buffer being too small.
-    static_assert(sizeof(StaticTask_t) >= sizeof(FrtosTask),
+    STK_STATIC_ASSERT_DESC(sizeof(StaticTask_t) >= sizeof(FrtosTask),
         "StaticTask_t is too small to hold FrtosTask. "
         "Increase STATIC_TASK_TCB_SIZE_WORDS in freertos_stk.h.");
 
@@ -2091,7 +2030,7 @@ QueueHandle_t xQueueCreateStatic(UBaseType_t    uxQueueLength,
 
     // Placement-new the FrtosQueue control block into the caller-supplied buffer.
     // Static assert guards against the buffer being too small.
-    static_assert(sizeof(StaticQueue_t) >= sizeof(FrtosQueue),
+    STK_STATIC_ASSERT_DESC(sizeof(StaticQueue_t) >= sizeof(FrtosQueue),
         "StaticQueue_t is too small to hold FrtosQueue. "
         "Increase STATIC_QUEUE_TCB_SIZE_WORDS in freertos_stk.h.");
 
@@ -2642,7 +2581,7 @@ SemaphoreHandle_t xSemaphoreCreateBinaryStatic(StaticSemaphore_t *pxSemaphoreBuf
         return nullptr;
 
     // Static assert guards against the buffer being too small.
-    static_assert(sizeof(StaticSemaphore_t) >= sizeof(FrtosSemaphore),
+    STK_STATIC_ASSERT_DESC(sizeof(StaticSemaphore_t) >= sizeof(FrtosSemaphore),
         "StaticSemaphore_t is too small to hold FrtosSemaphore. "
         "Increase STATIC_SEMAPHORE_TCB_SIZE_WORDS in freertos_stk.h.");
 
@@ -2713,7 +2652,7 @@ SemaphoreHandle_t xSemaphoreCreateCountingStatic(UBaseType_t        uxMaxCount,
     if (uxInitialCount > uxMaxCount)
         return nullptr;
 
-    static_assert(sizeof(StaticSemaphore_t) >= sizeof(FrtosSemaphore),
+    STK_STATIC_ASSERT_DESC(sizeof(StaticSemaphore_t) >= sizeof(FrtosSemaphore),
         "StaticSemaphore_t is too small to hold FrtosSemaphore. "
         "Increase STATIC_SEMAPHORE_TCB_SIZE_WORDS in freertos_stk.h.");
 
@@ -2760,7 +2699,7 @@ static SemaphoreHandle_t CreateMutexStaticInternal(StaticSemaphore_t *pxMutexBuf
     if (pxMutexBuffer == nullptr)
         return nullptr;
 
-    static_assert(sizeof(StaticSemaphore_t) >= sizeof(FrtosSemaphore),
+    STK_STATIC_ASSERT_DESC(sizeof(StaticSemaphore_t) >= sizeof(FrtosSemaphore),
         "StaticSemaphore_t is too small to hold FrtosSemaphore. "
         "Increase STATIC_SEMAPHORE_TCB_SIZE_WORDS in freertos_stk.h.");
 
@@ -3082,7 +3021,7 @@ TimerHandle_t xTimerCreateStatic(const char             *pcTimerName,
     if (!FrtosTimer::EnsureTimerHost())
         return nullptr;
 
-    static_assert(sizeof(StaticTimer_t) >= sizeof(FrtosTimer),
+    STK_STATIC_ASSERT_DESC(sizeof(StaticTimer_t) >= sizeof(FrtosTimer),
         "StaticTimer_t is too small to hold FrtosTimer. "
         "Increase STATIC_TIMER_TCB_SIZE_WORDS in freertos_stk.h.");
 
@@ -3419,7 +3358,7 @@ EventGroupHandle_t xEventGroupCreateStatic(StaticEventGroup_t *pxEventGroupBuffe
     if (IsIrqContext())
         return nullptr;
 
-    static_assert(sizeof(StaticEventGroup_t) >= sizeof(FrtosEventGroup),
+    STK_STATIC_ASSERT_DESC(sizeof(StaticEventGroup_t) >= sizeof(FrtosEventGroup),
         "StaticEventGroup_t is too small to hold FrtosEventGroup. "
         "Increase STATIC_EVENT_GROUP_TCB_SIZE_WORDS in freertos_stk.h.");
 
@@ -4058,7 +3997,7 @@ void *pvTaskGetThreadLocalStoragePointer(TaskHandle_t xTaskToQuery,
 
 #if configUSE_STREAM_BUFFERS
 
-static_assert(sizeof(StaticStreamBuffer_t) >= sizeof(FrtosStreamBuffer),
+STK_STATIC_ASSERT_DESC(sizeof(StaticStreamBuffer_t) >= sizeof(FrtosStreamBuffer),
     "Increase STATIC_STREAM_BUFFER_TCB_SIZE_WORDS in FreeRTOS.h.");
 
 StreamBufferHandle_t xStreamBufferCreate(size_t xBufferSizeBytes,
@@ -4095,7 +4034,7 @@ StreamBufferHandle_t xStreamBufferCreateStatic(
         (xBufferSizeBytes == 0U))
         return nullptr;
 
-    static_assert(sizeof(StaticStreamBuffer_t) >= sizeof(FrtosStreamBuffer),
+    STK_STATIC_ASSERT_DESC(sizeof(StaticStreamBuffer_t) >= sizeof(FrtosStreamBuffer),
         "Increase STATIC_STREAM_BUFFER_TCB_SIZE_WORDS in FreeRTOS.h.");
 
     FrtosStreamBuffer *sb = new (pxStaticStreamBuffer)
@@ -4386,7 +4325,7 @@ StreamBufferHandle_t xStreamBufferCreateStaticWithCallback(
         (xBufferSizeBytes == 0U))
         return nullptr;
 
-    static_assert(sizeof(StaticStreamBuffer_t) >= sizeof(FrtosStreamBuffer),
+    STK_STATIC_ASSERT_DESC(sizeof(StaticStreamBuffer_t) >= sizeof(FrtosStreamBuffer),
         "Increase STATIC_STREAM_BUFFER_TCB_SIZE_WORDS in FreeRTOS.h.");
 
     FrtosStreamBuffer *sb = new (pxStaticStreamBuffer)
@@ -4424,11 +4363,10 @@ StreamBufferHandle_t xStreamBufferCreateStaticWithCallback(
 //   Drain all envelopes, free their blocks, then Reset() the eq.
 // ===========================================================================
 
-static_assert(sizeof(StaticMessageBuffer_t) >= sizeof(FrtosMessageBuffer),
+STK_STATIC_ASSERT_DESC(sizeof(StaticMessageBuffer_t) >= sizeof(FrtosMessageBuffer),
     "Increase STATIC_MESSAGE_BUFFER_TCB_SIZE_WORDS in FreeRTOS.h.");
 
-MessageBufferHandle_t xMessageBufferCreate(size_t xBufferSizeBytes,
-                                            size_t xMaxMessageSize)
+MessageBufferHandle_t xMessageBufferCreate(size_t xBufferSizeBytes, size_t xMaxMessageSize)
 {
     if ((xBufferSizeBytes == 0U) || (xMaxMessageSize == 0U))
         return nullptr;
@@ -4528,12 +4466,12 @@ MessageBufferHandle_t xMessageBufferCreateStaticWithCallback(
     StreamBufferCallbackFunction_t pxReceiveCompletedCallback)
 {
     if ((pucMessageBufferStorageArea == nullptr) ||
-        (pxStaticMessageBuffer       == nullptr) ||
-        (xMaxMessageSize  == 0U) ||
-        (xMessageCount    == 0U))
+        (pxStaticMessageBuffer == nullptr) ||
+        (xMaxMessageSize == 0U) ||
+        (xMessageCount == 0U))
         return nullptr;
 
-    static_assert(sizeof(StaticMessageBuffer_t) >= sizeof(FrtosMessageBuffer),
+    STK_STATIC_ASSERT_DESC(sizeof(StaticMessageBuffer_t) >= sizeof(FrtosMessageBuffer),
         "Increase STATIC_MESSAGE_BUFFER_TCB_SIZE_WORDS in FreeRTOS.h.");
 
     const size_t block_size   = stk::memory::BlockMemoryPool::AlignBlockSize(xMaxMessageSize);
@@ -4581,7 +4519,7 @@ size_t xMessageBufferSend(MessageBufferHandle_t xMessageBuffer,
         return 0U;
 
     // 2. Copy payload into the block.
-    STK_MEMCPY(blk, pvTxData, xDataLengthBytes);
+    stk::STK_MEMCPY(blk, pvTxData, xDataLengthBytes);
 
     // 3. Enqueue the envelope (should always succeed: pool and eq are 1:1,
     //    but guard with NO_WAIT to avoid deadlock if they desync).
@@ -4635,7 +4573,7 @@ size_t xMessageBufferReceive(MessageBufferHandle_t xMessageBuffer,
     }
 
     // 3. Copy payload out and return the block.
-    STK_MEMCPY(pvRxData, env.blk, env.len);
+    stk::STK_MEMCPY(pvRxData, env.blk, env.len);
     mb->m_pool.Free(env.blk);
 
     // Fire receive-complete callback outside any critical section.
@@ -4768,7 +4706,7 @@ size_t xMessageBufferSendFromISR(MessageBufferHandle_t  xMessageBuffer,
         return 0U; // pool full — no block consumed, nothing to free
 
     // Step 2: copy payload.
-    STK_MEMCPY(blk, pvTxData, xDataLengthBytes);
+    stk::STK_MEMCPY(blk, pvTxData, xDataLengthBytes);
 
     // Step 3: non-blocking enqueue.
     FrtosMessageBuffer::MsgEnvelope env = { xDataLengthBytes, blk };
@@ -4822,7 +4760,7 @@ size_t xMessageBufferReceiveFromISR(MessageBufferHandle_t  xMessageBuffer,
     }
 
     // Step 3: copy payload out and release pool block.
-    STK_MEMCPY(pvRxData, env.blk, env.len);
+    stk::STK_MEMCPY(pvRxData, env.blk, env.len);
     mb->m_pool.Free(env.blk);
 
     // Fire receive-complete callback outside any critical section.

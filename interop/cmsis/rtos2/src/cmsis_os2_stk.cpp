@@ -112,7 +112,7 @@ size_t CmsisStrlen(const char str[]) // MISRA: declared as array, not pointer to
 // -----------------------------------------------------------------------------
 using StkSwitchingStrategy = stk::sched::SwitchStrategyFP64_NSY;
 
-static_assert(static_cast<int32_t>(osPriorityISR) <= static_cast<int32_t>(StkSwitchingStrategy::PRIORITY_HIGHEST),
+STK_STATIC_ASSERT_DESC(static_cast<int32_t>(osPriorityISR) <= static_cast<int32_t>(StkSwitchingStrategy::PRIORITY_HIGHEST),
     "STK switch strategy must provide a dedicated priority level for every CMSIS priority");
 
 // Clamps a priority value into the CMSIS thread priority range [osPriorityIdle, osPriorityISR].
