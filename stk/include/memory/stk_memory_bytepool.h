@@ -480,7 +480,7 @@ private:
     */
     static size_t HeapSize(size_t size)
     {
-        const size_t slack = ((BLOCK_ALIGN > MemoryAllocator::ALIGNMENT) ? (BLOCK_ALIGN - 1U) : 0U);
+        const size_t slack = ((BLOCK_ALIGN > MemoryAllocator::MIN_ALIGNMENT) ? (BLOCK_ALIGN - 1U) : 0U);
         return ((size <= (static_cast<size_t>(~static_cast<size_t>(0U)) - slack)) ? (size + slack) : 0U);
     }
 #endif
@@ -568,7 +568,7 @@ inline BytePool::BytePool(uint8_t *storage, size_t storage_size, const char *nam
   m_rover(nullptr),
   m_cv(),
   m_storage_size(storage_size),
-  m_stats(0U),
+  m_stats(storage_size),
   m_max_scan(0U),
   m_storage_owned(false)
 {
@@ -592,7 +592,7 @@ inline BytePool::BytePool(size_t storage_size, const char *name)
   m_rover(nullptr),
   m_cv(),
   m_storage_size(HeapSize(storage_size)),
-  m_stats(0U),
+  m_stats(storage_size),
   m_max_scan(0U),
   m_storage_owned(true)
 {

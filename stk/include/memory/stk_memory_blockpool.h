@@ -536,7 +536,7 @@ inline BlockMemoryPool::BlockMemoryPool(size_t capacity, size_t raw_block_size, 
   m_block_align(alignment),
   m_capacity(capacity),
   m_used_count(0U),
-  m_stats(0U),
+  m_stats(capacity * m_block_size),
   m_storage_owned(false)
 {
     STK_ASSERT(storage != nullptr);
@@ -563,7 +563,7 @@ inline BlockMemoryPool::BlockMemoryPool(size_t capacity, size_t raw_block_size, 
   m_block_align(alignment),
   m_capacity(capacity),
   m_used_count(0U),
-  m_stats(0U),
+  m_stats(capacity * m_block_size),
   m_storage_owned(true)
 {
 #if STK_SYNC_DEBUG_NAMES
@@ -577,7 +577,7 @@ inline BlockMemoryPool::BlockMemoryPool(size_t capacity, size_t raw_block_size, 
         // total = blocks + bitmap + slack for aligning the start (Allocate() itself guarantees ALIGNMENT);
         // every step is checked so that a huge capacity * block size can not wrap around
         const size_t max_size = static_cast<size_t>(~static_cast<size_t>(0U));
-        const size_t slack    = ((alignment > MemoryAllocator::ALIGNMENT) ? (alignment - 1U) : 0U);
+        const size_t slack    = ((alignment > MemoryAllocator::MIN_ALIGNMENT) ? (alignment - 1U) : 0U);
         const size_t bitmap   = BitmapBytes(capacity);
 
         if ((capacity <= (max_size / m_block_size)) &&

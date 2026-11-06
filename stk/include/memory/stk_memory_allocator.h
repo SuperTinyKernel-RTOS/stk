@@ -162,15 +162,14 @@ namespace memory {
 */
 struct MemoryAllocator
 {
-    /*! \brief Default memory pool capacity in bytes.
-        \see   Stats
-    */
-    static const size_t CAPACITY_DEFAULT = 12288U;
-
-    /*! \brief Minimum alignment (bytes) guaranteed for pointers returned by Allocate().
+    /*! \brief   Minimum alignment (bytes) guaranteed for pointers returned by Allocate().
         \details Types with a stricter alignment must be allocated with AllocateAligned().
     */
-    static const size_t ALIGNMENT = 8U;
+#ifdef _STK_ARCH_RISC_V
+    static const size_t MIN_ALIGNMENT = 16U;
+#else
+    static const size_t MIN_ALIGNMENT = 8U;
+#endif
 
     /*! \class Stats
         \brief Snapshot of the memory allocator's statistics.
@@ -181,9 +180,9 @@ struct MemoryAllocator
     */
     struct Stats
     {
-        Stats(size_t _capacity = CAPACITY_DEFAULT)
-            : capacity(_capacity), allocated(0U), peak_allocated(0U), allocate_count(0U), free_count(0U),
-              alloc_fail_count(0U), min_ever_free(_capacity)
+        Stats(size_t capacity_ = 0U)
+            : capacity(capacity_), allocated(0U), peak_allocated(0U), allocate_count(0U), free_count(0U),
+              alloc_fail_count(0U), min_ever_free(capacity_)
         {}
 
         size_t          capacity;         //!< Total capacity of the memory pool in bytes.
@@ -199,15 +198,15 @@ struct MemoryAllocator
                        after aligning/trimming their storage.
             \param[in] _capacity: Total capacity in bytes.
         */
-        void Reset(size_t _capacity)
+        void Reset(size_t capacity_)
         {
-            capacity         = _capacity;
+            capacity         = capacity_;
             allocated        = 0U;
             peak_allocated   = 0U;
             allocate_count   = 0U;
             free_count       = 0U;
             alloc_fail_count = 0U;
-            min_ever_free    = _capacity;
+            min_ever_free    = capacity_;
         }
 
         /*! \brief     Get total capacity of the memory pool.
@@ -363,7 +362,8 @@ struct MemoryAllocator
     template <typename TElement, typename... TArgs>
     static inline TElement *AllocateOneT(TArgs &&...args)
     {
-        STK_STATIC_ASSERT_DESC(alignof(TElement) <= ALIGNMENT, "TElement alignment exceeds MemoryAllocator::ALIGNMENT");
+        STK_STATIC_ASSERT_DESC(alignof(TElement) <= MIN_ALIGNMENT,
+            "TElement alignment exceeds MemoryAllocator::MIN_ALIGNMENT");
 
         TElement *ptr = nullptr;
 
@@ -398,8 +398,8 @@ struct MemoryAllocator
     template <typename TElement, typename... TArgs>
     static inline TElement *AllocateArrayT(size_t count, TArgs &&...args)
     {
-        STK_STATIC_ASSERT_DESC(alignof(TElement) <= ALIGNMENT,
-            "TElement alignment exceeds MemoryAllocator::ALIGNMENT");
+        STK_STATIC_ASSERT_DESC(alignof(TElement) <= MIN_ALIGNMENT,
+            "TElement alignment exceeds MemoryAllocator::MIN_ALIGNMENT");
 
         TElement *ptr = nullptr;
 
@@ -444,8 +444,8 @@ struct MemoryAllocator
             "TElement must be a trivial type");
 
         // ensure alignment does not exceed allocator guarantees
-        STK_STATIC_ASSERT_DESC(alignof(TElement) <= ALIGNMENT,
-            "TElement alignment exceeds MemoryAllocator::ALIGNMENT");
+        STK_STATIC_ASSERT_DESC(alignof(TElement) <= MIN_ALIGNMENT,
+            "TElement alignment exceeds MemoryAllocator::MIN_ALIGNMENT");
 
         TElement *ptr = nullptr;
         const size_t max_size = static_cast<size_t>(~static_cast<size_t>(0U));

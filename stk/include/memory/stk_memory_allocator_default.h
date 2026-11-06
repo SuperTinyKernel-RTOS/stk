@@ -45,7 +45,7 @@ namespace stk {
 namespace memory {
 namespace detail {
 
-STK_STATIC_ASSERT_DESC(BytePool::BLOCK_ALIGN >= MemoryAllocator::ALIGNMENT,
+STK_STATIC_ASSERT_DESC(BytePool::BLOCK_ALIGN >= MemoryAllocator::MIN_ALIGNMENT,
     "STK_MEMORY_BYTEPOOL_ALIGN_DEFAULT is below MemoryAllocator::ALIGNMENT: the default allocator would violate its contract");
 
 alignas(BytePool::BLOCK_ALIGN) static uint8_t g_DefaultHeapArea[STK_MEMORY_DEFAULT_HEAP_SIZE];
