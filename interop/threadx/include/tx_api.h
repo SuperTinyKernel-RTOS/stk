@@ -11,7 +11,10 @@
 #define TX_API_H
 
 /*! \file  tx_api.h
-    \brief Eclipse ThreadX (Azure RTOS ThreadX) compatible API on top of SuperTinyKernel (STK).
+    \brief Eclipse ThreadX (Azure RTOS ThreadX) compatible API on top of SuperTinyKernel RTOS.
+
+    \defgroup threadx STK ThreadX API
+    \brief    ThreadX interface for C++ API of SuperTinyKernel RTOS.
 
     This header is a drop-in replacement for ThreadX's tx_api.h: application code written against
     the standard tx_* C API compiles unchanged, while the implementation (threadx_stk.cpp) maps it
@@ -21,6 +24,8 @@
     objects live in the opaque storage member of each control block (placement-new, no heap).
 
     See README.md in this folder for the full list of differences from native ThreadX.
+
+    @{
 */
 
 #include <stdint.h>
@@ -478,5 +483,7 @@ UINT    tx_timer_info_get(TX_TIMER *timer_ptr, TX_NAME_CONST CHAR **name, UINT *
 #ifdef __cplusplus
 }
 #endif
+
+/** @} */
 
 #endif /* TX_API_H */

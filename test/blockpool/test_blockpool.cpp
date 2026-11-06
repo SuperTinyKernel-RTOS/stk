@@ -60,7 +60,7 @@ static Kernel<KERNEL_DYNAMIC | KERNEL_SYNC | (STK_TICKLESS_IDLE ? KERNEL_TICKLES
     _STK_POOL_TEST_TASKS_MAX, sched::SwitchStrategyRR, PlatformDefault> g_Kernel;
 
 // Shared pool + external-storage buffer used by most tests
-alignas(sizeof(void *)) static uint8_t
+alignas(stk::memory::BlockMemoryPool::ALIGN_DEFAULT) static uint8_t
     g_PoolStorage[_STK_POOL_CAPACITY * stk::memory::BlockMemoryPool::AlignBlockSize(_STK_POOL_BLOCK_SIZE)];
 
 static stk::memory::BlockMemoryPool *g_Pool = nullptr;
@@ -576,7 +576,7 @@ private:
         {
             bool ok = true;
 
-            const size_t align = sizeof(void *); // BLOCK_ALIGN = sizeof(MemoryBlock) = sizeof(void*)
+            const size_t align = stk::memory::BlockMemoryPool::ALIGN_DEFAULT; // default block alignment (STK_MEMORY_BLOCKPOOL_ALIGN_DEFAULT, 8)
 
             // AlignBlockSize(1) must be at least BLOCK_ALIGN
             size_t a1 = stk::memory::BlockMemoryPool::AlignBlockSize(1U);

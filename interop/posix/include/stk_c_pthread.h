@@ -231,7 +231,7 @@
     never exits. \c STK_C_PTHREAD_KEYS_MAX (this file) bounds how many keys can exist
     concurrently.
 
-    \defgroup c_api_pthread STK C pthread-compatible API
+    \defgroup c_api_pthread STK C PThread-compatible API
     \brief    Minimal POSIX-threads-style interface for SuperTinyKernel RTOS.
     @{
 */

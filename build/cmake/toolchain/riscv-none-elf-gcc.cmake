@@ -8,10 +8,10 @@
 #
 
 # Identity
-set(CMAKE_CROSSCOMPILING               TRUE)
-set(CMAKE_SYSTEM_NAME                  Linux)
-set(CMAKE_SYSTEM_VERSION               0)
-set(CMAKE_SYSTEM_PROCESSOR             riscv)
+set(CMAKE_CROSSCOMPILING   TRUE)
+set(CMAKE_SYSTEM_NAME      Linux)
+set(CMAKE_SYSTEM_VERSION   0)
+set(CMAKE_SYSTEM_PROCESSOR riscv)
 
 # Options
 option(ENABLE_LTO       "enable LTO"               OFF)

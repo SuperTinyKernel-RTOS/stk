@@ -724,11 +724,9 @@ TId GetTidFromUserTask(const ITask *task);
 */
 static constexpr ITask *GetUserTaskFromTid(TId task_id) noexcept { return hw::WordToPtr<ITask>(task_id); }
 
-} // namespace stk
-
 //! Implementation of STK_MEMCPY.
 #ifndef _STK_CUSTOM_MEMCPY
-static inline void STK_MEMCPY(void *const dest, const void *const src, const size_t size)
+inline void STK_MEMCPY(void *const dest, const void *const src, size_t size)
 {
     using namespace stk;
 
@@ -739,9 +737,9 @@ static inline void STK_MEMCPY(void *const dest, const void *const src, const siz
 
         // fast path: check if destination, source, and size are all 4-byte aligned
         // then copy data in 4-byte chunks
-        if (((dest_addr & 0x03U) == 0U) &&
-            ((src_addr  & 0x03U) == 0U) &&
-            ((size      & 0x03U) == 0U))
+        if (((dest_addr & 0x3U) == 0U) &&
+            ((src_addr  & 0x3U) == 0U) &&
+            ((size      & 0x3U) == 0U))
         {
             uint32_t *const       p_d32 = static_cast<uint32_t *>(dest);
             const uint32_t *const p_s32 = static_cast<const uint32_t *>(src);
@@ -763,7 +761,7 @@ static inline void STK_MEMCPY(void *const dest, const void *const src, const siz
 
 //! Implementation of STK_MEMSET.
 #ifndef _STK_CUSTOM_MEMSET
-static inline void STK_MEMSET(void *const dest, const uint8_t value, const size_t size)
+inline void STK_MEMSET(void *const dest, uint8_t value, size_t size)
 {
     using namespace stk;
 
@@ -772,8 +770,8 @@ static inline void STK_MEMSET(void *const dest, const uint8_t value, const size_
         const Word dest_addr = hw::PtrToWord(dest);
 
         // fast path: destination and size are 4-byte aligned, fill in 4-byte chunks
-        if (((dest_addr & 0x03U) == 0U) &&
-            ((size      & 0x03U) == 0U))
+        if (((dest_addr & 0x3U) == 0U) &&
+            ((size      & 0x3U) == 0U))
         {
             uint32_t *const p_d32  = static_cast<uint32_t *>(dest);
             const uint32_t  word   = static_cast<uint32_t>(value) * 0x01010101U;
@@ -791,5 +789,7 @@ static inline void STK_MEMSET(void *const dest, const uint8_t value, const size_
     }
 }
 #endif
+
+} // namespace stk
 
 #endif /* STK_ARCH_H_ */

@@ -709,6 +709,7 @@ private:
         while (true)
         {
             AdcSample sample;
+            sample.timestamp = stk::GetTicks();
 
             // Block until a sample arrives or 2 s elapse.
             if (!g_AdcPipe.Read(sample, stk::GetTicksFromMs(10000)))

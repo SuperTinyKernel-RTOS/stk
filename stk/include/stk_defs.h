@@ -766,20 +766,6 @@ struct STK_ALLOCATE_COUNT
 */
 #define STK_STATIC_ARRAY_SIZE(ARRAY) static_cast<size_t>(sizeof(ARRAY) / sizeof(ARRAY[0]))
 
-/*! \brief     A wrapper for a built-in memcpy, redefine to your own if required.
-    \note      Can be overridden by defining _STK_CUSTOM_MEMCPY in system configuration.
-*/
-#ifndef _STK_CUSTOM_MEMCPY
-static void STK_MEMCPY(void *const dest, const void *const src, const size_t size);
-#endif
-
-/*! \brief     A wrapper for a built-in memset, redefine to your own if required.
-    \note      Can be overridden by defining _STK_CUSTOM_MEMSET in system configuration.
-*/
-#ifndef _STK_CUSTOM_MEMSET
-static void STK_MEMSET(void *const dest, const uint8_t value, const size_t size);
-#endif
-
 // ----------------------------------------------------------------------------
 namespace stk {
 // ----------------------------------------------------------------------------
@@ -842,6 +828,20 @@ static __stk_forceinline uint32_t CountLeadingZeros(const uint32_t value) noexce
 
     return ret_val;
 }
+
+/*! \brief     A wrapper for a built-in memcpy, redefine to your own if required.
+    \note      Can be overridden by defining _STK_CUSTOM_MEMCPY in system configuration.
+*/
+#ifndef _STK_CUSTOM_MEMCPY
+static void STK_MEMCPY(void *const dest, const void *const src, size_t size);
+#endif
+
+/*! \brief     A wrapper for a built-in memset, redefine to your own if required.
+    \note      Can be overridden by defining _STK_CUSTOM_MEMSET in system configuration.
+*/
+#ifndef _STK_CUSTOM_MEMSET
+static void STK_MEMSET(void *const dest, uint8_t value, size_t size);
+#endif
 
 /*! \namespace stk::util
     \brief     Internal utility namespace containing data structure helpers (linked lists, etc.)

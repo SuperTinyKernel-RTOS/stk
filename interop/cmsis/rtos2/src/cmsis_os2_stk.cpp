@@ -16,14 +16,14 @@
  *  - Every 'else if' chain is terminated by an 'else' (Rule 6-4-2).
  *  - Objects and functions private to this file have internal linkage (Rule 3-3-1). The CMSIS API
  *    functions, the weak user handlers (osWatchdogAlarm_Handler(), osZoneSetup_Callback()) and
- *    the stk::memory::MemoryAllocator hooks are the only externally visible symbols.
+ *    are the only externally visible symbols (stk::memory::MemoryAllocator is supplied by the application).
  *  - Remaining, intentional deviations:
- *      Rule 1-0-1   : weak linkage attribute (STK_CMSIS_WEAK) and __NO_RETURN are compiler extensions.
+ *      Rule 1-0-1   : weak linkage attribute (__stk_weak) and __NO_RETURN are compiler extensions.
  *      Rule 5-2-7/8/9 : reinterpret_cast in StkThread::ConvertTIdToThreadId() (the STK task id is the
  *                     task address), in the stack alignment check of osThreadNew() and in
  *                     osThreadEnumerate() (thread ids are returned as ITask pointers).
- *      Rule 18-4-1  : malloc()/free() for the memory allocator hooks, heap/placement new for control
- *                     blocks and stacks (the CMSIS API mandates both user-provided and
+ *      Rule 18-4-1  : dynamic memory (via stk::memory::MemoryAllocator) and placement new for control
+ *                     blocks, stacks and queue buffers (the CMSIS API mandates both user-provided and
  *                     kernel-allocated objects).
  *      Rule 7-3-1   : the control block classes live in the global namespace of this file.
  *      Rule 0-1-1   : the loop after stk::ExitTask() in osThreadExit() is unreachable by design
@@ -65,12 +65,13 @@
 // Minimum stack size (in Words) – mirrors STK's own STACK_SIZE_MIN.
 #define CMSIS_STK_MIN_STACK_WORDS (STK_STACK_SIZE_MIN)
 
-// Private memory allocators (we define malloc, free here to overcome absence of declaration in
-// case of -ffreestanding compiler flag).
-extern "C" void *malloc(size_t size);
-extern "C" void free(void *ptr);
-void *stk::memory::MemoryAllocator::Allocate(size_t size) { return malloc(size); }
-void stk::memory::MemoryAllocator::Free(void *ptr) { free(ptr); }
+// Dynamic memory: every heap allocation made by this file (control blocks, thread stacks, message queue
+// buffers) goes through stk::memory::MemoryAllocator. The application must provide its implementation
+// (Allocate/Free, e.g. by compiling stk_memory_allocator_default.h in one translation unit or by
+// defining its own): it is intentionally NOT defined here.
+#if !STK_MEMORY_HAS_HEAP
+#error "CMSIS-RTOS2 wrapper requires heap support: STK_MEMORY_PLACEMENT_NEW=1 and STK_MEMORY_NO_HEAP=0"
+#endif
 
 // Types.
 uint32_t osWatchdogAlarm_Handler(osThreadId_t thread_id);
@@ -232,17 +233,6 @@ using StkKernel = stk::Kernel<stk::KERNEL_DYNAMIC | stk::KERNEL_SYNC
 
 StkKernel g_StkKernel;
 
-// Weak linkage for user-overridable handlers (osWatchdogAlarm_Handler, osZoneSetup_Callback)
-#ifndef STK_CMSIS_WEAK
-#if defined(__ICCARM__)
-#define STK_CMSIS_WEAK __weak
-#elif defined(__GNUC__) || defined(__clang__) || defined(__ARMCC_VERSION)
-#define STK_CMSIS_WEAK __attribute__((weak))
-#else
-#define STK_CMSIS_WEAK
-#endif
-#endif
-
 // Safety class / privileged protection state (no MPU is used: the state is recorded and the class based
 // operations are implemented on top of the thread list)
 uint32_t g_KernelProtectClass       = 0U;     // class passed to osKernelProtect()
@@ -333,7 +323,7 @@ public:
     {
         if (m_stack_owned && (m_stack != nullptr))
         {
-            delete[] m_stack;
+            stk::memory::MemoryAllocator::FreeArrayT(m_stack, m_stack_size);
             m_stack = nullptr;
         }
     }
@@ -740,14 +730,15 @@ public:
     {
         if (m_bf_owned)
         {
-            delete[] m_mq.GetBuffer();
+            stk::memory::MemoryAllocator::Free(const_cast<uint8_t *>(m_mq.GetBuffer()));
         }
     }
 
     uint8_t *AllocBuffer(uint32_t cap, uint32_t msz)
     {
-        uint8_t *const ret = new (std::nothrow) uint8_t[static_cast<size_t>(cap) * msz];
-        STK_ASSERT(ret != nullptr); // fail in Debug: increase Heap size in linker settings
+        uint8_t *const ret = static_cast<uint8_t *>(
+            stk::memory::MemoryAllocator::Allocate(static_cast<size_t>(cap) * msz));
+        STK_ASSERT(ret != nullptr); // fail in Debug: increase the heap size of your MemoryAllocator
         return ret;
     }
     
@@ -773,12 +764,15 @@ T *PlacementNewOrHeap(void *mem, size_t size, const Args &... args)
 
     if ((mem != nullptr) && (size >= sizeof(T)))
     {
+        // ensure the memory pointer meets the alignment requirements of T
+        STK_ASSERT((reinterpret_cast<size_t>(mem) % alignof(T)) == 0);
+
         obj = new (mem) T(args...);
         obj->m_cb_owned = false;
     }
     else
     {
-        obj = new (std::nothrow) T(args...);
+        obj = stk::memory::MemoryAllocator::AllocateOneT<T>(args...);
         // m_cb_owned is already true from the constructor default
         STK_ASSERT(obj != nullptr);
     }
@@ -794,7 +788,7 @@ void ObjDestroy(T *obj)
 {
     if (obj->m_cb_owned)
     {
-        delete obj;
+        stk::memory::MemoryAllocator::FreeOneT(obj); // virtual destructor + Free()
     }
     else
     {
@@ -966,7 +960,7 @@ osStatus_t osKernelGetInfo(osVersion_t *version, char *id_buf, uint32_t id_size)
             copy_len = id_len;
         }
 
-        STK_MEMCPY(id_buf, id, copy_len);
+        stk::STK_MEMCPY(id_buf, id, copy_len);
         id_buf[copy_len] = '\0';
     }
 
@@ -1272,7 +1266,7 @@ osThreadId_t osThreadNew(osThreadFunc_t func, void *argument, const osThreadAttr
             // allocate stack memory if not caller-provided
             else
             {
-                th->m_stack = new (std::nothrow) stk::Word[stack_words];
+                th->m_stack = stk::memory::MemoryAllocator::AllocateArrayT<stk::Word>(stack_words);
                 STK_ASSERT(th->m_stack != nullptr);
                 
                 if (th->m_stack == nullptr)
@@ -1863,13 +1857,13 @@ osStatus_t osThreadFeedWatchdog(uint32_t ticks)
 }
 
 // Default handler: stop the watchdog. Applications override it to take a recovery action.
-STK_CMSIS_WEAK uint32_t osWatchdogAlarm_Handler(osThreadId_t thread_id)
+__stk_weak uint32_t osWatchdogAlarm_Handler(osThreadId_t thread_id)
 {
     (void)thread_id;
     return 0U;
 }
 
-STK_CMSIS_WEAK void osZoneSetup_Callback(uint32_t zone)
+__stk_weak void osZoneSetup_Callback(uint32_t zone)
 {
     (void)zone; // no MPU support: zones are only recorded
 }
