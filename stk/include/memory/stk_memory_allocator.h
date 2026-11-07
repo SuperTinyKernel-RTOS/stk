@@ -76,7 +76,7 @@
            macro in the build system. A strong definition of any of these operators elsewhere in the program
            takes precedence.
     \note   Subject to the MemoryAllocator contract (thread-safety, no ISR use unless your implementation
-           allows it). MemoryAllocator::Allocate() must not itself use \c new (infinite recursion).
+           allows it). The backend MemoryAllocator::Weak::Allocate() must not itself use \c new (infinite recursion).
            Requires heap support (\c STK_MEMORY_NO_HEAP must be 0).
 */
 #ifndef STK_MEMORY_OVERRIDE_NEW_DELETE
@@ -114,40 +114,49 @@
 #endif
 
 /*! \file  stk_memory_allocator.h
-    \brief Weak declaration of memory allocator: stk::memory::MemoryAllocator.
+    \brief Memory allocator front-end with checked API and its weak backend hooks: stk::memory::MemoryAllocator.
 */
 
 namespace stk {
 namespace memory {
 
-/*! \class MemoryAllocator
+/*! \struct MemoryAllocator
     \brief Memory allocator for allocating dynamic memory.
     \note  STK does not use dynamic memory allocation but some auxiliary classes may provide such
            functionality for convenience. In this case you must provide your own implementation
-           of MemoryAllocator::Allocate() and MemoryAllocator::Free(), or include the optional
+           of the backend hooks MemoryAllocator::Weak::Allocate() and MemoryAllocator::Weak::Free()
+           (and optionally MemoryAllocator::Weak::GetStats()), or include the optional
            stk_memory_allocator_default.h in exactly one translation unit to get a ready-made,
            deterministic implementation backed by a static BytePool.
 
-    \warning Allocate(), Free() and GetStats() are declared weak and STK does not define them.
+    \par Two layers
+         - \b Backend: MemoryAllocator::Weak (weak, implemented by the application or by one of the
+           stk_memory_allocator_*.h headers). It is NOT meant to be called directly.
+         - \b Front-end: MemoryAllocator::Allocate(), Free(), GetStats() and all typed/aligned helpers.
+           They verify that a backend is linked in (see IsAvailable()) and fail gracefully if it is not.
+           Application code must use only this layer.
+
+    \warning The Weak hooks are declared weak and STK does not define them.
              If you provide none of them, on most toolchains the symbols resolve to address 0
              and calling them is a jump to null (a fault at run time), \b not a linker error.
-             The typed helpers below assert (debug) and fail gracefully (return nullptr) in that case;
-             use IsAvailable() to check.
+             The front-end asserts (debug) and fails gracefully in that case (Allocate() returns nullptr,
+             Free() is a noop, GetStats() returns empty Stats); use IsAvailable() to check explicitly.
 
-    \par Contract for implementations
-         - Allocate() must return memory aligned to at least \c ALIGNMENT bytes.
-         - Allocate() and Free() must be thread-safe. If you wrap a C library \c malloc (e.g. newlib)
+    \par Contract for backend implementations (MemoryAllocator::Weak)
+         - Weak::Allocate() must return memory aligned to at least \c MIN_ALIGNMENT bytes.
+         - Weak::Allocate() and Weak::Free() must be thread-safe. If you wrap a C library \c malloc (e.g. newlib)
            make sure the lock hooks (\c __malloc_lock) are implemented.
          - Unless your implementation says otherwise, Allocate() and Free() must NOT be called from an ISR.
-         - Allocate(0) may return nullptr.
+         - Weak::Allocate(0) may return nullptr.
+         - Weak::Free(nullptr) must be a noop.
 
     Example of your trivial implementation:
     \code
-    void *MemoryAllocator::Allocate(size_t size)
+    void *MemoryAllocator::Weak::Allocate(size_t size)
     {
         return malloc(size);
     }
-    void MemoryAllocator::Free(void *ptr)
+    void MemoryAllocator::Weak::Free(void *ptr)
     {
         free(ptr);
     }
@@ -187,7 +196,7 @@ struct MemoryAllocator
     STK_STATIC_ASSERT_DESC(MIN_ALIGNMENT >= sizeof(void *),
          "MIN_ALIGNMENT must be at least pointer-aligned");
 
-    /*! \class Stats
+    /*! \struct Stats
         \brief Snapshot of the memory allocator's statistics.
         \note  The Record*() methods are not atomic: they must be called with the allocator lock held
                (e.g. inside the critical section that protects the allocator state).
@@ -212,7 +221,7 @@ struct MemoryAllocator
         /*! \brief     Restart the statistics for a pool of the given capacity.
             \details   Clears all counters and watermarks. Used by pools that learn their real capacity only
                        after aligning/trimming their storage.
-            \param[in] _capacity: Total capacity in bytes.
+            \param[in] capacity_: Total capacity in bytes.
         */
         void Reset(size_t capacity_)
         {
@@ -282,35 +291,100 @@ struct MemoryAllocator
         }
     };
 
-    /*! \brief     Allocate the memory chunk.
-        \param[in] size: Size of the memory chunk.
-        \return    Pointer to the allocated memory chunk (aligned to at least ALIGNMENT),
-                   nullptr if allocator failed to allocate it.
+    /*! \struct  Weak
+        \brief   Weak backend hooks of the allocator: the part that the application (or one of the
+                 stk_memory_allocator_*.h headers) implements.
+        \details STK never defines these functions. If no definition is linked in, on most toolchains the
+                 symbols resolve to address 0 and a call is a jump to null (a run-time fault), not a
+                 linker error.
+        \warning Do NOT call these functions directly from application code: they are unguarded.
+                 Use the checked front-end instead: MemoryAllocator::Allocate(), Free() and GetStats().
+        \note    Allocate() and Free() are required; GetStats() is optional (the front-end returns empty
+                 Stats if it is not provided).
+        \see     IsAvailable(), Allocate(), Free(), GetStats()
     */
-    static void *Allocate(size_t size) __stk_weak;
+    struct Weak
+    {
+        /*! \brief     Allocate the memory chunk (backend hook).
+            \param[in] size: Size of the memory chunk.
+            \return    Pointer to the allocated memory chunk (aligned to at least MIN_ALIGNMENT),
+                       nullptr if allocator failed to allocate it.
+        */
+        static void *Allocate(size_t size) __stk_weak;
 
-    /*! \brief     Free the memory chunk.
-        \param[in] ptr: Pointer to the memory chunk. nullptr is allowed and results in noop.
-    */
-    static void Free(void *ptr) __stk_weak;
+        /*! \brief     Free the memory chunk (backend hook).
+            \param[in] ptr: Pointer to the memory chunk. nullptr is allowed and results in noop.
+        */
+        static void Free(void *ptr) __stk_weak;
 
-    /*! \brief     Get stats of memory allocation.
-        \return    Stats structure.
-    */
-    static Stats GetStats() __stk_weak;
+        /*! \brief     Get stats of memory allocation (backend hook, optional).
+            \return    Stats structure.
+        */
+        static Stats GetStats() __stk_weak;
+    };
 
-    /*! \brief     Check that Allocate() and Free() were provided by the application.
-        \return    true if both functions have an implementation linked in.
+    /*! \brief     Check that Weak::Allocate() and Weak::Free() were provided by the application.
+        \return    true if both hooks have an implementation linked in.
     */
     static bool IsAvailable()
     {
-        return (hw::PtrToWord(&MemoryAllocator::Allocate) != 0U) &&
-               (hw::PtrToWord(&MemoryAllocator::Free) != 0U);
+        return (hw::PtrToWord(&Weak::Allocate) != 0U) &&
+               (hw::PtrToWord(&Weak::Free) != 0U);
+    }
+
+    /*! \brief     Allocate the memory chunk (checked).
+        \details   Forwards to Weak::Allocate() if a backend is linked in. Asserts (debug) and returns
+                   nullptr otherwise, so it is safe to call even if the application provided no backend.
+        \param[in] size: Size of the memory chunk.
+        \return    Pointer to the allocated memory chunk (aligned to at least MIN_ALIGNMENT),
+                   nullptr if the allocator failed to allocate it or no backend is available.
+    */
+    static inline void *Allocate(size_t size)
+    {
+        void *ptr = nullptr;
+
+        // guard against unlinked weak symbols
+        const bool available = IsAvailable();
+        STK_ASSERT(available);
+
+        if (available)
+        {
+            ptr = Weak::Allocate(size);
+        }
+
+        return ptr;
+    }
+
+    /*! \brief     Free the memory chunk (checked).
+        \details   Forwards to Weak::Free() if a backend is linked in. Asserts (debug) and does nothing
+                   otherwise.
+        \param[in] ptr: Pointer to the memory chunk. nullptr is allowed and results in noop.
+    */
+    static inline void Free(void *ptr)
+    {
+        // guard against unlinked weak symbols
+        const bool available = IsAvailable();
+        STK_ASSERT(available);
+
+        if (available)
+        {
+            Weak::Free(ptr);
+        }
+    }
+
+    /*! \brief     Get stats of memory allocation (checked).
+        \details   Forwards to Weak::GetStats() if the application provided it. Unlike Allocate()/Free(),
+                   statistics are optional: no assertion is raised if the hook is missing.
+        \return    Stats structure, default-constructed (all zeros) if the backend provides no statistics.
+    */
+    static inline Stats GetStats()
+    {
+        return ((hw::PtrToWord(&Weak::GetStats) != 0U) ? Weak::GetStats() : Stats());
     }
 
 #if STK_MEMORY_HAS_HEAP
 
-    /*! \brief     Allocate memory with an alignment stricter than ALIGNMENT and an optional offset.
+    /*! \brief     Allocate memory with an alignment stricter than MIN_ALIGNMENT and an optional offset.
         \details   Over-allocates and stores the original pointer right below the aligned block
                    (rounded down to a pointer boundary, see layout below).
                    The result \b must be released with FreeAligned(), never with Free().
@@ -336,13 +410,10 @@ struct MemoryAllocator
         const bool pow2         = IsPow2(alignment);
         const bool offset_valid = ((offset == 0U) || (offset < size));
 
-        // guard against unlinked weak symbols
-        const bool available = IsAvailable();
-
         STK_ASSERT(pow2);
-        STK_ASSERT(available);
 
-        if (pow2 && offset_valid && available)
+        // note: Allocate() below is the checked front-end, it returns nullptr if no backend is linked in
+        if (pow2 && offset_valid)
         {
             const size_t adjusted_alignment = Max(alignment, ptr_size);
 
@@ -379,11 +450,7 @@ struct MemoryAllocator
     {
         constexpr size_t ptr_size = sizeof(void *);
 
-        // guard against unlinked weak symbols
-        const bool available = IsAvailable();
-        STK_ASSERT(available);
-
-        if ((ptr != nullptr) && available)
+        if (ptr != nullptr)
         {
             const Word ptr_word = hw::PtrToWord(ptr);
 
@@ -405,7 +472,7 @@ struct MemoryAllocator
         \param[in] args: Constructor arguments forwarded to TElement.
         \return    Pointer to the constructed element, nullptr if allocation failed.
         \note      Pair with FreeOneT<TElement>() to properly invoke the destructor.
-        \note      TElement must not require alignment above ALIGNMENT (compile-time checked).
+        \note      TElement must not require alignment above MIN_ALIGNMENT (compile-time checked).
     */
     template <typename TElement, typename... TArgs>
     static inline TElement *AllocateOneT(TArgs &&...args)
@@ -413,21 +480,15 @@ struct MemoryAllocator
         STK_STATIC_ASSERT_DESC(alignof(TElement) <= MIN_ALIGNMENT,
             "TElement alignment exceeds MemoryAllocator::MIN_ALIGNMENT");
 
-        TElement *ptr = nullptr;
+        // note: Allocate() is the checked front-end, it returns nullptr if no backend is linked in
+        TElement *ptr = static_cast<TElement *>(Allocate(sizeof(TElement)));
 
-        // guard against unlinked weak symbols
-        STK_ASSERT(IsAvailable());
-
-        if (IsAvailable())
+        if (ptr != nullptr)
         {
-            ptr = static_cast<TElement *>(Allocate(sizeof(TElement)));
-            if (ptr != nullptr)
+            if __stk_constexpr_cpp17 ((sizeof...(TArgs) != 0U) || !std::is_trivially_default_constructible<TElement>::value)
             {
-                if __stk_constexpr_cpp17 ((sizeof...(TArgs) != 0U) || !std::is_trivially_default_constructible<TElement>::value)
-                {
-                    auto const elm = new (static_cast<void *>(ptr)) TElement(static_cast<TArgs &&>(args)...);
-                    STK_UNUSED(elm);
-                }
+                auto const elm = new (static_cast<void *>(ptr)) TElement(static_cast<TArgs &&>(args)...);
+                STK_UNUSED(elm);
             }
         }
 
@@ -453,10 +514,8 @@ struct MemoryAllocator
 
         const size_t max_size = static_cast<size_t>(~static_cast<size_t>(0U));
 
-        // guard against unlinked weak symbols
-        STK_ASSERT(IsAvailable());
-
-        if ((count != 0U) && (count <= (max_size / sizeof(TElement))) && IsAvailable())
+        // note: Allocate() is the checked front-end, it returns nullptr if no backend is linked in
+        if ((count != 0U) && (count <= (max_size / sizeof(TElement))))
         {
             ptr = static_cast<TElement *>(Allocate(count * sizeof(TElement)));
             if (ptr != nullptr)
@@ -504,9 +563,7 @@ struct MemoryAllocator
     template <typename TElement>
     static inline void FreeOneT(TElement *ptr)
     {
-        STK_ASSERT(IsAvailable());
-
-        if ((ptr != nullptr) && IsAvailable())
+        if (ptr != nullptr)
         {
             if __stk_constexpr_cpp17 (!std::is_trivially_destructible<TElement>())
             {
@@ -524,9 +581,7 @@ struct MemoryAllocator
     template <typename TElement>
     static inline void FreeArrayT(TElement ptr[], size_t count)
     {
-        STK_ASSERT(IsAvailable());
-
-        if ((ptr != nullptr) && IsAvailable())
+        if (ptr != nullptr)
         {
             if __stk_constexpr_cpp17 (!std::is_trivially_destructible<TElement>())
             {
@@ -675,14 +730,10 @@ inline void *NewImpl(std::size_t size, std::size_t alignment, bool throwing)
 
     const std::size_t n = ((size != 0U) ? size : 1U);
 
-    STK_ASSERT(MemoryAllocator::IsAvailable());
-
     for (;;)
     {
-        if (MemoryAllocator::IsAvailable())
-        {
-            ptr = ((alignment != 0U) ? MemoryAllocator::AllocateAligned(n, alignment) : MemoryAllocator::Allocate(n));
-        }
+        // note: both paths go through the checked front-end (nullptr if no backend is linked in)
+        ptr = ((alignment != 0U) ? MemoryAllocator::AllocateAligned(n, alignment) : MemoryAllocator::Allocate(n));
 
         if (ptr != nullptr)
         {
@@ -714,21 +765,14 @@ inline void *NewImpl(std::size_t size, std::size_t alignment, bool throwing)
 
 inline void DeleteImpl(void *ptr, bool aligned)
 {
-    if (ptr != nullptr)
+    // note: both paths go through the checked front-end
+    if (aligned)
     {
-        STK_ASSERT(MemoryAllocator::IsAvailable());
-
-        if (MemoryAllocator::IsAvailable())
-        {
-            if (aligned)
-            {
-                MemoryAllocator::FreeAligned(ptr);
-            }
-            else
-            {
-                MemoryAllocator::Free(ptr);
-            }
-        }
+        MemoryAllocator::FreeAligned(ptr);
+    }
+    else
+    {
+        MemoryAllocator::Free(ptr);
     }
 }
 

@@ -167,7 +167,8 @@ public:
     /*! \brief     Construct a pool with \b heap-allocated storage.
         \details   Allocates a flat byte buffer of
                    \c RequiredStorageSize(capacity, raw_block_size, alignment) bytes via
-                   \c MemoryAllocator::AllocateArrayT (non-throwing, overflow-checked). When exceptions are disabled
+                   \c MemoryAllocator::AllocateAligned (non-throwing, overflow-checked, start aligned to
+                   \a alignment). When exceptions are disabled
                    (embedded default), check \c IsStorageValid() immediately after
                    construction to detect allocation failure before first use.
         \param[in] capacity:       Total number of blocks.
@@ -568,16 +569,15 @@ inline BlockMemoryPool::BlockMemoryPool(size_t capacity, size_t raw_block_size, 
 
     if (ArgsValid(capacity, raw_block_size, alignment, m_block_size))
     {
-        // total = blocks + bitmap + slack for aligning the start (Allocate() itself guarantees ALIGNMENT);
+        // total = blocks + bitmap (AllocateAligned() aligns the start itself, no slack is needed);
         // every step is checked so that a huge capacity * block size can not wrap around
         const size_t max_size = static_cast<size_t>(~static_cast<size_t>(0U));
-        const size_t slack    = ((alignment > MemoryAllocator::MIN_ALIGNMENT) ? (alignment - 1U) : 0U);
         const size_t bitmap   = BitmapBytes(capacity);
 
         if ((capacity <= (max_size / m_block_size)) &&
-            ((capacity * m_block_size) <= (max_size - bitmap - slack)))
+            ((capacity * m_block_size) <= (max_size - bitmap)))
         {
-            const size_t total = ((capacity * m_block_size) + bitmap + slack);
+            const size_t total = ((capacity * m_block_size) + bitmap);
 
             m_storage = static_cast<uint8_t *>(MemoryAllocator::AllocateAligned(total, alignment));
             if (m_storage != nullptr)

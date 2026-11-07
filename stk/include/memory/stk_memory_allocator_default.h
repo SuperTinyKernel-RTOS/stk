@@ -18,16 +18,17 @@
 /*! \file  stk_memory_allocator_default.h
     \brief Optional ready-made implementation of stk::memory::MemoryAllocator on top of a static BytePool.
 
-    \warning Include this header in \b exactly one translation unit of your application (it defines
-             MemoryAllocator::Allocate(), Free() and GetStats()). Do not include it if you provide
-             your own implementation.
+    \warning Include this header in \b exactly one translation unit of your application (it defines the
+             backend hooks MemoryAllocator::Weak::Allocate(), Weak::Free() and Weak::GetStats(); the
+             application uses them through the checked MemoryAllocator::Allocate(), Free() and GetStats()).
+             Do not include it if you provide your own implementation.
 
     The heap lives in a static array (.bss) of \c STK_MEMORY_DEFAULT_HEAP_SIZE bytes, so the result is
     deterministic, needs no C library \c malloc, no linker heap region and no \c __malloc_lock hooks:
     - Allocate() is non-blocking (BytePool::TryAlloc()): it returns nullptr when memory is exhausted.
     - Allocate() and Free() are thread-safe and may be used from an ISR (see BytePool for the
       execution-time caveat).
-    - Returned pointers are aligned to BytePool::BLOCK_ALIGN (at least MemoryAllocator::ALIGNMENT, enforced at
+    - Returned pointers are aligned to BytePool::BLOCK_ALIGN (at least MemoryAllocator::MIN_ALIGNMENT, enforced at
       compile time; see STK_MEMORY_BYTEPOOL_ALIGN_DEFAULT).
     - Allocate(0) returns nullptr.
     - The pool is created on first use inside a critical section, so there is no dependency on
@@ -46,7 +47,7 @@ namespace memory {
 namespace detail {
 
 STK_STATIC_ASSERT_DESC(BytePool::BLOCK_ALIGN >= MemoryAllocator::MIN_ALIGNMENT,
-    "STK_MEMORY_BYTEPOOL_ALIGN_DEFAULT is below MemoryAllocator::ALIGNMENT: the default allocator would violate its contract");
+    "STK_MEMORY_BYTEPOOL_ALIGN_DEFAULT is below MemoryAllocator::MIN_ALIGNMENT: the default allocator would violate its contract");
 
 alignas(BytePool::BLOCK_ALIGN) static uint8_t g_DefaultHeapArea[STK_MEMORY_DEFAULT_HEAP_SIZE];
 alignas(BytePool) static uint8_t              g_DefaultHeapPoolMem[sizeof(BytePool)];
@@ -72,12 +73,12 @@ static inline BytePool &DefaultHeapPool()
 
 } // namespace detail
 
-void *MemoryAllocator::Allocate(size_t size)
+void *MemoryAllocator::Weak::Allocate(size_t size)
 {
     return detail::DefaultHeapPool().TryAlloc(size);
 }
 
-void MemoryAllocator::Free(void *ptr)
+void MemoryAllocator::Weak::Free(void *ptr)
 {
     if (ptr != nullptr)
     {
@@ -86,7 +87,7 @@ void MemoryAllocator::Free(void *ptr)
     }
 }
 
-MemoryAllocator::Stats MemoryAllocator::GetStats()
+MemoryAllocator::Stats MemoryAllocator::Weak::GetStats()
 {
     return detail::DefaultHeapPool().GetStats();
 }

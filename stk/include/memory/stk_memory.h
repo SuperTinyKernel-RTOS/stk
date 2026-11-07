@@ -30,7 +30,7 @@
     | **BytePool**                              | \c TryAlloc(), \c TryAllocT(), \c TimedAlloc(NO_WAIT), \c TimedAllocT(NO_WAIT), \c TimedAllocEx(NO_WAIT), \c Free(), \c TryNewT(), \c TimedNewT(NO_WAIT), \c TryMakeT(), \c DeleteT(), \c GetInfo(), \c GetStats(), query methods |
     | **StaticBlockPool**, **StaticBytePool**   | Same as the pool they derive from (\c BlockMemoryPool, \c BytePool)                                                                                                                                               |
     | **PoolPtr**                               | \c Get(), \c Release(), \c Reset(), \c operator bool, destructor                                                                                                                                                  |
-    | **MemoryAllocator**                       | \c IsAvailable(); \c Allocate(), \c Free(), \c GetStats() and everything built on them only if the implementation is ISR safe (the default one is)                                                                |
+    | **MemoryAllocator**                       | \c IsAvailable(); \c Allocate(), \c Free(), \c GetStats() and everything built on them only if the backend (\c Weak) implementation is ISR safe (the default one is)                                              |
 
     NOTE:
     - **Query methods**: \c IsStorageValid(), \c GetCapacity(), \c GetBlockSize(), \c GetBlockAlignment(), \c GetUsedCount(),
@@ -49,10 +49,13 @@
       was held) observed on the real workload. \c GetStats() is O(1).
     - **Constructors and destructors** of the pools are never ISR safe (init or task context only). The heap-storage
       constructors additionally call \c MemoryAllocator::Allocate().
-    - **MemoryAllocator**: STK does not implement \c Allocate(), \c Free() and \c GetStats(); whether they (and the typed and
-      aligned helpers or the global \c new and \c delete override that rely on them) may be called from an ISR is defined by
-      your implementation. \c stk_memory_allocator_default.h, which is \b not included by this header (it defines functions:
-      include it in exactly one translation unit), is ISR safe.
+    - **MemoryAllocator**: \c Allocate(), \c Free() and \c GetStats() are checked front-end wrappers that forward to the weak
+      backend hooks \c MemoryAllocator::Weak::Allocate(), \c Weak::Free() and \c Weak::GetStats(). STK does not implement the
+      hooks; whether the front-end (and the typed and aligned helpers or the global \c new and \c delete override that rely
+      on it) may be called from an ISR is defined by your backend implementation. \c stk_memory_allocator_default.h, which is
+      \b not included by this header (it defines the hooks: include it in exactly one translation unit), is ISR safe.
+      \c stk_memory_allocator_malloc.h follows the same inclusion rule but depends on the C library \c malloc, so it is
+      ISR safe only if your C library is.
     - Blocking methods rely on the kernel being compiled with \c KERNEL_SYNC; \c TryAlloc() and \c Free() are always available.
 
     WARNING:

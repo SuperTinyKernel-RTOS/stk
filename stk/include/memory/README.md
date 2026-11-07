@@ -80,7 +80,7 @@ explicit BlockMemoryPool(size_t capacity, size_t raw_block_size,
                          size_t alignment = ALIGN_DEFAULT);
 ```
 
-Allocates the storage via `MemoryAllocator::AllocateArrayT` (non-throwing, overflow-checked). On destruction the buffer is freed automatically. Check `IsStorageValid()` after construction when exceptions are disabled. Not available when `STK_MEMORY_NO_HEAP` is `1`.
+Allocates the storage via `MemoryAllocator::AllocateAligned` (non-throwing, overflow-checked, start aligned to the pool alignment). On destruction the buffer is freed automatically with `FreeAligned`. Check `IsStorageValid()` after construction when exceptions are disabled. Not available when `STK_MEMORY_NO_HEAP` is `1`.
 
 ---
 
@@ -261,22 +261,35 @@ Nothing is constructed when the allocation fails. Arguments are always honored, 
 
 ### 5. Memory Allocator (`memory::MemoryAllocator`)
 
-STK itself does not allocate dynamically, but some auxiliary classes (heap-storage pool constructors, the typed helpers below) do. They go through a tiny **weak** interface that *you* implement — or get a ready-made one from `stk_memory_allocator_default.h`:
+STK itself does not allocate dynamically, but some auxiliary classes (heap-storage pool constructors, the typed helpers below) do. The allocator has two layers:
+
+- **Backend — `MemoryAllocator::Weak`**: a tiny **weak** interface that *you* implement, or get a ready-made one from `stk_memory_allocator_default.h` / `stk_memory_allocator_malloc.h`. It is not meant to be called directly.
+- **Front-end — `MemoryAllocator::Allocate()`, `Free()`, `GetStats()`** and all typed/aligned helpers: checked wrappers that verify a backend is linked in before forwarding to it. Application code (and the rest of the STK memory module) uses only this layer.
 
 ```cpp
-static void *Allocate(size_t size);   // aligned to at least MemoryAllocator::MIN_ALIGNMENT (8; 16 on RISC-V)
-static void  Free(void *ptr);         // nullptr is a no-op
-static Stats GetStats();              // optional
+// Backend hooks (you implement these)
+struct MemoryAllocator::Weak
+{
+    static void *Allocate(size_t size);   // aligned to at least MemoryAllocator::MIN_ALIGNMENT (8; 16 on RISC-V)
+    static void  Free(void *ptr);         // nullptr is a no-op
+    static Stats GetStats();              // optional
+};
+
+// Checked front-end (you call these)
+static void *MemoryAllocator::Allocate(size_t size);   // nullptr if the allocator failed or no backend is available
+static void  MemoryAllocator::Free(void *ptr);         // nullptr is a no-op
+static Stats MemoryAllocator::GetStats();              // empty Stats if the backend provides none
+static bool  MemoryAllocator::IsAvailable();           // true if Weak::Allocate() and Weak::Free() are linked in
 ```
 
-> **Warning**: STK does not define these. If none are linked in, on most toolchains the symbols resolve to address 0 and calling them faults at run time — it is *not* a linker error. `MemoryAllocator::IsAvailable()` tells you whether they are present; the helpers below assert (debug) and return `nullptr` otherwise.
+> **Warning**: STK does not define the `Weak` hooks. If none are linked in, on most toolchains the symbols resolve to address 0 and calling them directly faults at run time — it is *not* a linker error. The front-end protects against this: `Allocate()` / `Free()` and everything built on them assert (debug) and fail gracefully otherwise (`Allocate()` returns `nullptr`, `Free()` does nothing, `GetStats()` returns empty `Stats`). `IsAvailable()` lets you check explicitly. Never call `Weak::*` yourself, as that bypasses the check.
 
-**Contract for implementations:** `Allocate()`/`Free()` must be thread-safe (with newlib's `malloc`, implement `__malloc_lock`), must not be called from an ISR unless your implementation allows it, and `Allocate(0)` may return `nullptr`.
+**Contract for backend implementations:** `Weak::Allocate()` / `Weak::Free()` must be thread-safe (with newlib's `malloc`, implement `__malloc_lock`), must not be called from an ISR unless your implementation allows it, `Weak::Allocate(0)` may return `nullptr`, and `Weak::Free(nullptr)` must be a no-op.
 
 ```cpp
 // Your trivial implementation:
-void *MemoryAllocator::Allocate(size_t size) { return malloc(size); }
-void  MemoryAllocator::Free(void *ptr)       { free(ptr); }
+void *MemoryAllocator::Weak::Allocate(size_t size) { return malloc(size); }
+void  MemoryAllocator::Weak::Free(void *ptr)       { free(ptr); }
 ```
 
 #### Default deterministic implementation
@@ -288,7 +301,11 @@ Include the optional header in **exactly one** translation unit to get an implem
 #include <memory/stk_memory_allocator_default.h>
 ```
 
-`Allocate()` is non-blocking (returns `nullptr` when exhausted), thread-safe, usable from an ISR (with `BytePool`'s non-constant execution time), returns memory aligned to at least `MemoryAllocator::MIN_ALIGNMENT` (8 bytes, 16 on RISC-V; enforced at compile time against `STK_MEMORY_BYTEPOOL_ALIGN_DEFAULT`), and creates its pool on first use, so it has no static-initialization-order problem. `GetStats()` reports the heap usage.
+It defines the `MemoryAllocator::Weak` hooks. `Allocate()` is non-blocking (returns `nullptr` when exhausted), thread-safe, usable from an ISR (with `BytePool`'s non-constant execution time), returns memory aligned to at least `MemoryAllocator::MIN_ALIGNMENT` (8 bytes, 16 on RISC-V; enforced at compile time against `STK_MEMORY_BYTEPOOL_ALIGN_DEFAULT`), and creates its pool on first use, so it has no static-initialization-order problem. `GetStats()` reports the heap usage.
+
+#### C library `malloc` implementation
+
+If you prefer the C library heap, include `stk_memory_allocator_malloc.h` in **exactly one** translation unit instead (never together with the default one). It defines the `Weak` hooks as thin wrappers around `malloc()` / `free()`: the heap is whatever your C library and linker script provide, thread-safety depends on the C library lock hooks (e.g. `__malloc_lock` in newlib), ISR safety is only as good as your `malloc`, and `GetStats()` returns empty `Stats` (`malloc` exposes no statistics).
 
 #### Typed and aligned helpers
 
@@ -327,7 +344,7 @@ Build with `-DSTK_MEMORY_OVERRIDE_NEW_DELETE=1` and every global C++ allocation 
 - Throwing `new` then throws `std::bad_alloc`, or — with exceptions disabled — calls `STK_MEMORY_NEW_OOM_ACTION()` (default `std::terminate()`, like libstdc++). This hook **must not return**; define it to your panic/reset handler. The `std::nothrow` forms return `nullptr`.
 - Over-aligned types use `AllocateAligned()` / `FreeAligned()`.
 - The operators are emitted **weak** in every translation unit that includes the header (the standard forbids `inline` replacements), so enabling the macro in the build system is safe, and a strong definition elsewhere takes precedence.
-- `MemoryAllocator::Allocate()` must not itself use `new` (infinite recursion). Placement `new` (used by `NewT()` and `AllocateOneT()`) is unaffected. Requires `STK_MEMORY_NO_HEAP=0`.
+- The backend `MemoryAllocator::Weak::Allocate()` must not itself use `new` (infinite recursion). Placement `new` (used by `NewT()` and `AllocateOneT()`) is unaffected. Requires `STK_MEMORY_NO_HEAP=0`.
 
 ---
 
@@ -641,7 +658,7 @@ alignas(stk::memory::BytePool::BLOCK_ALIGN) static uint8_t g_Heap[
 | `TimedAlloc(timeout > 0)` / `TimedNewT<T>(timeout > 0)` | **No** — task context only |
 | Constructors / Destructor | **No** — init/task context only |
 
-The same table applies to `BytePool` (`size` is the first argument of the alloc calls). Its `TryAlloc()`, `Free()` and `GetInfo()` are ISR-safe but take time proportional to the number of blocks, so avoid them in time-critical ISRs on pools with many blocks — `GetMaxScanLength()` measures the actual cost on your workload. `MemoryAllocator::Allocate()` / `Free()` (and therefore global `new` / `delete`) may be called from an ISR only if your implementation allows it; the default implementation does.
+The same table applies to `BytePool` (`size` is the first argument of the alloc calls). Its `TryAlloc()`, `Free()` and `GetInfo()` are ISR-safe but take time proportional to the number of blocks, so avoid them in time-critical ISRs on pools with many blocks — `GetMaxScanLength()` measures the actual cost on your workload. `MemoryAllocator::Allocate()` / `Free()` (and therefore global `new` / `delete`) may be called from an ISR only if your backend (`MemoryAllocator::Weak`) implementation allows it; the default implementation does.
 
 ---
 
@@ -653,7 +670,7 @@ The same table applies to `BytePool` (`size` is the first argument of the alloc 
 - **Non-copyable**: `BlockMemoryPool` and `BytePool` are non-copyable and non-movable.
 - **`BytePool` starvation**: freed memory is not reserved for the longest-waiting task, so a large request can be starved by a stream of small ones. Every `Free()` wakes all waiters, each of which re-scans the pool.
 - **Global pool objects**: with heap storage they would be constructed before the heap is usable; use embedded or external storage.
-- **`stk_memory_allocator_default.h`** defines functions: include it in exactly one translation unit, and not from a shared/umbrella header.
+- **`stk_memory_allocator_default.h`** and **`stk_memory_allocator_malloc.h`** define functions (the `MemoryAllocator::Weak` hooks): include only one of them, in exactly one translation unit, and not from a shared/umbrella header.
 
 ---
 
@@ -667,6 +684,7 @@ Behavior that differs from earlier versions of this module:
 - **`AllocateOneT()` / `AllocateArrayT()`** now always construct when arguments are passed (previously the arguments of trivially constructible types were silently ignored), copy their arguments into every array element, and reject `count * sizeof(T)` overflow. Over-aligned types are rejected at compile time.
 - **`MemoryAllocator::Stats`**: `capacity` is no longer `const`, the structure gained `peak_allocated`, `alloc_fail_count` and `Reset()`, and a default-constructed `Stats` now has zero capacity.
 - **`MemoryAllocator` constants**: `ALIGNMENT` is now `MIN_ALIGNMENT` (8, or 16 on RISC-V), and `CAPACITY_DEFAULT` was removed. New: `AllocateTrivialArrayT()` / `FreeTrivialArrayT()`.
+- **`MemoryAllocator` backend split**: the weak hooks moved to `MemoryAllocator::Weak::Allocate()`, `Weak::Free()` and `Weak::GetStats()`. `MemoryAllocator::Allocate()`, `Free()` and `GetStats()` are now checked front-end wrappers. Custom backends must rename their definitions to `MemoryAllocator::Weak::*` (until then the hooks stay unresolved and `IsAvailable()` returns `false`). `stk_memory_allocator_malloc.h` is a new ready-made `malloc`-backed backend.
 - **`STK_MEMORY_POOL_CHECKS`** replaces the hard-wired `_DEBUG` / `DEBUG` test (which remains its default).
 - **`BytePool::BLOCK_ALIGN`** is public and configurable (default 8, 16 on RISC-V); `HEADER_SIZE` is `max(8, BLOCK_ALIGN)`.
 - **Heap-storage constructors** are removed when `STK_MEMORY_NO_HEAP=1`.

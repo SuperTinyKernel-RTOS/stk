@@ -813,7 +813,7 @@ constexpr __stk_forceinline T AlignPow2(T v, T align) noexcept
     \param[in] value: Value must be non 0.
     \warning   Undefined behavior if temp_val is 0, but guaranteed safe by upstream checks.
 */
-static __stk_forceinline uint32_t CountLeadingZeros(const uint32_t value) noexcept
+__stk_forceinline uint32_t CountLeadingZeros(const uint32_t value) noexcept
 {
     uint32_t ret_val;
 
