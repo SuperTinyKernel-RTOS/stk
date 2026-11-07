@@ -330,11 +330,11 @@ inline bool ISyncObject::Tick(Timeout elapsed_ticks)
     const hw::CriticalSection::ScopedLock cs_;
 #endif
 
-    IWaitObject *itr = util::DListCast::ListEntryToParent<IWaitObject>(wlist.GetFirst());
+    IWaitObject *itr = detail::DListCast::ListEntryToParent<IWaitObject>(wlist.GetFirst());
 
     while (itr != nullptr)
     {
-        IWaitObject *const next = util::DListCast::ListEntryToParent<IWaitObject>(itr->GetNext());
+        IWaitObject *const next = detail::DListCast::ListEntryToParent<IWaitObject>(itr->GetNext());
 
         if (!itr->Tick(elapsed_ticks))
         {
@@ -351,7 +351,7 @@ inline bool ISyncObject::Tick(Timeout elapsed_ticks)
 inline Weight ISyncObject::FindWeightHigherThan(Weight comp) const
 {
     Weight max_weight = NO_WEIGHT;
-    const IWaitObject *itr = util::DListCast::ListEntryToParent<const IWaitObject>(GetWaitList().GetFirst());
+    const IWaitObject *itr = detail::DListCast::ListEntryToParent<const IWaitObject>(GetWaitList().GetFirst());
 
     while (itr != nullptr)
     {
@@ -361,7 +361,7 @@ inline Weight ISyncObject::FindWeightHigherThan(Weight comp) const
             max_weight = w;
         }
             
-        itr = util::DListCast::ListEntryToParent<const IWaitObject>(itr->GetNext());
+        itr = detail::DListCast::ListEntryToParent<const IWaitObject>(itr->GetNext());
     }
 
     return ((max_weight > comp) ? max_weight : NO_WEIGHT);

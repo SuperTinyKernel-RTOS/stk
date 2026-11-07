@@ -253,7 +253,7 @@ inline void FastMutex::Unlock()
         }
 
         // pass ownership directly to the first waiter (FIFO order)
-        IWaitObject *const waiter = util::DListCast::ListEntryToParent<IWaitObject>(m_wait_list.GetFirst());
+        IWaitObject *const waiter = detail::DListCast::ListEntryToParent<IWaitObject>(m_wait_list.GetFirst());
 
         // transfer ownership to the waiter
         m_owner_tid = waiter->GetTid();

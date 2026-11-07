@@ -24,7 +24,7 @@ class IKernelService;
 class IKernelTask;
 class ITask;
 class ISyncObject;
-namespace tz { namespace nsec { namespace util {
+namespace tz { namespace nsec { namespace detail {
     class CmseISyncObjectWrapper;
 }}}
 
@@ -539,7 +539,7 @@ protected:
 /*! \class IWaitObject
     \brief Wait object.
 */
-class IWaitObject : public util::DListEntry<IWaitObject, false>
+class IWaitObject : public detail::DListEntry<IWaitObject, false>
 {
 public:
     /*! \typedef   ListHeadType
@@ -650,14 +650,14 @@ protected:
 
     Pure contract that the kernel programs against. Carries no wait-list storage of its
     own so that alternative backings (e.g. a cross-domain wrapper such as
-    \a tz::nsec::util::CmseISyncObjectWrapper) can implement this interface without
+    \a tz::nsec::detail::CmseISyncObjectWrapper) can implement this interface without
     inheriting an unused/incompatible wait list. \see SyncObjectBase for the default,
     storage-owning implementation used by the built-in primitives.
 */
-class ISyncObject : public util::DListEntry<ISyncObject, false>
+class ISyncObject : public detail::DListEntry<ISyncObject, false>
 {
     friend class IKernelService;
-    friend class tz::nsec::util::CmseISyncObjectWrapper;
+    friend class tz::nsec::detail::CmseISyncObjectWrapper;
 
 public:
     /*! \typedef   ListHeadType
@@ -731,7 +731,7 @@ public:
     */
     static inline void WakeOne(IWaitObject::ListHeadType &wlist)
     {
-        IWaitObject *const obj = util::DListCast::ListEntryToParent<IWaitObject>(wlist.GetFirst());
+        IWaitObject *const obj = detail::DListCast::ListEntryToParent<IWaitObject>(wlist.GetFirst());
         if (obj != nullptr)
         {
             obj->Wake(false);
@@ -746,9 +746,9 @@ public:
     */
     static inline void WakeAll(IWaitObject::ListHeadType &wlist)
     {
-        for (IWaitObject *obj = util::DListCast::ListEntryToParent<IWaitObject>(wlist.GetFirst());
+        for (IWaitObject *obj = detail::DListCast::ListEntryToParent<IWaitObject>(wlist.GetFirst());
              obj != nullptr;
-             obj = util::DListCast::ListEntryToParent<IWaitObject>(wlist.GetFirst()))
+             obj = detail::DListCast::ListEntryToParent<IWaitObject>(wlist.GetFirst()))
         {
             obj->Wake(false);
         }
@@ -771,7 +771,7 @@ public:
     */
     TId GetFirstWaiterTid() const
     {
-        const IWaitObject *const obj = util::DListCast::ListEntryToParent<const IWaitObject>(
+        const IWaitObject *const obj = detail::DListCast::ListEntryToParent<const IWaitObject>(
                 GetWaitList().GetFirst());
 
         return ((obj != nullptr) ? obj->GetTid() : TID_NONE);
@@ -1023,7 +1023,7 @@ protected:
     GetHrtRelativeDeadline), and weighted-round-robin support
     (GetWeight, GetCurrentWeight, SetCurrentWeight).
 */
-class IKernelTask : public util::DListEntry<IKernelTask, true>
+class IKernelTask : public detail::DListEntry<IKernelTask, true>
 {
 public:
     /*! \typedef   ListHeadType

@@ -2379,7 +2379,7 @@ protected:
             else
             if (m_fsm_state == FSM_STATE_SLEEPING)
             {
-                m_task_now = util::DListCast::ListEntryToParent<KernelTask>(m_strategy.GetFirst());
+                m_task_now = detail::DListCast::ListEntryToParent<KernelTask>(m_strategy.GetFirst());
                 active     = &m_sleep_trap[0].stack;
             }
             else
@@ -3096,7 +3096,7 @@ protected:
         {
             ISyncObject::ListEntryType *const next = itr->GetNext();
 
-            if (!util::DListCast::ListEntryToParent<ISyncObject>(itr)->Tick(elapsed_ticks))
+            if (!detail::DListCast::ListEntryToParent<ISyncObject>(itr)->Tick(elapsed_ticks))
             {
                 m_sync_list->Unlink(itr);
             }
@@ -3114,7 +3114,7 @@ protected:
         EFsmEvent type = FSM_EVENT_SLEEP;
 
         // try getting next task for scheduling
-        next = util::DListCast::ListEntryToParent<KernelTask>(m_strategy.GetNext());
+        next = detail::DListCast::ListEntryToParent<KernelTask>(m_strategy.GetNext());
 
         // sleep-aware strategy returns nullptr if no active tasks available
         if (next != nullptr)
@@ -3293,7 +3293,7 @@ protected:
         idle   = now->GetUserStackPtr();
         active = &m_sleep_trap[0].stack;
 
-        m_task_now = util::DListCast::ListEntryToParent<KernelTask>(m_strategy.GetFirst());
+        m_task_now = detail::DListCast::ListEntryToParent<KernelTask>(m_strategy.GetFirst());
 
         if __stk_constexpr_cpp17 (IsHrtMode())
         {

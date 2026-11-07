@@ -852,11 +852,11 @@ static void STK_MEMCPY(void *const dest, const void *const src, size_t size);
 static void STK_MEMSET(void *const dest, uint8_t value, size_t size);
 #endif
 
-/*! \namespace stk::util
+/*! \namespace stk::detail
     \brief     Internal utility namespace containing data structure helpers (linked lists, etc.)
                used by the kernel implementation. Not part of the public user API.
 */
-namespace util {}
+namespace detail {}
 
 /*! \namespace stk::sched
     \brief     Task-switching strategies (stk::sched::SwitchStrategy*) and their helpers (priority bitmaps,

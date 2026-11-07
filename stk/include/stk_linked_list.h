@@ -28,7 +28,7 @@
 */
 
 namespace stk {
-namespace util {
+namespace detail {
 
 // Forward declaration required so DListEntry can reference DListHead as a friend
 // and store a back-pointer to the owning list head.
@@ -471,7 +471,7 @@ struct DListCast
     }
 };
 
-} // namespace util
+} // namespace detail
 } // namespace stk
 
 

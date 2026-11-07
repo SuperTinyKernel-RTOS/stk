@@ -219,13 +219,13 @@ TEST_GROUP(DList)
     void setup() {}
     void teardown() {}
 
-    struct ListEntry : public stk::util::DListEntry<ListEntry, true>
+    struct ListEntry : public stk::detail::DListEntry<ListEntry, true>
     {
         int32_t m_id;
         ListEntry(int32_t id) : m_id(id) {}
     };
 
-    typedef stk::util::DListHead<ListEntry, true> ListHead;
+    typedef stk::detail::DListHead<ListEntry, true> ListHead;
 };
 
 TEST(DList, Empty)
