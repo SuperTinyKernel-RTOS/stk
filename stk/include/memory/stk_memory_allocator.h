@@ -162,14 +162,30 @@ namespace memory {
 */
 struct MemoryAllocator
 {
+    /*! \def     STK_MIN_ALIGNMENT
+        \brief   Minimum alignment (bytes) guaranteed for pointers returned by Allocate().
+        \details Defaults to the larger of the toolchain's fundamental alignment
+                 (alignof(std::max_align_t)) and the platform stack alignment
+                 (STK_STACK_MEMORY_ALIGN, 16 on RISC-V). Can be overridden in stk_config.h
+                 when the underlying allocator guarantees more. Overriding to a smaller
+                 value is rejected at compile time.
+    */
+#ifndef STK_MIN_ALIGNMENT
+    #define STK_MIN_ALIGNMENT (stk::Max<size_t>(alignof(std::max_align_t), STK_STACK_MEMORY_ALIGN))
+#endif
+
     /*! \brief   Minimum alignment (bytes) guaranteed for pointers returned by Allocate().
         \details Types with a stricter alignment must be allocated with AllocateAligned().
+        \note    The allocator must deliver this: the heap base, the block header size and
+                 the rounding of block sizes must all be multiples of this value.
     */
-#ifdef _STK_ARCH_RISC_V
-    static const size_t MIN_ALIGNMENT = 16U;
-#else
-    static const size_t MIN_ALIGNMENT = 8U;
-#endif
+    static constexpr size_t MIN_ALIGNMENT = STK_MIN_ALIGNMENT;
+
+    STK_STATIC_ASSERT_DESC(IsPow2(MIN_ALIGNMENT), "MIN_ALIGNMENT must be a power of two");
+    STK_STATIC_ASSERT_DESC(MIN_ALIGNMENT >= alignof(std::max_align_t),
+        "MIN_ALIGNMENT is weaker than the toolchain's fundamental alignment");
+    STK_STATIC_ASSERT_DESC(MIN_ALIGNMENT >= sizeof(void *),
+         "MIN_ALIGNMENT must be at least pointer-aligned");
 
     /*! \class Stats
         \brief Snapshot of the memory allocator's statistics.
@@ -294,41 +310,62 @@ struct MemoryAllocator
 
 #if STK_MEMORY_HAS_HEAP
 
-    /*! \brief     Allocate memory with an alignment stricter than ALIGNMENT (e.g. a DMA/cache-line aligned buffer).
-        \details   Over-allocates and stores the original pointer right before the returned one.
+    /*! \brief     Allocate memory with an alignment stricter than ALIGNMENT and an optional offset.
+        \details   Over-allocates and stores the original pointer right below the aligned block
+                   (rounded down to a pointer boundary, see layout below).
                    The result \b must be released with FreeAligned(), never with Free().
         \param[in] size: Size of the memory chunk in bytes.
         \param[in] alignment: Required alignment, a power of two (valid values below sizeof(void *) are raised to it).
-        \return    Aligned pointer, nullptr on failure or if \a alignment is not a power of two.
+        \param[in] offset: Offset from the alignment boundary, i.e. (result + offset) is aligned.
+        \return    Aligned pointer, nullptr on failure or if arguments are invalid.
+
+        Layout:
+            raw                                  aligned
+            |<-- pad -->|<-- raw ptr -->|<-space->|<-- size bytes -->
+                        ^ block_start
+            where space = (-offset) mod sizeof(void *), which keeps block_start pointer-aligned
+            and lets FreeAligned() recover it from the low bits of 'aligned'.
     */
-    static inline void *AllocateAligned(size_t size, size_t alignment)
+    static inline void *AllocateAligned(size_t size, size_t alignment, size_t offset = 0U)
     {
         void *result = nullptr;
 
-        const bool pow2 = ((alignment != 0U) && ((alignment & (alignment - 1U)) == 0U));
-        STK_ASSERT(pow2);
+        constexpr size_t ptr_size = sizeof(void *);
+        constexpr size_t max_size = static_cast<size_t>(~static_cast<size_t>(0U));
 
-        if (alignment < sizeof(void *))
-        {
-            alignment = sizeof(void *);
-        }
+        const bool pow2         = IsPow2(alignment);
+        const bool offset_valid = ((offset == 0U) || (offset < size));
 
         // guard against unlinked weak symbols
-        STK_ASSERT(IsAvailable());
+        const bool available = IsAvailable();
 
-        const size_t extra = ((alignment - 1U) + sizeof(void *));
-        const size_t max_size = static_cast<size_t>(~static_cast<size_t>(0U));
+        STK_ASSERT(pow2);
+        STK_ASSERT(available);
 
-        if (pow2 && IsAvailable() && (size <= (max_size - extra)))
+        if (pow2 && offset_valid && available)
         {
-            uint8_t *const raw = static_cast<uint8_t *>(Allocate(size + extra));
-            if (raw != nullptr)
-            {
-                const Word aligned = ((hw::PtrToWord(raw) + sizeof(void *) + (alignment - 1U)) &
-                                        ~static_cast<Word>(alignment - 1U));
+            const size_t adjusted_alignment = Max(alignment, ptr_size);
 
-                *hw::WordToPtr<void *>(aligned - sizeof(void *)) = raw;
-                result = hw::WordToPtr<uint8_t>(aligned);
+            // bytes between the metadata slot and the aligned block, keeps the slot pointer-aligned
+            const size_t space         = (0U - offset) & (ptr_size - 1U);
+            const size_t private_space = ptr_size + space + (adjusted_alignment - 1U);
+
+            if (size <= (max_size - private_space))
+            {
+                uint8_t *const raw = static_cast<uint8_t *>(Allocate(private_space + size));
+
+                if (raw != nullptr)
+                {
+                    // lowest address that leaves room for the metadata slot, with (aligned + offset) on the boundary
+                    const Word lowest  = hw::PtrToWord(raw) + static_cast<Word>(ptr_size + space + offset);
+                    const Word aligned = AlignPow2(lowest, static_cast<Word>(adjusted_alignment)) - static_cast<Word>(offset);
+
+                    // cannot wrap: 'aligned' stays within [raw + ptr_size + space, raw + private_space]
+                    void **const block_start = hw::WordToPtr<void *>(aligned - static_cast<Word>(space + ptr_size));
+
+                    *block_start = raw;
+                    result       = hw::WordToPtr<uint8_t>(aligned);
+                }
             }
         }
 
@@ -340,12 +377,23 @@ struct MemoryAllocator
     */
     static inline void FreeAligned(void *ptr)
     {
-        // guard against unlinked weak symbols
-        STK_ASSERT(IsAvailable());
+        constexpr size_t ptr_size = sizeof(void *);
 
-        if ((ptr != nullptr) && IsAvailable())
+        // guard against unlinked weak symbols
+        const bool available = IsAvailable();
+        STK_ASSERT(available);
+
+        if ((ptr != nullptr) && available)
         {
-            Free(*hw::WordToPtr<void *>(hw::PtrToWord(ptr) - sizeof(void *)));
+            const Word ptr_word = hw::PtrToWord(ptr);
+
+            // 'space' survives in the low bits because the effective alignment is >= sizeof(void *)
+            const Word space = ptr_word & static_cast<Word>(ptr_size - 1U);
+
+            // retrieve the original raw pointer stored below the block
+            void **const block_start = hw::WordToPtr<void *>(ptr_word - space - static_cast<Word>(ptr_size));
+
+            Free(*block_start);
         }
     }
 
@@ -447,19 +495,7 @@ struct MemoryAllocator
         STK_STATIC_ASSERT_DESC(alignof(TElement) <= MIN_ALIGNMENT,
             "TElement alignment exceeds MemoryAllocator::MIN_ALIGNMENT");
 
-        TElement *ptr = nullptr;
-        const size_t max_size = static_cast<size_t>(~static_cast<size_t>(0U));
-
-        // guard against unlinked weak symbols
-        STK_ASSERT(IsAvailable());
-
-        if ((count != 0U) && (count <= (max_size / sizeof(TElement))) && IsAvailable())
-        {
-            ptr = static_cast<TElement *>(Allocate(count * sizeof(TElement)));
-            // note: no placement new loop is needed here because TElement is trivial
-        }
-
-        return ptr;
+        return AllocateArrayT<TElement>(count);
     }
 
     /*! \brief     Destroy and free a single element allocated via AllocateOneT().
@@ -521,14 +557,8 @@ struct MemoryAllocator
         STK_STATIC_ASSERT_DESC(std::is_trivial<TElement>::value,
             "TElement must be a trivial type");
 
-        // guard against unlinked weak symbols
-        STK_ASSERT(IsAvailable());
-
-        if ((ptr != nullptr) && IsAvailable())
-        {
-            // note: trivial types have trivial destructors, so no destructor loops are needed
-            Free(ptr);
-        }
+        // note: count (0) is ignored
+        FreeArrayT(ptr, 0);
     }
 
 #endif // STK_MEMORY_HAS_HEAP

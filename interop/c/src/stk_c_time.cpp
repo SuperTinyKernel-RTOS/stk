@@ -66,8 +66,28 @@ extern EAddResult InitializeTimerHostEx(stk_kernel_t *kernel, stk::time::TimerHo
 } // interop_c_helper
 } // stk
 
+// -----------------------------------------------------------------------------
+// stk_timerhost_t — wraps a TimerHost instance
+//
+// One instance per CPU core, held in s_TimerHosts[]. The struct is opaque to
+// C callers.
+// -----------------------------------------------------------------------------
+
+struct stk_timerhost_t
+{
+    TimerHost handle;
+};
+
+// +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+// Anonymous namespace to make local functions and objects file-local.
+namespace {
+// +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+// Static pool: one host per core, indexed by core_nr (0 ... STK_C_CPU_COUNT-1).
+stk_timerhost_t s_TimerHosts[STK_C_CPU_COUNT];
+
 // maps the C++ command result to the C API result
-static __stk_forceinline stk_timer_result_t ToCTimerResult(TimerHost::EResult r)
+__stk_forceinline stk_timer_result_t ToCTimerResult(TimerHost::EResult r)
 {
     // C result enum must stay in sync with its C++ counterpart (values are cast directly)
     STK_STATIC_ASSERT_DESC(static_cast<int32_t>(STK_TIMER_RES_CANCELLED)     == static_cast<int32_t>(TimerHost::RES_CANCELLED),     "stk_timer_result_t mismatch");
@@ -84,20 +104,9 @@ static __stk_forceinline stk_timer_result_t ToCTimerResult(TimerHost::EResult r)
     return static_cast<stk_timer_result_t>(static_cast<int32_t>(r));
 }
 
-// -----------------------------------------------------------------------------
-// stk_timerhost_t — wraps a TimerHost instance
-//
-// One instance per CPU core, held in s_TimerHosts[]. The struct is opaque to
-// C callers.
-// -----------------------------------------------------------------------------
-
-struct stk_timerhost_t
-{
-    TimerHost handle;
-};
-
-// Static pool: one host per core, indexed by core_nr (0 ... STK_C_CPU_COUNT-1).
-static stk_timerhost_t s_TimerHosts[STK_C_CPU_COUNT];
+// +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+} // namespace
+// +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 // =============================================================================
 // C-interface
@@ -126,11 +135,11 @@ void stk_timerhost_init(stk_timerhost_t *host,
 {
     STK_ASSERT(host   != nullptr);
     STK_ASSERT(kernel != nullptr);
-    
-    interop_c_helper::InitializeTimerHost(kernel, &host->handle, 
+
+    interop_c_helper::InitializeTimerHost(kernel, &host->handle,
         (privileged ? ACCESS_PRIVILEGED : ACCESS_USER));
 }
-    
+
 void stk_timerhost_config_init(stk_timerhost_config_t *cfg)
 {
     STK_ASSERT(cfg != nullptr);

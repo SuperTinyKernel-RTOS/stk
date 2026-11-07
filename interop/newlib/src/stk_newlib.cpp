@@ -95,7 +95,7 @@ LockPool      *s_LockPool = nullptr;
 */
 LockPool *GetLockPool()
 {
-    const sync::ScopedCriticalSection cs_;
+    const hw::CriticalSection::ScopedLock cs_;
 
     if (s_LockPool == nullptr)
     {
@@ -152,7 +152,7 @@ static inline T *ConstructIn(Mem &mem, Args &&... args)
 */
 void Construct(_LOCK_T lock, __lock::EKind kind)
 {
-    const sync::ScopedCriticalSection cs_;
+    const hw::CriticalSection::ScopedLock cs_;
 
     if (lock->kind == __lock::KIND_NONE)
     {

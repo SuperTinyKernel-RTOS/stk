@@ -13,6 +13,7 @@
 #include <stk_config.h>
 #include <stk.h>
 #include <memory/stk_memory_bytepool.h>
+#include <memory/stk_memory_allocator_malloc.h> // use malloc-based allocator
 
 #include "stktest_context.h"
 
@@ -41,13 +42,6 @@ STK_TEST_DECL_ASSERT;
 
 static_assert((_STK_POOL_BLK_COUNT * (_STK_POOL_BLK_PAYLOAD + stk::memory::BytePool::HEADER_SIZE)) == _STK_POOL_STORAGE_SIZE,
     "uniform block layout must fill the test pool exactly");
-
-// Private memory allocators (we define malloc, free here to overcome absence of declaration in
-// case of -ffreestanding compiler flag).
-extern "C" void *malloc(size_t size);
-extern "C" void free(void *ptr);
-void *stk::memory::MemoryAllocator::Allocate(size_t size) { return malloc(size); }
-void stk::memory::MemoryAllocator::Free(void *ptr) { free(ptr); }
 
 namespace stk {
 namespace test {

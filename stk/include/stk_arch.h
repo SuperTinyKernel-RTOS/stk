@@ -180,7 +180,7 @@ namespace stk {
            and must never return. A minimal safe default is provided below.
     \param[in] id: EKernelPanicId value identifying the fault.
 */
-static __stk_forceinline void STK_KERNEL_PANIC(stk::EKernelPanicId id)
+__stk_forceinline void STK_KERNEL_PANIC(stk::EKernelPanicId id)
 {
     __stk_debug_break();   // debug aid
     STK_PANIC_HANDLER(id); // must not return
@@ -211,7 +211,7 @@ namespace hw {
     \see       WordToPtr
 */
 template <typename T>
-static constexpr Word PtrToWord(T *const ptr) noexcept
+static __stk_forceinline Word PtrToWord(T *const ptr) noexcept
 {
     STK_STATIC_ASSERT(sizeof(Word) == sizeof(T *));
     return reinterpret_cast<Word>(ptr);
@@ -228,7 +228,7 @@ static constexpr Word PtrToWord(T *const ptr) noexcept
     \see       PtrToWord
 */
 template <typename T>
-static constexpr T *WordToPtr(Word value) noexcept
+static __stk_forceinline T *WordToPtr(Word value) noexcept
 {
     STK_STATIC_ASSERT(sizeof(Word) == sizeof(T *));
     return reinterpret_cast<T *>(value);
@@ -328,7 +328,7 @@ __stk_forceinline void SetTlsPtr(const _TyTls *tp)
     \see       WriteVolatile64
 */
 template <typename T>
-static __stk_forceinline T ReadVolatile64(volatile const T *addr)
+__stk_forceinline T ReadVolatile64(volatile const T *addr)
 {
     STK_STATIC_ASSERT_N(sz, sizeof(T) == 8U);  // only 64-bit types permitted
     STK_STATIC_ASSERT_N(al, alignof(T) >= 4U); // type must be at least 4-byte aligned
@@ -393,7 +393,7 @@ static __stk_forceinline T ReadVolatile64(volatile const T *addr)
     \see       ReadVolatile64
 */
 template <typename T>
-static __stk_forceinline void WriteVolatile64(volatile T *addr, T value)
+__stk_forceinline void WriteVolatile64(volatile T *addr, T value)
 {
     STK_STATIC_ASSERT_N(sz, sizeof(T) == 8U);  // only 64-bit types permitted
     STK_STATIC_ASSERT_N(al, alignof(T) >= 4U); // type must be at least 4-byte aligned
@@ -713,7 +713,7 @@ struct HiResClock
     \see    GetUserTaskFromTid
 */
 #ifndef _STK_CORTEX_M_TRUSTZONE_NON_SECURE
-static constexpr TId GetTidFromUserTask(const ITask *task) noexcept { return hw::PtrToWord(task); }
+__stk_forceinline TId GetTidFromUserTask(const ITask *task) noexcept { return hw::PtrToWord(task); }
 #else
 TId GetTidFromUserTask(const ITask *task);
 #endif
@@ -722,7 +722,7 @@ TId GetTidFromUserTask(const ITask *task);
     \return ITask instance.
     \see    GetTidFromUserTask
 */
-static constexpr ITask *GetUserTaskFromTid(TId task_id) noexcept { return hw::WordToPtr<ITask>(task_id); }
+__stk_forceinline ITask *GetUserTaskFromTid(TId task_id) noexcept { return hw::WordToPtr<ITask>(task_id); }
 
 //! Implementation of STK_MEMCPY.
 #ifndef _STK_CUSTOM_MEMCPY

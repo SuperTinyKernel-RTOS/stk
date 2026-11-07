@@ -16,7 +16,7 @@
 /*! \def   STK_MEMORY_BYTEPOOL_ALIGN_DEFAULT
     \brief Payload alignment of BytePool allocations in bytes (a power of two, not less than 4) and the
            granularity of block sizes. Defaults to 8, which keeps \c double / \c uint64_t payloads aligned on
-           32-bit targets and satisfies MemoryAllocator::ALIGNMENT.
+           32-bit targets and satisfies MemoryAllocator::MIN_ALIGNMENT.
     \details Unlike BlockMemoryPool this is a compile-time setting, not a constructor argument: it also
            determines the layout of the block header (the payload follows it directly), so
            \c BytePool::HEADER_SIZE becomes \c max(8, alignment).
@@ -29,11 +29,7 @@
            the build system, not in a single source file.
 */
 #ifndef STK_MEMORY_BYTEPOOL_ALIGN_DEFAULT
-    #ifdef _STK_ARCH_RISC_V
-        #define STK_MEMORY_BYTEPOOL_ALIGN_DEFAULT (16U)
-    #else
-        #define STK_MEMORY_BYTEPOOL_ALIGN_DEFAULT (8U)
-    #endif
+    #define STK_MEMORY_BYTEPOOL_ALIGN_DEFAULT stk::memory::MemoryAllocator::MIN_ALIGNMENT
 #endif
 
 /*! \def   STK_MEMORY_BYTEPOOL_GUARD
@@ -978,6 +974,10 @@ inline MemoryAllocator::Stats BytePool::GetStats() const
 inline void BytePool::Init()
 {
     STK_STATIC_ASSERT_DESC(sizeof(BlockHeader) == HEADER_SIZE, "BlockHeader must be exactly HEADER_SIZE bytes");
+
+    // start from an empty snapshot: a pool that turns out to be invalid (no storage, or too small for a single
+    // block) must report zero capacity, consistent with GetSize() == 0; a valid pool sets the real capacity below
+    m_stats.Reset(0U);
 
     if (m_storage != nullptr)
     {

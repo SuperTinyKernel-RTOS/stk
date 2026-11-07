@@ -16,16 +16,10 @@
 /*! \def   STK_MEMORY_BLOCKPOOL_ALIGN_DEFAULT
     \brief Default block alignment (bytes, power of two, not less than sizeof(void *)) used when a pool is
            constructed without an explicit alignment. Defaults to 8 so that \c double / \c uint64_t members are
-           properly aligned on 32-bit targets (where sizeof(void *) is only 4). Define it as
-           \c sizeof(void *) to restore the pre-existing behavior: the smallest possible blocks
-           (4 bytes on 32-bit targets) at the cost of 4-byte-only alignment there.
+           properly aligned on 32-bit targets (where sizeof(void *) is only 4).
 */
 #ifndef STK_MEMORY_BLOCKPOOL_ALIGN_DEFAULT
-    #ifdef _STK_ARCH_RISC_V
-        #define STK_MEMORY_BLOCKPOOL_ALIGN_DEFAULT (16U)
-    #else
-        #define STK_MEMORY_BLOCKPOOL_ALIGN_DEFAULT (8U)
-    #endif
+    #define STK_MEMORY_BLOCKPOOL_ALIGN_DEFAULT stk::memory::MemoryAllocator::MIN_ALIGNMENT
 #endif
 
 /*! \def   STK_MEMORY_BLOCKPOOL_BITMAP
@@ -585,7 +579,7 @@ inline BlockMemoryPool::BlockMemoryPool(size_t capacity, size_t raw_block_size, 
         {
             const size_t total = ((capacity * m_block_size) + bitmap + slack);
 
-            m_storage = MemoryAllocator::AllocateArrayT<uint8_t>(total);
+            m_storage = static_cast<uint8_t *>(MemoryAllocator::AllocateAligned(total, alignment));
             if (m_storage != nullptr)
             {
                 m_storage_size = total;
@@ -606,7 +600,7 @@ inline BlockMemoryPool::~BlockMemoryPool()
 #if STK_MEMORY_HAS_HEAP
     if (m_storage_owned && (m_storage != nullptr))
     {
-        MemoryAllocator::FreeArrayT(m_storage, m_storage_size);
+        MemoryAllocator::FreeAligned(m_storage);
         m_storage = nullptr;
     }
 #endif

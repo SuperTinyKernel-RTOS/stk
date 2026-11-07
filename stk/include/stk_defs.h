@@ -774,28 +774,37 @@ namespace stk {
     \note  Arguments are evaluated exactly once, safe for any expression type.
 */
 template <typename T>
-static constexpr __stk_forceinline T Min(T a, T b) noexcept { return ((a < b) ? a : b); }
+constexpr __stk_forceinline T Min(T a, T b) noexcept { return ((a < b) ? a : b); }
 
 /*! \brief Compile-time maximum of two values.
     \note  Arguments are evaluated exactly once, safe for any expression type.
 */
 template <typename T>
-static constexpr __stk_forceinline T Max(T a, T b) noexcept { return ((a > b) ? a : b); }
+constexpr __stk_forceinline T Max(T a, T b) noexcept { return ((a > b) ? a : b); }
 
 /*! \brief Aligns a value towards the next larger size multiple.
     \note  Arguments are evaluated exactly once, safe for any expression type.
 */
 template <typename T>
-static constexpr __stk_forceinline T Align(T v, T align) noexcept
+constexpr __stk_forceinline T Align(T v, T align) noexcept
 {
     return ((v + align - static_cast<T>(1U)) / align) * align;
+}
+
+/*! \brief Checks if a value is a power of two.
+    \note  Arguments are evaluated exactly once.
+*/
+template <typename T>
+constexpr __stk_forceinline bool IsPow2(T v) noexcept
+{
+    return (v > static_cast<T>(0)) && ((v & (v - static_cast<T>(1U))) == static_cast<T>(0));
 }
 
 /*! \brief Fast compile-time alignment for power-of-two boundaries.
     \note  Arguments are evaluated exactly once. The 'align' parameter MUST be a power of two.
 */
 template <typename T>
-static constexpr __stk_forceinline T AlignPow2(T v, T align) noexcept
+constexpr __stk_forceinline T AlignPow2(T v, T align) noexcept
 {
     return (v + align - static_cast<T>(1U)) & ~(align - static_cast<T>(1U));
 }

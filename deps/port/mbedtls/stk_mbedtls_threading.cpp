@@ -44,20 +44,20 @@
 #include <new>
 #include <cstddef>
 
-// ----------------------------------------------------------------------------
-namespace stk {
-namespace port {
-// ----------------------------------------------------------------------------
+// +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+// Anonymous namespace to make local functions file-local.
+namespace {
+// +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 /* mbedTLS never re-locks a mutex already held by the calling thread, so the non-recursive (smaller and
  * faster) stk::sync::FastMutex is used instead of the recursive stk::sync::Mutex. */
-static __stk_forceinline stk::sync::FastMutex *AsMutex(mbedtls_platform_mutex_t *mutex)
+__stk_forceinline stk::sync::FastMutex *AsMutex(mbedtls_platform_mutex_t *mutex)
 {
     STK_ASSERT(mutex != nullptr);
     return reinterpret_cast<stk::sync::FastMutex *>(mutex->storage.raw);
 }
 
-static __stk_forceinline stk::sync::ConditionVariable *AsCond(mbedtls_platform_condition_variable_t *cond)
+__stk_forceinline stk::sync::ConditionVariable *AsCond(mbedtls_platform_condition_variable_t *cond)
 {
     STK_ASSERT(cond != nullptr);
     return reinterpret_cast<stk::sync::ConditionVariable *>(cond->storage.raw);
@@ -86,43 +86,34 @@ static_assert(alignof(mbedtls_platform_condition_variable_t) % alignof(stk::sync
       "threading_alt.h.");
 
 // ----------------------------------------------------------------------------
-} // namespace port
-} // namespace stk
-// ----------------------------------------------------------------------------
-
-// ----------------------------------------------------------------------------
-extern "C" {
-// ----------------------------------------------------------------------------
-
-// ----------------------------------------------------------------------------
 // Mutex
 // ----------------------------------------------------------------------------
 
-static int stk_mutex_init(mbedtls_platform_mutex_t *mutex)
+int stk_mutex_init(mbedtls_platform_mutex_t *mutex)
 {
     /* stk::sync::FastMutex's constructor is non-allocating and cannot fail. */
     ::new (mutex->storage.raw) stk::sync::FastMutex();
     return 0;
 }
 
-static void stk_mutex_destroy(mbedtls_platform_mutex_t *mutex)
+void stk_mutex_destroy(mbedtls_platform_mutex_t *mutex)
 {
     /* Contract (mbedtls/threading.h): must not be locked and must have no
      * waiters; ~FastMutex() enforces this with an assertion in debug builds. */
-    stk::port::AsMutex(mutex)->~FastMutex();
+    AsMutex(mutex)->~FastMutex();
 }
 
-static int stk_mutex_lock(mbedtls_platform_mutex_t *mutex)
+int stk_mutex_lock(mbedtls_platform_mutex_t *mutex)
 {
     /* mbedTLS never re-locks a mutex already held by the calling thread (FastMutex is non-recursive: such a
      * re-lock would panic with KERNEL_PANIC_SYNC_DEADLOCK instead of dead-locking silently). */
-    stk::port::AsMutex(mutex)->Lock();
+    AsMutex(mutex)->Lock();
     return 0;
 }
 
-static int stk_mutex_unlock(mbedtls_platform_mutex_t *mutex)
+int stk_mutex_unlock(mbedtls_platform_mutex_t *mutex)
 {
-    stk::port::AsMutex(mutex)->Unlock();
+    AsMutex(mutex)->Unlock();
     return 0;
 }
 
@@ -130,32 +121,32 @@ static int stk_mutex_unlock(mbedtls_platform_mutex_t *mutex)
 // Condition variable
 // ----------------------------------------------------------------------------
 
-static int stk_cond_init(mbedtls_platform_condition_variable_t *cond)
+int stk_cond_init(mbedtls_platform_condition_variable_t *cond)
 {
     ::new (cond->storage.raw) stk::sync::ConditionVariable();
     return 0;
 }
 
-static void stk_cond_destroy(mbedtls_platform_condition_variable_t *cond)
+void stk_cond_destroy(mbedtls_platform_condition_variable_t *cond)
 {
     /* Contract: no task may be waiting on cond when this is called;
      * ~ConditionVariable() enforces this with an assertion in debug builds. */
-    stk::port::AsCond(cond)->~ConditionVariable();
+    AsCond(cond)->~ConditionVariable();
 }
 
-static int stk_cond_signal(mbedtls_platform_condition_variable_t *cond)
+int stk_cond_signal(mbedtls_platform_condition_variable_t *cond)
 {
-    stk::port::AsCond(cond)->NotifyOne();
+    AsCond(cond)->NotifyOne();
     return 0;
 }
 
-static int stk_cond_broadcast(mbedtls_platform_condition_variable_t *cond)
+int stk_cond_broadcast(mbedtls_platform_condition_variable_t *cond)
 {
-    stk::port::AsCond(cond)->NotifyAll();
+    AsCond(cond)->NotifyAll();
     return 0;
 }
 
-static int stk_cond_wait(mbedtls_platform_condition_variable_t *cond,
+int stk_cond_wait(mbedtls_platform_condition_variable_t *cond,
                          mbedtls_platform_mutex_t *mutex)
 {
     /* mutex must already be held by the calling task (mbedTLS's contract).
@@ -174,10 +165,18 @@ static int stk_cond_wait(mbedtls_platform_condition_variable_t *cond,
      * timeout with WAIT_INFINITE - is reported as a usage error, mirroring how
      * the reference pthread backend's err_from_posix() never swallows a failed
      * pthread_cond_wait(). */
-    const stk::EWaitResult wr = stk::port::AsCond(cond)->WaitEx(*stk::port::AsMutex(mutex), stk::WAIT_INFINITE);
+    const stk::EWaitResult wr = AsCond(cond)->WaitEx(*AsMutex(mutex), stk::WAIT_INFINITE);
     const bool woken = ((wr == stk::WAIT_RESULT_SIGNAL) || (wr == stk::WAIT_RESULT_CANCELED));
     return (woken ? 0 : MBEDTLS_ERR_THREADING_USAGE_ERROR);
 }
+
+// +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+} // namespace
+// +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+// ----------------------------------------------------------------------------
+extern "C" {
+// ----------------------------------------------------------------------------
 
 void stk_mbedtls_threading_init(void)
 {

@@ -51,19 +51,34 @@
  * it again.
  */
 
-static async_context_t * volatile s_lwip_context;
+// +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+// Anonymous namespace to make local functions file-local.
+namespace {
+// +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+async_context_t * volatile s_lwip_context;
 
 /* lwIP's tcpip_task cannot be shut down, so lwip_stk_deinit() just parks it here instead;
  * lwip_stk_init() re-signals it to resume on a later re-init. Static storage duration, so it
  * must outlive the whole program - constructed directly as a stk::sync::Semaphore rather than
  * via sys_sem_new() (see the file-level comment above for why). */
-static stk::sync::Semaphore s_tcpip_task_blocker_inst(0U, SYS_SEM_MAX_COUNT);
-static sys_sem_t s_tcpip_task_blocker = { .sem = &s_tcpip_task_blocker_inst };
+stk::sync::Semaphore s_tcpip_task_blocker_inst(0U, SYS_SEM_MAX_COUNT);
+sys_sem_t s_tcpip_task_blocker = { .sem = &s_tcpip_task_blocker_inst };
 
-static void tcpip_init_done(void *param)
+void tcpip_init_done(void *param)
 {
     sys_sem_signal((sys_sem_t *)param);
 }
+
+uint32_t clear_lwip_context(__unused void *param)
+{
+    s_lwip_context = NULL;
+    return 0;
+}
+
+// +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+} // namespace
+// +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 extern "C" bool lwip_stk_init(async_context_t *context)
 {
@@ -93,12 +108,6 @@ extern "C" bool lwip_stk_init(async_context_t *context)
         sys_sem_signal(&s_tcpip_task_blocker);
     }
     return true;
-}
-
-static uint32_t clear_lwip_context(__unused void *param)
-{
-    s_lwip_context = NULL;
-    return 0;
 }
 
 extern "C" void lwip_stk_deinit(__unused async_context_t *context)

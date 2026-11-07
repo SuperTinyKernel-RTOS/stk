@@ -49,18 +49,39 @@
  *      Rule 5-2-5   : const_cast in pthread_setspecific() (POSIX takes 'const void *').
  *      Rule 5-2-7/8/9 : reinterpret_cast of the stack pool storage and of the bound kernel pointer.
  *      Rule 7-3-4   : using-directives (namespace stk / stk::pthread).
- *      Rule 18-4-1  : malloc()/free() for non-default stack sizes, placement new for sync objects.
+ *      Rule 18-4-1  : MemoryAllocator heap for non-default stack sizes and message queues, placement new for sync objects.
  */
 
 // RAII critical section (default session semantics).
 typedef stk::hw::CriticalSection::ScopedLock CsLock;
 
-// Private malloc/free declarations (same as in stk_c_memory.cpp): overcomes absence of
-// declarations under a -ffreestanding compiler flag. Only used for the "unusual"
-// stack-size fallback path; the common-size path is served entirely from a static
-// BlockMemoryPool with zero heap use.
-extern "C" void *malloc(std::size_t size);
-extern "C" void free(void *ptr);
+// Dynamic memory (non-default stack sizes, message queue storage) comes from STK's allocator,
+// stk::memory::MemoryAllocator, which the application provides (or stk_memory_allocator_default.h).
+// The common-size stack path is served entirely from a static BlockMemoryPool with zero heap use.
+// MemoryAllocator::Allocate() guarantees only MIN_ALIGNMENT, so it must satisfy the stack alignment.
+static_assert(static_cast<std::size_t>(STK_STACK_MEMORY_ALIGN) <= stk::memory::MemoryAllocator::MIN_ALIGNMENT,
+              "STK_STACK_MEMORY_ALIGN exceeds MemoryAllocator::MIN_ALIGNMENT: heap stacks would be misaligned");
+
+// Allocate()/Free() are weak: an unlinked allocator is reported as a failed allocation instead of a jump to null.
+static inline void *HeapAlloc(std::size_t size)
+{
+    void *result = nullptr;
+
+    if (stk::memory::MemoryAllocator::IsAvailable())
+    {
+        result = stk::memory::MemoryAllocator::Allocate(size);
+    }
+
+    return result;
+}
+
+static inline void HeapFree(void *ptr)
+{
+    if ((ptr != nullptr) && stk::memory::MemoryAllocator::IsAvailable())
+    {
+        stk::memory::MemoryAllocator::Free(ptr);
+    }
+}
 
 // =============================================================================
 // Internal state
@@ -266,7 +287,7 @@ struct pthread_stk_ctrl_t
 
     pthread_stk_word_t      *stack;
     bool             stack_owned;     // false => caller-supplied via pthread_attr_setstack()
-    bool             stack_from_pool; // true  => came from s_StackPool, else malloc()
+    bool             stack_from_pool; // true  => came from s_StackPool, else MemoryAllocator
 
     stk::sync::Event *done_event; // constructed in place in done_event_buf by pthread_create()
     struct {
@@ -619,7 +640,7 @@ static void ReleaseThreadResources(ThreadCtrl *ctrl)
         }
         else
         {
-            free(ctrl->stack);
+            HeapFree(ctrl->stack);
         }
     }
     ctrl->stack = nullptr;
@@ -632,7 +653,7 @@ static void ReleaseThreadResources(ThreadCtrl *ctrl)
 }
 
 // Provides the thread stack: either the caller-supplied one, a pool block (default size),
-// or a malloc() block. Returns true if ctrl->stack is valid afterwards.
+// or a MemoryAllocator block. Returns true if ctrl->stack is valid afterwards.
 static bool AllocateStack(ThreadCtrl *ctrl, const pthread_attr_t *attr, std::size_t stack_bytes)
 {
     if ((attr != nullptr) && (attr->__ext_stack != nullptr))
@@ -662,7 +683,7 @@ static bool AllocateStack(ThreadCtrl *ctrl, const pthread_attr_t *attr, std::siz
         }
         else
         {
-            ctrl->stack           = static_cast<pthread_stk_word_t *>(malloc(stack_bytes));
+            ctrl->stack           = static_cast<pthread_stk_word_t *>(HeapAlloc(stack_bytes));
             ctrl->stack_owned     = true;
             ctrl->stack_from_pool = false;
         }
@@ -3830,7 +3851,7 @@ static inline MqMsgHdr *MqSlot(MqQueue *q, std::size_t idx)
 // Frees a queue which is unlinked and no longer open (\a q is already detached under the critical section)
 static void MqDestroy(uint8_t *buf)
 {
-    free(buf);
+    HeapFree(buf);
 }
 
 mqd_t mq_open(const char *name, int oflag, ...)
@@ -3875,7 +3896,7 @@ mqd_t mq_open(const char *name, int oflag, ...)
 
     if (create)
     {
-        newbuf = static_cast<uint8_t *>(malloc(stride * static_cast<std::size_t>(maxmsg)));
+        newbuf = static_cast<uint8_t *>(HeapAlloc(stride * static_cast<std::size_t>(maxmsg)));
         if (newbuf == nullptr)
         {
             return MqFailOpen(ENOMEM);
@@ -3966,7 +3987,7 @@ mqd_t mq_open(const char *name, int oflag, ...)
 
     if (!newbuf_used)
     {
-        free(newbuf);
+        HeapFree(newbuf);
     }
 
     return (err == 0) ? desc : MqFailOpen(err);

@@ -93,19 +93,23 @@
  * Types
  * -------------------------------------------------------------------------- */
 
-namespace stk { namespace lwip {
+/* Anonymous namespace: all file-local types, objects and helpers are kept
+ * internal to this translation unit. */
+namespace {
 
 typedef stk::sync::Semaphore LwipStkSemaphore;
 
-} } // namespace stk::lwip
-
-using namespace stk::lwip;
+} // namespace
 
 /* -----------------------------------------------------------------------------
  * Kernel registration
  * -------------------------------------------------------------------------- */
 
-static stk::IKernel *s_kernel = nullptr;
+namespace {
+
+stk::IKernel *s_kernel = nullptr;
+
+} // namespace
 
 extern "C" void sys_arch_set_kernel(stk::IKernel *kernel)
 {
@@ -119,13 +123,17 @@ extern "C" void sys_arch_set_kernel(stk::IKernel *kernel)
 
 /* Convert an lwIP millisecond timeout (0 already handled by caller as
  * "infinite") into an STK tick-based Timeout, clamped to WAIT_INFINITE. */
-static inline stk::Timeout StkTimeoutFromMs(u32_t timeout_ms)
+namespace {
+
+inline stk::Timeout StkTimeoutFromMs(u32_t timeout_ms)
 {
     const stk::Timeout ms_clamped =
         (timeout_ms > static_cast<u32_t>(INT32_MAX)) ? INT32_MAX : static_cast<stk::Timeout>(timeout_ms);
 
     return stk::GetTicksFromMsClampedToTimeout(ms_clamped);
 }
+
+} // namespace
 
 /* -----------------------------------------------------------------------------
  * sys_init (called first, before any other sys_arch/tcpip function)
@@ -160,7 +168,11 @@ extern "C" u32_t sys_jiffies(void)
 #if SYS_LIGHTWEIGHT_PROT
 
 #if LWIP_STK_SYS_ARCH_PROTECT_SANITY_CHECK
-static sys_prot_t s_arch_protect_nesting;
+namespace {
+
+sys_prot_t s_arch_protect_nesting;
+
+} // namespace
 #endif
 
 extern "C" sys_prot_t sys_arch_protect(void)
@@ -212,7 +224,7 @@ extern "C" void sys_arch_msleep(u32_t delay_ms)
 
 #if !LWIP_COMPAT_MUTEX
 
-namespace stk { namespace lwip {
+namespace {
 
 alignas(alignof(void *)) uint8_t s_mutex_pool_storage[
      LWIP_STK_MUTEX_POOL_SIZE * stk::memory::BlockMemoryPool::AlignBlockSize(sizeof(stk::sync::Mutex))];
@@ -220,7 +232,7 @@ stk::memory::BlockMemoryPool s_mutex_pool(LWIP_STK_MUTEX_POOL_SIZE, sizeof(stk::
         s_mutex_pool_storage, sizeof(s_mutex_pool_storage),
         "lwip_stk.mutex_pool");
 
-} } // namespace stk::lwip
+} // namespace
 
 extern "C" err_t sys_mutex_new(sys_mutex_t *mutex)
 {
@@ -279,7 +291,7 @@ extern "C" void sys_mutex_free(sys_mutex_t *mutex)
  * 0 or 1).
  * -------------------------------------------------------------------------- */
 
-namespace stk { namespace lwip {
+namespace {
 
 alignas(alignof(void *)) uint8_t s_sem_pool_storage[
      LWIP_STK_SEM_POOL_SIZE * stk::memory::BlockMemoryPool::AlignBlockSize(sizeof(LwipStkSemaphore))];
@@ -287,7 +299,7 @@ stk::memory::BlockMemoryPool s_sem_pool(LWIP_STK_SEM_POOL_SIZE, sizeof(LwipStkSe
                                         s_sem_pool_storage, sizeof(s_sem_pool_storage),
                                         "lwip_stk.sem_pool");
 
-} } // namespace stk::lwip
+} // namespace
 
 extern "C" err_t sys_sem_new(sys_sem_t *sem, u8_t initial_count)
 {
@@ -365,7 +377,7 @@ extern "C" void sys_sem_free(sys_sem_t *sem)
  * buffer pointer so sys_mbox_free() can release both.
  * -------------------------------------------------------------------------- */
 
-namespace stk { namespace lwip {
+namespace {
 
 struct LwipStkMbox
 {
@@ -394,7 +406,7 @@ stk::memory::BlockMemoryPool s_mbox_buf_pool(LWIP_STK_MBOX_POOL_SIZE, LWIP_STK_M
         s_mbox_buf_pool_storage, sizeof(s_mbox_buf_pool_storage),
         "lwip_stk.mbox_buf_pool");
 
-} } // namespace stk::lwip
+} // namespace
 
 extern "C" err_t sys_mbox_new(sys_mbox_t *mbox, int size)
 {
@@ -559,7 +571,7 @@ extern "C" void sys_mbox_free(sys_mbox_t *mbox)
  * Threads (sys_thread_t)
  * -------------------------------------------------------------------------- */
 
-namespace stk { namespace lwip {
+namespace {
 
 class LwipStkThread : public stk::ITask
 {
@@ -617,7 +629,7 @@ stk::memory::BlockMemoryPool s_thread_stack_pool(
     s_thread_stack_pool_storage, sizeof(s_thread_stack_pool_storage),
     "lwip_stk.thread_stack_pool");
 
-} } // namespace stk::lwip
+} // namespace
 
 extern "C" sys_thread_t sys_thread_new(const char *name, lwip_thread_fn thread, void *arg, int stacksize, int prio)
 {
@@ -681,7 +693,7 @@ extern "C" sys_thread_t sys_thread_new(const char *name, lwip_thread_fn thread, 
 
 #if LWIP_NETCONN_SEM_PER_THREAD
 
-namespace stk { namespace lwip {
+namespace {
 
 struct NetconnSemSlot
 {
@@ -690,9 +702,9 @@ struct NetconnSemSlot
     bool      used;
 };
 
-static NetconnSemSlot s_netconn_sems[LWIP_STK_NETCONN_SEM_MAX_THREADS];
+NetconnSemSlot s_netconn_sems[LWIP_STK_NETCONN_SEM_MAX_THREADS];
 
-} } // namespace stk::lwip
+} // namespace
 
 extern "C" sys_sem_t *sys_arch_netconn_sem_get(void)
 {
@@ -830,9 +842,13 @@ extern "C" void sys_unlock_tcpip_core(void)
 
 #else /* !LWIP_STK_CUSTOM_CORE_LOCKING */
 
+namespace {
+
 /** Flag the core lock held. A counter for recursive locks. */
-static uint8_t  s_stk_core_lock_count;
-static stk::TId s_stk_core_lock_holder = stk::TID_NONE;
+uint8_t  s_stk_core_lock_count;
+stk::TId s_stk_core_lock_holder = stk::TID_NONE;
+
+} // namespace
 
 extern "C" void sys_lock_tcpip_core(void)
 {
@@ -859,7 +875,11 @@ extern "C" void sys_unlock_tcpip_core(void)
 #endif /* LWIP_TCPIP_CORE_LOCKING */
 
 #if !NO_SYS
-static stk::TId s_stk_tcpip_thread_tid = stk::TID_NONE;
+namespace {
+
+stk::TId s_stk_tcpip_thread_tid = stk::TID_NONE;
+
+} // namespace
 #endif
 
 extern "C" void sys_mark_tcpip_thread(void)

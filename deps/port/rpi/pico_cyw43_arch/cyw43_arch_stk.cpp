@@ -30,22 +30,31 @@
 #error pico_cyw43_arch_stk requires NO_SYS=0
 #endif
 
-static async_context_stk_t s_cyw43_async_context_stk;
+// +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+// Anonymous namespace to make local functions file-local.
+namespace {
+// +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+async_context_stk_t s_cyw43_async_context_stk;
 
 // STK has no dynamic task-creation path (see async_context_stk.h): the caller always owns the
 // task's stack storage, so there is no build configuration under which this array would *not*
 // be needed; CYW43_NO_DEFAULT_TASK_STACK is the only opt-out, for callers who want to supply
 // their own config.task_stack instead.
 #if !CYW43_NO_DEFAULT_TASK_STACK
-static stk::Word s_cyw43_async_context_stk_task_stack[CYW43_TASK_STACK_SIZE];
+stk::Word s_cyw43_async_context_stk_task_stack[CYW43_TASK_STACK_SIZE];
 #endif
 
 // Set by cyw43_arch_stk_preinit() (see pico/cyw43_arch_stk.h). STK has no global registry for
 // either a kernel or a TimerHost, and doesn't lazily create private ones under the hood, so
 // cyw43_arch_init_default_async_context() can't discover them on its own; the application must
 // hand them in once, before calling cyw43_arch_init().
-static stk::IKernel         *s_cyw43_arch_stk_kernel     = nullptr;
-static stk::time::TimerHost *s_cyw43_arch_stk_timer_host = nullptr;
+stk::IKernel         *s_cyw43_arch_stk_kernel     = nullptr;
+stk::time::TimerHost *s_cyw43_arch_stk_timer_host = nullptr;
+
+// +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+} // namespace
+// +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 void cyw43_arch_stk_preinit(stk::IKernel *kernel, stk::time::TimerHost *timer_host)
 {

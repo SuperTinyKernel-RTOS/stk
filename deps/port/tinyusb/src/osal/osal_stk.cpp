@@ -32,11 +32,19 @@
 #include "sync/stk_sync.h"
 
 //----------------------------------------------------------------------------+
-// Helper
+// Helper (file-local: anonymous namespace gives these internal linkage)
 //----------------------------------------------------------------------------+
 
+//+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+namespace {
+//+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+/* stk::sync::Semaphore is a typedef of stk::sync::SemaphoreT<uint16_t>: a destructor call needs a name that
+ * is found from this scope, so go through this alias (an unqualified ~Semaphore() would not be found here). */
+typedef stk::sync::Semaphore StkSemaphore;
+
 template <typename T, typename Mem, typename... Args>
-static inline T *StkConstructIn(Mem &mem, Args &&... args)
+__stk_forceinline T *StkConstructIn(Mem &mem, Args &&... args)
 {
     static_assert((sizeof(T) <= sizeof(Mem)),
         "osal_*_def_t is too small for the C++ object");
@@ -51,12 +59,12 @@ static inline T *StkConstructIn(Mem &mem, Args &&... args)
 /* Counterpart of StkConstructIn(): takes a pointer to the same storage-holding struct (an
  * osal_*_def_t, or osal_queue_def_t::mq) and returns the object placement-constructed in it. */
 template <typename T, typename Mem>
-static inline T *StkCastTo(Mem *mem)
+__stk_forceinline T *StkCastTo(Mem *mem)
 {
     return reinterpret_cast<T *>(mem->storage);
 }
 
-static inline stk::Timeout StkClampTimeout(uint32_t msec)
+__stk_forceinline stk::Timeout StkClampTimeout(uint32_t msec)
 {
     const stk::Timeout msec_clamped = (msec > static_cast<uint32_t>(stk::WAIT_INFINITE)) ?
       stk::WAIT_INFINITE : static_cast<stk::Timeout>(msec);
@@ -72,7 +80,7 @@ static inline stk::Timeout StkClampTimeout(uint32_t msec)
  * (e.g. the polling loop in tuh_control_xfer(), which only ever calls osal_task_delay(1)); for
  * timed waits it would turn a short blocking timeout into a non-blocking poll. Only msec == 0
  * maps to 0 ticks. */
-static inline stk::Timeout StkTimeoutFromMs(uint32_t msec)
+inline stk::Timeout StkTimeoutFromMs(uint32_t msec)
 {
   stk::Timeout to;
 
@@ -88,6 +96,10 @@ static inline stk::Timeout StkTimeoutFromMs(uint32_t msec)
 
   return to;
 }
+
+//+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+} // namespace
+//+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 //----------------------------------------------------------------------------+
 // TASK API
@@ -162,10 +174,6 @@ extern "C" void osal_spin_unlock(osal_spinlock_t *ctx, bool in_isr)
 //----------------------------------------------------------------------------+
 // Semaphore API
 //----------------------------------------------------------------------------+
-
-/* stk::sync::Semaphore is a typedef of stk::sync::SemaphoreT<uint16_t>: a destructor call needs a name that
- * is found from this scope, so go through this alias (an unqualified ~Semaphore() would not be found here). */
-typedef stk::sync::Semaphore StkSemaphore;
 
 extern "C" osal_semaphore_t osal_semaphore_create(osal_semaphore_def_t *semdef)
 {
