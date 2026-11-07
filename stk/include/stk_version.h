@@ -160,6 +160,11 @@
     #error "STK version fields must be in the range 0..255."
 #endif
 
+/*! \def   STK_PACKAGE_NAME
+    \brief Name of package.
+*/
+#define STK_PACKAGE_NAME "SuperTinyKernel RTOS (STK)"
+
 #ifdef __cplusplus
 
 /*! \namespace stk

@@ -234,7 +234,8 @@ Second, it declares and implements the portable `stk::hw` namespace used through
 | `hw::CriticalSection::Enter/Exit`              | Nestable interrupt-disable critical section                   |
 | `hw::CriticalSection::ScopedLock`              | RAII wrapper for `CriticalSection`                            |
 | `hw::SpinLock::Lock/Unlock/TryLock/IsLocked`   | Hardware atomic spinlock (SMP); `IsLocked()` is a non-synchronizing snapshot, not for use as an acquisition check |
-| `hw::HiResClock::GetCycles()`                  | 64-bit cycle counter                                          |
+| `hw::HiResClock` (constructor)                 | Instance-based clock (time origin is architecture-specific, see below) |
+| `hw::HiResClock::GetCycles()`                  | 64-bit counter value (CPU cycles on ARM, see below)           |
 | `hw::HiResClock::GetFrequency()`               | Counter frequency in Hz                                       |
 | `hw::HiResClock::GetTimeUs()`                  | Elapsed microseconds                                          |
 | `hw::ReadVolatile64<T>(addr)`                  | Lock-free 64-bit volatile read (hi-lo retry on 32-bit)        |
@@ -242,6 +243,8 @@ Second, it declares and implements the portable `stk::hw` namespace used through
 | `STK_KERNEL_PANIC(id)`                         | Trigger hardware breakpoint then call `STK_PANIC_HANDLER(id)` |
 
 `ISyncObject::Tick()` is also implemented here because it requires the `hw::CriticalSection` SMP guard.
+
+`hw::HiResClock` is instance-based: each caller (task, ISR) owns its own instance, so there is no shared driver state and no critical section is needed. The time origin is architecture-specific: only on ARM Cortex-M3+ does it start at construction, the other back-ends are stateless (Cortex-M0/M0+: kernel start; RISC-V: `mtime`/`mcycle` origin; x86-Win32: first use), so measure intervals as the difference of two readings. An instance is not re-entrant (do not share one between contexts), requires a Privileged/Secure context, and on Cortex-M3+ must be polled at least once per 2^32 CPU cycles to catch a wrap of the 32-bit DWT counter. The C binding exposes it as `stk_hires_clock_t` (see the C interface README).
 
 ---
 
@@ -920,7 +923,7 @@ Every implementation file begins with:
 
 The `stk_config.h` note is a reminder: the config file lives in the repository root and must be copied to `include/` and customized for your target before building.
 
-All three files implement the same `IPlatform` interface — `Initialize`, `Start`, `Stop`, `InitStack`, `SwitchToNext`, `Sleep`, `SleepUntil`, `Wait`, `ProcessTick`, `ProcessHardFault`, `GetTid`, `GetCallerSP`, `Suspend`, `Resume`, `SetCpuFrequency` — and the `hw::` namespace definitions (`CriticalSection::Enter/Exit`, `SpinLock::Lock/Unlock/TryLock`, `IsInsideISR`, `HiResClock::GetCycles/GetFrequency`).
+All three files implement the same `IPlatform` interface — `Initialize`, `Start`, `Stop`, `InitStack`, `SwitchToNext`, `Sleep`, `SleepUntil`, `Wait`, `ProcessTick`, `ProcessHardFault`, `GetTid`, `GetCallerSP`, `Suspend`, `Resume`, `SetCpuFrequency` — and the `hw::` namespace definitions (`CriticalSection::Enter/Exit`, `SpinLock::Lock/Unlock/TryLock`, `IsInsideISR`, `HiResClock` constructor and `GetCycles/GetFrequency`).
 
 ---
 

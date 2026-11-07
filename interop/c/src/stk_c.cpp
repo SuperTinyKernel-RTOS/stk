@@ -723,6 +723,66 @@ void stk_task_destroy(stk_task_t *tsk)
 }
 
 // -----------------------------------------------------------------------------
+// HiResClock (instance-based, caller-provided storage; wraps hw::HiResClock)
+// -----------------------------------------------------------------------------
+struct stk_hires_clock_t
+{
+    stk_hires_clock_t() : handle()
+    {}
+
+    hw::HiResClock handle;
+};
+
+stk_hires_clock_t *stk_hires_clock_create(stk_hires_clock_mem_t *const membuf)
+{
+    STK_ASSERT(membuf != nullptr);
+
+    stk_hires_clock_t *result = nullptr;
+    if (membuf != nullptr)
+    {
+        result = ConstructIn<stk_hires_clock_t>(*membuf);
+    }
+
+    return result;
+}
+
+void stk_hires_clock_destroy(stk_hires_clock_t *clk)
+{
+    if (clk != nullptr)
+    {
+        clk->~stk_hires_clock_t();
+    }
+}
+
+stk_cycle_t stk_hires_cycles(stk_hires_clock_t *clk)
+{
+    STK_ASSERT(clk != nullptr);
+
+    return clk->handle.GetCycles();
+}
+
+uint32_t stk_hires_frequency(const stk_hires_clock_t *clk)
+{
+    STK_ASSERT(clk != nullptr);
+
+    return clk->handle.GetFrequency();
+}
+
+stk_tick_t stk_hires_time_us(stk_hires_clock_t *clk)
+{
+    STK_ASSERT(clk != nullptr);
+
+    return clk->handle.GetTimeUs();
+}
+
+hw::HiResClock *stk_hires_clock_get_instance(stk_hires_clock_t *clk)
+{
+    STK_ASSERT(clk != nullptr);
+
+    return &clk->handle;
+}
+
+// -----------------------------------------------------------------------------
 // Kernel services (available inside tasks)
 // -----------------------------------------------------------------------------
 stk_tid_t     stk_tid(void)                      { return stk::GetTid(); }
@@ -733,9 +793,6 @@ stk_tick_t    stk_ticks_from_ms(stk_time_t msec) { return stk_ticks_from_ms_r(ms
 stk_timeout_t stk_ticks_from_ms_clamped_to_timeout(stk_timeout_t ms) { return static_cast<stk_timeout_t>(stk::GetTicksFromMsClampedToTimeout(static_cast<stk::Timeout>(ms))); }
 stk_cycle_t   stk_sys_timer_count(void)          { return stk::GetSysTimerCount(); }
 uint32_t      stk_sys_timer_frequency(void)      { return stk::GetSysTimerFrequency(); }
-stk_cycle_t   stk_hires_cycles(void)             { return stk::hw::HiResClock::GetCycles(); }
-uint32_t      stk_hires_frequency(void)          { return stk::hw::HiResClock::GetFrequency(); }
-stk_tick_t    stk_hires_time_us(void)            { return stk::hw::HiResClock::GetTimeUs(); }
 void          stk_delay(stk_timeout_t ticks)     { stk::Delay(ticks); }
 void          stk_sleep(stk_timeout_t ticks)     { stk::Sleep(ticks); }
 void          stk_delay_ms(stk_timeout_t ms)     { stk::DelayMs(ms); }

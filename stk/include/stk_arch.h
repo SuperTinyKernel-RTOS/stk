@@ -22,6 +22,7 @@
      - ISR context detection: IsInsideISR.
      - Preemption control: CriticalSection (nestable, single-core) and SpinLock (SMP).
      - Lock-free 64-bit volatile I/O: ReadVolatile64, WriteVolatile64.
+     - High-resolution clock for precise interval measurements: HiResClock.
 */
 
 // Architecture back-end selection.
@@ -195,7 +196,7 @@ __stk_forceinline void STK_KERNEL_PANIC(stk::EKernelPanicId id)
     compiler intrinsics for maximum performance and minimum latency.
 
     \see IsInsideISR, GetTlsPtr, SetTlsPtr, CriticalSection, SpinLock,
-         ReadVolatile64, WriteVolatile64
+         ReadVolatile64, WriteVolatile64, HiResClock
 */
 namespace hw {
 
@@ -663,33 +664,90 @@ protected:
 #endif
 };
 
+namespace detail {
+
+/*! \struct HiResClockState
+    \brief  Per-instance state of HiResClock (architecture-specific).
+    \note   Empty where the clock is stateless (RISC-V, x86-Win32). On ARM Cortex-M it holds the 64-bit
+            cycle accumulator and the last sampled value of the 32-bit hardware counter (DWT->CYCCNT,
+            Cortex-M3+). Cortex-M0/M0+ derives cycles from SysTick and leaves these members unused.
+*/
+#ifdef _STK_ARCH_ARM_CORTEX_M
+struct HiResClockState
+{
+    Cycles   m_acc;  //!< Cycles accumulated since the instance was constructed.
+    uint32_t m_prev; //!< Last sampled value of the 32-bit hardware cycle counter.
+};
+#else
+struct HiResClockState
+{};
+#endif
+
+} // namespace detail
+
 /*! \class   HiResClock
     \brief   High-resolution clock for high-precision measurements.
-    \warning Calling hw::HiResClock directly requires a Privileged/Secure context. On TrustZone
+    \note    Instance-based: every caller (task, ISR, ...) owns its own instance, so there is no shared
+             driver state and no need for a critical section.
+    \note    \b Time origin is architecture-specific. Only the ARM Cortex-M3+ implementation measures from
+             the moment of construction of the instance. The other back-ends are stateless and count from
+             a global origin, so the absolute value must not be relied upon, only the \b difference of two
+             GetCycles()/GetTimeUs() readings is portable:
+             - ARM Cortex-M3+: the moment of construction (DWT cycle counter, 64-bit accumulator).
+             - ARM Cortex-M0/M0+: the kernel start (kernel tick count + SysTick), requires an initialized kernel.
+             - RISC-V: the origin of the hardware counter, i.e. \c mtime (reference clock) or, if
+               \c STK_SUBMICORSECOND_PRECISION_TIMER is enabled, \c mcycle (CPU clock).
+             - x86-Win32: the first use of the clock (shared QueryPerformanceCounter origin, also used by
+               the system timer).
+    \note    The unit of the \c Cycles value is the unit of the underlying counter: CPU cycles on ARM, CPU
+             cycles or \c mtime reference ticks on RISC-V (see above), QueryPerformanceCounter ticks on
+             x86-Win32. Always convert with GetFrequency() or use GetTimeUs().
+    \note    A single instance is not re-entrant: do not share one instance between tasks or between a
+             task and an ISR, create one per context instead.
+    \note    On ARM Cortex-M3+ (32-bit DWT counter) an instance must be polled at least once per 2^32
+             CPU cycles, otherwise a counter wrap is missed. The constructor enables the DWT cycle counter
+             if it is not already running (a running counter is not reset). Without a DWT peripheral
+             (\c DWT is not defined by the device header) the counter reads as 0.
+    \warning Using hw::HiResClock directly requires a Privileged/Secure context. On TrustZone
              targets, Non-Secure/unprivileged callers must go through the NSC (Non-Secure
-             Callable) gateway functions (\c NSC_stk_hw_HiResClock_GetFrequency,
+             Callable) gateway functions (\c NSC_stk_hw_HiResClock_Init, \c NSC_stk_hw_HiResClock_GetFrequency,
              \c NSC_stk_hw_HiResClock_GetCycles) provided by the ARM Cortex-M back-end instead
-             of calling this class directly.
+             of calling this class directly. \c NSC_stk_hw_HiResClock_Init and
+             \c NSC_stk_hw_HiResClock_GetCycles operate on an instance located in Non-Secure memory (the
+             pointer is validated against the caller's access rights); \c NSC_stk_hw_HiResClock_GetFrequency
+             takes no instance, the frequency does not depend on instance state.
 */
-struct HiResClock
+class HiResClock : private detail::HiResClockState
 {
-    /*! \brief  Get number of clock cycles elapsed.
-        \note   ISR-safe.
-        \return Clock cycles.
+public:
+    /*! \brief  Construct a clock instance.
+        \note   On ARM Cortex-M3+ the time origin is the moment of construction, on other back-ends it is
+                a global origin, see the class description.
     */
-    static Cycles GetCycles();
+    explicit HiResClock();
+
+    /*! \brief  Get number of clock cycles elapsed since the time origin (see the class description).
+        \note   ISR-safe (for an instance not used by any other context).
+        \note   Use the difference of two readings for an interval; the absolute value is portable only on
+                ARM Cortex-M3+.
+        \return Counter cycles, convert to time using GetFrequency().
+    */
+    Cycles GetCycles();
 
     /*! \brief  Get clock frequency.
         \note   ISR-safe.
-        \return Frequency in Hz.
+        \return Frequency in Hz of the counter behind GetCycles() (CPU clock on ARM; \c mtime reference clock
+                or CPU clock on RISC-V; QueryPerformanceCounter frequency on x86-Win32).
     */
-    static uint32_t GetFrequency();
+    uint32_t GetFrequency() const;
 
-    /*! \brief  Get elapsed time in microseconds.
-        \note   ISR-safe.
+    /*! \brief  Get elapsed time in microseconds since the time origin (see the class description).
+        \note   ISR-safe (for an instance not used by any other context).
+        \note   Use the difference of two readings for an interval; the absolute value is portable only on
+                ARM Cortex-M3+.
         \return Microseconds.
     */
-    static __stk_forceinline Ticks GetTimeUs()
+    __stk_forceinline Ticks GetTimeUs()
     {
         Ticks ticks = 0LL;
         const uint32_t freq = GetFrequency();
@@ -698,7 +756,7 @@ struct HiResClock
         {
             const Cycles cycles = GetCycles();
             const Cycles ticksu = (cycles * 1000000ULL) / static_cast<Cycles>(freq);
-            
+
             ticks = static_cast<Ticks>(ticksu);
         }
 

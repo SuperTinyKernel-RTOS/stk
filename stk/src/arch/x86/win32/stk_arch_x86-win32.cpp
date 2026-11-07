@@ -883,12 +883,17 @@ bool stk::hw::IsPrivilegedContext()
     return true;
 }
 
+stk::hw::HiResClock::HiResClock() : HiResClockState()
+{}
+
+// note: HiResClockQPC is immutable after construction (QPC frequency and origin), therefore
+//       it is safely shared between all HiResClock instances
 Cycles stk::hw::HiResClock::GetCycles()
 {
     return HiResClockQPC::GetInstance()->GetCycles();
 }
 
-uint32_t stk::hw::HiResClock::GetFrequency()
+uint32_t stk::hw::HiResClock::GetFrequency() const
 {
     return HiResClockQPC::GetInstance()->GetFrequency();
 }

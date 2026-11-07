@@ -426,7 +426,7 @@ typedef TaskMpuT<STK_MPU_TASK_REGIONS> TaskMpu;
 typedef TaskMpuT<STK_MPU_TASK_REGIONS_NS> TaskMpuNs;
 #endif // STK_MPU && STK_MPU_STACK_GUARD
 
-/*! \typedef MpuRegions
+/*! \typedef MpuRegionList
     \brief   List of MPU regions.
     \see     ITask::GetMpuRegions, IPlatform::IEventOverrider::OnConfigureMpu
 */
@@ -671,6 +671,7 @@ public:
     typedef DLEntryType ListEntryType;
 
     /*! \brief     Called by kernel when a new task starts waiting on this event.
+        \param[in] wlist: Wait list.
         \param[in] wobj: Wait object representing blocked task.
         \note      Utility for AddWaitObject and ARM TrustZone support.
     */
@@ -687,6 +688,7 @@ public:
     virtual void AddWaitObject(IWaitObject *wobj) = 0;
 
     /*! \brief     Called by kernel when a waiting task is being removed (timeout expired, wait aborted, task terminated etc.).
+        \param[in] wlist: Wait list.
         \param[in] wobj: Wait object to remove from the wait list.
         \note      Utility for AddWaitObject and ARM TrustZone support.
     */
@@ -724,6 +726,7 @@ public:
     Weight FindWeightHigherThan(Weight comp) const;
 
     /*! \brief     Wake the first task in the wait list (FIFO order).
+        \param[in] wlist: Wait list.
         \note      The woken task is notified with timeout=false, indicating a successful signal
                    (not a timeout expiry).
         \note      Does nothing if no tasks are currently waiting.
@@ -739,6 +742,7 @@ public:
     }
 
     /*! \brief     Wake all tasks currently in the wait list.
+        \param[in] wlist: Wait list.
         \note      Each woken task is notified with timeout=false, indicating a successful signal
                    (not a timeout expiry).
         \note      Does nothing if no tasks are currently waiting.
