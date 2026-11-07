@@ -54,17 +54,24 @@
     #include <hardware/structs/rosc.h>
 #endif
 
-namespace stk {
+#if defined(STM32_MCU) && defined(UID_BASE)
+// Provided and initialized (HAL_RNG_Init, HAL_RNG_MODULE_ENABLED) by application
+// startup code, e.g. the handle STM32CubeMX generates when RNG is enabled.
+// Declared at global scope (not inside the anonymous namespace below) so it binds to
+// the application's C-linkage definition.
+extern "C" RNG_HandleTypeDef hrng;
+#endif
+
+// +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+// Anonymous namespace to make local functions file-local.
+namespace {
+// +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 #if defined(STM32_MCU) && defined(UID_BASE)
 //! Random bytes generator. When _STK_PLATFORM_SEED is not defined
 //! the generator is pseudorandom and unreliable for cryptography.
-static void GetRandomBytes(uint8_t *buffer, size_t size)
+void GetRandomBytes(uint8_t *buffer, size_t size)
 {
-    // Provided and initialized (HAL_RNG_Init, HAL_RNG_MODULE_ENABLED) by application
-    // startup code, e.g. the handle STM32CubeMX generates when RNG is enabled.
-    extern "C" RNG_HandleTypeDef hrng;
-
     const stk::hw::CriticalSection::ScopedLock _cs;
 
     // Re-init if the handle is in HAL_RNG_STATE_RESET, covers both
@@ -108,7 +115,7 @@ static void GetRandomBytes(uint8_t *buffer, size_t size)
 #elif defined(NXP_MCU) && defined(SIM)
 //! Random bytes generator. When _STK_PLATFORM_SEED is not defined
 //! the generator is pseudorandom and unreliable for cryptography.
-static void GetRandomBytes(uint8_t *buffer, size_t size)
+void GetRandomBytes(uint8_t *buffer, size_t size)
 {
     static bool s_rnga_initialized = false;
 
@@ -139,7 +146,7 @@ static void GetRandomBytes(uint8_t *buffer, size_t size)
 #elif defined(RPI_MCU)
 //! Random bytes generator. When _STK_PLATFORM_SEED is not defined
 //! the generator is pseudorandom and unreliable for cryptography.
-static void GetRandomBytes(uint8_t *buffer, size_t size)
+void GetRandomBytes(uint8_t *buffer, size_t size)
 {
     for (size_t i = 0U; i < size; ++i)
     {
@@ -157,11 +164,11 @@ static void GetRandomBytes(uint8_t *buffer, size_t size)
 
 #if !defined(_STK_PLATFORM_SEED)
 
-static constexpr size_t UID_SIZE = 4U;
+constexpr size_t UID_SIZE = 4U;
 
 #if defined(STM32_MCU) && defined(UID_BASE)
     //! Unique MCU ID getter.
-    static void GetMcuUID(uint32_t mcu_uid[UID_SIZE])
+    void GetMcuUID(uint32_t mcu_uid[UID_SIZE])
     {
         mcu_uid[0] = HAL_GetUIDw0();
         mcu_uid[1] = HAL_GetUIDw1();
@@ -170,7 +177,7 @@ static constexpr size_t UID_SIZE = 4U;
     }
 #elif defined(NXP_MCU) && defined(SIM)
     //! Unique MCU ID getter.
-    static void GetMcuUID(uint32_t mcu_uid[UID_SIZE])
+    void GetMcuUID(uint32_t mcu_uid[UID_SIZE])
     {
         mcu_uid[0] = SIM->UIDL;
         mcu_uid[1] = SIM->UIDML;
@@ -183,7 +190,7 @@ static constexpr size_t UID_SIZE = 4U;
     }
 #elif defined(RPI_MCU)
     //! Unique MCU ID getter.
-    static void GetMcuUID(uint32_t mcu_uid[UID_SIZE])
+    void GetMcuUID(uint32_t mcu_uid[UID_SIZE])
     {
         pico_unique_board_id_t id;
         pico_get_unique_board_id(&id);
@@ -196,7 +203,7 @@ static constexpr size_t UID_SIZE = 4U;
 
 #if !defined(_STK_PLATFORM_SEED)
 // FNV-1a Hash helper to mix entropy bits into output buffer.
-static uint32_t fnv1a_32(uint32_t hash, uint32_t data)
+uint32_t fnv1a_32(uint32_t hash, uint32_t data)
 {
     const uint32_t FNV_PRIME = 16777619U;
 
@@ -215,7 +222,7 @@ static uint32_t fnv1a_32(uint32_t hash, uint32_t data)
 // No on-chip HW RNG for this platform. CPU-cycle-jitter timing source only --
 // not SP 800-90B qualified, no online health testing. mbedtls_platform_get_entropy
 // reports a conservative (non-full) entropy estimate for output produced here.
-static void GetRandomBytes(uint8_t *buffer, size_t size)
+void GetRandomBytes(uint8_t *buffer, size_t size)
 {
     uint32_t running_hash = 2166136261U; // FNV-1a offset basis
 
@@ -234,10 +241,10 @@ static void GetRandomBytes(uint8_t *buffer, size_t size)
 
         // Mix low-order cycle variation jitter into state hash
         uint32_t cycle_jitter = static_cast<uint32_t>(end_cycles ^ start_cycles);
-        running_hash = stk::fnv1a_32(running_hash, cycle_jitter);
+        running_hash = fnv1a_32(running_hash, cycle_jitter);
 
         // Feed loop iteration index to guarantee state progression
-        running_hash = stk::fnv1a_32(running_hash, static_cast<uint32_t>(i));
+        running_hash = fnv1a_32(running_hash, static_cast<uint32_t>(i));
 
         // Store intermediate hash byte into output buffer
         buffer[i] = static_cast<uint8_t>(running_hash & 0xFFU);
@@ -245,7 +252,9 @@ static void GetRandomBytes(uint8_t *buffer, size_t size)
 }
 #endif // !_STK_PLATFORM_SEED
 
-} // namespace stk
+// +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+} // namespace
+// +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 extern "C" int mbedtls_platform_get_entropy(psa_driver_get_entropy_flags_t flags,
    size_t *estimate_bits, unsigned char *output, size_t output_size)
@@ -263,7 +272,7 @@ extern "C" int mbedtls_platform_get_entropy(psa_driver_get_entropy_flags_t flags
     // Fill the caller's buffer directly from the platform's best available
     // source: an on-chip HW RNG/TRNG when _STK_PLATFORM_SEED is defined,
     // or the CPU-cycle-jitter fallback otherwise.
-    stk::GetRandomBytes(output, output_size);
+    GetRandomBytes(output, output_size);
 
 #if defined(_STK_PLATFORM_SEED)
     // Backed by an on-chip hardware RNG/TRNG: full entropy credit.
@@ -274,8 +283,8 @@ extern "C" int mbedtls_platform_get_entropy(psa_driver_get_entropy_flags_t flags
     // against a degenerate/low-variance jitter source, and report a
     // conservative entropy estimate: this path is not SP 800-90B qualified
     // and has no online health testing, so full-entropy credit isn't honest.
-    uint32_t mcu_uid[stk::UID_SIZE] = {0U, 0U, 0U, 0U};
-    stk::GetMcuUID(mcu_uid);
+    uint32_t mcu_uid[UID_SIZE] = {0U, 0U, 0U, 0U};
+    GetMcuUID(mcu_uid);
 
     stk::IKernelService *kernel_svc = stk::IKernelService::GetInstance();
     stk::TId tid     = ((kernel_svc != nullptr) ? kernel_svc->GetTid() : 0U);
@@ -284,10 +293,10 @@ extern "C" int mbedtls_platform_get_entropy(psa_driver_get_entropy_flags_t flags
     uint32_t context_hash = 2166136261U; // FNV-1a offset basis
     for (size_t i = 0U; i < STK_STATIC_ARRAY_SIZE(mcu_uid); ++i)
     {
-        context_hash = stk::fnv1a_32(context_hash, mcu_uid[i]);
+        context_hash = fnv1a_32(context_hash, mcu_uid[i]);
     }
-    context_hash = stk::fnv1a_32(context_hash, static_cast<uint32_t>(tid));
-    context_hash = stk::fnv1a_32(context_hash, static_cast<uint32_t>(ticks & 0xFFFFFFFFLL));
+    context_hash = fnv1a_32(context_hash, static_cast<uint32_t>(tid));
+    context_hash = fnv1a_32(context_hash, static_cast<uint32_t>(ticks & 0xFFFFFFFFLL));
 
     for (size_t i = 0U; i < output_size; ++i)
     {

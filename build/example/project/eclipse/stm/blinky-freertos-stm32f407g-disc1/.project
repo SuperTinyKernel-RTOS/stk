@@ -186,6 +186,11 @@
 			<locationURI>virtual:/virtual</locationURI>
 		</link>
 		<link>
+			<name>deps/stk/src/memory</name>
+			<type>2</type>
+			<locationURI>virtual:/virtual</locationURI>
+		</link>
+		<link>
 			<name>deps/stm32fx/include/arm</name>
 			<type>2</type>
 			<locationURI>virtual:/virtual</locationURI>
@@ -296,14 +301,29 @@
 			<locationURI>PARENT-6-PROJECT_LOC/stk/include/memory/stk_memory_allocator.h</locationURI>
 		</link>
 		<link>
+			<name>deps/stk/include/memory/stk_memory_allocator_default.h</name>
+			<type>1</type>
+			<locationURI>PARENT-6-PROJECT_LOC/stk/include/memory/stk_memory_allocator_default.h</locationURI>
+		</link>
+		<link>
 			<name>deps/stk/include/memory/stk_memory_blockpool.h</name>
 			<type>1</type>
 			<locationURI>PARENT-6-PROJECT_LOC/stk/include/memory/stk_memory_blockpool.h</locationURI>
 		</link>
 		<link>
+			<name>deps/stk/include/memory/stk_memory_bytepool.h</name>
+			<type>1</type>
+			<locationURI>PARENT-6-PROJECT_LOC/stk/include/memory/stk_memory_bytepool.h</locationURI>
+		</link>
+		<link>
 			<name>deps/stk/include/strategy/README.md</name>
 			<type>1</type>
 			<locationURI>PARENT-6-PROJECT_LOC/stk/include/strategy/README.md</locationURI>
+		</link>
+		<link>
+			<name>deps/stk/include/strategy/stk_priority_bitmap.h</name>
+			<type>1</type>
+			<locationURI>PARENT-6-PROJECT_LOC/stk/include/strategy/stk_priority_bitmap.h</locationURI>
 		</link>
 		<link>
 			<name>deps/stk/include/strategy/stk_strategy_edf.h</name>
@@ -319,6 +339,11 @@
 			<name>deps/stk/include/strategy/stk_strategy_monotonic.h</name>
 			<type>1</type>
 			<locationURI>PARENT-6-PROJECT_LOC/stk/include/strategy/stk_strategy_monotonic.h</locationURI>
+		</link>
+		<link>
+			<name>deps/stk/include/strategy/stk_strategy_pthreshold.h</name>
+			<type>1</type>
+			<locationURI>PARENT-6-PROJECT_LOC/stk/include/strategy/stk_strategy_pthreshold.h</locationURI>
 		</link>
 		<link>
 			<name>deps/stk/include/strategy/stk_strategy_rrobin.h</name>
@@ -341,6 +366,11 @@
 			<locationURI>PARENT-6-PROJECT_LOC/stk/include/sync/stk_sync.h</locationURI>
 		</link>
 		<link>
+			<name>deps/stk/include/sync/stk_sync_barrier.h</name>
+			<type>1</type>
+			<locationURI>PARENT-6-PROJECT_LOC/stk/include/sync/stk_sync_barrier.h</locationURI>
+		</link>
+		<link>
 			<name>deps/stk/include/sync/stk_sync_cs.h</name>
 			<type>1</type>
 			<locationURI>PARENT-6-PROJECT_LOC/stk/include/sync/stk_sync_cs.h</locationURI>
@@ -359,6 +389,11 @@
 			<name>deps/stk/include/sync/stk_sync_eventflags.h</name>
 			<type>1</type>
 			<locationURI>PARENT-6-PROJECT_LOC/stk/include/sync/stk_sync_eventflags.h</locationURI>
+		</link>
+		<link>
+			<name>deps/stk/include/sync/stk_sync_fastmutex.h</name>
+			<type>1</type>
+			<locationURI>PARENT-6-PROJECT_LOC/stk/include/sync/stk_sync_fastmutex.h</locationURI>
 		</link>
 		<link>
 			<name>deps/stk/include/sync/stk_sync_msgqueue.h</name>
@@ -424,6 +459,11 @@
 			<name>deps/stk/src/arch/x86</name>
 			<type>2</type>
 			<locationURI>virtual:/virtual</locationURI>
+		</link>
+		<link>
+			<name>deps/stk/src/memory/stk_memory_allocator_default.cpp</name>
+			<type>1</type>
+			<locationURI>PARENT-6-PROJECT_LOC/stk/src/memory/stk_memory_allocator_default.cpp</locationURI>
 		</link>
 		<link>
 			<name>deps/stm32fx/include/arm/semihosting.h</name>

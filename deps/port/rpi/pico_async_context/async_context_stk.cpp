@@ -11,6 +11,11 @@
 #include "pico/async_context_base.h"
 #include "pico/sync.h" // get_core_num()
 
+// +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+// Anonymous namespace to make local functions file-local.
+namespace {
+// +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
 // -----------------------------------------------------------------------------
 // Forward declarations
 //
@@ -29,21 +34,21 @@
 // wait_for_work_until, deinit). Verify against your local pico/async_context.h /
 // pico/async_context_base.h if this ever changes upstream.
 // -----------------------------------------------------------------------------
-static void     async_context_stk_acquire_lock_blocking(async_context_t *self_base);
-static void     async_context_stk_release_lock(async_context_t *self_base);
-static void     async_context_stk_lock_check(async_context_t *self_base);
-static uint32_t async_context_stk_execute_sync(async_context_t *self_base, uint32_t (*func)(void *param), void *param);
-static bool     async_context_stk_add_at_time_worker(async_context_t *self_base, async_at_time_worker_t *worker);
-static bool     async_context_stk_remove_at_time_worker(async_context_t *self_base, async_at_time_worker_t *worker);
-static bool     async_context_stk_add_when_pending_worker(async_context_t *self_base, async_when_pending_worker_t *worker);
-static bool     async_context_stk_remove_when_pending_worker(async_context_t *self_base, async_when_pending_worker_t *worker);
-static void     async_context_stk_set_work_pending(async_context_t *self_base, async_when_pending_worker_t *worker);
-static void     async_context_stk_wait_until(async_context_t *self_base, absolute_time_t until);
-static void     async_context_stk_wait_for_work_until(async_context_t *self_base, absolute_time_t until);
-static void     async_context_stk_wake_up(async_context_t *self_base);
-static void     async_context_stk_deinit(async_context_t *self_base);
+void     async_context_stk_acquire_lock_blocking(async_context_t *self_base);
+void     async_context_stk_release_lock(async_context_t *self_base);
+void     async_context_stk_lock_check(async_context_t *self_base);
+uint32_t async_context_stk_execute_sync(async_context_t *self_base, uint32_t (*func)(void *param), void *param);
+bool     async_context_stk_add_at_time_worker(async_context_t *self_base, async_at_time_worker_t *worker);
+bool     async_context_stk_remove_at_time_worker(async_context_t *self_base, async_at_time_worker_t *worker);
+bool     async_context_stk_add_when_pending_worker(async_context_t *self_base, async_when_pending_worker_t *worker);
+bool     async_context_stk_remove_when_pending_worker(async_context_t *self_base, async_when_pending_worker_t *worker);
+void     async_context_stk_set_work_pending(async_context_t *self_base, async_when_pending_worker_t *worker);
+void     async_context_stk_wait_until(async_context_t *self_base, absolute_time_t until);
+void     async_context_stk_wait_for_work_until(async_context_t *self_base, absolute_time_t until);
+void     async_context_stk_wake_up(async_context_t *self_base);
+void     async_context_stk_deinit(async_context_t *self_base);
 
-static const async_context_type_t s_async_context_stk_type =
+const async_context_type_t s_async_context_stk_type =
 {
     ASYNC_CONTEXT_STK,
     async_context_stk_acquire_lock_blocking,
@@ -66,7 +71,7 @@ static const async_context_type_t s_async_context_stk_type =
 // STK's own tick resolution (stk::GetTickResolution(), microseconds/tick) rather than assuming
 // any particular fixed tick period.
 // -----------------------------------------------------------------------------
-static stk::Timeout sensible_ticks_until(absolute_time_t until)
+stk::Timeout sensible_ticks_until(absolute_time_t until)
 {
     const int64_t delay_us = absolute_time_diff_us(get_absolute_time(), until);
 
@@ -109,7 +114,7 @@ static stk::Timeout sensible_ticks_until(absolute_time_t until)
 // rendezvous object on the stack and deinit() waits for the worker's exit, so returning early would let
 // the worker signal an object which no longer exists. A wait the kernel rejected is an internal defect.
 // -----------------------------------------------------------------------------
-static void wait_signaled(stk::sync::Semaphore &sem)
+void wait_signaled(stk::sync::Semaphore &sem)
 {
     stk::EWaitResult wr;
 
@@ -130,7 +135,7 @@ static void wait_signaled(stk::sync::Semaphore &sem)
 // WakeTimer for whatever's due next, via TimerHost::Restart(), which atomically
 // stops-and-restarts the timer with a fresh delay.
 // -----------------------------------------------------------------------------
-static void process_under_lock(async_context_stk_t *self)
+void process_under_lock(async_context_stk_t *self)
 {
 #ifndef NDEBUG
     async_context_stk_lock_check(&self->core);
@@ -204,104 +209,10 @@ void async_context_stk_wake_up(async_context_t *self_base)
 }
 
 // -----------------------------------------------------------------------------
-// Worker task
+// deinit
 // -----------------------------------------------------------------------------
-void async_context_stk::Worker::Bind(async_context_stk *owner, stk::Word *stack, size_t stack_size,
-                                     stk::Weight weight, stk::EAccessMode mode)
-{
-    m_owner      = owner;
-    m_stack      = stack;
-    m_stack_size = stack_size;
-    m_weight     = weight;
-    m_mode       = mode;
-}
 
-void async_context_stk::Worker::Run()
-{
-    async_context_stk *self = m_owner;
-
-    // TId is only known once the task actually starts running; record it so wake_up() can tell
-    // whether it is being called from this same task (avoiding a redundant self-wake).
-    self->task_tid = stk::GetTid();
-
-    do
-    {
-        self->task_wake_sem.Wait(); // WAIT_INFINITE
-
-        if (self->task_should_exit)
-        {
-            break;
-        }
-
-        async_context_stk_acquire_lock_blocking(&self->core);
-        process_under_lock(self);
-        async_context_stk_release_lock(&self->core);
-
-        // Signal a cross-core event (SEV) to wake up any other CPU core waiting in a WFE loop
-        // (e.g., waiting for spinlocks, async work, or lock release). Also sets the Event Register
-        // so a core entering WFE shortly won't miss this update.
-        __sev();
-
-    }
-    while (!self->task_should_exit);
-}
-
-void async_context_stk::Worker::OnExit()
-{
-    // Called by the kernel (KERNEL_DYNAMIC) after Run() returns, in kernel/tick context - must
-    // stick to ISR-safe primitives only. Semaphore::TrySignal() qualifies.
-    m_owner->task_complete_sem.TrySignal();
-}
-
-// -----------------------------------------------------------------------------
-// WakeTimer
-// -----------------------------------------------------------------------------
-void async_context_stk::WakeTimer::OnExpired(stk::time::TimerHost * /*host*/)
-{
-    async_context_stk_wake_up(&m_owner->core);
-}
-
-// -----------------------------------------------------------------------------
-// init / deinit
-// -----------------------------------------------------------------------------
-bool async_context_stk_init(async_context_stk_t *self, async_context_stk_config_t *config)
-{
-    if ((self == nullptr) || (config == nullptr) ||
-        (config->kernel == nullptr) || (config->timer_host == nullptr) ||
-        (config->task_stack == nullptr) || (config->task_stack_size == 0U))
-    {
-        return false;
-    }
-
-    // Do NOT memset(self, 0, sizeof(*self)): lock_mutex / *_sem / timer are live C++ objects
-    // already default-constructed (with the right (0,1) binary semaphore counts, via their
-    // NSDMIs) by virtue of *self existing. We only need to set the plain data fields below.
-    self->core.type     = &s_async_context_stk_type;
-    self->core.flags    = ASYNC_CONTEXT_FLAG_CALLBACK_FROM_NON_IRQ;
-    self->core.core_num = get_core_num();
-
-    self->kernel           = config->kernel;
-    self->timer_host       = config->timer_host;
-    self->nesting          = 0U;
-    self->task_should_exit = false;
-    self->task_tid         = stk::TID_NONE;
-
-    self->timer.Bind(self);
-    self->task.Bind(self, config->task_stack, config->task_stack_size,
-                    config->task_weight, config->task_access_mode);
-
-    // KERNEL_DYNAMIC returns a failure (e.g. out of kernel task slots) instead of asserting: without the
-    // worker task nothing would ever process the context, so report it and stay uninitialized
-    if (self->kernel->AddTask(&self->task) != stk::ADD_OK)
-    {
-        return false;
-    }
-
-    self->initialized = true;
-    return true;
-}
-
-static uint32_t end_task_func(void *param)
+uint32_t end_task_func(void *param)
 {
     async_context_stk_t *self = static_cast<async_context_stk_t *>(param);
     self->task_should_exit = true;
@@ -364,7 +275,7 @@ struct sync_func_call_t
     uint32_t                    rc;
 };
 
-static void handle_sync_func_call(async_context_t *context, async_when_pending_worker_t *worker)
+void handle_sync_func_call(async_context_t *context, async_when_pending_worker_t *worker)
 {
     STK_UNUSED(context);
     sync_func_call_t *call = (sync_func_call_t *)worker;
@@ -489,4 +400,106 @@ void async_context_stk_wait_for_work_until(async_context_t *self_base, absolute_
             return;
         }
     }
+}
+
+// +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+} // namespace
+// +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+// -----------------------------------------------------------------------------
+// Worker task
+// -----------------------------------------------------------------------------
+void async_context_stk::Worker::Bind(async_context_stk *owner, stk::Word *stack, size_t stack_size,
+                                     stk::Weight weight, stk::EAccessMode mode)
+{
+    m_owner      = owner;
+    m_stack      = stack;
+    m_stack_size = stack_size;
+    m_weight     = weight;
+    m_mode       = mode;
+}
+
+void async_context_stk::Worker::Run()
+{
+    async_context_stk *self = m_owner;
+
+    // TId is only known once the task actually starts running; record it so wake_up() can tell
+    // whether it is being called from this same task (avoiding a redundant self-wake).
+    self->task_tid = stk::GetTid();
+
+    do
+    {
+        self->task_wake_sem.Wait(); // WAIT_INFINITE
+
+        if (self->task_should_exit)
+        {
+            break;
+        }
+
+        async_context_stk_acquire_lock_blocking(&self->core);
+        process_under_lock(self);
+        async_context_stk_release_lock(&self->core);
+
+        // Signal a cross-core event (SEV) to wake up any other CPU core waiting in a WFE loop
+        // (e.g., waiting for spinlocks, async work, or lock release). Also sets the Event Register
+        // so a core entering WFE shortly won't miss this update.
+        __sev();
+
+    }
+    while (!self->task_should_exit);
+}
+
+void async_context_stk::Worker::OnExit()
+{
+    // Called by the kernel (KERNEL_DYNAMIC) after Run() returns, in kernel/tick context - must
+    // stick to ISR-safe primitives only. Semaphore::TrySignal() qualifies.
+    m_owner->task_complete_sem.TrySignal();
+}
+
+// -----------------------------------------------------------------------------
+// WakeTimer
+// -----------------------------------------------------------------------------
+void async_context_stk::WakeTimer::OnExpired(stk::time::TimerHost * /*host*/)
+{
+    async_context_stk_wake_up(&m_owner->core);
+}
+
+// -----------------------------------------------------------------------------
+// init
+// -----------------------------------------------------------------------------
+bool async_context_stk_init(async_context_stk_t *self, async_context_stk_config_t *config)
+{
+    if ((self == nullptr) || (config == nullptr) ||
+        (config->kernel == nullptr) || (config->timer_host == nullptr) ||
+        (config->task_stack == nullptr) || (config->task_stack_size == 0U))
+    {
+        return false;
+    }
+
+    // Do NOT memset(self, 0, sizeof(*self)): lock_mutex / *_sem / timer are live C++ objects
+    // already default-constructed (with the right (0,1) binary semaphore counts, via their
+    // NSDMIs) by virtue of *self existing. We only need to set the plain data fields below.
+    self->core.type     = &s_async_context_stk_type;
+    self->core.flags    = ASYNC_CONTEXT_FLAG_CALLBACK_FROM_NON_IRQ;
+    self->core.core_num = get_core_num();
+
+    self->kernel           = config->kernel;
+    self->timer_host       = config->timer_host;
+    self->nesting          = 0U;
+    self->task_should_exit = false;
+    self->task_tid         = stk::TID_NONE;
+
+    self->timer.Bind(self);
+    self->task.Bind(self, config->task_stack, config->task_stack_size,
+                    config->task_weight, config->task_access_mode);
+
+    // KERNEL_DYNAMIC returns a failure (e.g. out of kernel task slots) instead of asserting: without the
+    // worker task nothing would ever process the context, so report it and stay uninitialized
+    if (self->kernel->AddTask(&self->task) != stk::ADD_OK)
+    {
+        return false;
+    }
+
+    self->initialized = true;
+    return true;
 }

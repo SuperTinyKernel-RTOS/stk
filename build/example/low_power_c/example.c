@@ -448,6 +448,7 @@ static void LogTaskEntry(void *arg)
     while (true)
     {
         AdcSample sample;
+        sample.timestamp = stk_ticks();
 
         /* Block up to 10 s for a sample (matches the C++ 10000 ms timeout). */
         bool ok = stk_pipe_read(g_AdcPipe, &sample, stk_ticks_from_ms(10000));

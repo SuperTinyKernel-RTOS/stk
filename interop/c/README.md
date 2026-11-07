@@ -56,6 +56,7 @@ pure C API with no C++ headers required in your source files.
   - [Barrier](#barrier)
 - [Memory: Block Pool](#memory-block-pool)
 - [Memory: Byte Pool](#memory-byte-pool)
+- [Memory: General-Purpose Allocator](#memory-general-purpose-allocator)
 - [Software Timers](#software-timers)
 - [Thread-Local Storage (TLS)](#thread-local-storage-tls)
 - [Common Pitfalls](#common-pitfalls)
@@ -68,7 +69,7 @@ pure C API with no C++ headers required in your source files.
 | File | Purpose |
 |---|---|
 | `stk_c.h` | Kernel, tasks, timing, synchronization, and version information |
-| `stk_c_memory.h` | Block memory pool and byte (variable-size) memory pool |
+| `stk_c_memory.h` | Block memory pool, byte (variable-size) memory pool and the general-purpose allocator |
 | `stk_c_time.h` | Software timers and periodic triggers |
 
 Compile the matching `.cpp` files alongside your project:
@@ -93,6 +94,11 @@ or more typically in your project's `stk_config.h`.
 | `STK_C_CPU_COUNT` | `1` | Number of CPU cores / kernel instances |
 | `STK_C_BLOCKPOOL_MAX` | `8` | Max concurrent block pools |
 | `STK_C_BYTEPOOL_MAX` | `8` | Max concurrent byte pools |
+| `STK_C_MEMORY_DEFAULT_ALLOCATOR` | `0` | Allocator provided by the binding: `0` wraps C library `malloc`/`free`, `1` uses the deterministic, ISR-safe static byte pool allocator (see [Memory: General-Purpose Allocator](#memory-general-purpose-allocator)) |
+| `STK_MEMORY_BLOCKPOOL_ALIGN_DEFAULT` | `8` (`16` on RISC-V) | Default block alignment of block pools (see [Memory: Block Pool](#memory-block-pool)) |
+| `STK_MEMORY_BLOCKPOOL_BITMAP` | `0` | `1` adds a per-block "allocated" bitmap: O(1) double-free detection in release builds, larger storage requirement |
+| `STK_MEMORY_BYTEPOOL_ALIGN_DEFAULT` | `8` (`16` on RISC-V) | Payload alignment of byte pool allocations; also sets the block header size, `max(8, align)` |
+| `STK_MEMORY_BYTEPOOL_GUARD` | `0` | `1` appends a 4-byte overrun guard word to every byte pool allocation, verified on free |
 | `STK_C_TIMER_COMMAND_QUEUE_MAX` | `32` | Capacity of each timer host's command queue (does **not** limit the number of timers; must be identical in every translation unit). The deprecated `STK_C_TIMER_MAX` is still honored if this macro is not defined |
 | `STK_C_TIMER_HANDLER_STACK_SIZE` | `256` | Stack words for the timer handler task |
 | `STK_C_TIMER_THREADS_COUNT` | `1` | Number of handler tasks serving expired timers in task mode (must be identical in every translation unit) |
@@ -1107,6 +1113,16 @@ case STK_BARRIER_CANCELED:     /* wait cancelled; arrival rolled back */ break;
 A deterministic, fragmentation-free fixed-size block allocator. All blocks have
 the same size, so allocation and deallocation are O(1).
 
+Blocks are aligned to the pool alignment: `STK_BLOCKPOOL_ALIGN`
+(`STK_MEMORY_BLOCKPOOL_ALIGN_DEFAULT`, 8 bytes by default, 16 on RISC-V), so `double` /
+`uint64_t` members are safe on 32-bit targets. The `_ex` creation functions take an explicit
+alignment (a power of two, not less than `sizeof(void *)`) for cache-line, DMA or SIMD buffers.
+
+> The `STK_MEMORY_*` macros change sizing and layout rules shared with the C++ classes. Set them in
+> the build system so that every C and C++ translation unit sees the same values. The C macros
+> mirror the C++ definitions and `stk_c_memory.cpp` verifies them at compile time: a mismatch is a
+> build error, not a runtime surprise.
+
 ### Static storage (no heap, preferred for embedded)
 
 ```c
@@ -1131,16 +1147,39 @@ if (pkt) {
 
 bool ok = stk_blockpool_free(pool, pkt);   /* ISR-safe; wakes a blocked allocator.
                                                Returns false if ptr is NULL, out of
-                                               range, or misaligned. */
+                                               range, misaligned or already free
+                                               (release-build double-free detection
+                                               needs STK_MEMORY_BLOCKPOOL_BITMAP). */
 pkt = NULL;   /* avoid double-free */
 ```
+
+`STK_BLOCKPOOL_STORAGE_DECL()` sizes the array (including the optional bitmap) and aligns it with
+`__stk_c_align()`. Use `STK_BLOCKPOOL_STORAGE_SIZE()` to size a buffer yourself, and the `_EX`
+forms of the macros (`STK_BLOCKPOOL_STORAGE_DECL_EX`, `STK_BLOCKPOOL_STORAGE_SIZE_EX`,
+`STK_BLOCKPOOL_ALIGN_BLOCK_SIZE_EX`) for a custom alignment:
+
+```c
+STK_BLOCKPOOL_STORAGE_DECL_EX(g_dma_storage, 4, 100, 32);   /* 4 blocks, 32-byte aligned */
+
+stk_blockpool_t *dma_pool = stk_blockpool_create_static_ex(
+    4, 100, (uint8_t *)g_dma_storage, sizeof(g_dma_storage), "dma_pool", 32);
+```
+
+A misaligned buffer start is corrected internally and the capacity is trimmed to what fits
+(debug builds assert), so check `stk_blockpool_get_capacity()` if you cannot guarantee the size.
 
 ### Heap storage
 
 ```c
 stk_blockpool_t *pool = stk_blockpool_create(PKT_COUNT, PKT_SIZE, "pkt_pool");
-if (!stk_blockpool_is_storage_valid(pool)) { /* allocation failed */ }
+if (pool == NULL || !stk_blockpool_is_storage_valid(pool)) { /* slot pool exhausted or allocation failed */ }
+
+/* With an explicit alignment: */
+stk_blockpool_t *pool2 = stk_blockpool_create_ex(PKT_COUNT, PKT_SIZE, "pkt_pool", 32);
 ```
+
+`stk_blockpool_create()` and `stk_bytepool_create()` return `NULL` if heap support is compiled out
+(`STK_MEMORY_NO_HEAP`). Use external storage there.
 
 ### Destroying a pool
 
@@ -1154,21 +1193,43 @@ pool = NULL;
 ### Blocking allocation
 
 ```c
-void *blk = stk_blockpool_alloc(pool);                    /* blocks until available */
+void *blk = stk_blockpool_alloc(pool);                    /* blocks; NULL only on cancel or invalid pool */
 void *blk = stk_blockpool_timed_alloc(pool, 100);         /* ticks timeout, NULL on timeout */
 void *blk = stk_blockpool_try_alloc(pool);                /* non-blocking, ISR-safe */
+
+/* Tell a timeout from a cancellation: */
+void *blk2 = NULL;
+stk_wait_result_t r = stk_blockpool_timed_alloc_ex(pool, &blk2, 100);
+/* SIGNAL: blk2 is valid; TIMEOUT / CANCELED / FAIL: blk2 is NULL */
 ```
+
+`stk_blockpool_timed_alloc_ex()` is ISR-safe only with `STK_NO_WAIT`.
 
 ### Query
 
 ```c
-stk_blockpool_get_capacity(pool);    /* total blocks */
-stk_blockpool_get_block_size(pool);  /* aligned per-block size in bytes */
-stk_blockpool_get_used_count(pool);  /* currently allocated */
-stk_blockpool_get_free_count(pool);  /* available */
+stk_blockpool_get_capacity(pool);         /* total blocks (0 for an invalid pool) */
+stk_blockpool_get_block_size(pool);       /* aligned per-block size in bytes */
+stk_blockpool_get_block_alignment(pool);  /* alignment of every block */
+stk_blockpool_get_used_count(pool);       /* currently allocated */
+stk_blockpool_get_free_count(pool);       /* available */
 stk_blockpool_is_full(pool);
 stk_blockpool_is_empty(pool);
 ```
+
+### Diagnostics
+
+Run your worst-case workload, then read the watermarks to size the pool:
+
+```c
+size_t peak  = stk_blockpool_get_peak_used_count(pool);   /* max blocks in use at once */
+size_t fails = stk_blockpool_get_alloc_fail_count(pool);  /* timeouts and NO_WAIT misses */
+
+stk_mem_stats_t st;
+stk_blockpool_get_stats(pool, &st);   /* consistent snapshot, in bytes (blocks * block size) */
+```
+
+See [stk_mem_stats_t](#memory-general-purpose-allocator) for the fields.
 
 ---
 
@@ -1176,9 +1237,14 @@ stk_blockpool_is_empty(pool);
 
 A variable-size, first-fit allocator with block coalescing, for payloads of
 different sizes (messages, strings) where a fixed block size would waste memory.
-Every allocation is 8-byte aligned and costs its payload (rounded up to 8) plus an
-8-byte header. Allocation and free are O(n) in the number of blocks, unlike the
-O(1) block pool.
+Every allocation is aligned to `STK_BYTEPOOL_ALIGN` (`STK_MEMORY_BYTEPOOL_ALIGN_DEFAULT`: 8 bytes by
+default, 16 on RISC-V) and costs its payload (rounded up to that alignment) plus a header of
+`STK_BYTEPOOL_HEADER_SIZE` = `max(8, alignment)` bytes. With `STK_MEMORY_BYTEPOOL_GUARD=1` each
+allocation also carries a 4-byte guard word (rounded up to the alignment) that is verified on free.
+Allocation and free are O(n) in the number of blocks, unlike the O(1) block pool.
+
+The same note as for the block pool applies: set the `STK_MEMORY_*` macros in the build system so
+that C and C++ code agree. The C macros are checked against the C++ class at compile time.
 
 ### Static storage (no heap, preferred for embedded)
 
@@ -1194,14 +1260,17 @@ stk_bytepool_t *bp = stk_bytepool_create_static((uint8_t *)g_heap, sizeof(g_heap
 char *msg = (char *)stk_bytepool_timed_alloc(bp, 64, stk_ticks_from_ms(100)); /* NULL on timeout */
 if (msg) {
     /* ... use msg ... */
-    bool ok = stk_bytepool_free(bp, msg);   /* false if NULL, foreign, misaligned or double free */
+    bool ok = stk_bytepool_free(bp, msg);   /* false if NULL, foreign, misaligned, double free,
+                                               or (with the guard word) an overrun payload,
+                                               in which case the block is kept (leaked) to
+                                               protect the pool metadata */
     msg = NULL;
 }
 ```
 
-`STK_BYTEPOOL_STORAGE_DECL()` declares a `uint64_t` array so the start address is
-8-byte aligned on every target. `STK_BYTEPOOL_REQUIRED_SIZE(payload)` is the pool
-space one allocation consumes; sum it over all blocks that must coexist.
+`STK_BYTEPOOL_STORAGE_DECL()` declares a `uint64_t` array aligned to `STK_BYTEPOOL_ALIGN`.
+`STK_BYTEPOOL_REQUIRED_SIZE(payload)` is the pool space one allocation consumes (aligned payload,
+guard word if enabled, and header); sum it over all blocks that must coexist.
 
 ### Heap storage
 
@@ -1223,6 +1292,14 @@ of blocking forever. A free wakes all blocked allocators, because a coalesced bl
 satisfy several of them. `stk_bytepool_timed_alloc()` is ISR-safe only with
 `STK_NO_WAIT`.
 
+To tell a timeout from a cancellation or an invalid request, use the `_ex` form:
+
+```c
+void *p = NULL;
+stk_wait_result_t r = stk_bytepool_timed_alloc_ex(bp, &p, 64, 100);
+/* SIGNAL: p is valid; TIMEOUT / CANCELED / FAIL (size is 0 or too large, no storage): p is NULL */
+```
+
 ### Query
 
 ```c
@@ -1231,8 +1308,25 @@ stk_bytepool_get_info(bp, &available, &largest, &fragments);  /* any pointer may
                                                                   fragments == 1: no external
                                                                   fragmentation; ISR-safe, O(n) */
 stk_bytepool_get_size(bp);          /* managed area in bytes, headers included */
-stk_bytepool_get_max_request(bp);   /* largest request that can ever succeed */
+stk_bytepool_get_max_request(bp);   /* largest request that can ever succeed
+                                        (less the guard word, if enabled) */
 ```
+
+### Diagnostics
+
+```c
+stk_mem_stats_t st;
+stk_bytepool_get_stats(bp, &st);                 /* O(1) snapshot; bytes include headers */
+
+size_t peak  = stk_bytepool_get_peak_used_size(bp);     /* high watermark of consumption */
+size_t fails = stk_bytepool_get_alloc_fail_count(bp);   /* timeouts, NO_WAIT misses, oversized requests */
+size_t scan  = stk_bytepool_get_max_scan_length(bp);    /* longest block-list walk, in blocks */
+```
+
+`stk_bytepool_get_max_scan_length()` measures the worst-case time the allocator held its critical
+section on your real workload (multiply by the cost of one iteration on your target). Use it to
+decide whether a time-critical ISR may call `stk_bytepool_try_alloc()` or `stk_bytepool_free()`.
+`stk_bytepool_get_stats()` is the O(1) alternative to the O(n) `stk_bytepool_get_info()`.
 
 ### Destroying a pool
 
@@ -1242,7 +1336,48 @@ bp = NULL;
 ```
 
 Do not destroy a pool while a task is blocked in `stk_bytepool_alloc()` /
-`stk_bytepool_timed_alloc()`.
+`stk_bytepool_timed_alloc()`, and return all blocks first (debug builds assert).
+
+---
+
+## Memory: General-Purpose Allocator
+
+`stk_mem_*()` exposes `stk::memory::MemoryAllocator`, the allocator behind the heap-storage pools:
+
+```c
+void *p = stk_mem_allocate(128);        /* aligned to STK_MEM_MIN_ALIGNMENT (8, 16 on RISC-V); NULL on failure */
+stk_mem_free(p);                        /* NULL-safe */
+
+void *q = stk_mem_allocate_aligned(256, 64);   /* stricter alignment (power of two), e.g. a cache line */
+stk_mem_free_aligned(q);                       /* must pair with stk_mem_allocate_aligned(), never stk_mem_free() */
+
+if (stk_mem_is_available()) { /* an allocator implementation is linked in */ }
+
+stk_mem_stats_t st;
+stk_mem_get_stats(&st);
+```
+
+`stk_mem_stats_t` (shared by the pool statistics calls) has these fields, all `size_t`:
+
+| Field | Meaning |
+|---|---|
+| `capacity` | Total capacity in bytes |
+| `allocated` | Bytes currently allocated |
+| `peak_allocated` | High watermark of allocated bytes |
+| `allocate_count` / `free_count` | Successful allocations / frees |
+| `alloc_fail_count` | Requests that could not be satisfied |
+| `min_ever_free` | Minimum free bytes recorded since the start |
+
+The binding provides the allocator implementation, selected by `STK_C_MEMORY_DEFAULT_ALLOCATOR`:
+
+| Value | Implementation | ISR-safe | Statistics |
+|---|---|---|---|
+| `0` (default) | C library `malloc` / `free`. The C library locking hooks (e.g. `__malloc_lock` for newlib) must be implemented | No | None (all zero) |
+| `1` | Deterministic allocator on a static byte pool (`stk_memory_allocator_default.h`). No C library heap needed. Heap size is `STK_MEMORY_DEFAULT_HEAP_SIZE` (8192 bytes by default) | Yes (time proportional to the blocks scanned) | Yes |
+
+Allocate with a size of 0 returns `NULL`. If heap support is compiled out (`STK_MEMORY_NO_HEAP=1`)
+no allocator is provided: `stk_mem_is_available()` returns `false` and the allocation functions
+return `NULL`.
 
 ---
 
@@ -1545,6 +1680,20 @@ mode on an HRT kernel is rejected (`STK_ADD_FAIL_INVALID`): use polled mode ther
 `STK_C_TIMER_COMMAND_QUEUE_MAX`** — These change the layout or sizing of types in the public headers. Define them identically in every translation unit (and in the
 `.cpp` files of the binding), otherwise structure sizes will disagree.
 
+**Mismatched `STK_MEMORY_*` macros** — `STK_MEMORY_BLOCKPOOL_ALIGN_DEFAULT`,
+`STK_MEMORY_BLOCKPOOL_BITMAP`, `STK_MEMORY_BYTEPOOL_ALIGN_DEFAULT` and `STK_MEMORY_BYTEPOOL_GUARD`
+change pool layout and storage sizing. Set them in the build system for every translation unit. A
+disagreement with the C macros is caught by a `static_assert` in `stk_c_memory.cpp`, but only for
+the files that are compiled with it.
+
+**Assuming `stk_blockpool_alloc()` / `stk_bytepool_alloc()` never return `NULL`** — They return `NULL`
+if the wait is cancelled or the pool is invalid (and, for byte pools, for an invalid size). Use the
+`_ex` variants when the cause matters.
+
+**Undersized or misaligned pool storage** — Size external buffers with the `STK_BLOCKPOOL_STORAGE_*`
+/ `STK_BYTEPOOL_REQUIRED_SIZE` macros (they include the bitmap, guard word and header). A misaligned
+start is corrected internally at the cost of capacity.
+
 **Forgetting `KERNEL_SYNC`** — Mutex, semaphore, event, and message queue are
 compiled in only when `KERNEL_SYNC` is part of the kernel flags. Without it,
 the sync API will link but the kernel has no scheduler hooks, leading to
@@ -1603,6 +1752,15 @@ Place these in `stk_config.h` before including any STK header.
 
 /* Maximum concurrent byte pools */
 #define STK_C_BYTEPOOL_MAX       4
+
+/* Allocator provided by the binding: 0 = malloc/free, 1 = static byte pool (ISR-safe, with statistics) */
+#define STK_C_MEMORY_DEFAULT_ALLOCATOR  0
+
+/* Memory pool layout (identical for C and C++ code; defaults shown, 16 on RISC-V) */
+#define STK_MEMORY_BLOCKPOOL_ALIGN_DEFAULT  8U
+#define STK_MEMORY_BLOCKPOOL_BITMAP         0
+#define STK_MEMORY_BYTEPOOL_ALIGN_DEFAULT   8U
+#define STK_MEMORY_BYTEPOOL_GUARD           0
 
 /* Capacity of each timer host's command queue (timers themselves live in
    caller-supplied memory and are not limited by this value).

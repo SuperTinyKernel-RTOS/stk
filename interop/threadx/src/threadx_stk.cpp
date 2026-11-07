@@ -16,27 +16,27 @@
 
 #include "tx_api.h"
 
-#include <new>
+// ----------------------------------------------------------------------------
+namespace {
+// ----------------------------------------------------------------------------
 
-// -----------------------------------------------------------------------------
-// Memory allocator hooks required by the heap constructors/destructors of stk::memory::BlockMemoryPool and
-// stk::memory::BytePool.
-// This wrapper never uses the heap (caller-supplied memory only), so the weak stubs below only satisfy
-// the linker. A strong definition (e.g. from the CMSIS wrapper or the application) overrides them.
-// -----------------------------------------------------------------------------
-__stk_weak void *stk::memory::MemoryAllocator::Allocate(size_t /*size*/) { return nullptr; }
-__stk_weak void stk::memory::MemoryAllocator::Free(void * /*ptr*/) {}
+// ----------------------------------------------------------------------------
+// File-local variables
+// ----------------------------------------------------------------------------
 
-// -----------------------------------------------------------------------------
+volatile bool g_IntDisabled = false; // posture emulated for tx_interrupt_control()
+int64_t g_TimeOffset = 0; // tx_time_set() adjustment
+
+// ----------------------------------------------------------------------------
 // Kernel configuration
 //
 // sched::SwitchStrategyPreemptionThreshold<TX_MAX_PRIORITIES, true> = ThreadX scheduling model: fixed priority +
 // preemption-threshold + per-thread time-slice, up to 1024 priority levels. STK numbers priorities in the opposite
 // direction (higher number = more important), the conversion ((TX_MAX_PRIORITIES - 1) - tx_priority) is done by
 // Strategy::FromThreadX().
-// -----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
 
-static_assert((TX_MAX_PRIORITIES >= 1U) && (TX_MAX_PRIORITIES <= 1024U),
+STK_STATIC_ASSERT_DESC((TX_MAX_PRIORITIES >= 1U) && (TX_MAX_PRIORITIES <= 1024U),
     "TX_MAX_PRIORITIES must be in [1, 1024] (limit of the ready bitmap of sched::SwitchStrategyPreemptionThreshold)");
 
 typedef stk::sched::SwitchStrategyPreemptionThreshold<TX_MAX_PRIORITIES, true> StkStrategy;
@@ -52,11 +52,9 @@ typedef stk::Kernel<stk::KERNEL_DYNAMIC | stk::KERNEL_SYNC | stk::KERNEL_TIMESLI
 
 static StkKernel g_StkKernel;
 
-// -----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
 // Helpers
-// -----------------------------------------------------------------------------
-
-namespace {
+// ----------------------------------------------------------------------------
 
 class StkThread;
 
@@ -146,13 +144,13 @@ __stk_forceinline UINT WaitResultToTx(stk::EWaitResult wr, UINT timeout_status)
     return result;
 }
 
-// -----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
 // Thread control block
 //
 // StkThread lives in TX_THREAD::tx_thread_stk_storage (placement-new). It is created by tx_thread_create(),
 // but it is registered in the kernel only when the thread is started (TX_AUTO_START at creation, or the first
 // tx_thread_resume() for TX_DONT_START). Registration state is tracked by m_registered/m_removed.
-// -----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
 
 class StkThread final : public stk::ITask
 {
@@ -221,9 +219,10 @@ public:
     volatile bool        m_abort;      // tx_thread_wait_abort() hit a plain sleep
 };
 
-static_assert(sizeof(StkThread) <= sizeof(static_cast<TX_THREAD *>(nullptr)->tx_thread_stk_storage),
+STK_STATIC_ASSERT_DESC(sizeof(StkThread) <= sizeof(static_cast<TX_THREAD *>(nullptr)->tx_thread_stk_storage),
     "TX_STK_THREAD_STORAGE_WORDS is too small for StkThread");
-static_assert(alignof(StkThread) <= alignof(ALIGN_TYPE), "StkThread requires stricter alignment than ALIGN_TYPE");
+STK_STATIC_ASSERT_DESC(alignof(StkThread) <= alignof(ALIGN_TYPE),
+    "StkThread requires stricter alignment than ALIGN_TYPE");
 
 __stk_forceinline StkThread *ThreadOf(TX_THREAD *tx)
 {
@@ -447,11 +446,13 @@ bool WaitThreadRemoved(const StkThread *th)
     return th->m_removed;
 }
 
+// ----------------------------------------------------------------------------
 } // namespace
+// ----------------------------------------------------------------------------
 
-// ===========================================================================
+// ============================================================================
 // ==== Kernel / system ====
-// ===========================================================================
+// ============================================================================
 
 VOID tx_kernel_enter(VOID)
 {
@@ -462,10 +463,6 @@ VOID tx_kernel_enter(VOID)
 
     // does not return for KERNEL_STATIC, for KERNEL_DYNAMIC returns when all threads have exited
     g_StkKernel.Start();
-}
-
-namespace {
-volatile bool g_IntDisabled = false; // posture emulated for tx_interrupt_control()
 }
 
 UINT tx_interrupt_control(UINT new_posture)
@@ -491,10 +488,6 @@ UINT tx_interrupt_control(UINT new_posture)
     return old_posture;
 }
 
-namespace {
-int64_t g_TimeOffset = 0; // tx_time_set() adjustment
-}
-
 ULONG tx_time_get(VOID)
 {
     ULONG result = 0U;
@@ -515,9 +508,9 @@ VOID tx_time_set(ULONG new_time)
     }
 }
 
-// ===========================================================================
+// ============================================================================
 // ==== Thread ====
-// ===========================================================================
+// ============================================================================
 
 UINT tx_thread_create(TX_THREAD *thread_ptr, TX_NAME_CONST CHAR *name_ptr,
                       VOID (*entry_function)(ULONG entry_input), ULONG entry_input,
@@ -1114,23 +1107,33 @@ UINT tx_thread_wait_abort(TX_THREAD *thread_ptr)
     return result;
 }
 
-// ===========================================================================
+// ============================================================================
 // ==== Mutex ====
 //
 // Backed by stk::sync::Mutex: always recursive and with priority inheritance, the \a inherit argument
 // of tx_mutex_create() is accepted but TX_NO_INHERIT is not honored.
-// ===========================================================================
+// ============================================================================
 
-static_assert(sizeof(stk::sync::Mutex) <= sizeof(static_cast<TX_MUTEX *>(nullptr)->tx_mutex_stk_storage),
+STK_STATIC_ASSERT_DESC(sizeof(stk::sync::Mutex) <= sizeof(static_cast<TX_MUTEX *>(nullptr)->tx_mutex_stk_storage),
     "TX_STK_MUTEX_STORAGE_WORDS is too small for stk::sync::Mutex");
 
+// ----------------------------------------------------------------------------
 namespace {
+// ----------------------------------------------------------------------------
+
 __stk_forceinline stk::sync::Mutex *MutexOf(TX_MUTEX *m)
 {
     return static_cast<stk::sync::Mutex *>(static_cast<void *>(m->tx_mutex_stk_storage));
 }
-__stk_forceinline bool IsValidMutex(const TX_MUTEX *m) { return ((m != nullptr) && (m->tx_mutex_id == TX_MUTEX_ID)); }
+
+__stk_forceinline bool IsValidMutex(const TX_MUTEX *m)
+{
+    return ((m != nullptr) && (m->tx_mutex_id == TX_MUTEX_ID));
 }
+
+// ----------------------------------------------------------------------------
+} // namespace
+// ----------------------------------------------------------------------------
 
 UINT tx_mutex_create(TX_MUTEX *mutex_ptr, TX_NAME_CONST CHAR *name_ptr, UINT inherit)
 {
@@ -1271,26 +1274,36 @@ UINT tx_mutex_prioritize(TX_MUTEX *mutex_ptr)
     return (IsValidMutex(mutex_ptr) ? TX_SUCCESS : TX_MUTEX_ERROR);
 }
 
-// ===========================================================================
+// ============================================================================
 // ==== Semaphore ====
 //
 // Backed by stk::sync::SemaphoreT<ULONG>: the counter has the same width as the ThreadX counter (ULONG), so
 // the full ThreadX count range is supported. tx_semaphore_ceiling_put() maps to SemaphoreT::TrySignal(ceiling),
 // which checks the ceiling and signals atomically.
-// ===========================================================================
+// ============================================================================
 
 typedef stk::sync::SemaphoreT<ULONG> StkSemaphore;
 
-static_assert(sizeof(StkSemaphore) <= sizeof(static_cast<TX_SEMAPHORE *>(nullptr)->tx_semaphore_stk_storage),
+STK_STATIC_ASSERT_DESC(sizeof(StkSemaphore) <= sizeof(static_cast<TX_SEMAPHORE *>(nullptr)->tx_semaphore_stk_storage),
     "TX_STK_SEMAPHORE_STORAGE_WORDS is too small for stk::sync::SemaphoreT<ULONG>");
 
+// ----------------------------------------------------------------------------
 namespace {
+// ----------------------------------------------------------------------------
+
 __stk_forceinline StkSemaphore *SemOf(TX_SEMAPHORE *s)
 {
     return static_cast<StkSemaphore *>(static_cast<void *>(s->tx_semaphore_stk_storage));
 }
-__stk_forceinline bool IsValidSem(const TX_SEMAPHORE *s) { return ((s != nullptr) && (s->tx_semaphore_id == TX_SEMAPHORE_ID)); }
+
+__stk_forceinline bool IsValidSem(const TX_SEMAPHORE *s)
+{
+    return ((s != nullptr) && (s->tx_semaphore_id == TX_SEMAPHORE_ID));
 }
+
+// ----------------------------------------------------------------------------
+} // namespace
+// ----------------------------------------------------------------------------
 
 UINT tx_semaphore_create(TX_SEMAPHORE *semaphore_ptr, TX_NAME_CONST CHAR *name_ptr, ULONG initial_count)
 {
@@ -1467,27 +1480,35 @@ UINT tx_semaphore_put_notify(TX_SEMAPHORE *semaphore_ptr,
     return result;
 }
 
-// ===========================================================================
+// ============================================================================
 // ==== Event flags ====
 //
 // Backed by stk::sync::EventFlagsT<uint64_t>: all 32 ThreadX flags are usable (flags are kept in the low half of
 // the 64-bit word, the reserved error bit of STK is bit 63).
-// ===========================================================================
+// ============================================================================
 
-static_assert(sizeof(StkEventFlags) <= sizeof(static_cast<TX_EVENT_FLAGS_GROUP *>(nullptr)->tx_event_flags_group_stk_storage),
+STK_STATIC_ASSERT_DESC(sizeof(StkEventFlags) <= sizeof(static_cast<TX_EVENT_FLAGS_GROUP *>(nullptr)->tx_event_flags_group_stk_storage),
     "TX_STK_EVENT_FLAGS_STORAGE_DWORDS is too small for StkEventFlags");
-static_assert(alignof(StkEventFlags) <= alignof(uint64_t), "StkEventFlags requires stricter alignment than the event flags storage (uint64_t)");
+STK_STATIC_ASSERT_DESC(alignof(StkEventFlags) <= alignof(uint64_t),
+    "StkEventFlags requires stricter alignment than the event flags storage (uint64_t)");
 
+// ----------------------------------------------------------------------------
 namespace {
+// ----------------------------------------------------------------------------
+
 __stk_forceinline StkEventFlags *EfOf(TX_EVENT_FLAGS_GROUP *g)
 {
     return static_cast<StkEventFlags *>(static_cast<void *>(g->tx_event_flags_group_stk_storage));
 }
+
 __stk_forceinline bool IsValidEf(const TX_EVENT_FLAGS_GROUP *g)
 {
     return ((g != nullptr) && (g->tx_event_flags_group_id == TX_EVENT_FLAGS_ID));
 }
-}
+
+// ----------------------------------------------------------------------------
+} // namespace
+// ----------------------------------------------------------------------------
 
 UINT tx_event_flags_create(TX_EVENT_FLAGS_GROUP *group_ptr, TX_NAME_CONST CHAR *name_ptr)
 {
@@ -1675,23 +1696,33 @@ UINT tx_event_flags_set_notify(TX_EVENT_FLAGS_GROUP *group_ptr,
     return result;
 }
 
-// ===========================================================================
+// ============================================================================
 // ==== Message queue ====
 //
 // Backed by stk::sync::MessageQueue. ThreadX message size is counted in ULONGs, the queue area (queue_size) in
 // bytes; the area is used as the ring buffer directly (no heap).
-// ===========================================================================
+// ============================================================================
 
-static_assert(sizeof(stk::sync::MessageQueue) <= sizeof(static_cast<TX_QUEUE *>(nullptr)->tx_queue_stk_storage),
+STK_STATIC_ASSERT_DESC(sizeof(stk::sync::MessageQueue) <= sizeof(static_cast<TX_QUEUE *>(nullptr)->tx_queue_stk_storage),
     "TX_STK_QUEUE_STORAGE_WORDS is too small for stk::sync::MessageQueue");
 
+// ----------------------------------------------------------------------------
 namespace {
+// ----------------------------------------------------------------------------
+
 __stk_forceinline stk::sync::MessageQueue *QueueOf(TX_QUEUE *q)
 {
     return static_cast<stk::sync::MessageQueue *>(static_cast<void *>(q->tx_queue_stk_storage));
 }
-__stk_forceinline bool IsValidQueue(const TX_QUEUE *q) { return ((q != nullptr) && (q->tx_queue_id == TX_QUEUE_ID)); }
+
+__stk_forceinline bool IsValidQueue(const TX_QUEUE *q)
+{
+    return ((q != nullptr) && (q->tx_queue_id == TX_QUEUE_ID));
 }
+
+// ----------------------------------------------------------------------------
+} // namespace
+// ----------------------------------------------------------------------------
 
 UINT tx_queue_create(TX_QUEUE *queue_ptr, TX_NAME_CONST CHAR *name_ptr, UINT message_size,
                      VOID *queue_start, ULONG queue_size)
@@ -1815,7 +1846,9 @@ UINT tx_queue_prioritize(TX_QUEUE *queue_ptr)
     return (IsValidQueue(queue_ptr) ? TX_SUCCESS : TX_QUEUE_ERROR); // noop: FIFO wait list
 }
 
+// ----------------------------------------------------------------------------
 namespace {
+// ----------------------------------------------------------------------------
 
 UINT QueueSend(TX_QUEUE *queue_ptr, VOID *source_ptr, ULONG wait_option, bool front)
 {
@@ -1854,7 +1887,9 @@ UINT QueueSend(TX_QUEUE *queue_ptr, VOID *source_ptr, ULONG wait_option, bool fr
     return result;
 }
 
+// ----------------------------------------------------------------------------
 } // namespace
+// ----------------------------------------------------------------------------
 
 UINT tx_queue_send(TX_QUEUE *queue_ptr, VOID *source_ptr, ULONG wait_option)
 {
@@ -1909,30 +1944,35 @@ UINT tx_queue_send_notify(TX_QUEUE *queue_ptr, VOID (*queue_send_notify)(TX_QUEU
     return result;
 }
 
-// ===========================================================================
+// ============================================================================
 // ==== Block memory pool ====
 //
 // Backed by stk::memory::BlockMemoryPool. tx_block_release() receives only the block address, so, as in
 // ThreadX, every block carries a hidden pointer-sized header holding the owning pool.
-// ===========================================================================
+// ============================================================================
 
-static_assert(sizeof(stk::memory::BlockMemoryPool) <= sizeof(static_cast<TX_BLOCK_POOL *>(nullptr)->tx_block_pool_stk_storage),
+STK_STATIC_ASSERT_DESC(sizeof(stk::memory::BlockMemoryPool) <= sizeof(static_cast<TX_BLOCK_POOL *>(nullptr)->tx_block_pool_stk_storage),
     "TX_STK_BLOCK_POOL_STORAGE_WORDS is too small for stk::memory::BlockMemoryPool");
 
+// ----------------------------------------------------------------------------
 namespace {
+// ----------------------------------------------------------------------------
 
-const size_t BLOCK_HDR_SIZE = sizeof(void *);
+constexpr size_t BLOCK_HDR_SIZE = sizeof(void *);
 
 __stk_forceinline stk::memory::BlockMemoryPool *BlockPoolOf(TX_BLOCK_POOL *p)
 {
     return static_cast<stk::memory::BlockMemoryPool *>(static_cast<void *>(p->tx_block_pool_stk_storage));
 }
+
 __stk_forceinline bool IsValidBlockPool(const TX_BLOCK_POOL *p)
 {
     return ((p != nullptr) && (p->tx_block_pool_id == TX_BLOCK_POOL_ID));
 }
 
+// ----------------------------------------------------------------------------
 } // namespace
+// ----------------------------------------------------------------------------
 
 UINT tx_block_pool_create(TX_BLOCK_POOL *pool_ptr, TX_NAME_CONST CHAR *name_ptr, ULONG block_size,
                           VOID *pool_start, ULONG pool_size)
@@ -2115,7 +2155,7 @@ UINT tx_block_pool_prioritize(TX_BLOCK_POOL *pool_ptr)
     return (IsValidBlockPool(pool_ptr) ? TX_SUCCESS : TX_POOL_ERROR); // noop: FIFO wait list
 }
 
-// ===========================================================================
+// ============================================================================
 // ==== Byte memory pool ====
 //
 // Backed by stk::memory::BytePool: first-fit allocator with block splitting, coalescing of free neighbours
@@ -2126,9 +2166,11 @@ UINT tx_block_pool_prioritize(TX_BLOCK_POOL *pool_ptr)
 // pools created by tx_byte_pool_create() are kept in a small intrusive list and the owner is found by the
 // address range of the pool area. The list is touched only by create/delete/release (short, under a critical
 // section), allocation and info paths do not use it.
-// ===========================================================================
+// ============================================================================
 
+// ----------------------------------------------------------------------------
 namespace {
+// ----------------------------------------------------------------------------
 
 class StkBytePool final
 {
@@ -2161,9 +2203,10 @@ private:
     uintptr_t             m_hi;
 };
 
-static_assert(sizeof(StkBytePool) <= sizeof(static_cast<TX_BYTE_POOL *>(nullptr)->tx_byte_pool_stk_storage),
+STK_STATIC_ASSERT_DESC(sizeof(StkBytePool) <= sizeof(static_cast<TX_BYTE_POOL *>(nullptr)->tx_byte_pool_stk_storage),
     "TX_STK_BYTE_POOL_STORAGE_WORDS is too small for StkBytePool (stk::memory::BytePool + registry link and range)");
-static_assert(alignof(StkBytePool) <= alignof(ALIGN_TYPE), "StkBytePool requires stricter alignment than ALIGN_TYPE");
+STK_STATIC_ASSERT_DESC(alignof(StkBytePool) <= alignof(ALIGN_TYPE),
+    "StkBytePool requires stricter alignment than ALIGN_TYPE");
 
 StkBytePool *g_BytePools = nullptr; // registry head
 
@@ -2214,7 +2257,9 @@ StkBytePool *BytePoolFind(const void *mem)
     return p;
 }
 
+// ----------------------------------------------------------------------------
 } // namespace
+// ----------------------------------------------------------------------------
 
 UINT tx_byte_pool_create(TX_BYTE_POOL *pool_ptr, TX_NAME_CONST CHAR *name_ptr, VOID *pool_start, ULONG pool_size)
 {
@@ -2404,7 +2449,7 @@ UINT tx_byte_pool_prioritize(TX_BYTE_POOL *pool_ptr)
     return (IsValidBytePool(pool_ptr) ? TX_SUCCESS : TX_POOL_ERROR); // noop: FIFO wait list
 }
 
-// ===========================================================================
+// ============================================================================
 // ==== Application timers ====
 //
 // Backed by stk::time::TimerHost in task mode: a tick task evaluates deadlines and a handler task runs the
@@ -2420,9 +2465,11 @@ UINT tx_byte_pool_prioritize(TX_BYTE_POOL *pool_ptr)
 // The host is started by the first tx_timer_create() and occupies stk::time::TimerHost::TASK_COUNT kernel task
 // slots (see the kernel configuration above). Tick values are limited to INT32_MAX (STK timeout range), larger
 // values are clamped.
-// ===========================================================================
+// ============================================================================
 
+// ----------------------------------------------------------------------------
 namespace {
+// ----------------------------------------------------------------------------
 
 class StkTimer final : public stk::time::Timer
 {
@@ -2452,9 +2499,10 @@ private:
     TX_TIMER *m_tx;
 };
 
-static_assert(sizeof(StkTimer) <= sizeof(static_cast<TX_TIMER *>(nullptr)->tx_timer_stk_storage),
+STK_STATIC_ASSERT_DESC(sizeof(StkTimer) <= sizeof(static_cast<TX_TIMER *>(nullptr)->tx_timer_stk_storage),
     "TX_STK_TIMER_STORAGE_DWORDS is too small for StkTimer (stk::time::Timer + back pointer)");
-static_assert(alignof(StkTimer) <= alignof(uint64_t), "StkTimer requires stricter alignment than the timer storage (uint64_t)");
+STK_STATIC_ASSERT_DESC(alignof(StkTimer) <= alignof(uint64_t),
+    "StkTimer requires stricter alignment than the timer storage (uint64_t)");
 
 bool g_TimerHostStarted = false;
 
@@ -2527,7 +2575,9 @@ UINT TimerResultToTx(StkTimerHost::EResult res, UINT active_status)
     return result;
 }
 
+// ----------------------------------------------------------------------------
 } // namespace
+// ----------------------------------------------------------------------------
 
 UINT tx_timer_create(TX_TIMER *timer_ptr, TX_NAME_CONST CHAR *name_ptr,
                      VOID (*expiration_function)(ULONG input), ULONG expiration_input,

@@ -17,15 +17,14 @@
  *    stk_kernel_create() terminate switch cases (Rule 6-4-5), not loops.
  *  - Every 'switch' has a 'default' clause (Rule 6-4-6).
  *  - Objects and functions private to this file have internal linkage (Rule 3-3-1): helper
- *    functions, s_Tasks and s_KernelMap are 'static'.
+ *    functions, helper classes, s_Tasks and s_KernelMap are placed into an anonymous namespace.
  *  - Remaining, intentional deviations:
  *      Rule 3-9-2     : 'int32_t' is used in static_cast<int32_t>() of the C/C++ enum consistency checks.
  *      Rule 5-2-5     : const_cast in stk_kernel_is_schedulable() (IKernel::GetSwitchStrategy() is non-const).
  *      Rule 5-2-7/8/9 : reinterpret_cast (via void *) in the Cast*() helpers converting between
  *                       the opaque C handles (stk_kernel_t, stk_task_t) and their C++ objects.
- *      Rule 7-3-1     : TaskWrapper, EventOverrider, KernelRegistryEntry, TaskSlot and stk_task_t
- *                       are declared in the global namespace; the C API handles must be visible
- *                       to the C header (stk_task_t) and the rest is only referenced in this file.
+ *      Rule 7-3-1     : stk_task_t is declared in the global namespace; the C API handle must be
+ *                       visible to the C header.
  *      Rule 7-3-4     : using-directive (namespace stk).
  *      Rule 10-3-2    : explicit virtual destructor of TaskWrapper / EventOverrider, see [STK-DEV-005].
  *      Rule 16-0-4    : function-like macros (STK_PP_CAT*, STK_KERNEL_*) generate the per-core kernel
@@ -60,23 +59,32 @@ using namespace stk;
 // Forward decl.
 struct stk_task_t;
 
+// +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+// Anonymous namespace to make local functions file-local.
+namespace {
+// +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
 // Cast from stk_kernel_t to IKernel without a warning.
-static __stk_forceinline IKernel *CastCToKernelInterface(stk_kernel_t *const k)
+__stk_forceinline IKernel *CastCToKernelInterface(stk_kernel_t *const k)
 {
     return reinterpret_cast<IKernel *>(reinterpret_cast<void *>(k));
 }
 
 // Cast from const stk_kernel_t to const IKernel without a warning.
-static __stk_forceinline const IKernel *CastCToKernelInterfaceConst(const stk_kernel_t *const k)
+__stk_forceinline const IKernel *CastCToKernelInterfaceConst(const stk_kernel_t *const k)
 {
     return reinterpret_cast<const IKernel *>(reinterpret_cast<const void *>(k));
 }
 
 // Cast from IKernel to stk_kernel_t without a warning.
-static __stk_forceinline stk_kernel_t *CastCppKernelInterfaceToC(IKernel *const k)
+__stk_forceinline stk_kernel_t *CastCppKernelInterfaceToC(IKernel *const k)
 {
     return reinterpret_cast<stk_kernel_t *>(reinterpret_cast<void *>(k));
 }
+
+// +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+} // namespace
+// +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 // Interop-private helpers
 namespace stk {
@@ -96,7 +104,12 @@ extern EAddResult InitializeTimerHostEx(stk_kernel_t *kernel, stk::time::TimerHo
 } // interop_c_helper
 } // stk
 
-static void FreeTask(const stk_task_t *tsk);
+// +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+// Anonymous namespace to make local functions and types file-local.
+namespace {
+// +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+void FreeTask(const stk_task_t *tsk);
 
 class TaskWrapper final : public ITask
 {
@@ -148,12 +161,21 @@ private:
     const char      *m_tname;
 };
 
+// +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+} // namespace
+// +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+// Opaque C handle, must stay in the global namespace (declared in stk_c.h).
 struct stk_task_t
 {
     TaskWrapper handle;
 };
 
-static struct TaskSlot
+// +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+namespace {
+// +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+struct TaskSlot
 {
     TaskSlot() : busy(false), task()
     {}
@@ -164,7 +186,7 @@ static struct TaskSlot
 s_Tasks[STK_C_TASKS_MAX];
 
 // Cast from stk_task_t to TaskWrapper without a warning.
-static __stk_forceinline stk_task_t *CastCppTaskInterfaceToC(ITask *const t)
+__stk_forceinline stk_task_t *CastCppTaskInterfaceToC(ITask *const t)
 {
     return reinterpret_cast<stk_task_t *>(reinterpret_cast<void *>(t));
 }
@@ -240,16 +262,16 @@ struct KernelRegistryEntry
     IKernel       *kernel;
     EventOverrider event_cb;
 };
-static KernelRegistryEntry s_KernelMap[STK_C_CPU_COUNT];
+KernelRegistryEntry s_KernelMap[STK_C_CPU_COUNT];
 
-static void RegisterKernel(IKernel *k, uint8_t core_nr)
+void RegisterKernel(IKernel *k, uint8_t core_nr)
 {
     STK_ASSERT(s_KernelMap[core_nr].kernel == nullptr);
 
     s_KernelMap[core_nr].kernel = k;
 }
 
-static void UnregisterKernel(const IKernel *k)
+void UnregisterKernel(const IKernel *k)
 {
     for (uint32_t i = 0U; i < STK_C_CPU_COUNT; ++i)
     {
@@ -262,7 +284,7 @@ static void UnregisterKernel(const IKernel *k)
     }
 }
 
-static void SetEventOverrider(IKernel *k, stk_event_overrider_t *overrider)
+void SetEventOverrider(IKernel *k, stk_event_overrider_t *overrider)
 {
     bool found = false;
 
@@ -286,11 +308,11 @@ static void SetEventOverrider(IKernel *k, stk_event_overrider_t *overrider)
 // Helpers
 // -----------------------------------------------------------------------------
 
-static stk_task_t *AllocateTask(stk_task_entry_t  entry,
-                                void             *arg,
-                                stk_word_t       *stack,
-                                uint32_t          stack_size,
-                                EAccessMode       amode)
+stk_task_t *AllocateTask(stk_task_entry_t  entry,
+                         void             *arg,
+                         stk_word_t       *stack,
+                         uint32_t          stack_size,
+                         EAccessMode       amode)
 {
     stk_task_t *tsk = nullptr;
 
@@ -329,6 +351,10 @@ void FreeTask(const stk_task_t *tsk)
 
     STK_ASSERT(found);
 }
+
+// +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+} // namespace
+// +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 // =============================================================================
 // C-interface
@@ -473,7 +499,7 @@ bool stk_kernel_is_schedulable(const stk_kernel_t *k)
 {
     STK_ASSERT(k != nullptr);
 
-    return SchedulabilityCheck::IsSchedulableWCRT<STK_C_KERNEL_MAX_TASKS>(
+    return sched::SchedulabilityCheck::IsSchedulableWCRT<STK_C_KERNEL_MAX_TASKS>(
         const_cast<IKernel *>(CastCToKernelInterfaceConst(k))->GetSwitchStrategy());
 }
 

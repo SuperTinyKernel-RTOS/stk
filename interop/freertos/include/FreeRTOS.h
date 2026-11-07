@@ -541,7 +541,7 @@ typedef struct
 /// Covers FrtosMessageBuffer (BlockMemoryPool header + envelope MessageQueue header
 /// + ownership flags + two StreamBufferCallbackFunction_t pointers) on all
 /// supported STK targets. Size is conservative (+2 words vs the pre-callback layout).
-#define STATIC_MESSAGE_BUFFER_TCB_SIZE_WORDS  38U
+#define STATIC_MESSAGE_BUFFER_TCB_SIZE_WORDS  48U
 typedef struct
 {
     uintptr_t _opaque[STATIC_MESSAGE_BUFFER_TCB_SIZE_WORDS];

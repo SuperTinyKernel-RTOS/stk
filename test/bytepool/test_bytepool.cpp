@@ -13,6 +13,7 @@
 #include <stk_config.h>
 #include <stk.h>
 #include <memory/stk_memory_bytepool.h>
+#include <memory/stk_memory_allocator_malloc.h> // use malloc-based allocator
 
 #include "stktest_context.h"
 
@@ -41,13 +42,6 @@ STK_TEST_DECL_ASSERT;
 
 static_assert((_STK_POOL_BLK_COUNT * (_STK_POOL_BLK_PAYLOAD + stk::memory::BytePool::HEADER_SIZE)) == _STK_POOL_STORAGE_SIZE,
     "uniform block layout must fill the test pool exactly");
-
-// Private memory allocators (we define malloc, free here to overcome absence of declaration in
-// case of -ffreestanding compiler flag).
-extern "C" void *malloc(size_t size);
-extern "C" void free(void *ptr);
-void *stk::memory::MemoryAllocator::Allocate(size_t size) { return malloc(size); }
-void stk::memory::MemoryAllocator::Free(void *ptr) { free(ptr); }
 
 namespace stk {
 namespace test {
@@ -1533,6 +1527,397 @@ private:
 };
 
 // ---------------------------------------------------------------------------
+// Test 17 – Diagnostics: GetStats / GetPeakUsedSize / GetAllocFailCount / GetMaxScanLength
+// ---------------------------------------------------------------------------
+
+/*! \class DiagnosticsTask
+    \brief Verifies the O(1) statistics of the pool on a fresh instance: consumption (headers included),
+           allocation/free counters, the high watermark and its derived min_ever_free, the failed-request
+           counter (exhaustion, timeout and oversized requests count; zero-sized requests do not) and the
+           block-list walk length.
+*/
+template <EAccessMode _AccessMode>
+class DiagnosticsTask : public Task<_STK_POOL_STACK_SIZE, _AccessMode>
+{
+    uint8_t m_task_id;
+
+public:
+    DiagnosticsTask(uint8_t task_id, int32_t) : m_task_id(task_id)
+    {}
+
+private:
+    void Run() override
+    {
+        if (m_task_id == 0)
+        {
+            typedef stk::memory::MemoryAllocator::Stats StatsT;
+
+            bool ok = true;
+
+            const size_t cap       = g_Pool->GetSize();
+            const size_t blk_total = (_STK_POOL_BLK_PAYLOAD + stk::memory::BytePool::HEADER_SIZE);
+
+            // fresh pool: every counter is zero, everything is available
+            const StatsT s0 = g_Pool->GetStats();
+            ok &= (cap == _STK_POOL_STORAGE_SIZE) && (s0.GetCapacity() == cap);
+            ok &= (s0.allocated == 0U) && (s0.peak_allocated == 0U);
+            ok &= (s0.allocate_count == 0U) && (s0.free_count == 0U) && (s0.alloc_fail_count == 0U);
+            ok &= (s0.min_ever_free == cap) && (s0.GetAvailable() == cap);
+            ok &= (g_Pool->GetPeakUsedSize() == 0U);
+            ok &= (g_Pool->GetAllocFailCount() == 0U);
+            ok &= (g_Pool->GetMaxScanLength() == 0U);
+
+            // one allocation: consumption includes the header, the list walk is at least one block long
+            void *one = g_Pool->TryAlloc(_STK_POOL_BLK_PAYLOAD);
+            ok &= (one != nullptr);
+
+            const StatsT s1 = g_Pool->GetStats();
+            ok &= (s1.allocated == blk_total) && (s1.peak_allocated == blk_total);
+            ok &= (s1.allocate_count == 1U) && (s1.free_count == 0U);
+            ok &= (s1.GetAvailable() == (cap - blk_total));
+            ok &= ((s1.allocated + FreeSpace()) == cap); // every byte belongs either to a used or to a free block
+            ok &= (g_Pool->GetMaxScanLength() >= 1U);
+
+            ok &= g_Pool->Free(one);
+
+            // after the free the consumption drops, but the watermark stays
+            const StatsT s2 = g_Pool->GetStats();
+            ok &= (s2.allocated == 0U) && (s2.free_count == 1U) && (s2.allocate_count == 1U);
+            ok &= (s2.peak_allocated == blk_total) && (s2.min_ever_free == (cap - blk_total));
+            ok &= (g_Pool->GetPeakUsedSize() == blk_total);
+
+            // exhaust the pool: the watermark reaches the capacity, the 8th allocation walked all blocks
+            void *blocks[_STK_POOL_BLK_COUNT] = {};
+            DrainPool(blocks);
+
+            const StatsT s3 = g_Pool->GetStats();
+            ok &= (s3.allocated == cap) && (s3.peak_allocated == cap) && (s3.GetAvailable() == 0U);
+            ok &= (s3.allocate_count == (1U + _STK_POOL_BLK_COUNT)) && (s3.min_ever_free == 0U);
+            ok &= (g_Pool->GetPeakUsedSize() == cap);
+            ok &= (g_Pool->GetMaxScanLength() >= _STK_POOL_BLK_COUNT);
+            ok &= (s3.alloc_fail_count == 0U) && (g_Pool->GetAllocFailCount() == 0U);
+
+            // failed requests: exhaustion (NO_WAIT), oversized request and an expired timeout are counted ...
+            ok &= (g_Pool->TryAlloc(_STK_POOL_BLK_PAYLOAD) == nullptr);
+            ok &= (g_Pool->GetAllocFailCount() == 1U);
+
+            ok &= (g_Pool->TryAlloc(g_Pool->GetMaxRequest() + 1U) == nullptr);
+            ok &= (g_Pool->GetAllocFailCount() == 2U);
+
+            void *blk = nullptr;
+            const int64_t start = GetTimeNowMs();
+            ok &= (g_Pool->TimedAllocEx(&blk, _STK_POOL_BLK_PAYLOAD, _STK_POOL_TEST_SHORT_SLEEP) == WAIT_RESULT_TIMEOUT);
+            const int64_t elapsed = GetTimeNowMs() - start;
+            ok &= (blk == nullptr) && (elapsed >= (_STK_POOL_TEST_SHORT_SLEEP / 2));
+            ok &= (g_Pool->GetAllocFailCount() == 3U);
+
+            // ... a zero-sized request is an argument error, not an exhaustion
+            ok &= (g_Pool->TryAlloc(0U) == nullptr);
+            ok &= (g_Pool->GetAllocFailCount() == 3U);
+
+            ok &= (g_Pool->GetStats().alloc_fail_count == 3U); // the snapshot reports the same counter
+            ok &= (g_Pool->GetMaxScanLength() >= _STK_POOL_BLK_COUNT);
+
+            // release everything: consumption returns to zero, history (watermark, counters) is kept
+            ReleaseAll(blocks);
+
+            const StatsT s4 = g_Pool->GetStats();
+            ok &= (s4.allocated == 0U) && (s4.peak_allocated == cap) && (s4.min_ever_free == 0U);
+            ok &= (s4.allocate_count == (1U + _STK_POOL_BLK_COUNT)) && (s4.free_count == (1U + _STK_POOL_BLK_COUNT));
+            ok &= (s4.alloc_fail_count == 3U);
+            ok &= IsAllFree();
+
+            printf("Diagnostics: peak=%d fails=%d max_scan=%d %s\n",
+                (int)g_Pool->GetPeakUsedSize(), (int)g_Pool->GetAllocFailCount(),
+                (int)g_Pool->GetMaxScanLength(), ok ? "PASS" : "FAIL");
+
+            if (ok)
+                g_TestResult = 1;
+        }
+
+        ++g_InstancesDone;
+    }
+};
+
+// ---------------------------------------------------------------------------
+// Test 18 – Object helpers: TryNewT / NewT / TimedNewT / DeleteT / TryMakeT / MakeT / PoolPtr
+// ---------------------------------------------------------------------------
+
+/*! \brief Object with observable construction/destruction used by ObjectApiTask. */
+struct TrackedObj
+{
+    static const uint32_t CANARY = 0xC0DEC0DEU;
+
+    uint32_t a;
+    uint32_t b;
+    uint32_t canary;
+
+    TrackedObj(uint32_t x = 0x1111U, uint32_t y = 0x2222U);
+    ~TrackedObj();
+};
+
+static volatile int32_t g_ObjCtors         = 0;
+static volatile int32_t g_ObjDtors         = 0;
+static volatile bool    g_ObjDtorSawCanary = true; // false if a destructor ever ran on a damaged object
+
+TrackedObj::TrackedObj(uint32_t x, uint32_t y) : a(x), b(y), canary(CANARY)
+{
+    ++g_ObjCtors;
+}
+
+TrackedObj::~TrackedObj()
+{
+    if (canary != CANARY)
+        g_ObjDtorSawCanary = false;
+
+    canary = 0U;
+    ++g_ObjDtors;
+}
+
+/*! \class ObjectApiTask
+    \brief Verifies construction in place with argument forwarding (TryNewT / NewT / TimedNewT), that nothing is
+           constructed when the allocation fails, that DeleteT() runs the destructor before the block is returned,
+           that trivially constructible types still receive their arguments, and the owning PoolPtr returned by
+           TryMakeT() / MakeT(): scope exit, move construction/assignment, Release(), Reset() and empty pointers.
+*/
+template <EAccessMode _AccessMode>
+class ObjectApiTask : public Task<_STK_POOL_STACK_SIZE, _AccessMode>
+{
+    uint8_t m_task_id;
+
+public:
+    ObjectApiTask(uint8_t task_id, int32_t) : m_task_id(task_id)
+    {}
+
+private:
+    void Run() override
+    {
+        if (m_task_id == 0)
+        {
+            typedef stk::memory::PoolPtr<TrackedObj, stk::memory::BytePool> ObjPtr;
+
+            bool ok = true;
+
+            g_ObjCtors         = 0;
+            g_ObjDtors         = 0;
+            g_ObjDtorSawCanary = true;
+
+            // ---- TryNewT: constructed in place with forwarded arguments
+            TrackedObj *o1 = g_Pool->TryNewT<TrackedObj>(0x11U, 0x22U);
+            ok &= (o1 != nullptr);
+            if (o1 != nullptr)
+            {
+                ok &= IsAligned8(o1);
+                ok &= (o1->a == 0x11U) && (o1->b == 0x22U) && (o1->canary == TrackedObj::CANARY);
+            }
+            ok &= (g_ObjCtors == 1) && (g_ObjDtors == 0);
+            ok &= !IsAllFree();
+
+            // ---- DeleteT: destructor runs on the intact object, then the block is returned
+            g_Pool->DeleteT(o1);
+            ok &= (g_ObjDtors == 1) && g_ObjDtorSawCanary;
+            ok &= IsAllFree();
+
+            // ---- DeleteT(nullptr) is a no-op
+            g_Pool->DeleteT<TrackedObj>(nullptr);
+            ok &= (g_ObjDtors == 1) && IsAllFree();
+
+            // ---- NewT (default arguments) and TimedNewT (explicit arguments)
+            TrackedObj *o2 = g_Pool->NewT<TrackedObj>();
+            TrackedObj *o3 = g_Pool->TimedNewT<TrackedObj>(_STK_POOL_TEST_TIMEOUT, 7U, 8U);
+            ok &= (o2 != nullptr) && (o3 != nullptr) && (o2 != o3);
+            if ((o2 != nullptr) && (o3 != nullptr))
+            {
+                ok &= (o2->a == 0x1111U) && (o2->b == 0x2222U);
+                ok &= (o3->a == 7U) && (o3->b == 8U);
+            }
+            ok &= (g_ObjCtors == 3);
+            g_Pool->DeleteT(o2);
+            g_Pool->DeleteT(o3);
+            ok &= (g_ObjDtors == 3) && g_ObjDtorSawCanary && IsAllFree();
+
+            // ---- trivially constructible types must still be constructed from the arguments
+            uint32_t *pv = g_Pool->TryNewT<uint32_t>(0xC0FFEEU);
+            ok &= (pv != nullptr) && (*pv == 0xC0FFEEU);
+            g_Pool->DeleteT(pv);
+
+            const TestRecord src = { 5U, 6U };
+            TestRecord *pr = g_Pool->TryNewT<TestRecord>(src);
+            ok &= (pr != nullptr) && (pr->id == 5U) && (pr->value == 6U);
+            g_Pool->DeleteT(pr);
+
+            // ... and without arguments the object is value-initialised (zeroed), not left with stale bytes
+            void *dirty = g_Pool->TryAlloc(sizeof(TestRecord));
+            ok &= (dirty != nullptr);
+            if (dirty != nullptr)
+            {
+                memset(dirty, 0xFF, sizeof(TestRecord));
+                g_Pool->Free(dirty);
+            }
+            TestRecord *pz = g_Pool->TryNewT<TestRecord>();
+            ok &= (pz != nullptr) && (pz->id == 0U) && (pz->value == 0U);
+            g_Pool->DeleteT(pz);
+            ok &= IsAllFree();
+
+            // ---- failed allocation constructs nothing
+            {
+                void *blocks[_STK_POOL_BLK_COUNT] = {};
+                DrainPool(blocks);
+
+                const int32_t ctors = g_ObjCtors;
+                ok &= (g_Pool->TryNewT<TrackedObj>() == nullptr);
+                ok &= (g_Pool->TimedNewT<TrackedObj>(_STK_POOL_TEST_SHORT_SLEEP, 1U, 2U) == nullptr);
+                ok &= (g_ObjCtors == ctors);
+
+                ObjPtr empty = g_Pool->TryMakeT<TrackedObj>();
+                ok &= !empty && (empty.Get() == nullptr);
+                empty.Reset(); // resetting an empty pointer is harmless
+                ok &= (g_ObjCtors == ctors);
+
+                ReleaseAll(blocks);
+                ok &= IsAllFree();
+            }
+
+            // ---- PoolPtr: ownership, moves, Release(), Reset(), scope exit
+            g_ObjCtors = 0;
+            g_ObjDtors = 0;
+            {
+                ObjPtr p = g_Pool->TryMakeT<TrackedObj>(1U, 2U);
+                ok &= static_cast<bool>(p) && (p.Get() != nullptr) && (p->a == 1U) && ((*p).b == 2U);
+                ok &= (g_ObjCtors == 1) && (g_ObjDtors == 0);
+
+                // move construction transfers ownership, nothing is destroyed
+                ObjPtr q(static_cast<ObjPtr &&>(p));
+                ok &= !p && static_cast<bool>(q) && (q->a == 1U);
+
+                // move assignment into an empty pointer
+                ObjPtr r;
+                ok &= !r;
+                r = static_cast<ObjPtr &&>(q);
+                ok &= !q && static_cast<bool>(r) && (r->b == 2U);
+                ok &= (g_ObjDtors == 0);
+
+                // move assignment over a live object destroys the old one first
+                ObjPtr s = g_Pool->MakeT<TrackedObj>(3U, 4U);
+                ok &= static_cast<bool>(s) && (s->a == 3U) && (g_ObjCtors == 2);
+                s = static_cast<ObjPtr &&>(r);
+                ok &= (g_ObjDtors == 1) && static_cast<bool>(s) && (s->a == 1U) && !r;
+
+                // Release(): ownership goes back to the caller, nothing is destroyed
+                TrackedObj *raw = s.Release();
+                ok &= !s && (raw != nullptr) && (g_ObjDtors == 1);
+                g_Pool->DeleteT(raw);
+                ok &= (g_ObjDtors == 2);
+
+                // Reset() destroys at once, a second Reset() is a no-op
+                ObjPtr t = g_Pool->TryMakeT<TrackedObj>();
+                ok &= static_cast<bool>(t) && (g_ObjCtors == 3);
+                t.Reset();
+                ok &= !t && (g_ObjDtors == 3);
+                t.Reset();
+                ok &= (g_ObjDtors == 3);
+            }
+            ok &= (g_ObjCtors == g_ObjDtors) && IsAllFree();
+
+            // leaving the scope returns the object to the pool
+            {
+                ObjPtr u = g_Pool->TryMakeT<TrackedObj>(9U, 9U);
+                ok &= static_cast<bool>(u) && !IsAllFree() && (g_ObjDtors == 3);
+            }
+            ok &= (g_ObjCtors == 4) && (g_ObjDtors == 4) && g_ObjDtorSawCanary && IsAllFree();
+
+            printf("ObjectApi: ctors=%d dtors=%d %s\n", (int)g_ObjCtors, (int)g_ObjDtors, ok ? "PASS" : "FAIL");
+
+            if (ok)
+                g_TestResult = 1;
+        }
+
+        ++g_InstancesDone;
+    }
+};
+
+// ---------------------------------------------------------------------------
+// Test 19 – StaticBytePool: pool with embedded storage
+// ---------------------------------------------------------------------------
+
+// Namespace-scope instance, as recommended for global pools: no heap, no separately declared buffer
+static stk::memory::StaticBytePool<256U> g_StaticPool("static");
+
+/*! \class StaticPoolTask
+    \brief Verifies that StaticBytePool is usable as a regular BytePool with its own embedded, correctly
+           aligned storage (nothing trimmed, nothing shared with the test pool) including the object helpers.
+*/
+template <EAccessMode _AccessMode>
+class StaticPoolTask : public Task<_STK_POOL_STACK_SIZE, _AccessMode>
+{
+    uint8_t m_task_id;
+
+public:
+    StaticPoolTask(uint8_t task_id, int32_t) : m_task_id(task_id)
+    {}
+
+private:
+    void Run() override
+    {
+        if (m_task_id == 0)
+        {
+            typedef stk::memory::BytePool BP;
+
+            bool ok = true;
+
+            BP &sp = g_StaticPool;
+
+            ok &= sp.IsStorageValid();
+            ok &= (sp.GetSize() == 256U); // the embedded buffer is aligned by construction: nothing is trimmed
+            ok &= (sp.GetMaxRequest() == (256U - BP::HEADER_SIZE));
+
+            // the largest request spans the whole pool; the pool is then exhausted
+            void *whole = sp.TryAlloc(sp.GetMaxRequest());
+            ok &= (whole != nullptr);
+            if (whole != nullptr)
+            {
+                ok &= IsAligned8(whole);
+                ok &= (sp.TryAlloc(1U) == nullptr);
+
+                // the storage is private to this pool, the shared test pool is not involved
+                const uint8_t *p = static_cast<const uint8_t *>(whole);
+                ok &= (p < g_PoolStorage) || (p >= (g_PoolStorage + sizeof(g_PoolStorage)));
+
+                memset(whole, 0x5A, sp.GetMaxRequest());
+                ok &= sp.Free(whole);
+            }
+
+            size_t a, l, f;
+            sp.GetInfo(a, l, f);
+            ok &= (f == 1U) && (a == sp.GetMaxRequest()) && (l == a);
+
+            // object helpers work through the derived class
+            g_ObjCtors = 0;
+            g_ObjDtors = 0;
+            {
+                stk::memory::PoolPtr<TrackedObj, BP> obj = sp.TryMakeT<TrackedObj>(21U, 42U);
+                ok &= static_cast<bool>(obj) && (obj->a == 21U) && (obj->b == 42U) && IsAligned8(obj.Get());
+                ok &= (sp.GetStats().allocated > 0U);
+            }
+            ok &= (g_ObjCtors == 1) && (g_ObjDtors == 1);
+            ok &= (sp.GetStats().allocated == 0U);
+            ok &= (sp.GetStats().GetCapacity() == 256U);
+
+            sp.GetInfo(a, l, f);
+            ok &= (f == 1U) && (a == sp.GetMaxRequest());
+
+            ok &= IsAllFree(); // shared pool untouched
+
+            printf("StaticPool: %s\n", ok ? "PASS" : "FAIL");
+            if (ok)
+                g_TestResult = 1;
+        }
+
+        ++g_InstancesDone;
+    }
+};
+
+// ---------------------------------------------------------------------------
 // Helper – reset shared state between tests
 // ---------------------------------------------------------------------------
 
@@ -1567,7 +1952,7 @@ static void ResetTestState()
 /*! \fn    NeedsTwoTasks
     \brief Returns true if the test requires tasks 0 and 1.
     \note  Single-task tests (TryAllocFree, ExhaustPool, SplitCoalesce, TypedAlloc, FreeNull,
-           InvalidRequest, AlignHelpers, StorageMode) use only task 0.
+           InvalidRequest, AlignHelpers, StorageMode, Diagnostics, ObjectApi, StaticPool) use only task 0.
 */
 static bool NeedsTwoTasks(const char *test_name)
 {
@@ -1737,6 +2122,15 @@ int main(int argc, char **argv)
 
     // Test 15: External, heap, minimal and misaligned storage
     RUN(stk::test::bytepool::StorageModeTask,         "StorageMode",         0);
+
+    // Test 17: GetStats / GetPeakUsedSize / GetAllocFailCount / GetMaxScanLength
+    RUN(stk::test::bytepool::DiagnosticsTask,         "Diagnostics",         0);
+
+    // Test 18: TryNewT / NewT / TimedNewT / DeleteT / TryMakeT / MakeT / PoolPtr
+    RUN(stk::test::bytepool::ObjectApiTask,           "ObjectApi",           0);
+
+    // Test 19: StaticBytePool (embedded storage)
+    RUN(stk::test::bytepool::StaticPoolTask,          "StaticPool",          0);
 
     // Cancellation of blocked allocations (tasks 0-2 only), via IKernel::CancelTaskWait()
     // and via stk::SleepCancel() (param + 100)
