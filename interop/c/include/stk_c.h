@@ -40,6 +40,9 @@
 namespace stk {
     class IKernel;
     class ITask;
+    namespace hw {
+        class HiResClock;
+    }
     namespace sync {
         class Mutex;
         class FastMutex;
@@ -917,26 +920,83 @@ stk_cycle_t stk_sys_timer_count(void);
 uint32_t stk_sys_timer_frequency(void);
 
 // =============================================================================
-// High-Resolution Clock  (see hw::HiResClock)
+// High-Resolution Clock (see hw::HiResClock)
 // =============================================================================
 
-/*! \brief     Get raw CPU cycle counter.
-    \return    64-bit cycle count. Resolution is one clock cycle.
-    \note      ISR-safe. Use stk_hires_frequency() to convert to real time.
+/*! \brief     A memory size (multiples of stk_word_t) required for HiResClock instance.
+    \note      The state of hw::HiResClock is at most one 64-bit cycle accumulator plus one 32-bit
+               previous counter value (Cortex-M3+), padded to 8 bytes alignment: 16 bytes in total
+               (other architectures need less). The formula yields 4 words on a 32-bit MCU and
+               2 words on a 64-bit target. ConstructIn() verifies at compile time that the container
+               is large and aligned enough for hw::HiResClock.
 */
-stk_cycle_t stk_hires_cycles(void);
+#define STK_HIRES_CLOCK_IMPL_SIZE STK_C_CEIL_DIV( \
+    STK_ROUND_UP((sizeof(uint64_t) + sizeof(uint32_t)), sizeof(uint64_t)), \
+    sizeof(stk_word_t))
 
-/*! \brief     Get CPU clock frequency in Hz.
+/*! \brief     Opaque memory container for a HiResClock instance.
+    \note      Alignment guarantees compatibility with underlying C++ representation (64-bit
+               cycle accumulator).
+*/
+typedef struct stk_hires_clock_mem_t {
+    stk_word_t data[STK_HIRES_CLOCK_IMPL_SIZE] __stk_c_align(STK_MAX(sizeof(stk_word_t), sizeof(uint64_t)));
+} stk_hires_clock_mem_t;
+
+/*! \brief     Opaque handle to a HiResClock instance (see hw::HiResClock).
+*/
+typedef struct stk_hires_clock_t stk_hires_clock_t;
+
+/*! \brief     Create a HiResClock (using provided memory).
+    \details   Constructs a hw::HiResClock in-place inside \a membuf.
+    \param[in] membuf: Pointer to static memory container.
+    \return    HiResClock handle.
+    \note      The time origin is architecture-specific: only on ARM Cortex-M3+ it is the moment of this
+               call, other ports count from a global origin (kernel start, hardware counter origin or first
+               use). Measure intervals as the difference of two readings, see hw::HiResClock.
+    \note      An instance is NOT re-entrant: use one instance per execution context (task or ISR)
+               that reads it.
+    \note      Privileged mode only (same contract as hw::HiResClock).
+*/
+stk_hires_clock_t *stk_hires_clock_create(stk_hires_clock_mem_t *const membuf);
+
+/*! \brief     Destroy a HiResClock.
+    \param[in] clk: HiResClock handle.
+*/
+void stk_hires_clock_destroy(stk_hires_clock_t *clk);
+
+/*! \brief     Get the cycle count of the clock counter (see stk_hires_clock_create() for the time origin).
+    \param[in] clk: HiResClock handle.
+    \return    64-bit counter value. Resolution is one counter tick: one CPU cycle on ARM, one CPU cycle or
+               one \c mtime reference tick on RISC-V, one QueryPerformanceCounter tick on x86-Win32.
+               Use the difference of two readings for an interval.
+    \note      Use stk_hires_frequency() to convert to real time. On Cortex-M3+ the instance must
+               be polled at least once per 2^32 cycles to keep the 32-bit hardware counter unwrapped.
+    \note      ISR-safe (for an instance not used by any other context).
+*/
+stk_cycle_t stk_hires_cycles(stk_hires_clock_t *clk);
+
+/*! \brief     Get clock frequency in Hz.
+    \param[in] clk: HiResClock handle.
     \return    Clock frequency in Hz.
     \note      ISR-safe.
 */
-uint32_t stk_hires_frequency(void);
+uint32_t stk_hires_frequency(const stk_hires_clock_t *clk);
 
-/*! \brief     Get elapsed time in microseconds from the high-resolution clock.
-    \return    Microseconds since an arbitrary but fixed epoch (typically reset).
-    \note      ISR-safe. Equivalent to stk_hires_cycles() * 1000000 / stk_hires_frequency().
+/*! \brief     Get elapsed time in microseconds (see stk_hires_clock_create() for the time origin).
+    \param[in] clk: HiResClock handle.
+    \return    Microseconds. Equivalent to stk_hires_cycles() * 1000000 / stk_hires_frequency().
+    \note      ISR-safe (for an instance not used by any other context).
 */
-stk_tick_t stk_hires_time_us(void);
+stk_tick_t stk_hires_time_us(stk_hires_clock_t *clk);
+
+#ifdef __cplusplus
+/*! \brief     Get the underlying C++ \c stk::hw::HiResClock object wrapped by a \c stk_hires_clock_t handle.
+    \param[in] clk: HiResClock handle obtained via \c stk_hires_clock_create().
+    \return    Pointer to the wrapped \c stk::hw::HiResClock instance. Never \c NULL for a valid handle.
+    \note      C++ callers only (guarded by \c __cplusplus); not part of the C ABI.
+*/
+extern "C" stk::hw::HiResClock *stk_hires_clock_get_instance(stk_hires_clock_t *clk);
+#endif // __cplusplus
 
 /*! \brief     Busy-wait delay (other tasks continue to run).
     \param[in] ticks: Ticks to delay.

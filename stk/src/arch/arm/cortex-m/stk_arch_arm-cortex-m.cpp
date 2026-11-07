@@ -541,7 +541,7 @@ void OnSchedulerExit();
 #if STK_SEGGER_SYSVIEW
 void SendSysDesc()
 {
-    SEGGER_SYSVIEW_SendSysDesc("SuperTinyKernel RTOS (STK)");
+    SEGGER_SYSVIEW_SendSysDesc(STK_PACKAGE_NAME);
 }
 #endif
 
@@ -2080,124 +2080,6 @@ Context s_StkPlatformContext[STK_ARCH_CPU_COUNT];
 
 // ----------------------------------------------------------------------------
 } // namespace
-// ----------------------------------------------------------------------------
-
-// ----------------------------------------------------------------------------
-// Make file local content (anonymous namespace).
-namespace {
-// ----------------------------------------------------------------------------
-
-#if (__CORTEX_M >= 3U)
-
-//! High resolution clock for Cortex-M3+ using DWT peripheral.
-class HiResClockDWT
-{
-    Cycles   m_acc;
-    uint32_t m_prev;
-
-public:
-    HiResClockDWT() : m_acc(0U), m_prev(0U)
-    {
-        HW_DWTEnableCounter();
-        m_prev = HW_DWTGetCounter();
-    }
-
-    static HiResClockDWT *GetInstance();
-
-    void Update()
-    {
-        const uint32_t current = HW_DWTGetCounter();
-
-        // unsigned subtraction handles the wrap-around perfectly
-        const uint32_t delta = current - m_prev;
-        m_acc += delta;
-
-        m_prev = current;
-    }
-
-    Cycles GetCycles()
-    {
-        Update();
-        return m_acc;
-    }
-
-    uint32_t GetFrequency()
-    {
-        return HW_CoreClockFrequency();
-    }
-};
-
-STK_MPU_KERNEL_CODE_SECTION
-HiResClockDWT *HiResClockDWT::GetInstance()
-{
-    // keep declaration function-local to allow compiler stripping it from the binary if
-    // it is unused by the user code
-    STK_MPU_KERNEL_DATA_SECTION static HiResClockDWT clock;
-    return &clock;
-}
-
-typedef HiResClockDWT HiResClockImpl;
-
-#endif // #if (__CORTEX_M >= 3U)
-
-//! High resolution clock implementation for Cortex-M0.
-#if (__CORTEX_M < 3U)
-class HiResClockM0
-{
-public:
-    static HiResClockM0 *GetInstance();
-
-    Cycles GetCycles()
-    {
-        const Ticks resolution_ticks = static_cast<Ticks>(GetContext().m_tick_resolution);
-        const Cycles tick_cycles     = ConvertTimeUsToClockCycles(HW_CoreClockFrequency(), resolution_ticks);
-
-        // tick counter cannot advance while the critical section is held (SysTick ISR is deferred)
-        Cycles cycles = ConvertTimeUsToClockCycles(HW_CoreClockFrequency(), (stk::GetTicks() * resolution_ticks));
-
-        bool     wrapped = ((SCB->ICSR & SCB_ICSR_PENDSTSET_Msk) != 0U);
-        uint32_t val     = HW_SysTickValue();
-        if (!wrapped && ((SCB->ICSR & SCB_ICSR_PENDSTSET_Msk) != 0U))
-        {
-            // counter wrapped between the two reads: re-sample the post-wrap value
-            wrapped = true;
-            val     = HW_SysTickValue();
-        }
-        if (wrapped)
-        {
-            cycles += tick_cycles; // the tick whose ISR is still pending
-        }
-
-        const uint32_t load  = SysTick->LOAD;
-        const uint32_t delta = load - val;
-
-        const Cycles delta_cycles = static_cast<Cycles>(delta);
-
-        // total elapsed cycles
-        return cycles + delta_cycles;
-    }
-
-    uint32_t GetFrequency()
-    {
-        return HW_CoreClockFrequency();
-    }
-};
-
-STK_MPU_KERNEL_CODE_SECTION
-HiResClockM0 *HiResClockM0::GetInstance()
-{
-    // keep declaration function-local to allow compiler stripping it from the binary if
-    // it is unused by the user code
-    STK_MPU_KERNEL_DATA_SECTION static HiResClockM0 clock;
-    return &clock;
-}
-
-typedef HiResClockM0 HiResClockImpl;
-
-#endif //#if (__CORTEX_M < 3U)
-
-// ----------------------------------------------------------------------------
-} // anonymous namespace
 // ----------------------------------------------------------------------------
 
 __stk_attr_noinline  // keep out of inlining to preserve stack frame
@@ -3790,20 +3672,42 @@ bool NSC_stk_hw_SpinLock_TryLock(hw::SpinLock *sl)
     return locked;
 }
 
+/*! \brief  NSC gateway: hw::HiResClock::HiResClock (initialize a Non-Secure instance).
+    \note   The instance must reside in Non-Secure memory writable by the caller.
+*/
+STK_TZ_NSC_GATEWAY
+void NSC_stk_hw_HiResClock_Init(hw::HiResClock *clk)
+{
+    if ((clk != nullptr) && (cmse_check_pointed_object(clk, NSC_GetCallerAccessFlags()) != nullptr))
+    {
+        (*clk) = hw::HiResClock();
+    }
+}
+
 /*! \brief  NSC gateway: hw::HiResClock::GetFrequency.
+    \note   Frequency does not depend on instance state.
 */
 STK_TZ_NSC_GATEWAY
 uint32_t NSC_stk_hw_HiResClock_GetFrequency()
 {
-    return hw::HiResClock::GetFrequency();
+    return HW_CoreClockFrequency();
 }
 
 /*! \brief  NSC gateway: hw::HiResClock::GetCycles.
+    \note   The instance must reside in Non-Secure memory writable by the caller and must have been
+            initialized with NSC_stk_hw_HiResClock_Init().
 */
 STK_TZ_NSC_GATEWAY
-stk::Cycles NSC_stk_hw_HiResClock_GetCycles()
+stk::Cycles NSC_stk_hw_HiResClock_GetCycles(hw::HiResClock *clk)
 {
-    return hw::HiResClock::GetCycles();
+    stk::Cycles cycles = 0U;
+
+    if ((clk != nullptr) && (cmse_check_pointed_object(clk, NSC_GetCallerAccessFlags()) != nullptr))
+    {
+        cycles = clk->GetCycles();
+    }
+
+    return cycles;
 }
 
 /*! \brief  NSC gateway: hw::IsInsideISR.
@@ -4296,15 +4200,63 @@ bool stk::hw::IsPrivilegedContext()
 }
 
 STK_MPU_KERNEL_CODE_SECTION
-Cycles stk::hw::HiResClock::GetCycles()
+stk::hw::HiResClock::HiResClock() : stk::hw::detail::HiResClockState()
 {
-    return HiResClockImpl::GetInstance()->GetCycles();
+#if (__CORTEX_M >= 3U)
+    HW_DWTEnableCounter();
+    m_prev = HW_DWTGetCounter();
+#endif
 }
 
 STK_MPU_KERNEL_CODE_SECTION
-uint32_t stk::hw::HiResClock::GetFrequency()
+Cycles stk::hw::HiResClock::GetCycles()
 {
-    const uint32_t freq = HiResClockImpl::GetInstance()->GetFrequency();
+#if (__CORTEX_M >= 3U)
+    // high resolution clock for Cortex-M3+ using DWT peripheral
+    const uint32_t current = HW_DWTGetCounter();
+
+    // unsigned subtraction handles the wrap-around perfectly
+    const uint32_t delta = current - m_prev;
+    m_acc += delta;
+
+    m_prev = current;
+
+    return m_acc;
+#else
+    // high resolution clock for Cortex-M0, stateless
+    const Ticks resolution_ticks = static_cast<Ticks>(GetContext().m_tick_resolution);
+    const Cycles tick_cycles     = ConvertTimeUsToClockCycles(HW_CoreClockFrequency(), resolution_ticks);
+
+    // tick counter cannot advance while the critical section is held (SysTick ISR is deferred)
+    Cycles cycles = ConvertTimeUsToClockCycles(HW_CoreClockFrequency(), (stk::GetTicks() * resolution_ticks));
+
+    bool     wrapped = ((SCB->ICSR & SCB_ICSR_PENDSTSET_Msk) != 0U);
+    uint32_t val     = HW_SysTickValue();
+    if (!wrapped && ((SCB->ICSR & SCB_ICSR_PENDSTSET_Msk) != 0U))
+    {
+        // counter wrapped between the two reads: re-sample the post-wrap value
+        wrapped = true;
+        val     = HW_SysTickValue();
+    }
+    if (wrapped)
+    {
+        cycles += tick_cycles; // the tick whose ISR is still pending
+    }
+
+    const uint32_t load  = SysTick->LOAD;
+    const uint32_t delta = load - val;
+
+    const Cycles delta_cycles = static_cast<Cycles>(delta);
+
+    // total elapsed cycles
+    return cycles + delta_cycles;
+#endif
+}
+
+STK_MPU_KERNEL_CODE_SECTION
+uint32_t stk::hw::HiResClock::GetFrequency() const
+{
+    const uint32_t freq = HW_CoreClockFrequency();
     STK_ASSERT(freq != 0U);
     return freq;
 }

@@ -115,7 +115,7 @@ static __stk_forceinline void __stk_dmb() { __asm volatile("fence rw, rw" ::: "m
     #define STK_SYSTEM_CORE_CLOCK_FREQUENCY 150000000U
 #endif
 
-/*! \var   SystemCoreClock
+/*! \var   STK_SYSTEM_CORE_CLOCK_VAR
     \brief System clock frequency in Hz.
 */
 extern "C" volatile uint32_t STK_SYSTEM_CORE_CLOCK_VAR;

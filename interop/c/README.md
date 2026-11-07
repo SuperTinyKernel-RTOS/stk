@@ -519,18 +519,51 @@ uint32_t freq  = stk_sys_timer_frequency(); /* counter frequency in Hz, ISR-safe
 
 ### High-Resolution Clock
 
-For sub-tick measurements (profiling, precise intervals):
+For sub-tick measurements (profiling, precise intervals). Like the synchronization primitives,
+the clock is an **instance** with caller-provided memory (no heap allocation): create it with
+`stk_hires_clock_create()` and release it with `stk_hires_clock_destroy()`.
 
 ```c
-uint64_t t0 = stk_hires_cycles();
+static stk_hires_clock_mem_t clk_mem;
+stk_hires_clock_t *clk = stk_hires_clock_create(&clk_mem);
+
+stk_cycle_t t0 = stk_hires_cycles(clk);
 /* ... work ... */
-uint64_t t1 = stk_hires_cycles();
-uint32_t freq = stk_hires_frequency();     /* CPU clock in Hz */
+stk_cycle_t t1 = stk_hires_cycles(clk);
+uint32_t freq = stk_hires_frequency(clk);   /* counter frequency in Hz */
 double elapsed_us = (double)(t1 - t0) * 1e6 / freq;
 
-/* Or directly: */
-int64_t us = stk_hires_time_us();
+/* Or directly, in microseconds: */
+stk_tick_t us = stk_hires_time_us(clk);
+
+stk_hires_clock_destroy(clk);
 ```
+
+| Function | Description |
+|---|---|
+| `stk_hires_clock_create(membuf)` / `stk_hires_clock_destroy(clk)` | Construct / destroy an instance in the caller-provided `stk_hires_clock_mem_t` |
+| `stk_hires_cycles(clk)` | Counter value (CPU cycles on ARM; see the time origin and unit notes below) |
+| `stk_hires_frequency(clk)` | Frequency in Hz of the counter behind `stk_hires_cycles()` |
+| `stk_hires_time_us(clk)` | Microseconds (`stk_hires_cycles() * 1000000 / stk_hires_frequency()`) |
+
+Notes:
+
+- **Time origin is architecture-specific.** Only on ARM Cortex-M3+ does an instance count from the moment
+  it was created. Other ports are stateless and count from a global origin (Cortex-M0/M0+: kernel start;
+  RISC-V: the hardware counter origin; x86-Win32: first use), so measure intervals as the **difference of
+  two readings** rather than relying on the absolute value.
+- The unit of `stk_hires_cycles()` is the unit of the underlying counter: CPU cycles on ARM, CPU cycles or
+  `mtime` reference ticks on RISC-V (depends on `STK_SUBMICORSECOND_PRECISION_TIMER`),
+  QueryPerformanceCounter ticks on x86-Win32. Always convert with `stk_hires_frequency()` or use
+  `stk_hires_time_us()`.
+- An instance is **not re-entrant**: use one instance per execution context (task or ISR) that reads it
+  rather than sharing one between a task and an ISR, or between tasks. The getters are ISR-safe for an
+  instance not used by any other context.
+- Use from a **Privileged** context only (same contract as `stk::hw::HiResClock`).
+- On Cortex-M3+ the 32-bit hardware counter wraps every 2^32 cycles, so poll each instance at least
+  once per 2^32 cycles to keep the 64-bit count correct.
+- The size and alignment of `stk_hires_clock_mem_t` (`STK_HIRES_CLOCK_IMPL_SIZE` words) adapt to the
+  target automatically, and `create` asserts that the memory container is not NULL.
 
 ---
 
@@ -639,6 +672,7 @@ objects (declared only under `__cplusplus`, not part of the C ABI):
 | `stk_task_get_instance(tsk)` | `stk::ITask *` |
 | `stk_mutex_get_instance`, `stk_fastmutex_get_instance`, `stk_spinlock_get_instance`, `stk_cv_get_instance`, `stk_event_get_instance`, `stk_ef_get_instance`, `stk_pipe_get_instance`, `stk_msgq_get_instance`, `stk_rwmutex_get_instance`, `stk_barrier_get_instance` | the matching `stk::sync::*` object |
 | `stk_sem_get_instance` | `stk::sync::SemaphoreT<stk_sem_val_t> *` |
+| `stk_hires_clock_get_instance` | `stk::hw::HiResClock *` |
 | `stk_blockpool_get_instance`, `stk_bytepool_get_instance` | `stk::memory::BlockMemoryPool` / `BytePool` |
 | `stk_timerhost_get_instance`, `stk_timer_get_instance`, `stk_periodic_trigger_get_instance` | `stk::time::*` objects |
 

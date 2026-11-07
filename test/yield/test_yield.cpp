@@ -352,8 +352,10 @@ public:
 private:
     void Run()
     {
+        hw::HiResClock hires_clock;
+
         // workload start (all tasks start together, task 0 reports the total workload time)
-        const Ticks start_us = hw::HiResClock::GetTimeUs();
+        const Ticks start_us = hires_clock.GetTimeUs();
 
         for (int32_t i = 0; i < m_iterations; ++i)
         {
@@ -394,7 +396,7 @@ private:
             WaitAllDone();
 
             // workload time: from the start of task 0 until all tasks have completed
-            const Ticks elapsed_us = hw::HiResClock::GetTimeUs() - start_us;
+            const Ticks elapsed_us = hires_clock.GetTimeUs() - start_us;
 
             int32_t spread = 0, in_order = 0, out_of_order = 0;
             bool ok = true;

@@ -968,70 +968,6 @@ void RestoreJmp(JmpFrame &/*f*/, int32_t /*val*/)
 // ----------------------------------------------------------------------------
 
 // ----------------------------------------------------------------------------
-// Make file local content (anonymous namespace).
-namespace {
-// ----------------------------------------------------------------------------
-
-//! High resolution clock based on MTIME.
-#if STK_SUBMICORSECOND_PRECISION_TIMER
-class HiResClockCYCLE
-{
-public:
-    static HiResClockCYCLE *GetInstance();
-
-    Cycles GetCycles()
-    {
-        return HW_GetCycleCounter();
-    }
-
-    uint32_t GetFrequency()
-    {
-        return HW_CoreClockFrequency();
-    }
-};
-typedef HiResClockCYCLE HiResClockImpl;
-
-STK_MPU_KERNEL_CODE_SECTION
-HiResClockCYCLE *HiResClockCYCLE::GetInstance()
-{
-    // keep declaration function-local to allow compiler stripping it from the binary if
-    // it is unused by the user code
-    STK_MPU_KERNEL_DATA_SECTION static HiResClockCYCLE clock;
-    return &clock;
-}
-#else
-class HiResClockMTIME
-{
-public:
-    static HiResClockMTIME *GetInstance();
-
-    Cycles GetCycles()
-    {
-        return HW_GetMtime();
-    }
-
-    uint32_t GetFrequency()
-    {
-        return HW_MtimeClockFrequency();
-    }
-};
-typedef HiResClockMTIME HiResClockImpl;
-
-STK_MPU_KERNEL_CODE_SECTION
-HiResClockMTIME *HiResClockMTIME::GetInstance()
-{
-    // keep declaration function-local to allow compiler stripping it from the binary if
-    // it is unused by the user code
-    STK_MPU_KERNEL_DATA_SECTION static HiResClockMTIME clock;
-    return &clock;
-}
-#endif // !STK_SUBMICORSECOND_PRECISION_TIMER
-
-// ----------------------------------------------------------------------------
-} // anonymous namespace
-// ----------------------------------------------------------------------------
-
-// ----------------------------------------------------------------------------
 namespace {
 // ----------------------------------------------------------------------------
 
@@ -2443,14 +2379,25 @@ bool stk::hw::IsPrivilegedContext()
     return true;
 }
 
+stk::hw::HiResClock::HiResClock() : HiResClockState()
+{}
+
 Cycles stk::hw::HiResClock::GetCycles()
 {
-    return HiResClockImpl::GetInstance()->GetCycles();
+#if STK_SUBMICORSECOND_PRECISION_TIMER
+    return HW_GetCycleCounter();
+#else
+    return HW_GetMtime();
+#endif
 }
 
-uint32_t stk::hw::HiResClock::GetFrequency()
+uint32_t stk::hw::HiResClock::GetFrequency() const
 {
-    const uint32_t freq = HiResClockImpl::GetInstance()->GetFrequency();
+#if STK_SUBMICORSECOND_PRECISION_TIMER
+    const uint32_t freq = HW_CoreClockFrequency();
+#else
+    const uint32_t freq = HW_MtimeClockFrequency();
+#endif
     STK_ASSERT(freq != 0U);
     return freq;
 }

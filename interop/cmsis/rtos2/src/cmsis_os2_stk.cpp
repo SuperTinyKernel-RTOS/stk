@@ -82,7 +82,7 @@ namespace {
 // +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 // Returns a size of memory in stk::Word elements required for object allocation.
-template <typename T> static constexpr size_t StkGetWordCountForType()
+template <typename T> __stk_forceinline constexpr size_t StkGetWordCountForType()
 {
     return ((sizeof(T) + sizeof(stk::Word) - 1U) / sizeof(stk::Word));
 }
