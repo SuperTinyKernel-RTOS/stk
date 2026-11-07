@@ -79,10 +79,10 @@ class TimerHost; // forward declaration (used by Timer::OnExpired)
 
     \see TimerHost::Start, TimerHost::Stop, TimerHost::Reset, TimerHost::Restart
 */
-class Timer : private util::DListEntry<Timer, false>
+class Timer : private detail::DListEntry<Timer, false>
 {
     friend class TimerHost;
-    friend class util::DListCast; // allow casts because DListEntry is private
+    friend class detail::DListCast; // allow casts because DListEntry is private
 
 public:
     /*! \brief     Default constructor.
@@ -165,7 +165,7 @@ private:
         \note  Linked/unlinked only inside a critical section. Invariant (task mode): the node is
                linked if and only if m_pending is true.
     */
-    struct ReadyNode : public util::DListEntry<ReadyNode, false>
+    struct ReadyNode : public detail::DListEntry<ReadyNode, false>
     {
         explicit ReadyNode(Timer *owner) : timer(owner)
         {}
@@ -984,7 +984,7 @@ private:
         \brief   Intrusive list of the expired timers (via Timer::m_ready_node) handed over from the tick task
                  to the handler tasks. Protected by a critical section.
     */
-    typedef util::DListHead<Timer::ReadyNode, false>       ReadyList;
+    typedef detail::DListHead<Timer::ReadyNode, false>       ReadyList;
 
     /*! \typedef CommandQueue
         \brief   Lock-free pipe used to send TimerCommand records from API callers to the tick task.
@@ -995,7 +995,7 @@ private:
     TimerHostMemory               m_task_handler_memory[STK_TIMER_THREADS_COUNT]; //!< handler task memory
     TimerWorkerTask               m_task_tick;                                    //!< timer task
     TimerWorkerTask               m_task_process[STK_TIMER_THREADS_COUNT];        //!< handler tasks
-    util::DListHead<Timer, false> m_active;                                       //!< active timers (tick task only)
+    detail::DListHead<Timer, false> m_active;                                       //!< active timers (tick task only)
     ReadyList                     m_ready_list;                                   //!< expired timers waiting for a handler task (access only inside a critical section)
     sync::Event                   m_ready_event;                                  //!< auto-reset event which wakes a handler task when m_ready_list gets an entry or on shutdown
     CommandQueue                  m_commands;                                     //!< command queue
@@ -1315,10 +1315,10 @@ inline Timeout TimerHost::ScanTimers(Ticks now)
     // using WriteVolatile64() to guarantee correct lockless reading order by ReadVolatile64
     hw::WriteVolatile64(&m_now, now);
 
-    Timer *tmr = util::DListCast::ListEntryToParent<Timer>(m_active.GetFirst());
+    Timer *tmr = detail::DListCast::ListEntryToParent<Timer>(m_active.GetFirst());
     while (tmr != nullptr)
     {
-        Timer *const next = util::DListCast::ListEntryToParent<Timer>(tmr->GetNext());
+        Timer *const next = detail::DListCast::ListEntryToParent<Timer>(tmr->GetNext());
 
         if (tmr->m_active)
         {
@@ -1459,7 +1459,7 @@ inline void TimerHost::ProcessTimers()
 
             if (!m_ready_list.IsEmpty())
             {
-                Timer *const queued = util::DListCast::ListEntryToParent<Timer::ReadyNode>(m_ready_list.PopFront())->timer;
+                Timer *const queued = detail::DListCast::ListEntryToParent<Timer::ReadyNode>(m_ready_list.PopFront())->timer;
 
                 // the node is linked only while pending, kept as a guard for the invariant
                 if (queued->m_pending)
@@ -1790,7 +1790,7 @@ inline bool TimerHost::ProcessCommands(Timeout next_sleep)
             if (m_polled)
             {
                 // no tasks to stop: stop and release all timers, the host stays usable
-                Timer *tmr = util::DListCast::ListEntryToParent<Timer>(m_active.GetFirst());
+                Timer *tmr = detail::DListCast::ListEntryToParent<Timer>(m_active.GetFirst());
                 while (tmr != nullptr)
                 {
                     m_active.Unlink(tmr);
@@ -1799,7 +1799,7 @@ inline bool TimerHost::ProcessCommands(Timeout next_sleep)
                     tmr->m_pending  = false;
                     tmr->m_rearming = false;
 
-                    tmr = util::DListCast::ListEntryToParent<Timer>(m_active.GetFirst());
+                    tmr = detail::DListCast::ListEntryToParent<Timer>(m_active.GetFirst());
                 }
             }
             else
