@@ -355,9 +355,9 @@ typedef struct stk_version_info_t
     uint8_t     major;     //!< Major version number.
     uint8_t     minor;     //!< Minor version number.
     uint8_t     patch;     //!< Patch version number.
-    const char *string;    //!< Version string: "xx.xx.xx" or "xx.xx.xx-rc1".
     uint32_t    code;      //!< Packed version, STK_VERSION_CODE (0x00MMmmpp).
     uint32_t    revision;  //!< Build metadata: git commit count, 0 if unknown.
+    const char *string;    //!< Version string: "xx.xx.xx" or "xx.xx.xx-rc1".
     const char *git_hash;  //!< Build metadata: short git hash, "<hash>-dirty" if modified, "unknown" if unavailable.
 } stk_version_info_t;
 
