@@ -141,6 +141,10 @@
 
 // Enable SEGGER SystemView tracing integration (0 or 1)
 #cmakedefine STK_SEGGER_SYSVIEW @STK_SEGGER_SYSVIEW@
+#if defined(STK_SEGGER_SYSVIEW) && STK_SEGGER_SYSVIEW
+    // SEGGER_SYSVIEW_xxx() API used by the scheduler port (deps/segger, built with ENABLE_SEGGER_SYSVIEW=ON)
+    #include "SEGGER_SYSVIEW.h"
+#endif
 
 
 // =============================================================================

@@ -34,6 +34,7 @@
 #include "sync/stk_sync.h"
 #include "time/stk_time.h"
 #include "memory/stk_memory.h"
+#include "memory/stk_memory_allocator_default.h" // use STK's BytePool for dynamic memory
 
 // See design notes, API coverage and other details in cmsis_os2.h.
 

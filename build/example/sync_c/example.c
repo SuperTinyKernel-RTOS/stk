@@ -214,11 +214,11 @@ void RunExample()
 
 #else
 
-static size_t g_StackT1[TASK_STACK_SIZE] __stk_c_stack_attr;
+static size_t g_StackT1[TASK_STACK_SIZE] __stk_c_stack;
 #if !STK_EXAMPLE_USE_PIPE
-static size_t g_StackT2[TASK_STACK_SIZE] __stk_c_stack_attr;
+static size_t g_StackT2[TASK_STACK_SIZE] __stk_c_stack;
 #endif
-static size_t g_StackT3[TASK_STACK_SIZE] __stk_c_stack_attr;
+static size_t g_StackT3[TASK_STACK_SIZE] __stk_c_stack;
 
 void RunExample()
 {

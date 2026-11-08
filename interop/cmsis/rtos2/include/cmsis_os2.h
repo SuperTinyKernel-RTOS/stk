@@ -117,9 +117,10 @@
       - The wrapper owns one global Kernel instance (g_StkKernel).
         Call osKernelInitialize() before any other API, then osKernelStart().
       - The kernel is configured with KERNEL_DYNAMIC | KERNEL_SYNC and
-        sched::SwitchStrategyFP32_NSY (32 fixed-priority levels, round-robin within a level, osThreadYield() hands over to same-priority threads only).
+        sched::SwitchStrategyFP64_NSY (64 fixed-priority levels, round-robin within a level,
+        osThreadYield() hands over to same-priority threads only).
         osThread priority values (osPriorityIdle=1 .. osPriorityISR=56) are
-        linearly mapped to STK priority levels 0..31.
+        mapped to STK priority levels 0.55.
       - CMSIS osWaitForever (0xFFFFFFFF) is translated to STK WAIT_INFINITE.
       - Timeout values in CMSIS are in ticks; STK Sleep/Delay also take ticks,
         so no conversion is required.
