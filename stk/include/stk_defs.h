@@ -85,15 +85,8 @@
 /*! \def   STK_TLS
     \brief Enable per-task thread-local storage (TLS).
     \note  When set to 1, the kernel saves and restores a per-task TLS pointer on
-           every context switch, making a dedicated pointer available to each task
-           at all times via stk::hw::GetTlsPtr/SetTlsPtr.
-    \note  Storage strategy is controlled by STK_TLS_PREFER_REGISTER:
-           - STK_TLS_PREFER_REGISTER=0 (default): the pointer is kept in the
-             stk::Stack::tls member. No special compiler flags required.
-           - STK_TLS_PREFER_REGISTER=1: the pointer is kept in a CPU register
-             (r9 on Cortex-M, tp on RISC-V) for single-instruction access.
-             Cortex-M additionally requires -ffixed-r9 for all task translation
-             units; see STK_TLS_PREFER_REGISTER.
+           every context switch, accessible via stk::hw::GetTlsPtr/SetTlsPtr.
+           Storage (memory or CPU register) is selected by STK_TLS_PREFER_REGISTER.
     \note  Default: 0 (disabled).
     \see   STK_TLS_PREFER_REGISTER, stk::hw::GetTlsPtr, stk::hw::SetTlsPtr
 */
@@ -112,13 +105,10 @@
     \note  **RISC-V:** uses the \c tp (x4) register, which is reserved for TLS by
            the RISC-V psABI. STK_TLS_PREFER_REGISTER is set to 1 on RISC-V;
            no additional compiler flags are needed. Can be overridden to 0 safely.
-    \note  When set to 1 the stk::Stack gains no \c tls member, reducing
-           per-task RAM by one \c Word. On targets with many tasks this saving can
-           be significant.
-    \note  Default: 0 (disabled) on all architectures except RISC-V, where it defaults to 1
-           (see the RISC-V note above). Leave at 0 if \c -ffixed-r9 cannot be applied
-           to all task translation units (e.g. pre-built third-party libraries);
-           the memory-based fallback incurs only one extra load/store per TLS access.
+    \note  When set to 1 the stk::Stack has no \c tls member, saving one \c Word of RAM per task.
+    \note  Default: 0 on all architectures except RISC-V, where it is 1. Leave at 0 if
+           \c -ffixed-r9 cannot be applied to all task translation units (e.g. pre-built
+           third-party libraries); the memory-based fallback costs one extra load/store per TLS access.
     \warning Cortex-M only: \c -ffixed-r9 must be applied to \e every translation
            unit in the binary that contains task code, including inlined functions
            and any library code those tasks call. A single TU compiled without
@@ -171,7 +161,7 @@
     (STK_MPU_TASK_REGIONS != 2U) && (STK_MPU_TASK_REGIONS != 4U) && \
     (STK_MPU_TASK_REGIONS != 6U) && (STK_MPU_TASK_REGIONS != 8U) && \
     (STK_MPU_TASK_REGIONS != 12U) && (STK_MPU_TASK_REGIONS != 16U)
-    #error "STK_MPU_TASK_REGIONS_S must be defined as 2, 4, 6, 8, 12, or 16"
+    #error "STK_MPU_TASK_REGIONS must be defined as 2, 4, 6, 8, 12, or 16"
 #endif
 #if STK_MPU_STACK_GUARD && \
     (STK_MPU_TASK_REGIONS_NS != 2U) && (STK_MPU_TASK_REGIONS_NS != 4U) && \
@@ -257,7 +247,8 @@
 #endif
 
 /*! \def   STK_VIRT_DTOR
-    \brief Makes destructors virtual and compliant to strict rules if STK_STRICT_COMPLIANCY=0.
+    \brief Expands to nothing if STK_STRICT_COMPLIANCY=0 (non-virtual destructors, smaller objects),
+           to \c virtual if STK_STRICT_COMPLIANCY=1 (strict-rule compliant).
 */
 #if !STK_STRICT_COMPLIANCY
     #define STK_VIRT_DTOR
@@ -543,37 +534,28 @@
 #endif
 
 /*! \def   STK_STATIC_ASSERT_DESC_N
-    \brief Compile-time assertion with a user-defined name suffix and a custom error description.
-    \note  \a NAME is appended to the internal symbol name, allowing multiple assertions in the
-           same scope without symbol-name collisions.
-    \note  \a DESC is a string literal shown in the compiler diagnostic — use it to provide a
-           human-readable explanation of the constraint. Prefer this over STK_STATIC_ASSERT_N
-           when the expression alone would not be self-explanatory in a compiler error.
+    \brief Compile-time assertion with a name tag and a custom error description.
+    \note  \a NAME is a documentation tag only: it is not used in the expansion (a \c static_assert
+           declares no symbol), so repeating a name in the same scope is harmless.
+    \note  \a DESC is a string literal shown in the compiler diagnostic. Prefer this over
+           STK_STATIC_ASSERT_N when the expression alone would not be self-explanatory.
 */
 #define STK_STATIC_ASSERT_DESC_N(NAME, X, DESC) static_assert((X), DESC)
 
 /*! \def   STK_STATIC_ASSERT_DESC
     \brief Compile-time assertion with a custom error description. Produces a compilation error if \a X is false.
-    \note  Uses a fixed internal symbol name. If more than one STK_STATIC_ASSERT_DESC appears in
-           the same scope, use STK_STATIC_ASSERT_DESC_N to provide distinct name suffixes and
-           avoid duplicate symbol errors.
 */
 #define STK_STATIC_ASSERT_DESC(X, DESC) STK_STATIC_ASSERT_DESC_N(_, X, DESC)
 
 /*! \def   STK_STATIC_ASSERT_N
-    \brief Compile-time assertion with a user-defined name suffix.
-    \note  \a NAME is appended to the internal symbol name, allowing multiple assertions in the
-           same scope without symbol-name collisions.
+    \brief Compile-time assertion with a name tag (documentation only, see STK_STATIC_ASSERT_DESC_N).
     \note  The compiler diagnostic message is the stringified form of expression \a X.
-           Use STK_STATIC_ASSERT_DESC_N instead when you need a more descriptive error message.
+           Use STK_STATIC_ASSERT_DESC_N when you need a more descriptive error message.
 */
 #define STK_STATIC_ASSERT_N(NAME, X) STK_STATIC_ASSERT_DESC_N(N, (X), #X)
 
 /*! \def   STK_STATIC_ASSERT
     \brief Compile-time assertion. Produces a compilation error if \a X is false.
-    \note  Uses a fixed internal symbol name. If more than one STK_STATIC_ASSERT appears in
-           the same scope, use STK_STATIC_ASSERT_N to provide distinct name suffixes and
-           avoid duplicate symbol errors.
 */
 #define STK_STATIC_ASSERT(X) STK_STATIC_ASSERT_DESC_N(_, (X), #X)
 
@@ -617,9 +599,8 @@
 
 /*! \def   STK_ARCH_CPU_COUNT
     \brief Number of physical CPU cores available to the scheduler (default: 1).
-    \note  Controls the number of per-CPU kernel service instances and per-CPU data structures
-           allocated by the kernel. Set to the actual core count for SMP (symmetric multi-processing)
-           targets. Can be defined in the architecture header or stk_config.h.
+    \note  Sizes the per-CPU platform context array. Set to the actual core count for SMP targets.
+           Can be defined in the architecture header or stk_config.h.
 */
 #ifndef STK_ARCH_CPU_COUNT
     #define STK_ARCH_CPU_COUNT (1U)
@@ -627,7 +608,7 @@
 
 /*! \def   STK_STACK_SIZE_MIN
     \brief Minimum stack size in elements of \c Word, shared by all stack allocation lower-bound checks.
-    \see   TrapStackMemory
+    \see   StackMemoryWrapper, STK_SLEEP_TRAP_STACK_SIZE
     \note  This is the smallest stack that can correctly save and restore all CPU registers during
            a context switch or service trap. The required size depends on the number of registers
            the architecture mandates saving and specific platform alignment requirements.
@@ -720,15 +701,9 @@ struct STK_ALLOCATE_COUNT
 #endif
 
 /*! \def       STK_NONCOPYABLE_CLASS
-    \brief     Disables copy construction and assignment for a class.
-    \details   This macro declares a private copy constructor and copy assignment
-               operator to prevent the compiler from generating default ones. It
-               ensures that instances of a class cannot be duplicated.
+    \brief     Deletes (\c = delete) the copy constructor and copy assignment operator of a class.
     \param[in] TYPE: The name of the class to be made non-copyable.
-    \warning   This macro must be placed within the \c private or \c protected
-               section of the class declaration to be effective.
-    \note      In C++11 and later, it is generally preferred to use \c = delete, however,
-               this macro provides compatibility for legacy environments.
+    \note      Place it inside the class body, typically in the \c private or \c protected section.
 */
 #define STK_NONCOPYABLE_CLASS(TYPE)\
     TYPE(const TYPE &) = delete;\
@@ -761,8 +736,8 @@ struct STK_ALLOCATE_COUNT
 
 /*! \def       STK_STATIC_ARRAY_SIZE
     \brief     Get size of the static array.
-    \param[in] ARRAY: Pointer to the array.
-    \warning   Array must be static.
+    \param[in] ARRAY: Array (not a pointer to it).
+    \warning   Must be applied to an array whose size is known at the point of use, not to a pointer or a decayed parameter.
 */
 #define STK_STATIC_ARRAY_SIZE(ARRAY) static_cast<size_t>(sizeof(ARRAY) / sizeof(ARRAY[0]))
 
@@ -811,7 +786,7 @@ constexpr __stk_forceinline T AlignPow2(T v, T align) noexcept
 
 /*! \brief     Count leading zeros.
     \param[in] value: Value must be non 0.
-    \warning   Undefined behavior if temp_val is 0, but guaranteed safe by upstream checks.
+    \warning   Undefined behavior if \a value is 0 (the caller must guarantee it is not).
 */
 __stk_forceinline uint32_t CountLeadingZeros(const uint32_t value) noexcept
 {

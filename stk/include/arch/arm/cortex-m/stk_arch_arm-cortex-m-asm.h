@@ -13,6 +13,7 @@
 #include "stk_config.h"
 
 // Inline ASM helpers:
+// Inline-asm directive wrappers: GNU-style directives for GCC/Clang/armclang, empty for IAR.
 #ifdef __ICCARM__
     #define STK_ASM_SYNTAX_UNIFIED /* IAR: not needed, unified is default */
     #define STK_ASM_POOL           /* IAR: not needed, handled automatically */
@@ -36,12 +37,16 @@
 #endif
 
 #ifdef _STK_CORTEX_M_TRUSTZONE
-/* ARMv8-M TrustZone (Cortex-M33 / Mainline)
+/* STK_ASM_EXTRACT_STACK_POINTER_TO_R0 (all variants below):
+   Loads into r0 the stack pointer that was active when the exception was taken (MSP or PSP,
+   selected by EXC_RETURN in LR). Uses local labels 1..7, must be used at most once per asm block.
+
+   ARMv8-M TrustZone variants:
    EXC_RETURN bit layout (ARMv8-M ARM B1.5.8):
      bit 6 (0x40): 1 = Secure stack, 0 = Non-Secure stack.  <-- S-bit
      bit 2 (0x04): 1 = PSP,          0 = MSP.
-   We test bit 6 first to select the correct world's stack pointer,
-   then bit 2 to choose MSP vs PSP within that world. */
+   We test bit 2 first to choose MSP vs PSP, then bit 6 to select the Secure or
+   Non-Secure instance of that stack pointer. */
 #if (__CORTEX_M >= 33U)
 /* -----------------------------------------------------------------
    Cortex-M33 and later (ARMv8-M Mainline) -- IT/ITE available.
@@ -63,10 +68,10 @@
     "2:                         \n"
 #else
 /* -----------------------------------------------------------------
-   Cortex-M23 (ARMv8-M Baseline) -- no IT instructions, limited ISA.
+   Cortex-M23 (ARMv8-M Baseline) -- no IT instructions, limited ISA. Clobbers r1.
    Shift bits into the sign position and use BMI (Branch if Minus).
-     bit 2 -> sign: LSLS r1, #29  (32 - 3 = 29)
-     bit 6 -> sign: LSLS r1, #25  (32 - 7 = 25)
+     bit 2 -> sign: LSLS r1, #29  (31 - 2 = 29)
+     bit 6 -> sign: LSLS r1, #25  (31 - 6 = 25)
    ----------------------------------------------------------------- */
 #define STK_ASM_EXTRACT_STACK_POINTER_TO_R0 \
     "MOV    r1, LR              \n" \
@@ -111,4 +116,4 @@
     "7:                         \n"
 #endif
 
-#endif /* STK_ARCH_ARM_CORTEX_M_H_ */
+#endif /* STK_ARCH_ARM_CORTEX_M_ASM_H_ */

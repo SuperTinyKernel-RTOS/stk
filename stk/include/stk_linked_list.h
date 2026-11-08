@@ -90,34 +90,22 @@ public:
     const DLHeadType *GetHead() const { return m_head; }
 
     /*! \brief  Get the next entry in the list.
-        \return Pointer to the next DListEntry, or \c NULL if this is the last entry
-                (open list) or the first entry (closed loop, where next wraps to first).
-        \note   In a closed loop (\c TClosedLoop == true) this pointer is never \c NULL
-                when the entry is linked.
+        \return Next entry. In an open list \c NULL for the last entry; in a closed loop the
+                last entry wraps to the first one, so the result is never \c NULL for a linked entry.
     */
     DLEntryType *GetNext() { return m_next; }
-    
-    /*! \brief  Get the next entry in the list.
-        \return Pointer to the next DListEntry, or \c NULL if this is the last entry
-                (open list) or the first entry (closed loop, where next wraps to first).
-        \note   In a closed loop (\c TClosedLoop == true) this pointer is never \c NULL
-                when the entry is linked.
+
+    /*! \copydoc GetNext()
     */
     const DLEntryType *GetNext() const { return m_next; }
 
     /*! \brief  Get the previous entry in the list.
-        \return Pointer to the previous DListEntry, or \c NULL if this is the first entry
-                (open list) or the last entry (closed loop, where prev wraps to last).
-        \note   In a closed loop (\c TClosedLoop == true) this pointer is never \c NULL
-                when the entry is linked.
+        \return Previous entry. In an open list \c NULL for the first entry; in a closed loop the
+                first entry wraps to the last one, so the result is never \c NULL for a linked entry.
     */
     DLEntryType *GetPrev() { return m_prev; }
-    
-    /*! \brief  Get the previous entry in the list.
-        \return Pointer to the previous DListEntry, or \c NULL if this is the first entry
-                (open list) or the last entry (closed loop, where prev wraps to last).
-        \note   In a closed loop (\c TClosedLoop == true) this pointer is never \c NULL
-                when the entry is linked.
+
+    /*! \copydoc GetPrev()
     */
     const DLEntryType *GetPrev() const { return m_prev; }
 
@@ -452,14 +440,16 @@ private:
     DLEntryType *m_last;  //!< Pointer to the last (back) entry, or \c NULL when empty.
 };
 
-/*! \class DListCast
-    \brief Helper for casting list entries to concrete (parent) types.
+/*! \struct DListCast
+    \brief  Helper for casting list entries to concrete (parent) types.
 */
 struct DListCast
 {
-    /*! \brief     Safely casts an intrusive list entry to its concrete parent container object type.
-        \param[in] lentry: Pointer to the intrusive list entry. Must be a valid pointer or \c nullptr.
-        \return    A pointer converted to the target parent container type \c TargetType, or \c nullptr if the input entry was \c nullptr.
+    /*! \brief     Casts an intrusive list entry to the concrete type that derives from it.
+        \tparam    TTargetType: Type to cast to. Must derive from the entry type of \a TSourceType.
+        \tparam    TSourceType: Entry type of the argument (DListEntry instantiation or a type derived from it).
+        \param[in] lentry: Pointer to the list entry, or \c nullptr.
+        \return    \a lentry converted to \c TTargetType *, \c nullptr if \a lentry is \c nullptr.
     */
     template <typename TTargetType, typename TSourceType>
     static __stk_forceinline TTargetType *ListEntryToParent(TSourceType *const lentry)

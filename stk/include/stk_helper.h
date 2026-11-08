@@ -136,8 +136,7 @@ private:
     \tparam _StackSize:  Stack size in elements of Word.
     \tparam _AccessMode: Hardware access mode (ACCESS_USER or ACCESS_PRIVILEGED).
 
-    \note  Hard Real-Time mode (KERNEL_HRT) is not supported for weighted tasks.
-           OnDeadlineMissed() will trigger an assertion if HRT scheduling is attempted.
+    \note  Hard Real-Time mode (KERNEL_HRT) is not supported for weighted strategies.
 
     See Task for full usage example, implementation guidance, and TrustZone Non-Secure
     inheritance notes.
@@ -178,7 +177,7 @@ protected:
     STK_VIRT_DTOR ~TaskW() = default;
 
 private:
-    typename StackMemoryDef<_StackSize>::Type m_stack; //!< Stack memory region, 16-byte aligned.
+    typename StackMemoryDef<_StackSize>::Type m_stack; //!< Stack memory region, STK_STACK_MEMORY_ALIGN-byte aligned.
 };
 
 /*! \class StackMemoryWrapper
@@ -319,12 +318,11 @@ inline bool ISyncObject::Tick(Timeout elapsed_ticks)
 
     // note: ScopedCriticalSection usage
     //
-    // Single-core: no critical section needed - Tick() runs inside the
-    // SysTick ISR which already executes with interrupts disabled, making
-    // re-entrancy impossible on the local core.
+    // Single-core: no critical section needed - Tick() runs from the tick ISR,
+    // which cannot be re-entered on the local core.
     //
     // Multi-core: critical section is required because the tick handler on
-    // each core may call Tick() concurrently for the same Semaphore instance,
+    // each core may call Tick() concurrently for the same sync object,
     // and ISyncObject::Tick() is not re-entrant.
 #if (STK_ARCH_CPU_COUNT > 1)
     const hw::CriticalSection::ScopedLock cs_;
@@ -347,7 +345,7 @@ inline bool ISyncObject::Tick(Timeout elapsed_ticks)
     return !wlist.IsEmpty();
 }
 
-//! Implementation of ISyncObject::Tick, see \a ISyncObject. Placed here as it depends on \a GetUserTaskFromTid.
+//! Implementation of ISyncObject::FindWeightHigherThan, see \a ISyncObject. Placed here as it depends on \a GetUserTaskFromTid.
 inline Weight ISyncObject::FindWeightHigherThan(Weight comp) const
 {
     Weight max_weight = NO_WEIGHT;
@@ -420,9 +418,8 @@ static __stk_forceinline Ticks GetTicksFromMs(Time ms, uint32_t resolution)
 /*! \brief     Convert milliseconds to ticks using the current kernel tick resolution.
     \param[in] ms: Time in milliseconds to convert.
     \return    Equivalent tick count.
-    \note      Convenience overload that queries GetTickResolution() automatically.
-               Use the two-argument form GetTicksFromMs(ms, resolution) in ISR context.
-    \warning   ISR-unsafe (internally calls GetTickResolution() which accesses the kernel service).
+    \note      Convenience overload that queries GetTickResolution() on every call. In hot paths
+               cache the resolution and use GetTicksFromMs(ms, resolution).
 */
 static __stk_forceinline Ticks GetTicksFromMs(Time ms)
 {
@@ -432,7 +429,7 @@ static __stk_forceinline Ticks GetTicksFromMs(Time ms)
 /*! \brief     Convert milliseconds to ticks and clamp the result to a Timeout type.
     \param[in] ms: Time in milliseconds to convert.
     \return    Equivalent tick count clamped to the maximum value allowed by Timeout (WAIT_INFINITE).
-    \note      ISR-unsafe (internally calls GetTickResolution() which accesses the kernel service).
+    \note      Queries GetTickResolution() on every call.
 */
 static __stk_forceinline Timeout GetTicksFromMsClampedToTimeout(Timeout ms)
 {
@@ -503,8 +500,7 @@ static __stk_forceinline bool Sleep(Timeout tick_count)
 /*! \brief     Put calling process into a sleep state.
     \note      Unlike Delay this function does not waste CPU cycles and allows kernel to put CPU into a low-power state.
     \note      Unsupported in HRT mode (see stk::KERNEL_HRT); in HRT mode tasks sleep automatically according to their periodicity and workload.
-    \note      Converts ms to ticks and calls IKernelService::SleepTicks() which schedules the calling
-               task to sleep and spins until the kernel switches it back in.
+    \note      Converts ms to ticks (clamped to WAIT_INFINITE) and calls Sleep().
     \param[in] ms: Sleep time (milliseconds). 0 does not cause yield, use Yield instead. Negative will cause an assertion.
     \warning   ISR-unsafe. Calling from an ISR context is not permitted and will trigger an assertion.
     \warning   Must not be called while the scheduler is locked (see LockScheduler): asserts in debug builds, no-op in release builds.
@@ -587,20 +583,11 @@ static __stk_forceinline void ExitTask()
 /*! \brief     Disable task switching (equivalent of CMSIS-RTOS2 osKernelLock). Ticks, timeouts and ISRs keep running.
     \return    Previous lock state (LOCK_WAS_UNLOCKED / LOCK_WAS_LOCKED), or LOCK_FAIL / LOCK_FAIL_ISR.
     \details   Only task switching is disabled: the tick counter, sleep timers, synchronization object timeouts
-               and ISRs continue to run. While locked the kernel state is KSTATE_LOCKED.
-    \note      Not nested: pass the returned value to RestoreSchedulerLock() to emulate nesting.
-    \note      Task context only. Not available in KERNEL_HRT mode (LOCK_FAIL).
-    \note      Entering tickless suspend (IKernelService::Suspend()) drops the lock.
-    \warning   The lock holder must keep the CPU. While locked, Sleep(), SleepUntil(), Yield(), IKernelService::Wait()
-               and IKernel::SuspendTask() of the calling task must not be called: they assert in debug builds and are
-               no-ops in release builds. Delay() is allowed. Blocking on a synchronization object owned by another
-               task would never complete.
-    \warning   stk::sync primitives: only non-blocking use is valid while locked (NO_WAIT / Try*() variants, acquisitions
-               which succeed immediately). A call which would block asserts in debug builds; in release builds timed
-               calls fail with WAIT_RESULT_FAIL, while the void Lock() / ReadLock() of Mutex, FastMutex and RWMutex panic
-               (KERNEL_PANIC_ASSERT) because a contended lock under a scheduler lock is a deadlock.
-    \note      Exiting (ExitTask() or returning from ITask::Run()) can not be refused: it asserts in debug builds,
-               in release builds the task exits and the lock is released when it leaves the CPU.
+               and ISRs continue to run. Not nested: pass the returned value to RestoreSchedulerLock() to
+               emulate nesting. Task context only, not available in KERNEL_HRT mode (LOCK_FAIL).
+    \warning   The lock holder must keep the CPU: no Sleep(), SleepUntil(), Yield(), blocking waits or
+               self-suspension while locked. See IKernelService::LockScheduler for the full list of
+               restrictions (including stk::sync primitives, exit and tickless suspend).
     \note      Prefer the RAII form, see ScopedSchedulerLock.
     \par       Example:
                \code
