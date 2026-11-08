@@ -70,22 +70,24 @@ extern "C"
 #define CY_RTOS_STK_USE_TIMERS          (1U)
 #endif
 
-/** Priority level of the timer tasks. Timer callbacks run in the handler task at this level. */
-#ifndef CY_RTOS_STK_TIMER_PRIORITY
-#define CY_RTOS_STK_TIMER_PRIORITY      (CY_RTOS_STK_PRIO_REALTIME)
+/** Priority levels of the timer tasks. The tick task (it evaluates the deadlines) must be at least
+ *  as urgent as the handler task, in which the timer callbacks run (same choice as the STK
+ *  CMSIS-RTOS2 wrapper). */
+#ifndef CY_RTOS_STK_TIMER_TICK_PRIORITY
+#define CY_RTOS_STK_TIMER_TICK_PRIORITY     (CY_RTOS_STK_PRIO_HIGH)
+#endif
+#ifndef CY_RTOS_STK_TIMER_HANDLER_PRIORITY
+#define CY_RTOS_STK_TIMER_HANDLER_PRIORITY  (CY_RTOS_STK_PRIO_ABOVENORMAL)
 #endif
 
 /******************************************************
 *                 Memory
 ******************************************************/
 
-/** Heap functions used for thread control blocks / stacks (stack == NULL) and queue storage. */
-#ifndef CY_RTOS_STK_MALLOC
-#define CY_RTOS_STK_MALLOC(size)        malloc(size)
-#endif
-#ifndef CY_RTOS_STK_FREE
-#define CY_RTOS_STK_FREE(ptr)           free(ptr)
-#endif
+/** Heap used for thread control blocks / stacks (stack == NULL) and queue storage: by default
+ *  stk::memory::MemoryAllocator (the application supplies its backend, as for the CMSIS-RTOS2
+ *  wrapper), or malloc/free if STK has no heap support. To use another heap define, for the C++
+ *  build of the port, CY_RTOS_STK_MALLOC(size) and CY_RTOS_STK_FREE(ptr). */
 
 /** Minimum stack size accepted by cy_rtos_thread_create(), in bytes. It must be at least
  *  STK_STACK_SIZE_MIN * sizeof(stk::Word) (checked at compile time by the port). */

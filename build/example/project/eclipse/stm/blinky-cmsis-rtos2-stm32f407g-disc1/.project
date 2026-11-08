@@ -166,11 +166,6 @@
 			<locationURI>virtual:/virtual</locationURI>
 		</link>
 		<link>
-			<name>deps/stk/src/memory</name>
-			<type>2</type>
-			<locationURI>virtual:/virtual</locationURI>
-		</link>
-		<link>
 			<name>deps/stm32fx/include/arm</name>
 			<type>2</type>
 			<locationURI>virtual:/virtual</locationURI>
@@ -439,11 +434,6 @@
 			<name>deps/stk/src/arch/x86</name>
 			<type>2</type>
 			<locationURI>virtual:/virtual</locationURI>
-		</link>
-		<link>
-			<name>deps/stk/src/memory/stk_memory_allocator_default.cpp</name>
-			<type>1</type>
-			<locationURI>PARENT-6-PROJECT_LOC/stk/src/memory/stk_memory_allocator_default.cpp</locationURI>
 		</link>
 		<link>
 			<name>deps/stm32fx/include/arm/semihosting.h</name>

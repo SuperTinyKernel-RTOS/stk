@@ -17,9 +17,24 @@
 #include "stk.h"
 #include "sync/stk_sync.h"
 #include "time/stk_time.h"
+#include "memory/stk_memory.h"
+#include "memory/stk_memory_allocator_default.h" // use STK's BytePool for dynamic memory
 
 #include "cyabs_rtos.h"
 #include "cyabs_rtos_stk.h"
+
+// Heap: by default the STK memory allocator (the same heap as the CMSIS-RTOS2 wrapper uses, the
+// application provides its backend), the C library otherwise. Override with CY_RTOS_STK_MALLOC/FREE.
+#ifndef CY_RTOS_STK_MALLOC
+#if STK_MEMORY_HAS_HEAP
+#define CY_RTOS_STK_MALLOC(size)    stk::memory::MemoryAllocator::Allocate(size)
+#define CY_RTOS_STK_FREE(ptr)       stk::memory::MemoryAllocator::Free(ptr)
+#else
+#include <stdlib.h>
+#define CY_RTOS_STK_MALLOC(size)    malloc(size)
+#define CY_RTOS_STK_FREE(ptr)       free(ptr)
+#endif
+#endif
 
 // Intrusive list of the thread control blocks (see cy_stk_thread below).
 struct cy_stk_thread;
@@ -30,6 +45,8 @@ namespace {
 
 STK_STATIC_ASSERT_DESC(!STK_MPU_STACK_GUARD,
     "STK_MPU_STACK_GUARD is not supported: user supplied stacks can not be given the required alignment");
+STK_STATIC_ASSERT_DESC(CY_RTOS_STK_TIMER_TICK_PRIORITY >= CY_RTOS_STK_TIMER_HANDLER_PRIORITY,
+    "the timer tick task must be at least as urgent as the timer handler task");
 STK_STATIC_ASSERT_DESC(CY_RTOS_STK_MIN_STACK_BYTES >= (STK_STACK_SIZE_MIN * sizeof(stk::Word)),
     "CY_RTOS_STK_MIN_STACK_BYTES is below the minimum stack size of STK for this target");
 
@@ -222,7 +239,7 @@ struct cy_stk_thread final : public stk::ITask
                   size_t stack_words, void *raw, uint32_t priority)
         : m_magic(ID_THREAD), m_entry(entry), m_arg(arg), m_name(name), m_stack(stack),
           m_stack_words(stack_words), m_raw(raw), m_priority(static_cast<stk::Weight>(priority)),
-          m_finished(false), m_removed(false), m_next(nullptr), m_notify(0U, 1U)
+          m_finished(false), m_removed(false), m_next(nullptr), m_notify(0U, 1U), m_join(0U, 1U)
     {}
 
     virtual ~cy_stk_thread()
@@ -234,10 +251,12 @@ struct cy_stk_thread final : public stk::ITask
         m_finished = true; // the kernel removes the task and calls OnExit()
     }
 
-    // Called by the kernel from the tick handler once the task is removed.
+    // Called by the kernel from the tick handler once the task is removed: after this the kernel no
+    // longer references the task, its stack or its slot. Wakes the joiner (ISR-safe primitive).
     void OnExit() override
     {
         m_removed = true;
+        (void)m_join.TrySignal();
     }
 
     const stk::Word *GetStack() const override { return m_stack; }
@@ -258,6 +277,7 @@ struct cy_stk_thread final : public stk::ITask
     volatile bool                           m_removed;   // the kernel does not reference the task
     cy_stk_thread                          *m_next;      // registry
     stk::sync::SemaphoreT<uint16_t>         m_notify;    // binary semaphore of the thread notification
+    stk::sync::SemaphoreT<uint16_t>         m_join;      // signaled by OnExit(), waited by join
 };
 
 // ----------------------------------------------------------------------------
@@ -359,9 +379,9 @@ cy_rslt_t cy_rtos_stk_kernel_init(void)
 #if CY_RTOS_STK_USE_TIMERS
         stk::time::TimerHost::Config cfg;
 
-        // the tick task and the handler task run at the same level, preemption of callers is not wanted
-        cfg.tick_weight    = static_cast<stk::Weight>(CY_RTOS_STK_TIMER_PRIORITY);
-        cfg.handler_weight = static_cast<stk::Weight>(CY_RTOS_STK_TIMER_PRIORITY);
+        // the tick task must be at least as urgent as the handler task
+        cfg.tick_weight    = static_cast<stk::Weight>(CY_RTOS_STK_TIMER_TICK_PRIORITY);
+        cfg.handler_weight = static_cast<stk::Weight>(CY_RTOS_STK_TIMER_HANDLER_PRIORITY);
         cfg.tick_mode      = stk::ACCESS_PRIVILEGED;
 
         if (g_TimerHost.Initialize(&g_Kernel, stk::ACCESS_PRIVILEGED, cfg) != stk::ADD_OK)
@@ -523,10 +543,6 @@ cy_rslt_t cy_rtos_thread_terminate(const cy_thread_t *thread)
     {
         return CY_RTOS_BAD_PARAM;
     }
-    if (th->m_finished || th->m_removed)
-    {
-        return CY_RSLT_SUCCESS; // already done, join it
-    }
     if (InIsr())
     {
         return Fail(CY_RTOS_STK_ERR_CONTEXT);
@@ -534,23 +550,36 @@ cy_rslt_t cy_rtos_thread_terminate(const cy_thread_t *thread)
 
     const bool is_self = (CurrentThread() == th);
 
-    {
-        const stk::sync::ScopedCriticalSection cs_;
-        th->m_finished = true;
-    }
-
     if (is_self)
     {
+        th->m_finished = true;
         stk::ExitTask(); // switched out and removed by the kernel, does not return
+        return CY_RSLT_SUCCESS;
     }
-    else if (KState() == stk::IKernel::KSTATE_INACTIVE)
+
+    // The target may be finishing right now: the check and the removal request are one step with
+    // respect to the kernel tick (which completes the removal and calls OnExit()).
+    const stk::sync::ScopedCriticalSection cs_;
+
+    if (th->m_removed)
+    {
+        return CY_RSLT_SUCCESS; // already gone, join it
+    }
+
+    const stk::IKernel::EKernelState st = KState();
+
+    if (st == stk::IKernel::KSTATE_INACTIVE)
     {
         return Fail(CY_RTOS_STK_ERR_KERNEL_STATE);
     }
-    else if (KState() == stk::IKernel::KSTATE_READY)
+
+    th->m_finished = true;
+
+    if (st == stk::IKernel::KSTATE_READY)
     {
         g_Kernel.RemoveTask(th); // the kernel has not started: nothing will call OnExit()
         th->m_removed = true;
+        (void)th->m_join.TrySignal();
     }
     else
     {
@@ -573,15 +602,17 @@ cy_rslt_t cy_rtos_thread_join(cy_thread_t *thread)
         return CY_RTOS_BAD_PARAM; // joining itself never completes
     }
 
-    // The kernel releases the task a tick after it has finished. Polling keeps the kernel free of
-    // callbacks from its tick handler (the same approach as the ThreadX port).
+    // Blocks until the kernel has removed the task (OnExit() signals m_join), no polling: the CPU can
+    // stay in a low-power state, also with the tickless kernel.
     while (!th->m_removed)
     {
         if (InIsr() || !SchedulerRunning())
         {
             return Fail(CY_RTOS_STK_ERR_CONTEXT);
         }
-        if (!stk::Sleep(1))
+
+        // a cancelled wait is harmless (the predicate is re-checked), a rejected one is an error
+        if (th->m_join.WaitEx(stk::WAIT_INFINITE) == stk::WAIT_RESULT_FAIL)
         {
             return Fail(CY_RTOS_STK_ERR_WAIT_FAILED);
         }
@@ -1293,7 +1324,7 @@ cy_rslt_t cy_rtos_queue_deinit(cy_queue_t *queue)
 // ==== Timers ====
 //
 // stk::time::TimerHost in task mode (see CY_RTOS_STK_USE_TIMERS). The callbacks run in the handler
-// task of the host, at CY_RTOS_STK_TIMER_PRIORITY, never in an ISR. The synchronous TimerHost API is
+// task of the host, at CY_RTOS_STK_TIMER_HANDLER_PRIORITY, never in an ISR. The synchronous TimerHost API is
 // used: when cy_rtos_timer_stop() returns the timer will not fire any more, and when
 // cy_rtos_timer_deinit() returns the storage can be reused.
 // ============================================================================
@@ -1310,7 +1341,7 @@ class CyTimer final : public stk::time::Timer
 
 public:
     CyTimer(bool oneshot, cy_timer_callback_t fn, cy_timer_callback_arg_t arg)
-        : m_oneshot(oneshot), m_fn(fn), m_arg(arg)
+        : m_oneshot(oneshot), m_started(false), m_fn(fn), m_arg(arg)
     {}
 
     virtual ~CyTimer()
@@ -1323,6 +1354,7 @@ public:
     }
 
     bool                      m_oneshot;
+    bool                      m_started; // a command for this timer was given to the host
     cy_timer_callback_t       m_fn;
     cy_timer_callback_arg_t   m_arg;
 };
@@ -1395,6 +1427,8 @@ cy_rslt_t cy_rtos_timer_start(const cy_timer_t *timer, cy_time_t num_ms)
     CyTimer *const t     = TimerOf(timer);
     const uint32_t ticks = MsToTicks(num_ms);
 
+    t->m_started = true;
+
     return TimerResultToCy(g_TimerHost.RestartSync(*t, ticks, (t->m_oneshot ? 0U : ticks)));
 }
 
@@ -1443,8 +1477,25 @@ cy_rslt_t cy_rtos_timer_deinit(cy_timer_t *timer)
 
     CyTimer *const t = TimerOf(timer);
 
+    // A timer which was never started is unknown to the host. Otherwise StopSync() guarantees that no
+    // command, queue node or running callback references the timer once it returned RES_OK/RES_INACTIVE.
+    // RES_QUEUED (ISR, kernel not running) gives no such guarantee: the timer must then stay alive.
+    if (t->m_started)
+    {
+        if (InIsr())
+        {
+            return Fail(CY_RTOS_STK_ERR_CONTEXT);
+        }
+
+        const stk::time::TimerHost::EResult res = g_TimerHost.StopSync(*t);
+
+        if ((res != stk::time::TimerHost::RES_OK) && (res != stk::time::TimerHost::RES_INACTIVE))
+        {
+            return Fail(CY_RTOS_STK_ERR_TIMER_HOST);
+        }
+    }
+
     timer->id = 0U;
-    (void)g_TimerHost.StopSync(*t); // afterwards the host holds no reference to the timer
     t->~CyTimer();
 
     return CY_RSLT_SUCCESS;

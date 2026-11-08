@@ -1806,7 +1806,7 @@ struct Context final : public PlatformContext
             HW_CoreClockFrequency(),
             HW_CoreClockFrequency(),
             nullptr,
-            stk::SendSysDesc);
+            drv::SendSysDesc);
     #endif
     }
 

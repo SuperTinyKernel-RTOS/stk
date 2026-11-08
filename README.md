@@ -37,7 +37,7 @@ You get:
 - **Higher CPU availability** - More time for your application logic. Benchmarks show up to **~12% more application CPU time** compared to FreeRTOS under comparable workloads (see [Benchmark](#benchmark)).
 - **Lower power consumption** - Features ultra-low power, tickless scheduling paired with reduced overhead, enabling the use of lower-frequency MCUs to save battery of your portable design.
 - **Native C support** - Includes a fully featured C API wrapper, allowing you to seamlessly use STK in pure C projects.
-- **Simplified migration** - Drop-in compatibility layers for FreeRTOS, CMSIS-RTOS2, ThreadX and POSIX (pthreads, semaphores, message queues, clocks and timers, C11 threads) to help you migrate legacy codebases with minimal application changes, plus a Newlib shim that makes the C library thread-safe.
+- **Simplified migration** - Drop-in compatibility layers for FreeRTOS, CMSIS-RTOS2, ThreadX, Infineon Abstraction RTOS and POSIX (pthreads, semaphores, message queues, clocks and timers, C11 threads) to help you migrate legacy codebases with minimal application changes, plus a Newlib shim that makes the C library thread-safe.
 - **B2B professional support** - Engineered for seamless integration into commercial projects. Explore our [Services](#services) for enterprise-grade support and custom engineering.
 
 > STK does not attempt to abstract or manage MCU peripherals, similarly to FreeRTOS or CMSIS-RTOS2.
@@ -74,6 +74,7 @@ STK is an open-source project developed at https://github.com/SuperTinyKernel-RT
 | **CMSIS-RTOS2 compatible**                           | Full CMSIS-RTOS2 wrapper (`cmsis_os2_stk.cpp`) maps the standard ARM CMSIS-RTOS2 C API onto STK, enabling drop-in compatibility with STM32CubeMX, MCUXpresso, and other CMSIS-aware middleware                                                                                     |
 | **FreeRTOS compatible**                              | Full FreeRTOS wrapper (`freertos_stk.cpp`) maps the standard FreeRTOS C API onto STK, enabling drop-in migration of existing FreeRTOS codebases with minimal or no application changes                                                                                             |
 | **ThreadX compatible**                               | Full ThreadX wrapper (`threadx_stk.cpp`) maps the standard Eclipse ThreadX (Azure RTOS) C API onto STK, enabling drop-in migration of existing ThreadX codebases, including preemption-threshold and time-slicing                                                                  |
+| **Infineon Abstraction RTOS compatible**             | Full Infineon Abstraction RTOS wrapper (`cyabs_rtos_stk.cpp`) maps the `cy_rtos_*` C API (`cyabs_rtos.h`) onto STK, enabling drop-in use of Infineon middleware and connectivity libraries                                                                                         |
 | **POSIX compatible**                                 | POSIX-named API (`interop/posix`) maps pthreads (threads, mutexes, condition variables, read-write locks, spinlocks, barriers, priorities, cancellation), semaphores, message queues, clocks, timers and C11 threads onto STK, usable from C and C++                               |
 | **Thread-safe C library (Newlib)**                   | Newlib retargetable-locking shim (`interop/newlib`) maps `__retarget_lock_*` onto STK mutexes, so `malloc`, `printf`, `fopen` and friends are safe to call from multiple tasks, with no heap use                                                                                   |
 | **Easy porting**                                     | Requires very small to none BSP surface                                                                                                                                                                                                                                            |
@@ -585,9 +586,9 @@ int main(void)
 
 ---
 
-## Migration and Interoperability (CMSIS-RTOS2, FreeRTOS, ThreadX, POSIX, Newlib)
+## Migration and Interoperability (CMSIS-RTOS2, FreeRTOS, ThreadX, Infineon Abstraction RTOS, POSIX, Newlib)
 
-STK ships ready-made compatibility wrappers that let you swap out your existing RTOS backend and replace it with STK without rewriting application code. The CMSIS-RTOS2, FreeRTOS, ThreadX and POSIX wrappers live under `interop/` and share the same design principles: thin translation of the source API onto STK primitives, ISR-safe where the original API requires it, and zero heap usage when the caller supplies static memory. The Newlib shim (`interop/newlib`) is not a wrapper of an RTOS API: it makes the C library itself safe to use next to STK.
+STK ships ready-made compatibility wrappers that let you swap out your existing RTOS backend and replace it with STK without rewriting application code. The CMSIS-RTOS2, FreeRTOS, ThreadX, Infineon Abstraction RTOS and POSIX wrappers live under `interop/` and share the same design principles: thin translation of the source API onto STK primitives, ISR-safe where the original API requires it, and zero heap usage when the caller supplies static memory (the Infineon Abstraction RTOS wrapper uses the STK memory allocator for thread control blocks and queue buffers). The Newlib shim (`interop/newlib`) is not a wrapper of an RTOS API: it makes the C library itself safe to use next to STK.
 
 ### CMSIS-RTOS2 Wrapper ([interop/cmsis/rtos2](https://github.com/SuperTinyKernel-RTOS/stk/tree/main/interop/cmsis/rtos2))
 
@@ -704,18 +705,61 @@ Ready to use ThreadX examples:
 
 ---
 
+### Infineon Abstraction RTOS Wrapper ([interop/cyabs_rtos](https://github.com/SuperTinyKernel-RTOS/stk/tree/main/interop/cyabs_rtos))
+
+STK provides a complete **Infineon Abstraction RTOS** compatibility layer (`cyabs_rtos_stk.cpp`) that maps the [abstraction-rtos](https://github.com/Infineon/abstraction-rtos) C API (`cyabs_rtos.h`, `cy_rtos_*`) onto the STK C++ kernel. Infineon middleware and libraries written against this API (ModusToolbox connectivity and cloud libraries, the Wi-Fi Host Driver, `cy_worker_thread`, etc.) run on STK without changes. The wrapper uses `sched::SwitchStrategyFixedPriority<CY_RTOS_STK_PRIORITY_LEVELS>`: fixed priority preemptive scheduling with round-robin inside a level, priority inheritance for mutexes and up to 1024 priority levels. The `cy_*_t` objects are caller-allocated and embed the STK objects; only thread control blocks, stacks passed as `NULL` and queue buffers use the heap (`stk::memory::MemoryAllocator`).
+
+**Covered API groups:** Thread (including join and notifications), Scheduler, Mutex, Semaphore, Event Flags, Message Queue, Timer, Time. The abstraction layer has no call to start the scheduler, so the port adds `cy_rtos_stk_kernel_enter()` (or `cy_rtos_stk_kernel_init()` + `cy_rtos_stk_kernel_start()`).
+
+**Quick integration:**
+
+```make
+# 1. Add wrapper source
+SRCS     += libs/stk/interop/cyabs_rtos/source/cyabs_rtos_stk.cpp
+
+# 2. Add include paths
+INCLUDES += -Ilibs/stk/include
+INCLUDES += -Ilibs/stk/interop/cyabs_rtos/include
+INCLUDES += -Ilibs/abstraction-rtos/include
+```
+
+```c
+// 3. No application changes required - existing cy_rtos_* calls work as-is
+#include "cyabs_rtos.h"
+#include "cyabs_rtos_stk.h"
+
+static void app_init(void)
+{
+    // create threads, queues, etc. (stack == NULL: allocated with the thread control block)
+    cy_rtos_thread_create(&g_thread, app_thread, "app", NULL, 1024,
+                          CY_RTOS_PRIORITY_NORMAL, 0);
+}
+
+int main(void)
+{
+    cy_rtos_stk_kernel_enter(app_init);   // does not return while threads are alive
+}
+```
+
+See [interop/cyabs_rtos](https://github.com/SuperTinyKernel-RTOS/stk/tree/main/interop/cyabs_rtos) for the full API coverage table, design notes, known limitations, and configuration macros (`CY_RTOS_STK_PRIORITY_LEVELS`, `CY_RTOS_STK_MAX_THREADS`, `CY_RTOS_STK_TICK_PERIOD_US`).
+
+Ready to use Infineon Abstraction RTOS example:
+- **Blinky (C)**: [Code (blinky_c-cyabs_rtos)](https://github.com/SuperTinyKernel-RTOS/stk/tree/main/build/example/blinky_c-cyabs_rtos), [Eclipse Project (blinky_c-cyabs_rtos-stm32f407g-disc1)](https://github.com/SuperTinyKernel-RTOS/stk/tree/main/build/example/project/eclipse/stm/blinky_c-cyabs_rtos-stm32f407g-disc1)
+
+---
+
 ### Wrapper Comparison
 
-|                     | CMSIS-RTOS2                                     | FreeRTOS                                          | ThreadX                                                                                                        |
-|---------------------|-------------------------------------------------|---------------------------------------------------|----------------------------------------------------------------------------------------------------------------|
-| Source file         | `cmsis_os2_stk.cpp`                             | `freertos_stk.cpp`                                | `threadx_stk.cpp`                                                                                              |
-| Header to include   | `cmsis_os2.h`                                   | `FreeRTOS.h`, `task.h`                            | `tx_api.h`                                                                                                     |
-| Priority model      | Linear map: `osPriority` 1–56 → STK levels 0–31 | Direct clamp: FreeRTOS 0–N → STK levels 0–31      | Inverted map: ThreadX 0 (highest) – N-1 → STK levels N-1 – 0, N = `TX_MAX_PRIORITIES` (default: 32, max: 1024) |
-| Max tasks macro     | `CMSIS_STK_MAX_THREADS` (default: 16)           | `FREERTOS_STK_MAX_TASKS` (default: 16)            | `TX_STK_MAX_THREADS` (default: 16)                                                                             |
-| Default stack macro | `CMSIS_STK_DEFAULT_STACK_WORDS` (default: 256)  | `FREERTOS_STK_DEFAULT_STACK_WORDS` (default: 256) | Not applicable: stack is always caller-supplied to `tx_thread_create`                                          |
-| Static allocation   | `cb_mem` / `cb_size` attributes                 | `xTaskCreateStatic` / `xQueueCreateStatic`        | Caller-allocated control blocks, stacks and pool areas                                                         |
-| Scheduler backend   | `sched::SwitchStrategyFP32`                     | `sched::SwitchStrategyFP32`                       | `sched::SwitchStrategyPreemptionThreshold<N, true>`                                                            |
-| Tickless support    | `STK_TICKLESS_IDLE=1`                           | `STK_TICKLESS_IDLE=1`                             | `STK_TICKLESS_IDLE=1`                                                                                          |
+|                     | CMSIS-RTOS2                                     | FreeRTOS                                          | ThreadX                                                                                                        | Infineon Abstraction RTOS                                                                                           |
+|---------------------|-------------------------------------------------|---------------------------------------------------|----------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------|
+| Source file         | `cmsis_os2_stk.cpp`                             | `freertos_stk.cpp`                                | `threadx_stk.cpp`                                                                                              | `cyabs_rtos_stk.cpp`                                                                                                |
+| Header to include   | `cmsis_os2.h`                                   | `FreeRTOS.h`, `task.h`                            | `tx_api.h`                                                                                                     | `cyabs_rtos.h`, `cyabs_rtos_stk.h`                                                                                  |
+| Priority model      | Linear map: `osPriority` 1–56 → STK levels 0–31 | Direct clamp: FreeRTOS 0–N → STK levels 0–31      | Inverted map: ThreadX 0 (highest) – N-1 → STK levels N-1 – 0, N = `TX_MAX_PRIORITIES` (default: 32, max: 1024) | Direct map: `cy_thread_priority_t` → STK levels 0 – N-1, N = `CY_RTOS_STK_PRIORITY_LEVELS` (default: 32, max: 1024) |
+| Max tasks macro     | `CMSIS_STK_MAX_THREADS` (default: 16)           | `FREERTOS_STK_MAX_TASKS` (default: 16)            | `TX_STK_MAX_THREADS` (default: 16)                                                                             | `CY_RTOS_STK_MAX_THREADS` (default: 16)                                                                             |
+| Default stack macro | `CMSIS_STK_DEFAULT_STACK_WORDS` (default: 256)  | `FREERTOS_STK_DEFAULT_STACK_WORDS` (default: 256) | Not applicable: stack is always caller-supplied to `tx_thread_create`                                          | `CY_RTOS_STK_MIN_STACK_BYTES` (minimum only); `NULL` stack = allocated from the heap                                |
+| Static allocation   | `cb_mem` / `cb_size` attributes                 | `xTaskCreateStatic` / `xQueueCreateStatic`        | Caller-allocated control blocks, stacks and pool areas                                                         | Caller-allocated `cy_*_t` objects, optional caller stacks; thread blocks and queue buffers from the heap            |
+| Scheduler backend   | `sched::SwitchStrategyFP32`                     | `sched::SwitchStrategyFP32`                       | `sched::SwitchStrategyPreemptionThreshold<N, true>`                                                            | `sched::SwitchStrategyFixedPriority<N>`                                                                             |
+| Tickless support    | `STK_TICKLESS_IDLE=1`                           | `STK_TICKLESS_IDLE=1`                             | `STK_TICKLESS_IDLE=1`                                                                                          | `STK_TICKLESS_IDLE=1`                                                                                               |
 
 
 > **Note:** Wrapper is missing important API your project is using? Contact with inquiry: [contact@supertinykernel.org](mailto:contact@supertinykernel.org)

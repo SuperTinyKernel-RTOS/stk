@@ -21,6 +21,10 @@
 
 static bool s_LedToggle = false;
 
+// Memory of the timers (must outlive the timers)
+static stk_timer_mem_t s_LedTimerMem;
+static stk_timer_mem_t s_ShutdownTimerMem;
+
 static void on_led_timer_expired(stk_timerhost_t *host,
                                  stk_timer_t     *timer,
                                  void            *user_data)
@@ -69,13 +73,13 @@ void RunExample(void)
     int32_t res = stk_tick_resolution(); /* microseconds per tick */
 
     // Create and start LED timer — periodic, fires every 1 s
-    stk_timer_t *led_timer = stk_timer_create(on_led_timer_expired, NULL);
+    stk_timer_t *led_timer = stk_timer_create(&s_LedTimerMem, on_led_timer_expired, NULL);
     stk_timer_start(timers, led_timer,
                     0,                                          /* no initial delay */
                     (uint32_t)stk_ticks_from_ms_r(1000, res));  /* 1000 ms -> ticks  */
 
     // Create and start shutdown timer — one-shot, fires once after 20 s
-    stk_timer_t *shutdown_timer = stk_timer_create(on_shutdown_timer_expired, NULL);
+    stk_timer_t *shutdown_timer = stk_timer_create(&s_ShutdownTimerMem, on_shutdown_timer_expired, NULL);
     stk_timer_start(timers, shutdown_timer,
                     (uint32_t)stk_ticks_from_ms_r(20000, res),  /* 20000 ms -> ticks */
                     0);                                         /* one-shot */

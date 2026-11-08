@@ -263,7 +263,10 @@ typedef unsigned long UBaseType_t;
 typedef long          portBASE_TYPE;
 typedef uintptr_t     StackType_t;   /*!< Native-word stack element type, matches stk::Word. */
 
-#define portMAX_DELAY        ((TickType_t)0xFFFFFFFFUL) /*!< Block indefinitely. */
+#ifndef portMAX_DELAY
+    #define portMAX_DELAY    ((TickType_t)0xFFFFFFFFUL) /*!< Block indefinitely. */
+#endif
+
 #define pdTRUE               ((BaseType_t)1)
 #define pdFALSE              ((BaseType_t)0)
 #define pdPASS               (pdTRUE)
