@@ -372,9 +372,9 @@ stk_version_info_t stk_get_version(void)
     ret.major    = vi.major;
     ret.minor    = vi.minor;
     ret.patch    = vi.patch;
-    ret.string   = vi.string;
     ret.code     = vi.code;
     ret.revision = vi.revision;
+    ret.string   = vi.string;
     ret.git_hash = vi.git_hash;
 
     return ret;

@@ -180,26 +180,25 @@ struct VersionInfo
     uint8_t     major;     //!< Major version number.
     uint8_t     minor;     //!< Minor version number.
     uint8_t     patch;     //!< Patch version number.
-    const char *string;    //!< Version string: "1.8.0" or "1.8.0-rc1".
     uint32_t    code;      //!< Packed version, STK_VERSION_CODE (0x00MMmmpp).
     uint32_t    revision;  //!< Build metadata: git commit count, 0 if unknown.
+    const char *string;    //!< Version string: "1.8.0" or "1.8.0-rc1".
     const char *git_hash;  //!< Build metadata: short git hash, "<hash>-dirty" if modified, "unknown" if unavailable.
 };
 
 /*! \brief  Get version information.
     \return VersionInfo structure containing major, minor, patch, version string, packed code, revision and git hash.
 */
-static constexpr VersionInfo GetVersion()
+constexpr VersionInfo GetVersion()
 {
-    return
-    {
-        STK_VERSION_MAJOR,
-        STK_VERSION_MINOR,
-        STK_VERSION_PATCH,
-        STK_VERSION_STRING,
-        STK_VERSION_CODE,
-        STK_VERSION_REVISION,
-        STK_VERSION_GIT_HASH
+    return VersionInfo {
+        .major    = STK_VERSION_MAJOR,
+        .minor    = STK_VERSION_MINOR,
+        .patch    = STK_VERSION_PATCH,
+        .code     = STK_VERSION_CODE,
+        .revision = STK_VERSION_REVISION,
+        .string   = STK_VERSION_STRING,
+        .git_hash = STK_VERSION_GIT_HASH
     };
 }
 
