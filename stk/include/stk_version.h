@@ -99,8 +99,8 @@
 #define STK_VERSION_STR(x)  STK_VERSION_STR_(x)
 
 /*! \def   STK_MINOR_STR
-    \brief Minor version as a string literal (internal, derived value, do not edit).
-    \note  Conditional formatting: adds a leading '0' if the minor version is less than 10.
+    \brief Minor version as a two-digit string literal (internal, derived value, do not edit).
+    \note  Adds a leading '0' if the minor version is less than 10, e.g. 8 -> "08".
     \see   STK_VERSION_STRING
 */
 #if (STK_VERSION_MINOR < 10)
@@ -110,7 +110,7 @@
 #endif
 
 /*! \def   STK_VERSION_STRING
-    \brief Version string literal: "1.8.0" or "1.8.0-rc1" (SemVer, no leading zeros).
+    \brief Version string literal: "1.08.0" or "1.08.0-rc1" (the minor number is zero-padded to two digits).
     \note  Derived value, do not edit.
     \see   STK_VERSION_PRERELEASE, STK_MINOR_STR
 */
@@ -182,7 +182,7 @@ struct VersionInfo
     uint8_t     patch;     //!< Patch version number.
     uint32_t    code;      //!< Packed version, STK_VERSION_CODE (0x00MMmmpp).
     uint32_t    revision;  //!< Build metadata: git commit count, 0 if unknown.
-    const char *string;    //!< Version string: "1.8.0" or "1.8.0-rc1".
+    const char *string;    //!< Version string: "1.08.0" or "1.08.0-rc1" (see STK_VERSION_STRING).
     const char *git_hash;  //!< Build metadata: short git hash, "<hash>-dirty" if modified, "unknown" if unavailable.
 };
 

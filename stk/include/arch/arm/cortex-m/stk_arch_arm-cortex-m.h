@@ -89,8 +89,8 @@
     #define __stk_tz_ns_call
 #endif
 
-/*! \def   STK_NSC_GATEWAY
-    \brief ARM TrustZone: Non-secure gateway to Secure API.
+/*! \def   STK_TZ_NSC_GATEWAY
+    \brief ARM TrustZone: declares a Non-Secure callable gateway function (extern "C", cmse_nonsecure_entry).
 */
 #define STK_TZ_NSC_GATEWAY extern "C" __stk_tz_nsc_entry
 
@@ -114,8 +114,8 @@
 #endif
 
 /*! \def     STK_CORTEX_M_SVCALL_ISR_PRIORITY
-    \brief   Max SVCall ISR priority.
-    \warning All other interrupts must have priority lower than \a STK_CORTEX_M_SVCALL_ISR_PRIORITY.
+    \brief   Priority of the SVCall exception (the most urgent one used by the kernel).
+    \warning All other interrupts must be less urgent, i.e. have a numerically greater priority value.
 */
 #ifndef STK_CORTEX_M_SVCALL_ISR_PRIORITY
     #define STK_CORTEX_M_SVCALL_ISR_PRIORITY (0U)
@@ -132,7 +132,7 @@ static __stk_forceinline void __stk_dmb() { __asm volatile("dmb sy" ::: "memory"
 namespace stk {
 
 /*! \class PlatformArmCortexM
-    \brief Concrete implementation of IPlatform driver for the Arm Cortex-M0, M3, M4, M7 processors.
+    \brief Concrete implementation of IPlatform driver for ARM Cortex-M processors (ARMv6-M, ARMv7-M, ARMv8-M).
 */
 class PlatformArmCortexM final : public IPlatform
 {
@@ -239,7 +239,7 @@ struct ExceptionFrame
 
 /*! \namespace stk::hw::mpu
     \brief     Memory Protection Unit (MPU) configuration related API.
-    \warning   MPU API is not accessible by non-Priviligeded, non-Secure contexts.
+    \warning   MPU API is not accessible by non-Privileged, non-Secure contexts.
 */
 namespace hw {
 namespace mpu {
@@ -281,8 +281,8 @@ enum EMpuExec : uint8_t
 enum EMpuType : uint8_t
 {
     TYPE_STRONGLY_ORDERED   = 0U, //!< MAIR0 index for strict ordering (Attr0=0x00 -> Device-nGnRnE).
-    TYPE_DEVICE             = 1U, //!< MAIR0 index for peripheral registers (Attr1=0x04 -> Device-nGnRE (or Normal Non-Cacheable)).
-    TYPE_NORMAL_NON_CACHE   = 2U, //!< MAIR0 index for non-cacheable spaces (DMA) (Attr2=0x44 -> Normal, Outer/Inner Write-Through Non-Transient).
+    TYPE_DEVICE             = 1U, //!< MAIR0 index for peripheral registers (Attr1=0x04 -> Device-nGnRE).
+    TYPE_NORMAL_NON_CACHE   = 2U, //!< MAIR0 index for non-cacheable spaces (DMA) (Attr2=0x44 -> Normal, Outer/Inner Non-cacheable).
     TYPE_NORMAL_CACHEABLE   = 3U  //!< MAIR0 index for standard cached memory (SRAM) (Attr3=0xFF -> Normal, Outer/Inner Write-Back Read/Write-Allocate).
 };
 
@@ -352,12 +352,12 @@ enum EMpuShare : uint32_t
 
 #endif // STK_ARCH_ARMV8_M
 
-/*! \class EMpuConfigFlags
-    \brief MPU control flags for high-level STK configuration.
+/*! \enum  EMpuConfigFlags
+    \brief MPU control flags for high-level STK configuration (see MpuConfig::mode).
 */
 enum EMpuConfigFlags : uint32_t
 {
-    MPU_CFG_NONE              = 0U,        //!< No configuration flags set (corresponds to MpuConfig::MODE_OFF).
+    MPU_CFG_NONE              = 0U,        //!< No configuration flags set (corresponds to MpuConfig::MPU_OFF).
     MPU_CFG_PRIVILEGED_BG_MEM = (1U << 0), //!< Enable default background memory map for privileged access (Cortex-M CTRL.PRIVDEFENA).
     MPU_CFG_IN_FAULTS         = (1U << 1), //!< Keep MPU active during HardFault and NMI handlers (Cortex-M CTRL.HFNMIENA).
     MPU_CFG_CLEAR_ON_INIT     = (1U << 2), //!< Wipe/reset all existing region registers upon initialization, before applying the static table below.
@@ -380,10 +380,11 @@ struct MpuRegionConfig
     hw::mpu::EMpuExec   exec;        //!< MPU Execute-Never.
 };
 
-/*! Recommended MPU configuration for per-task MPU regions of non-Privileged tasks:
+/*! Recommended MPU configuration for per-task MPU regions of non-Privileged tasks
+    (shared code/data sections, see STK_MPU_SHARED_CODE_SECTION / STK_MPU_SHARED_DATA_SECTION):
 
     \code
-    stk::MpuRegionConfigResult MyNonSecureTask::GetMpuRegions() override
+    const stk::MpuRegionList *MyUserTask::GetMpuRegions() const
     {
         using namespace stk;
 
@@ -399,6 +400,7 @@ struct MpuRegionConfig
               .size        = hw::PtrToWord(__stk_mpu_shared_code_end) - hw::PtrToWord(__stk_mpu_shared_code_start),
               .access_perm = hw::mpu::ACCESS_PRIV_RO_USER_RO,
               .mem_type    = hw::mpu::TYPE_NORMAL_CACHEABLE,
+              .share       = hw::mpu::SHARE_NON,
               .exec        = hw::mpu::EXEC_ALLOWED
             },
             {
@@ -406,11 +408,13 @@ struct MpuRegionConfig
               .size        = hw::PtrToWord(__stk_mpu_shared_data_end) - hw::PtrToWord(__stk_mpu_shared_data_start),
               .access_perm = hw::mpu::ACCESS_FULL,
               .mem_type    = hw::mpu::TYPE_NORMAL_CACHEABLE,
+              .share       = hw::mpu::SHARE_NON,
               .exec        = hw::mpu::EXEC_NEVER
             },
         };
 
-        return stk::MpuRegionConfigResult(s_mpu_shared_regions, STK_STATIC_ARRAY_SIZE(s_mpu_shared_regions));
+        static const MpuRegionList s_regions(s_mpu_shared_regions, STK_STATIC_ARRAY_SIZE(s_mpu_shared_regions));
+        return &s_regions;
     }
     \endcode
 */

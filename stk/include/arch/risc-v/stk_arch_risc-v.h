@@ -19,7 +19,7 @@
 namespace stk {
 
 /*! \class PlatformRiscV
-    \brief Concrete implementation of IPlatform driver for the Risc-V processors.
+    \brief Concrete implementation of IPlatform driver for RISC-V processors.
 */
 class PlatformRiscV : public IPlatform
 {
@@ -29,14 +29,15 @@ public:
     */
     STK_VIRT_DTOR ~PlatformRiscV() = default;
 
-    /*! \class IEventHandler
-        \brief RISC-V specific event handler.
+    /*! \class ISpecificEventHandler
+        \brief RISC-V specific event handler, see SetSpecificEventHandler().
     */
     class ISpecificEventHandler
     {
     public:
-        /*! \brief Called by ISR handler on IRQ_XXX (see encoding.h).
-            \note if scheduler is not started and ecall is invoked then
+        /*! \brief     Called by the trap handler for a RISC-V exception/interrupt cause (IRQ_XXX, see encoding.h).
+            \param[in] cause: Value of the \c mcause register.
+            \return    \c true if handled, \c false to let the driver handle it.
         */
         virtual bool OnException(Word cause) = 0;
     };

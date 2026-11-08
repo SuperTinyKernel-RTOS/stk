@@ -580,12 +580,12 @@ public:
     };
 
     /*! \class ScopedLock
-        \brief RAII guard that the spin lock is locked on construction and unlocked it on destruction.
+        \brief RAII guard: locks the spin lock on construction and unlocks it on destruction.
 
         Usage example:
         \code
         {
-            SpinLock::ScopedLock lock;
+            SpinLock::ScopedLock lock(my_spin_lock);
 
             // shared resource access protected here
         } // SpinLock::Unlock() called automatically
@@ -594,7 +594,8 @@ public:
     class ScopedLock
     {
     public:
-        /*! \brief Lock a spin lock instance.
+        /*! \brief     Lock the spin lock.
+            \param[in] sl: Spin lock to hold for the lifetime of this object.
         */
         explicit ScopedLock(SpinLock &sl) : m_sl(sl)
         {
@@ -815,7 +816,7 @@ inline void STK_MEMCPY(void *const dest, const void *const src, size_t size)
         }
     }
 }
-#endif // STK_MEMCPY
+#endif // _STK_CUSTOM_MEMCPY
 
 //! Implementation of STK_MEMSET.
 #ifndef _STK_CUSTOM_MEMSET
@@ -846,7 +847,7 @@ inline void STK_MEMSET(void *const dest, uint8_t value, size_t size)
         }
     }
 }
-#endif // STK_MEMSET
+#endif // _STK_CUSTOM_MEMSET
 
 } // namespace stk
 

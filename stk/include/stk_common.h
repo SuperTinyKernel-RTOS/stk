@@ -241,7 +241,7 @@ typedef int32_t Weight;
     The upper 20 bits of the TId space are reserved for ISR contexts.
     When GetTid() is called from an interrupt service routine, it returns
     \c TID_ISR_N | exception_number, where exception_number is the raw
-    value:
+    exception number of the interrupt being served:
 
     \code
     //  bits[31:12] = 0xFFFFF (this sentinel mask)
@@ -389,8 +389,8 @@ struct TaskStateInfo
                             //!< TASK_STATE_WAITING, \c WAIT_INFINITE if unbounded or not applicable.
 };
 
-/*! \class   MpuRegion
-    \brief   MPU region descriptor.
+/*! \struct  MpuRegion
+    \brief   MPU region descriptor (raw hardware register values).
     \warning Referenced by driver, member offsets must not change.
 */
 #if STK_MPU
@@ -401,9 +401,9 @@ struct MpuRegion
 };
 #endif
 
-/*! \class   TaskMpu
-    \brief   MPU descriptor of the task.
-    \warning Fields marked with 'Offset' have static position in the structure and can't move (driver dependent).
+/*! \struct  TaskMpuT
+    \brief   MPU descriptor of the task (a set of NUM_REGIONS regions), see TaskMpu / TaskMpuNs.
+    \warning Referenced by driver, layout must not change.
 */
 #if STK_MPU && STK_MPU_STACK_GUARD
 template <uint8_t REGIONS_COUNT>
@@ -411,8 +411,8 @@ struct TaskMpuT
 {
     /*! \var   NUM_REGIONS
         \brief Number of MPU regions per task.
-        \note  Configurable via \a STK_MPU_TASK_REGIONS (2, 4, 6, 8, 12 or 16). Last available slot is
-               always the automatic stack guard; the other remaining NUM_REGIONS-1 slots are
+        \note  Configurable via \a STK_MPU_TASK_REGIONS (2, 4, 6, 8, 12 or 16). Slot 0 is
+               always the automatic stack guard; the remaining NUM_REGIONS-1 slots are
                available to the application via \a ITask::GetMpuRegions().
         \see   Stack, STK_MPU_TASK_REGIONS
     */
@@ -443,8 +443,8 @@ typedef ArrayView<const struct MpuRegionConfig> MpuRegionList;
 #if STK_MPU
 struct MpuConfig
 {
-    /*! \var     DEFAULT_MODE
-        \brief   Default mode.
+    /*! \var     MPU_OFF
+        \brief   Mode value with all flags cleared (MPU is not configured).
     */
     static constexpr uint32_t MPU_OFF = 0U;
 
@@ -453,9 +453,9 @@ struct MpuConfig
     MpuConfig() : regions(), mode(MPU_OFF)
     {}
 
-    /*! \brief     Parameterized constructor initializing MPU region settings and enable state.
-        \param[in] regions_: Initial collection of MPU region descriptors.
-        \param[in] enable_:  Activation state flag for the hardware MPU subsystem.
+    /*! \brief     Parameterized constructor.
+        \param[in] regions_: Collection of MPU region descriptors.
+        \param[in] mode_:    Mode flags (hardware-dependent, see hw::mpu::EMpuConfigFlags).
     */
     MpuConfig(const MpuRegionList &regions_, uint32_t mode_) : regions(regions_), mode(mode_)
     {}
@@ -557,14 +557,14 @@ public:
     */
     enum EState : uint8_t
     {
-        STATE_NONE = 0U,
+        STATE_NONE = 0U, //!< Not waiting, no result pending.
         STATE_WAIT,      //!< Wait is active.
         STATE_SIGNALED,  //!< Wake signaled.
         STATE_TIMEOUT,   //!< Wait expired due to timeout rather than a Wake() signal.
         STATE_CANCELLED  //!< Wait was cancelled via Cancel() rather than Wake()/timeout.
     };
 
-    /*! \brief     Get thread Id of the task owning .
+    /*! \brief     Get thread Id of the task that owns this wait object.
         \return    Thread Id.
     */
     virtual TId GetTid() const = 0;
@@ -586,7 +586,8 @@ public:
     /*! \brief     Update wait object's waiting time.
         \param[in] elapsed_ticks: Number of ticks elapsed between this and previous calls, in case of
                    KERNEL_TICKLESS mode this value can be >1, for non-tickless mode it is always 1.
-        \return    Returns \a true if update caused a timeout of the object, \a false otherwise.
+        \return    \c true if the wait is still active, \c false if the timeout has just expired
+                   (the caller then wakes the task with Wake(true)).
     */
     virtual bool Tick(Timeout elapsed_ticks) = 0;
 
@@ -690,7 +691,7 @@ public:
     /*! \brief     Called by kernel when a waiting task is being removed (timeout expired, wait aborted, task terminated etc.).
         \param[in] wlist: Wait list.
         \param[in] wobj: Wait object to remove from the wait list.
-        \note      Utility for AddWaitObject and ARM TrustZone support.
+        \note      Utility for RemoveWaitObject and ARM TrustZone support.
     */
     static inline void RemoveWaitObject(IWaitObject::ListHeadType &wlist, IWaitObject *wobj)
     {
@@ -730,7 +731,7 @@ public:
         \note      The woken task is notified with timeout=false, indicating a successful signal
                    (not a timeout expiry).
         \note      Does nothing if no tasks are currently waiting.
-        \note      Utility for AddWaitObject and ARM TrustZone support.
+        \note      Utility for WakeOne and ARM TrustZone support.
     */
     static inline void WakeOne(IWaitObject::ListHeadType &wlist)
     {
@@ -746,7 +747,7 @@ public:
         \note      Each woken task is notified with timeout=false, indicating a successful signal
                    (not a timeout expiry).
         \note      Does nothing if no tasks are currently waiting.
-        \note      Utility for AddWaitObject and ARM TrustZone support.
+        \note      Utility for WakeAll and ARM TrustZone support.
     */
     static inline void WakeAll(IWaitObject::ListHeadType &wlist)
     {
@@ -889,7 +890,7 @@ public:
                    Implement this method with the task's main logic.
         \warning   If \c Kernel is configured as \c KERNEL_STATIC, the body must contain an infinite loop.
         \code
-        void Run( override)
+        void Run() override
         {
             while (true)
             {
@@ -1049,8 +1050,9 @@ public:
     */
     virtual Stack GetUserStack() const = 0;
 
-    /*! \brief     Get static base weight assigned to the task.
-        \return    Static weight value of the task.
+    /*! \brief     Get the effective weight of the task.
+        \return    The base weight (see GetBaseWeight), or the inherited weight while the task is
+                   boosted by priority inheritance.
         \see       SwitchStrategySmoothWeightedRoundRobin, ITask::GetWeight
         \note      Weight API
     */
@@ -1072,7 +1074,8 @@ public:
     virtual void SetCurrentWeight(Weight weight) = 0;
 
     /*! \brief     Get the current dynamic weight value of this task.
-        \return    Current dynamic weight value.
+        \return    Current dynamic weight value. For strategies with priority inheritance
+                   \a NO_WEIGHT means the task is not boosted.
         \see       SwitchStrategySmoothWeightedRoundRobin
         \note      Weight API
     */
@@ -1088,11 +1091,10 @@ public:
     */
     virtual Timeout GetHrtDeadline() const = 0;
 
-    /*! \brief     Get HRT task's relative deadline.
-        \return    Relative deadline of the task (ticks): the maximum allowed elapsed time from the
-                   start of the current period until the task must complete. Unlike the absolute
-                   deadline (GetHrtDeadline), this value is measured relative to the period start
-                   and does not depend on the current tick counter.
+    /*! \brief     Get HRT task's remaining deadline.
+        \return    Ticks left before the deadline of the current activation expires
+                   (GetHrtDeadline() minus the ticks the task has been active). Zero means this is the last
+                   tick still within the deadline, a negative value means the deadline is missed.
         \see       GetHrtDeadline, GetHrtPeriodicity
     */
     virtual Timeout GetHrtRelativeDeadline() const = 0;
@@ -1143,7 +1145,7 @@ public:
             \note       This event can be used to change hardware access mode for the first task.
             \param[out] active: Stack of the task which must enter Active state (to which context will switch).
         */
-        virtual void OnStart(Stack *&enable) = 0;
+        virtual void OnStart(Stack *&active) = 0;
 
         /*! \brief      Called by driver to notify that scheduling is stopped.
             \note       Resets internal kernel state so that Start() may be called again
@@ -1173,7 +1175,7 @@ public:
         ) = 0;
 
         /*! \brief      Called from the Thread process when task finished (its Run function exited by return).
-            \param[out] stack: Stack of the exited task.
+            \param[in]  stack: Stack of the exited task.
         */
         virtual void OnTaskExit(const Stack *stack) = 0;
 
@@ -1183,12 +1185,12 @@ public:
         */
         virtual TId OnGetTid(Word caller_SP) = 0;
 
-        /*! \brief      Called from the Thread process to suspend scheduling.
-            \param[in]  suspended: \c true if scheduling was successfully suspended, \c false otherwise.
+        /*! \brief      Called by the driver when scheduling is suspended or resumed (tickless suspend, see IPlatform::Suspend).
+            \param[in]  suspended: \c true if scheduling was suspended, \c false if it was resumed.
         */
         virtual void OnSuspend(bool suspended) = 0;
 
-        /*! \brief      Called when task state change forces a context switch (Sleep, SleepUntil, Wait).
+        /*! \brief      Called when a task state change forces a context switch (sleep, wait, suspend, yield, exit).
             \param[in]  id: Task id causing this forced context switch.
             \param[out] idle: Stack of the task which must enter Idle state.
             \param[out] active: Stack of the task which must enter Active state (to which context will switch).
@@ -1204,8 +1206,9 @@ public:
     class IEventOverrider
     {
     public:
-        /*! \brief  Called by the Kernel when it is entering a sleep mode.
-            \return True if event is handled otherwise False to let driver handle it.
+        /*! \brief     Called by the Kernel when it is entering a sleep mode.
+            \param[in] sleep_ticks: Number of ticks the CPU is going to sleep.
+            \return    True if event is handled otherwise False to let driver handle it.
         */
         virtual bool OnSleep(Timeout sleep_ticks)
         {
@@ -1214,7 +1217,7 @@ public:
         }
 
         /*! \brief  Called by Kernel when hard fault happens.
-            \note   Normally called by Kernel when one of the scheduled tasks missed its deadline (see stk::KERNEL_HRT, IPlatform::HardFault).
+            \note   Normally called by Kernel when one of the scheduled tasks missed its deadline (see stk::KERNEL_HRT, IPlatform::ProcessHardFault).
             \return True if event is handled otherwise False to let driver handle it.
         */
         virtual bool OnHardFault()
@@ -1505,13 +1508,12 @@ public:
         \param[in] task: The task whose weight was just updated via SetWeight().
         \param[in] old_weight: The previous weight of this task (required to remove it from
                    the priority list belonging to that weight).
-        \note      Called only for tasks that are currently in the runnable set
-                   (not sleeping). The strategy must relink the task to reflect
-                   its new weight. For strategies with WEIGHT_API = 0 this is a
-                   no-op. For SwitchStrategyFixedPriority it moves the task from
-                   its old priority-level list to the new one and updates
-                   m_ready_bitmap.
-        \note      Called from within a ScopedCriticalSection.
+        \note      Called for any bound task, including a sleeping one (e.g. SetWeight() on it), so the
+                   strategy must not assume the task is in its runnable set. The strategy must reflect
+                   the new weight in its data structures. For strategies with WEIGHT_API = 0 this is a
+                   no-op. For SwitchStrategyFixedPriority it moves a runnable task from
+                   its old priority-level list to the new one and updates m_ready_bitmap.
+        \note      Called from within a critical section (see hw::CriticalSection).
     */
     virtual void OnTaskWeightChange(IKernelTask *task, Weight old_weight)
     {
@@ -1622,16 +1624,15 @@ public:
                    To remove tasks after Start() the task should return from its Run function
                    (in KERNEL_DYNAMIC mode the slot is freed automatically on the next tick).
         \warning   Must only be called when kernel is not running, otherwise call ScheduleTaskRemoval.
-        \warning   KERNEL_DYNAMIC mode only. Asserts if called in KERNEL_STATIC or KERNEL_HRT mode,
-                   or if called after Start().
+        \warning   KERNEL_DYNAMIC mode only. Asserts if the kernel is not KERNEL_DYNAMIC or if called after Start().
         \see       ScheduleTaskRemoval
     */
     virtual void RemoveTask(ITask *user_task) = 0;
 
     /*! \brief     Schedule task removal from scheduling (exit).
         \param[in] user_task: User task to remove. Must not be \c nullptr.
-        \warning   KERNEL_DYNAMIC mode only. Asserts if called in KERNEL_STATIC or KERNEL_HRT mode,
-                   or if called before Start() (i.e. while the kernel is not yet running).
+        \warning   KERNEL_DYNAMIC mode only. Asserts if the kernel is not KERNEL_DYNAMIC or if called
+                   before Start() (i.e. while the kernel is not yet running).
                    Use RemoveTask instead to remove a task while the kernel is not running.
         \see       RemoveTask
     */
@@ -1671,11 +1672,10 @@ public:
     */
     virtual EResumeResult ResumeTask(ITask *user_task) = 0;
 
-    /*! \brief     Cancel a task's in-progress wait on a synchronization object, waking it early.
+    /*! \brief     Cancel a task's in-progress wait or sleep, waking it early.
         \param[in] user_task: Pointer to the user task whose wait should be cancelled.
-        \note      Only has effect if the task is currently blocked in IKernelService::Wait()
-                   (i.e. inside OnTaskWait()). No-op otherwise (e.g. task is running, suspended, or
-                   sleeping via Sleep()/SleepUntil()).
+        \note      Applies to a task blocked in IKernelService::Wait() (KERNEL_SYNC mode) and to a task
+                   sleeping via Sleep()/SleepUntil(). No-op if the task is running or suspended.
         \note      The cancelled task's IKernelService::Wait() call returns WAIT_RESULT_CANCELED -
                    distinct from WAIT_RESULT_SIGNAL (resource was NOT acquired/signalled) and
                    WAIT_RESULT_TIMEOUT (the timeout, if any, had not yet expired).
@@ -1685,9 +1685,7 @@ public:
                    variants (FastMutex::TimedLockEx(), Semaphore::WaitEx(), Event::WaitEx())
                    return WAIT_RESULT_CANCELED as is; EventFlags::Wait() reports it as
                    EventFlags::ERROR_CANCELED, distinct from EventFlags::ERROR_TIMEOUT.
-        \note      KERNEL_SYNC mode only.
-        \see       IKernelService::SleepCancel, which additionally ends a plain Sleep()/SleepUntil() and
-                   cancels a sync-object wait identically.
+        \see       IKernelService::SleepCancel (same effect, addressed by task id and ISR-safe).
     */
     virtual void CancelTaskWait(ITask *user_task) = 0;
 
@@ -1764,31 +1762,18 @@ public:
     /*! \brief     Lock or unlock task switching. Ticks, timeouts and ISRs keep running.
         \param[in] lock: \c true to lock, \c false to unlock.
         \return    Previous lock state (LOCK_WAS_UNLOCKED / LOCK_WAS_LOCKED), or LOCK_FAIL / LOCK_FAIL_ISR.
-        \note      Single kernel-level primitive: IKernelService::LockScheduler(), UnlockScheduler() and
-                   RestoreSchedulerLock() (and their stk:: helpers) are built on it. Application code should
-                   use those. Always reports the PREVIOUS state, RestoreSchedulerLock() converts it to the new one.
-        \note      Not nested.
-        \note      Task context only. Not available in KERNEL_HRT mode (LOCK_FAIL).
-        \note      While locked the kernel state is KSTATE_LOCKED.
-        \warning   The lock holder must keep the CPU. While locked, Sleep(), SleepUntil(), Yield(), IKernelService::Wait()
-                   and SuspendTask() of the calling task must not be called: they assert in debug builds. In release
-                   builds they are no-ops (SleepUntil() returns false, Wait() returns WAIT_RESULT_FAIL,
-                   SuspendTask() returns SUSPEND_FAIL). Delay() is allowed. Suspending another task is allowed.
-        \warning   Blocking on a synchronization object that is owned by another task would never complete,
-                   because no other task can run while locked. A synchronization object which is free can be used.
-        \note      Exiting (IKernelService::ExitTask() or returning from ITask::Run()) can not be refused: it asserts
-                   in debug builds, in release builds the task exits and the lock is released when it leaves the CPU,
-                   so the lock never passes on to another task.
-        \note      Time-slice accounting (KERNEL_TIMESLICE) continues while locked, rotation of an expired slice is
-                   deferred until the lock is released.
-        \note      Entering tickless suspend (IKernelService::Suspend()) drops the lock, the kernel state becomes
-                   KSTATE_SUSPENDED.
-        \see       ELockResult, IKernelService::LockScheduler, IKernelService::UnlockScheduler, IKernelService::RestoreSchedulerLock
+        \note      Kernel-level primitive behind IKernelService::LockScheduler(), UnlockScheduler() and
+                   RestoreSchedulerLock() (and their stk:: helpers), application code should use those.
+                   Always reports the PREVIOUS state.
+        \note      Not nested. Task context only. Not available in KERNEL_HRT mode (LOCK_FAIL).
+                   While locked the kernel state is KSTATE_LOCKED.
+        \see       IKernelService::LockScheduler for the restrictions that apply to the lock holder.
     */
     virtual ELockResult SetSchedulerLock(bool lock) = 0;
 
     /*! \brief     Start kernel scheduling.
-        \note      This function never returns. Must be called after Initialize() and AddTask().
+        \note      Does not return in KERNEL_STATIC mode; in KERNEL_DYNAMIC mode returns after all tasks
+                   have exited. Must be called after Initialize() and AddTask().
         \note      Kernel must be in \a KSTATE_READY state.
     */
     virtual void Start() = 0;
@@ -1868,7 +1853,6 @@ public:
         \note      Use with care in HRT mode to avoid missed deadline (see stk::KERNEL_HRT, ITask::OnDeadlineMissed).
         \param[in] ticks: Delay time (ticks).
         \warning   ISR-unsafe. Calling from an ISR context is not permitted and will trigger an assertion.
-        \see       Delay
     */
     virtual void Delay(Timeout ticks) = 0;
 
@@ -1879,6 +1863,7 @@ public:
         \warning   ISR-unsafe. Calling from an ISR context is not permitted and will trigger an assertion.
         \warning   Must not be called while the scheduler is locked (see LockScheduler): asserts in debug builds,
                    no-op in release builds.
+        \return    True if the task slept, false otherwise (\a ticks is 0, HRT mode, or scheduler locked).
     */
     virtual bool Sleep(Timeout ticks) = 0;
 
@@ -1900,14 +1885,16 @@ public:
                    IKernel::CancelTaskWait() does: the task is removed from the object's wait list and its
                    Wait() returns \c WAIT_RESULT_CANCELED (not \c WAIT_RESULT_TIMEOUT or
                    \c WAIT_RESULT_SIGNAL, no resource is acquired or consumed).
-        \note      No-op if task was neither sleeping nor waiting on a synchronization object.
+        \note      No-op if task was neither sleeping nor waiting on a synchronization object, or is suspended.
         \note      ISR-safe.
         \see       IKernel::CancelTaskWait, EWaitResult
     */
     virtual void SleepCancel(TId task_id) = 0;
 
     /*! \brief     Notify scheduler to switch to the next task (yield).
-        \note      A cooperation mechanism in HRT mode (see stk::KERNEL_HRT).
+        \note      In HRT mode (see stk::KERNEL_HRT) it signals completion of the current job. In other
+                   modes the strategy may keep the task runnable (NOSLEEP_YIELD_API), otherwise the
+                   task sleeps for one tick, see stk::Yield().
         \warning   ISR-unsafe.
         \warning   Must not be called while the scheduler is locked (see LockScheduler): asserts in debug builds,
                    no-op in release builds.

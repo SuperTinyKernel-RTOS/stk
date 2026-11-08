@@ -23,17 +23,15 @@
            task-switching strategies.
 
     Include this single header in user application code. It transitively pulls in:
-     - stk_helper.h             - Task, TaskW, StackMemoryWrapper; and free-function helpers:
-                                  GetTid, GetTicks, GetTickResolution, GetTicksFromMs,
-                                  GetMsFromTicks, GetTimeNowMs, Delay, Sleep, SleepUntil, Yield,
-                                  LockScheduler, UnlockScheduler, RestoreSchedulerLock, and the
-                                  ScopedSchedulerLock RAII alias.
+     - stk_helper.h             - Task, TaskW, StackMemoryWrapper; and free-function helpers
+                                  (GetTid, GetTicks, Sleep, SleepUntil, Yield, Delay, ExitTask,
+                                  tick/millisecond conversions, scheduler lock, SetWeight, SetTimeSlice, ...).
      - stk_strategy_rrobin.h    - sched::SwitchStrategyRoundRobin.
      - stk_strategy_swrrobin.h  - sched::SwitchStrategySmoothWeightedRoundRobin.
      - stk_strategy_monotonic.h - sched::SwitchStrategyMonotonic (SRT rate-monotonic).
      - stk_strategy_edf.h       - sched::SwitchStrategyEdf (Earliest Deadline First).
      - stk_strategy_fpriority.h - sched::SwitchStrategyFixedPriority.
-     - stk_strategy_pthreshold  - sched::SwitchStrategyPreemptionThreshold (Fixed-priority preemptive with Preemption-Threshold).
+     - stk_strategy_pthreshold.h - sched::SwitchStrategyPreemptionThreshold (Fixed-priority preemptive with Preemption-Threshold).
 */
 
 namespace stk {
@@ -77,10 +75,8 @@ template <> __stk_forceinline Timeout GetInitialSleepTicks<false>() { return 1; 
     \tparam TPlatform: Platform driver type (e.g. PlatformArmCortexM, or PlatformDefault). Must inherit IPlatform.
 
     \note  At least 1 task is required: TSize must be > 0 (enforced by compile-time assertion).
-    \note  KERNEL_HRT is incompatible with weighted scheduling strategies (WEIGHT_API == true),
-           also enforced by a compile-time assertion.
-    \note  KERNEL_TICKLESS is incompatible with KERNEL_HRT, also enforced by a compile-time
-           assertion (TICKLESS_HRT_CONFLICT).
+    \note  KERNEL_HRT is not supported with weighted scheduling strategies (WEIGHT_API == true).
+    \note  KERNEL_TICKLESS and KERNEL_TIMESLICE are incompatible with KERNEL_HRT (compile-time assertions).
 
     Usage example:
     \code
@@ -121,8 +117,8 @@ protected:
         \brief Internal per-slot kernel descriptor that wraps a user ITask instance.
 
         Holds the kernel-side state for one task slot: the Stack descriptor, sleep timer,
-        HRT or SRT scheduling metadata, optional wait object (KERNEL_SYNC), and optional
-        weight (weighted strategies). The task-switching strategy operates on KernelTask
+        HRT metadata (KERNEL_HRT), wait object (KERNEL_SYNC), time-slice state (KERNEL_TIMESLICE)
+        and weights (weighted strategies). The task-switching strategy operates on KernelTask
         pointers rather than ITask pointers directly.
 
         A slot is "free" when m_user == NULL (IsBusy() == false). The Kernel pre-allocates
@@ -240,8 +236,9 @@ protected:
             }
         }
 
-        /*! \brief  Get static scheduling weight from the user task.
-            \return ITask::GetWeight() if WEIGHT_API is true; 1 otherwise.
+        /*! \brief  Get the effective scheduling weight.
+            \return The inherited weight while boosted (PRIORITY_INHERITANCE_API strategies only),
+                    otherwise GetBaseWeight().
         */
         Weight GetWeight() const override
         {
@@ -302,9 +299,9 @@ protected:
         }
 
         /*! \brief  Get current (run-time) scheduling weight.
-            \return m_rt_weight[0] if WEIGHT_API is true; 1 otherwise.
-            \note   The run-time weight is decremented each tick by the weighted strategy and
-                    reset to GetWeight() when exhausted.
+            \return m_rt_weight[0] if WEIGHT_API is true; DEFAULT_WEIGHT otherwise.
+            \note   Strategy-owned dynamic value; with PRIORITY_INHERITANCE_API it holds the inherited
+                    weight, NO_WEIGHT meaning no boost.
         */
         Weight GetCurrentWeight() const override
         {
@@ -344,9 +341,9 @@ protected:
             return to;
         }
 
-        /*! \brief  Get absolute HRT deadline (ticks elapsed since task was activated).
-            \return Deadline in ticks. The task must complete its work within this many ticks
-                    of being switched in, or OnDeadlineMissed() is invoked.
+        /*! \brief  Get HRT deadline.
+            \return Maximum active duration in ticks. The task must complete its work within this many
+                    ticks of being switched in, or OnDeadlineMissed() is invoked.
             \note   KERNEL_HRT mode only. Asserts if called outside HRT mode.
         */
         Timeout GetHrtDeadline() const override
@@ -395,6 +392,12 @@ protected:
             return relative_deadline;
         }
 
+        /*! \brief     Narrow down the tickless idle interval by this task's remaining sleep/wait time.
+            \param[in] sleep_ticks: Interval accumulated so far.
+            \return    Minimum of \a sleep_ticks and the ticks left until this task wakes (or its sync wait
+                       times out), clamped to at least 1.
+            \note      KERNEL_TICKLESS only.
+        */
         Timeout GetSleepTicks(Timeout sleep_ticks)
         {
             // note: task sleep time is negative
@@ -566,7 +569,7 @@ protected:
 
             /*! \brief     Wake the waiting task (called by ISyncObject when it signals).
                 \param[in] timeout: \c true if woken because the timeout expired, \c false if signalled.
-                \note      Clears m_time_wait, records the timeout flag, removes this object from
+                \note      Sets m_state (STATE_TIMEOUT or STATE_SIGNALED), clears m_time_wait, removes this object from
                            m_sync_obj's wait list, nulls m_sync_obj, then calls m_task->Wake().
             */
             void Wake(bool timeout) override
@@ -627,7 +630,7 @@ protected:
             /*! \brief  Cancel an in-progress wait without waking the owning task.
                 \note   Used when the owning task is being forcibly removed (see
                         KernelTask::ScheduleRemoval) while blocked on a synchronization object.
-                        Unlike Wake(), this does not touch m_task's sleep state or set m_timeout -
+                        Unlike Wake(), this does not touch m_task's sleep state -
                         the task is being torn down and will never observe the wait result.
                 \note   No-op if not currently waiting.
             */
@@ -648,7 +651,7 @@ protected:
                         Unlike CancelNoWake(), this DOES wake the task - the task is not being
                         torn down, it needs to legitimately resume execution and observe the
                         result via IsCanceled().
-                \note   Sets m_canceled instead of m_timeout, so the caller can distinguish a
+                \note   Sets m_state to STATE_CANCELLED, so the caller can distinguish a
                         cancelled wait (WAIT_RESULT_CANCELED) from a genuine timeout or signal.
                 \note   Caller (IKernel::CancelTaskWait()) is responsible for checking IsWaiting()
                         before calling this - it asserts rather than no-op, mirroring Wake().
@@ -687,9 +690,10 @@ protected:
             volatile EState m_state;     //!< State of the object, see WaitObject::EState.
         };
 
-        /*! \brief     Bind this slot to a user task: set access mode, task ID, and initialize the stack.
+        /*! \brief     Bind this slot to a user task: set access mode and task ID, initialize the stack,
+                       and reset the weight and time-slice state.
             \param[in] platform: Platform driver used to initialize the stack frame.
-            \param[in] user_task: User task to bind. Asserts that the stack is successfully initialized.
+            \param[in] user_task: User task to bind.
         */
         void Bind(TPlatform *platform, ITask *user_task)
         {
@@ -930,8 +934,9 @@ protected:
             \param[in] ticks: Number of ticks to sleep. Must be > 0.
             \note      Stores \c -ticks in m_time_sleep (negative values indicate sleeping;
                        UpdateTaskState() increments toward 0 each tick until the task wakes).
-            \note      If the strategy uses SLEEP_EVENT_API and the task is not already sleeping,
-                       sets STATE_SLEEP_PENDING so OnTaskSleep() is delivered on the next tick.
+            \note      If the task is not already sleeping, sets STATE_SLEEP_PENDING so that the next tick
+                       delivers OnTaskSleep() to the strategy (SLEEP_EVENT_API strategies).
+            \note      In KERNEL_TIMESLICE mode the time slice of the task is reloaded.
             \note      A full memory fence is emitted after the assignment so that the ISR-side
                        scheduler sees the updated value without delay.
         */
@@ -1020,9 +1025,9 @@ protected:
     /*! \class KernelService
         \brief Concrete implementation of IKernelService exposed to running tasks.
 
-        Holds the global tick counter (m_ticks, updated atomically by IncrementTick() each
-        SysTick) and a typed pointer to the platform driver. Tasks access this object via
-        IKernelService::GetInstance() which returns the singleton registered at Initialize().
+        Holds the global tick counter (m_ticks, advanced by IncrementTicks() from the tick ISR)
+        and a pointer to the owning Kernel. Tasks access this object via
+        IKernelService::GetInstance().
     */
     class KernelService final : public IKernelService
     {
@@ -1329,7 +1334,7 @@ protected:
         }
 
     private:
-        /*! \brief Construct an uninitialized service instance (m_platform = null, m_ticks = 0).
+        /*! \brief Construct an uninitialized service instance (m_kernel = null, m_ticks = 0).
             \note  Fully initialized by Initialize(). Private; constructed only as a member of Kernel.
         */
         explicit KernelService() : m_kernel(nullptr), m_ticks(0)
@@ -1340,9 +1345,7 @@ protected:
         */
         STK_VIRT_DTOR ~KernelService() = default;
 
-        /*! \brief     Initialize instance.
-            \note      When call completes Singleton<IKernelService *> will start referencing this
-                       instance (see g_KernelService).
+        /*! \brief     Bind this service to its kernel.
             \param[in] kernel: Kernel instance.
         */
         void Initialize(Kernel *kernel)
@@ -1373,7 +1376,8 @@ protected:
     };
 
 public:
-    /*! \brief Maximum number of concurrently registered tasks. Fixed at compile time. Exceeding this limit in AddTask() triggers a compile-time assert (TASKS_MAX > 0) and a runtime STK_ASSERT.
+    /*! \brief Maximum number of concurrently registered tasks. Fixed at compile time and must be > 0
+               (compile-time assertion). AddTask() fails with ADD_FAIL_POOL_FULL when all slots are busy.
     */
     static constexpr size_t TASKS_MAX = TSize;
 
@@ -1449,25 +1453,14 @@ public:
     /*! \brief     Register task for a soft real-time (SRT) scheduling.
         \param[in] user_task: User task to add. Must not already be registered. Must not be \c nullptr.
         \return    See EAddResult. The kernel is not changed if the result is not ADD_OK.
-        \note      Before Start(): allocates a free KernelTask slot and adds it to the strategy immediately.
-        \note      After Start() (KERNEL_DYNAMIC only): the task is added immediately, inside a critical
-                   section, and is visible to the scheduler on the next tick. The call does not block, does
-                   not yield and does not defer any work to the tick handler.
-        \note      ISR-safe (task or ISR context), with these restrictions:
-                   - the whole operation runs with interrupts masked (stack initialization, MPU setup and the
-                     ITask getters are executed inside the critical section), keep stacks of tasks added from
-                     an ISR modest and call it from a low-priority ISR;
-                   - the ISR priority must be numerically above STK_CORTEX_M_SVCALL_ISR_PRIORITY (lower urgency)
-                     on Cortex-M, otherwise it is not masked by the BASEPRI critical section of an unprivileged task;
-                   - in KERNEL_TICKLESS mode a task added from an ISR while all tasks are sleeping becomes runnable
-                     only when the already armed timer expires (not one tick later), a task-context call is not
-                     affected;
-                   - kernels are expected to be per-core: the critical section excludes the tick of the local core only.
+        \note      Allocates a free KernelTask slot and adds the task to the strategy inside a critical section.
+                   After Start() (KERNEL_DYNAMIC only) the task is scheduled from the next tick.
+        \note      ISR-safe, with the restrictions listed in IKernel::AddTask.
         \warning   KERNEL_DYNAMIC: a failure is only returned, never asserted, the caller must handle it.
-                   Other modes: a failure asserts (KERNEL_HRT: always, use the HRT overload instead; KERNEL_STATIC:
-                   after Start(), TASKS_MAX exceeded, task or stack already registered). In a release build such
-                   a failure is not reported and the task is not added.
+                   Other modes: a failure asserts (KERNEL_HRT: always, use the HRT overload instead), in a
+                   release build it is not reported and the task is not added.
         \warning   The task and stack collision check is always performed, also in a release build.
+        \see       IKernel::AddTask
     */
     __stk_attr_noinline EAddResult AddTask(ITask *user_task) override
     {
@@ -1569,8 +1562,7 @@ public:
         \note      Only valid before Start() (i.e. while the kernel is not running).
                    To remove tasks after Start() the task should return from its Run function
                    (in KERNEL_DYNAMIC mode the slot is freed automatically on the next tick).
-        \warning   KERNEL_DYNAMIC mode only. Asserts if called in KERNEL_STATIC or KERNEL_HRT mode,
-                   or if called after Start().
+        \warning   KERNEL_DYNAMIC mode only. Asserts if the kernel is not KERNEL_DYNAMIC or if called after Start().
     */
     __stk_attr_noinline void RemoveTask(ITask *user_task) override
     {
@@ -1594,8 +1586,9 @@ public:
 
     /*! \brief     Schedule task removal from scheduling (exit).
         \param[in] user_task: User task to remove. Must not be \c nullptr.
-        \warning   KERNEL_DYNAMIC mode only. Asserts if called in KERNEL_STATIC or KERNEL_HRT mode,
-                   or if called after Start().
+        \note      The slot is released on a following tick, after ITask::OnExit() has been called.
+        \warning   KERNEL_DYNAMIC mode only. Asserts if the kernel is not KERNEL_DYNAMIC or if called
+                   before Start() (use RemoveTask() then).
     */
     __stk_attr_noinline void ScheduleTaskRemoval(ITask *user_task) override
     {
@@ -2085,11 +2078,10 @@ protected:
         FSM_EVENT_MAX         //!< Sentinel: number of valid events (used to size the FSM table).
     };
 
-    /*! \brief Ticks to yield.
+    /*! \brief Sleep time (ticks) of a legacy yield, i.e. a yield that is not handled by the strategy.
 
-         Yield with 2 ticks: 1 will be incremented on the next OnTick call by UpdateTasks
-         and remaining 1 will cause a context switch by UpdateFsmState when strategy detects
-         it as a sleeping test.
+        The yielding task is excluded from scheduling by the entry tick (which delivers OnTaskSleep() without
+        advancing the sleep timer) and is woken by the following tick.
     */
     static constexpr Timeout YIELD_TICKS = 1;
 
@@ -2451,8 +2443,8 @@ protected:
     #endif
         UpdateTasks(elapsed_ticks));
 
-        // time-slice accounting for the task that just ran (after sleep/wake updates, before the FSM picks next)
-        // (skipped while locked: a rotation without a context switch would cause a spurious early preemption after Unlock)
+        // time-slice accounting for the task that just ran (after sleep/wake updates, before the FSM picks next);
+        // the slice is charged while locked too, but rotation is deferred until unlock (see UpdateTimeslice)
         if __stk_constexpr_cpp17 (IsTimesliceMode())
         {
             UpdateTimeslice(elapsed_ticks);
@@ -2474,6 +2466,15 @@ protected:
         return switch_context;
     }
 
+    /*! \brief      Called by the platform driver (from ISR) after a task requested a forced context switch.
+        \param[in]  id: Task which requested it (it is busy-waiting to be switched out).
+        \param[out] idle: Stack of the task which must enter Idle state.
+        \param[out] active: Stack of the task which must enter Active state.
+        \return     \c true if a context switch is required, \c false if the request is stale or the
+                    task is not leaving the CPU.
+        \note       Consumes the pending sleep (or yield) of the task, releases the scheduler lock if the
+                    lock holder is exiting, then lets the FSM pick the next task.
+    */
     bool OnForceContextSwitch(TId id, Stack *&idle, Stack *&active)
     {
         bool switch_context = false;
@@ -2522,6 +2523,11 @@ protected:
 #ifdef _STK_UNDER_TEST
     virtual
 #endif
+    /*! \brief     Yield the calling task (IKernelService::SwitchToNext).
+        \param[in] caller_SP: Stack pointer of the calling task.
+        \note      If the strategy handles the yield (NOSLEEP_YIELD_API) the task stays runnable,
+                   otherwise it sleeps for YIELD_TICKS. In KERNEL_HRT mode it signals work completion.
+    */
     void OnTaskSwitch(Word caller_SP)
     {
         // let the strategy handle the yield without putting the task to sleep (e.g. to hand
@@ -2938,26 +2944,17 @@ protected:
                    active tasks, clamped to [1, STK_TICKLESS_TICKS_MAX]. The platform driver uses
                    this value to program the next timer wakeup interval, suppressing timer/tick ISR for
                    that many ticks when the system would otherwise be idle.
-        \note      Sleep entry/exit protocol: ScheduleSleep() sets STATE_SLEEP_PENDING and stores
-                   m_time_sleep = -ticks. This function's first pass over a newly-sleeping task (the
-                   "entry tick") consumes STATE_SLEEP_PENDING and delivers OnTaskSleep() to the
-                   strategy, but does NOT also advance m_time_sleep on that same pass - doing both in
-                   one call would let a 1-tick sleep collapse to zero elapsed time (OnTaskSleep and
-                   OnTaskWake firing back-to-back before the task was ever excluded from scheduling).
-                   The entry tick is therefore required to be a single, uncoalesced tick (asserted
-                   below); this holds because a task can only enter STATE_SLEEP_PENDING by putting
-                   itself to sleep, which means it was actively running (not idle) up to that point,
-                   so tickless coalescing, which only suppresses ticks while the CPU is idle, cannot
-                   have applied yet.
-                   If Wake()/SleepCancel() races in before the entry tick runs, STATE_WAKE_PENDING is
-                   set alongside STATE_SLEEP_PENDING. The entry tick then delivers OnTaskSleep()
-                   followed immediately by the normal advance (and OnTaskWake(), since m_time_sleep
-                   was already primed to -1 by Wake()) in the same pass, so the task still resumes on
-                   the next tick as promised, with the two notifications correctly paired instead of
-                   an orphaned OnTaskWake().
-                   Tasks sleeping via WAIT_INFINITE (IsSleepInfinite()) are excluded from the per-tick
-                   advance entirely so they never spuriously time out; only an explicit Wake() (which
-                   directly sets m_time_sleep = -1) ends an infinite sleep.
+        \note      Sleep entry protocol: ScheduleSleep() sets STATE_SLEEP_PENDING and stores
+                   m_time_sleep = -ticks. The first pass over such a task (the "entry tick") only delivers
+                   OnTaskSleep() to the strategy and does NOT advance m_time_sleep, otherwise a 1-tick sleep
+                   would collapse to zero (OnTaskSleep and OnTaskWake back-to-back). The entry tick is
+                   always a single, uncoalesced tick, because the task was running up to that point
+                   (asserted below).
+        \note      If Wake() raced in before the entry tick (STATE_WAKE_PENDING), OnTaskSleep() is followed by
+                   the normal advance and OnTaskWake() in the same pass, so the two stay paired.
+        \note      Tasks sleeping with WAIT_INFINITE (IsSleepInfinite()) are not advanced, only Wake() ends
+                   such a sleep. If a deferred suspension (STATE_SUSPEND_PENDING) is pending when the
+                   sleep/wait ends, the task is parked (CommitSuspend()) instead of being woken.
     */
     Timeout UpdateTaskState(const Timeout elapsed_ticks)
     {
@@ -3159,7 +3156,7 @@ protected:
     /*! \brief      Update FSM state.
         \param[out] idle: Stack of the task which must enter Idle state.
         \param[out] active: Stack of the task which must enter Active state (to which context will switch).
-        \return     FSM state.
+        \return     \c true if a context switch is required (\a idle and \a active are valid).
     */
     bool UpdateFsmState(Stack *&idle, Stack *&active)
     {
