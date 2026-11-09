@@ -42,6 +42,12 @@
  *
  *---------------------------------------------------------------------------*/
 
+/*! \file  blinky_c-cmsis-rtos2-prio/example.c
+    \brief Priority Inheritance demonstration via CMSIS RTOS2.
+    
+    \example blinky_c-cmsis-rtos2-prio/example.c
+*/
+
 #include <stdio.h>
 
 #include "cmsis_os2.h"          // ARM::CMSIS:RTOS2

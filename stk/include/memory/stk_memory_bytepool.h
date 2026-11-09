@@ -15,8 +15,8 @@
 
 /*! \def   STK_MEMORY_BYTEPOOL_ALIGN_DEFAULT
     \brief Payload alignment of BytePool allocations in bytes (a power of two, not less than 4) and the
-           granularity of block sizes. Defaults to 8, which keeps \c double / \c uint64_t payloads aligned on
-           32-bit targets and satisfies MemoryAllocator::MIN_ALIGNMENT.
+           granularity of block sizes. Defaults to MemoryAllocator::MIN_ALIGNMENT (8 on typical 32-bit targets, which
+           keeps \c double / \c uint64_t payloads aligned).
     \details Unlike BlockMemoryPool this is a compile-time setting, not a constructor argument: it also
            determines the layout of the block header (the payload follows it directly), so
            \c BytePool::HEADER_SIZE becomes \c max(8, alignment).
@@ -48,6 +48,8 @@
            from the beginning of the pool. This usually shortens the list walk (and therefore the
            critical section) when many used blocks accumulate at the start of the pool, at the price
            of somewhat higher fragmentation. First-fit (0) is the default.
+    \note  Free() moves the rover back to a freed block that lies before it, so freed memory is found
+           (and merged with its free neighbours) by the next search instead of being skipped.
     \see   BytePool::GetMaxScanLength()
 */
 #ifndef STK_MEMORY_BYTEPOOL_NEXT_FIT
@@ -70,7 +72,7 @@ namespace memory {
     allocation time and the possibility of fragmentation.
 
     The pool keeps an implicit block list inside the storage area. Every block (free or
-    used) is preceded by a header (\c HEADER_SIZE, 8 bytes by default) holding the total block size and a state marker.
+    used) is preceded by a header (\c HEADER_SIZE, at least 8 bytes) holding the total block size and a state marker.
     Blocks are laid out back to back, so the next block is always found at
     <tt>header + size</tt> and no separate metadata is required.
 
@@ -80,7 +82,7 @@ namespace memory {
         ^                                                          ^
         m_first                                                    m_end
 
-        Payload pointers returned to the caller are aligned to \c BLOCK_ALIGN (8 bytes by default,
+        Payload pointers returned to the caller are aligned to \c BLOCK_ALIGN (MemoryAllocator::MIN_ALIGNMENT by default,
         see \c STK_MEMORY_BYTEPOOL_ALIGN_DEFAULT).
 
     **Allocation policy**: first-fit (or next-fit with \c STK_MEMORY_BYTEPOOL_NEXT_FIT). While scanning,
@@ -159,7 +161,7 @@ class BytePool : public ITraceable
 {
 public:
     /*! \brief     Payload alignment and block size granularity in bytes.
-        \details   Set with \c STK_MEMORY_BYTEPOOL_ALIGN_DEFAULT (8 by default).
+        \details   Set with \c STK_MEMORY_BYTEPOOL_ALIGN_DEFAULT (MemoryAllocator::MIN_ALIGNMENT by default).
     */
     static const size_t BLOCK_ALIGN = STK_MEMORY_BYTEPOOL_ALIGN_DEFAULT;
 
@@ -368,9 +370,9 @@ public:
         \details   Walks the block list under a critical section, so the three values are
                    mutually consistent. Adjacent free blocks are counted as one fragment.
         \param[out] available: Total payload bytes that can still be allocated, summed over all
-                    free fragments (a single request can use at most \a largest of them).
+                    free fragments, guard words deducted (a single request can use at most \a largest of them).
         \param[out] largest:   Payload size of the largest free fragment, i.e. the biggest request
-                    that would succeed right now (less the guard word with \c STK_MEMORY_BYTEPOOL_GUARD).
+                    that would succeed right now (the guard word of \c STK_MEMORY_BYTEPOOL_GUARD is already deducted).
         \param[out] fragments: Number of free fragments (1 means no external fragmentation).
         \note      ISR-safe, but O(n) in the number of blocks. See \c GetStats() for an O(1) alternative.
     */
@@ -907,6 +909,18 @@ inline bool BytePool::Free(void *ptr)
                         // merge with the free blocks that follow; the ones that precede are merged by the next scan
                         Coalesce(h);
 
+                    #if STK_MEMORY_BYTEPOOL_NEXT_FIT
+                        // never let the rover stay ahead of a block that was just freed: a search that starts behind it
+                        // can neither reuse the hole nor merge it with the free blocks that precede it (merging backwards
+                        // is done only by a scan that passes through them), which leaves small free fragments behind
+                        // that first-fit would have coalesced; the rover still never walks back past the lowest block
+                        // freed since the last allocation, so the scan stays short
+                        if (h < m_rover)
+                        {
+                            m_rover = h;
+                        }
+                    #endif
+
                         // memory became available: waiters have different request sizes, so all of
                         // them must re-evaluate (waking only one could leave a satisfiable request asleep)
                         m_cv.NotifyAll_CS();
@@ -1141,7 +1155,8 @@ inline void BytePool::AccountRun(size_t run, size_t &available, size_t &largest,
 {
     if (run != 0U)
     {
-        const size_t payload = (run - HEADER_SIZE);
+        // request capacity of the run: the header and (with STK_MEMORY_BYTEPOOL_GUARD) the guard word are not payload
+        const size_t payload = ((run - HEADER_SIZE) - GUARD_SIZE);
 
         available += payload;
         ++fragments;

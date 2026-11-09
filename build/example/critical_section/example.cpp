@@ -7,6 +7,20 @@
  * License: MIT License, see LICENSE for a full text.
  */
 
+/*! \file  critical_section/example.cpp
+    \brief Critical section demo: a data race without it and a race-free update with it.
+    
+    \example critical_section/example.cpp
+*/
+
+/*
+ * Several threads increment a shared counter with an artificially inserted delay making the race inevitable.
+ * The RED and GREEN LEDs light up one by one in a loop: RED means the thread function ran without a critical
+ * section and the counter did not reach the expected value because of the race, GREEN means the function
+ * ran under the critical section and the counter matched the expected value. Use a critical section with
+ * care as it temporarily freezes the scheduler.
+ */
+
 #include <stk.h>
 #include "example.h"
 #ifdef _WIN32

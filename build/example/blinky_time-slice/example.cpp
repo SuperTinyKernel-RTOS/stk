@@ -7,6 +7,12 @@
  * License: MIT License, see LICENSE for a full text.
  */
 
+/*! \file  blinky_time-slice/example.cpp
+    \brief Time-slicing demo (KERNEL_TIMESLICE) with per-task time quantum.
+    
+    \example blinky_time-slice/example.cpp
+*/
+
 // Time-slicing demo (KERNEL_TIMESLICE).
 //
 // Four CPU-bound tasks of the SAME priority never sleep, never yield and never block. The kernel

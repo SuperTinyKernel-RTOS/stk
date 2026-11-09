@@ -20,6 +20,12 @@
  *
  *---------------------------------------------------------------------------*/
 
+/*! \file  blinky_c-cmsis-rtos2/example.c
+    \brief SuperTinyKernel RTOS via CMSIS RTOS2 wrapper example program.
+    
+    \example blinky_c-cmsis-rtos2/example.c
+*/
+
 #include <stdio.h>
 
 #include "cmsis_os2.h"                  // ARM::CMSIS:RTOS2

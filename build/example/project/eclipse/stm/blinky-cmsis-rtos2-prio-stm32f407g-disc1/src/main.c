@@ -7,8 +7,6 @@
  * License: MIT License, see LICENSE for a full text.
  */
 
-#include "example.h"
-
 extern void app_run();
 
 int main(int argc, char* argv[])

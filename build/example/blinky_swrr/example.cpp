@@ -7,6 +7,20 @@
  * License: MIT License, see LICENSE for a full text.
  */
 
+/*! \file  blinky_swrr/example.cpp
+    \brief Blinky with the Smooth Weighted Round-Robin (SWRR) scheduling strategy.
+    
+    \example blinky_swrr/example.cpp
+*/
+
+/*
+ * Four CPU-loaded tasks blink an LED each and have different weights (BLUE is the highest, RED is the
+ * lowest), so the larger the weight the more CPU time the task gets and the more often its LED blinks.
+ * Unlike the fixed-priority strategy (see \ref blinky_fp/example.cpp), SWRR guarantees a CPU time slice
+ * to every task including the one with the lowest weight and does not require tasks to cooperate by
+ * calling stk::Sleep() or stk::Yield().
+ */
+
 #include <stk.h>
 #include "example.h"
 

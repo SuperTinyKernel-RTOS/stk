@@ -43,10 +43,10 @@ namespace sched {
                             class for which a PriorityBitmapTraits specialization is provided.
 
     \par Priority assignment
-    Each task's priority is read from \c ITask::GetWeight(), narrowed to \c uint16_t, and must
-    be in the range [0, MAX_PRIORITIES - 1] (checked on the raw weight). Tasks do \b not use the dynamic current-weight
-    mechanism, the static weight value \e is the priority. Configure a task's priority by
-    overriding \c ITask::GetWeight() to return the desired level.
+    Each task's priority is its weight (\c IKernelTask::GetWeight()), narrowed to \c uint16_t, and must
+    be in the range [0, MAX_PRIORITIES - 1] (checked on the raw weight). Configure a task's priority by
+    overriding \c ITask::GetWeight() to return the desired level. While a task inherits a higher weight
+    (priority inheritance) its priority is the inherited one, the strategy is notified by OnTaskWeightChange().
 
     \par Scheduling rules
     - The highest runnable priority level is always selected. A task at priority \c N will
@@ -70,8 +70,8 @@ namespace sched {
     can be replaced without touching the scheduling logic.
 
     \note  Uses the Weight API (WEIGHT_API = 1): \c GetWeight() is interpreted as the task's
-           fixed priority level. The dynamic weight functions (SetCurrentWeight /
-           GetCurrentWeight) are \b not used by this strategy.
+           priority level. The strategy itself never calls SetCurrentWeight() / GetCurrentWeight()
+           (the kernel uses them to keep the inherited weight).
     \note  Requires the kernel Sleep API (SLEEP_EVENT_API = 1): OnTaskSleep() and OnTaskWake()
            maintain the per-priority runnable lists and keep \c m_ready_bitmap accurate.
     \see   SwitchStrategyFP32, SwitchStrategyFP32_NSY, ITaskSwitchStrategy, ITask::GetWeight
@@ -89,7 +89,7 @@ public:
         WEIGHT_API               = 1, //!< This strategy interprets GetWeight() as the task's fixed priority level (0 .. MAX_PRIORITIES - 1). Dynamic weight functions are not used.
         SLEEP_EVENT_API          = 1, //!< This strategy requires OnTaskSleep() / OnTaskWake() events to maintain per-priority runnable lists and keep \c m_ready_bitmap accurate.
         DEADLINE_MISSED_API      = 0, //!< This strategy does not use OnTaskDeadlineMissed() events.
-        PRIORITY_INHERITANCE_API = 1, //!< This strategy expects OnTaskPriorityChange() events to support priority inheritance requests.
+        PRIORITY_INHERITANCE_API = 1, //!< This strategy handles OnTaskWeightChange() events to support priority inheritance.
         NOSLEEP_YIELD_API        = NoSleepYield, //!< (1) enables OnTaskYield(): yielding task stays runnable and hands the CPU to same-priority peers.
         TIMESLICE_API            = 0  //!< This strategy does not support KERNEL_TIMESLICE mode.
     };
@@ -119,7 +119,7 @@ public:
     /*! \brief Construct an empty strategy with all priority levels empty, a clear bitmap, and null cursors.
         \note  A compile-time assertion enforces 1 <= MAX_PRIORITIES <= BitmapTraits::CAPACITY, i.e. the number
                of bits the \c ReadyBitmap type can hold. Instantiating with more priorities is a compile error.
-    \note  \c m_ready_bitmap is value-initialized, so a user-defined \c ReadyBitmap must be default-constructible
+        \note  \c m_ready_bitmap is value-initialized, so a user-defined \c ReadyBitmap must be default-constructible
                into the empty state.
     */
     explicit SwitchStrategyFixedPriority() : m_tasks(), m_sleep(), m_ready_bitmap(), m_prev()

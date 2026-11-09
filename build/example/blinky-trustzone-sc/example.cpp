@@ -7,6 +7,19 @@
  * License: MIT License, see LICENSE for a full text.
  */
 
+/*! \file  blinky-trustzone-sc/example.cpp
+    \brief TrustZone blinky, Secure side (RP2350, Cortex-M33).
+    
+    \example blinky-trustzone-sc/example.cpp
+*/
+
+/*
+ * Secure binary of the STK TrustZone example. It configures the SAU (Secure/Non-Secure/NSC memory split),
+ * exposes the NSC (Non-Secure Callable) entry points, runs a Secure task for handling hardware commands on
+ * behalf of the Non-Secure tasks and then starts the Non-Secure binary, see
+ * \ref blinky-trustzone-ns/example.cpp. See README.md in the example folder for the details.
+ */
+
 #include <setjmp.h>
 #include <stdio.h>
 #include <pico/runtime.h>

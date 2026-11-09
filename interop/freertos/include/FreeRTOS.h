@@ -479,7 +479,7 @@ void vTaskDelete(TaskHandle_t xTaskToDelete);
 /// array of uintptr_t so the compiler enforces natural alignment without
 /// requiring knowledge of FrtosTask internals.
 /// Size is conservative: covers FrtosTask on all supported STK targets.
-#define STATIC_TASK_TCB_SIZE_WORDS  (20U + configNUM_THREAD_LOCAL_STORAGE_POINTERS \
+#define STATIC_TASK_TCB_SIZE_WORDS  (21U + configNUM_THREAD_LOCAL_STORAGE_POINTERS \
                                          + (3U * (configTASK_NOTIFICATION_ARRAY_ENTRIES - 1U)))
 typedef struct
 {
@@ -490,7 +490,7 @@ typedef struct
 /// Must be at least sizeof(StaticQueue_t) bytes.  Declared as a fixed-size
 /// array of uintptr_t to enforce natural alignment without exposing FrtosQueue
 /// internals.  Size is conservative: covers FrtosQueue on all supported targets.
-#define STATIC_QUEUE_TCB_SIZE_WORDS  24U
+#define STATIC_QUEUE_TCB_SIZE_WORDS  25U
 typedef struct
 {
     uintptr_t _opaque[STATIC_QUEUE_TCB_SIZE_WORDS];
@@ -522,7 +522,7 @@ typedef struct
 /// Must be at least sizeof(FrtosEventGroup) bytes.  Declared as a fixed-size
 /// array of uintptr_t to enforce natural alignment without exposing
 /// FrtosEventGroup internals.
-#define STATIC_EVENT_GROUP_TCB_SIZE_WORDS  11U
+#define STATIC_EVENT_GROUP_TCB_SIZE_WORDS  13U
 typedef struct
 {
     uintptr_t _opaque[STATIC_EVENT_GROUP_TCB_SIZE_WORDS];
@@ -533,7 +533,7 @@ typedef struct
 /// Covers FrtosStreamBuffer (Pipe + trigger level + ownership flags +
 /// two StreamBufferCallbackFunction_t pointers) on all supported STK targets.
 /// Size is conservative (+2 words vs the pre-callback layout).
-#define STATIC_STREAM_BUFFER_TCB_SIZE_WORDS  26U
+#define STATIC_STREAM_BUFFER_TCB_SIZE_WORDS  27U
 typedef struct
 {
     uintptr_t _opaque[STATIC_STREAM_BUFFER_TCB_SIZE_WORDS];
@@ -544,7 +544,7 @@ typedef struct
 /// Covers FrtosMessageBuffer (BlockMemoryPool header + envelope MessageQueue header
 /// + ownership flags + two StreamBufferCallbackFunction_t pointers) on all
 /// supported STK targets. Size is conservative (+2 words vs the pre-callback layout).
-#define STATIC_MESSAGE_BUFFER_TCB_SIZE_WORDS  48U
+#define STATIC_MESSAGE_BUFFER_TCB_SIZE_WORDS  53U
 typedef struct
 {
     uintptr_t _opaque[STATIC_MESSAGE_BUFFER_TCB_SIZE_WORDS];

@@ -33,6 +33,12 @@
  *     SetEventOverrider()        stk_kernel_set_event_overrider()
  */
 
+/*! \file  low_power_c/example.c
+    \brief Low-power demo (pure-C translation) with sleep and stop modes (STM32F407G-DISC1).
+    
+    \example low_power_c/example.c
+*/
+
 #include <stdio.h>
 #include <stdint.h>
 #include <stdbool.h>

@@ -34,7 +34,7 @@ namespace sync {
 
     void IncrementCounter() {
         {                                                // code execution scope starts here
-            stk::sync::CriticalSection::ScopedLock __cs; // critical section starts here
+            stk::sync::ScopedCriticalSection cs_;        // critical section starts here
             g_SharedCounter++;                           // atomic update
         }                                                // critical section ends here (RAII)
     }

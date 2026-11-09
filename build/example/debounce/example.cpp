@@ -41,6 +41,12 @@
  *   interrupt context.
  */
 
+/*! \file  debounce/example.cpp
+    \brief Button debounce with a re-armed one-shot timer (STM32F407G-DISC1).
+    
+    \example debounce/example.cpp
+*/
+
 #include <stk.h>
 #include <time/stk_time.h>
 #include "example.h"

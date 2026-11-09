@@ -20,6 +20,12 @@
  *
  *---------------------------------------------------------------------------*/
 
+/*! \file  blinky_c-freertos/example.c
+    \brief SuperTinyKernel RTOS via FreeRTOS example program.
+    
+    \example blinky_c-freertos/example.c
+*/
+
 #include <stdio.h>
 
 #include "FreeRTOS.h"

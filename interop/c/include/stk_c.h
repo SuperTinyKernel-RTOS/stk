@@ -1087,7 +1087,10 @@ void stk_task_destroy(stk_task_t *tsk);
 // Thread-Local Storage (TLS)
 // =============================================================================
 
-/*! \example
+/*! \brief     Get thread-local pointer (platform-specific slot).
+    \return    Pointer previously stored with stk_tls_set() (NULL if never set).
+
+    Usage example:
     \code
     typedef struct {
         int task_counter;
@@ -1102,10 +1105,6 @@ void stk_task_destroy(stk_task_t *tsk);
     my_task_local_t *tls = STK_TLS_GET(my_task_local_t);
     tls->task_counter++;
     \endcode
-*/
-
-/*! \brief     Get thread-local pointer (platform-specific slot).
-    \return    Pointer previously stored with stk_tls_set() (NULL if never set).
 */
 void *stk_tls_get(void);
 

@@ -30,7 +30,10 @@ STK_TEST_DECL_ASSERT;
 // Main test pool: 512 bytes = 8 uniform blocks of 64 bytes (56 payload + 8 header) when all allocations
 // use _STK_POOL_BLK_PAYLOAD, which makes exhaustion, adjacency and fragmentation easy to reason about.
 #define _STK_POOL_STORAGE_SIZE     512U
-#define _STK_POOL_BLK_PAYLOAD      56U
+// Overrun guard word cost per allocation (STK_MEMORY_BYTEPOOL_GUARD=1), 0 otherwise. Request sizes below are
+// reduced by it so every block keeps the same total size (payload + guard + header) in both configurations.
+#define _STK_POOL_GUARD            ((STK_MEMORY_BYTEPOOL_GUARD != 0) ? 4U : 0U)
+#define _STK_POOL_BLK_PAYLOAD      (56U - _STK_POOL_GUARD)
 #define _STK_POOL_BLK_COUNT        8U
 #ifdef __ARM_ARCH_6M__
 #define _STK_POOL_STACK_SIZE       128 // ARM Cortex-M0
@@ -40,7 +43,7 @@ STK_TEST_DECL_ASSERT;
 #define STK_TASK                   static
 #endif
 
-static_assert((_STK_POOL_BLK_COUNT * (_STK_POOL_BLK_PAYLOAD + stk::memory::BytePool::HEADER_SIZE)) == _STK_POOL_STORAGE_SIZE,
+static_assert((_STK_POOL_BLK_COUNT * stk::memory::BytePool::RequiredSize(_STK_POOL_BLK_PAYLOAD)) == _STK_POOL_STORAGE_SIZE,
     "uniform block layout must fill the test pool exactly");
 
 namespace stk {
@@ -104,13 +107,13 @@ static size_t FreeSpace()
 {
     size_t available, largest, fragments;
     g_Pool->GetInfo(available, largest, fragments);
-    return (available + (fragments * stk::memory::BytePool::HEADER_SIZE));
+    return (available + (fragments * (stk::memory::BytePool::HEADER_SIZE + _STK_POOL_GUARD)));
 }
 
 // Number of outstanding uniform blocks (valid while only _STK_POOL_BLK_PAYLOAD-sized allocations are used)
 static size_t UsedBlocks()
 {
-    return ((_STK_POOL_STORAGE_SIZE - FreeSpace()) / (_STK_POOL_BLK_PAYLOAD + stk::memory::BytePool::HEADER_SIZE));
+    return ((_STK_POOL_STORAGE_SIZE - FreeSpace()) / stk::memory::BytePool::RequiredSize(_STK_POOL_BLK_PAYLOAD));
 }
 
 // True if nothing is allocated: the whole pool forms exactly one free fragment
@@ -181,7 +184,7 @@ private:
             // Initial state: one free fragment spanning the whole pool
             ok &= g_Pool->IsStorageValid();
             ok &= (g_Pool->GetSize() == _STK_POOL_STORAGE_SIZE);
-            ok &= (g_Pool->GetMaxRequest() == (_STK_POOL_STORAGE_SIZE - stk::memory::BytePool::HEADER_SIZE));
+            ok &= (g_Pool->GetMaxRequest() == (_STK_POOL_STORAGE_SIZE - stk::memory::BytePool::HEADER_SIZE - _STK_POOL_GUARD));
             ok &= IsAllFree();
 
             // Allocate one block non-blocking
@@ -193,7 +196,7 @@ private:
             size_t available, largest, fragments;
             g_Pool->GetInfo(available, largest, fragments);
             const size_t expected = (_STK_POOL_STORAGE_SIZE - stk::memory::BytePool::RequiredSize(64U) -
-                                     stk::memory::BytePool::HEADER_SIZE);
+                                     stk::memory::BytePool::HEADER_SIZE - _STK_POOL_GUARD);
             ok &= (available == expected) && (largest == expected) && (fragments == 1U);
 
             // Write to the block to verify it is usable memory
@@ -326,9 +329,9 @@ private:
 
             // --- part 1: adjacent frees are merged, first-fit reuses the merged hole ---
 
-            uint8_t *a = static_cast<uint8_t *>(g_Pool->TryAlloc(24U)); // 32-byte block
-            uint8_t *b = static_cast<uint8_t *>(g_Pool->TryAlloc(24U));
-            uint8_t *c = static_cast<uint8_t *>(g_Pool->TryAlloc(24U));
+            uint8_t *a = static_cast<uint8_t *>(g_Pool->TryAlloc(24U - _STK_POOL_GUARD)); // 32-byte block
+            uint8_t *b = static_cast<uint8_t *>(g_Pool->TryAlloc(24U - _STK_POOL_GUARD));
+            uint8_t *c = static_cast<uint8_t *>(g_Pool->TryAlloc(24U - _STK_POOL_GUARD));
 
             ok &= (a != nullptr) && (b != nullptr) && (c != nullptr);
 
@@ -343,8 +346,8 @@ private:
             size_t available, largest, fragments;
             g_Pool->GetInfo(available, largest, fragments);
 
-            const size_t hole_payload = (64U - stk::memory::BytePool::HEADER_SIZE);
-            const size_t tail_payload = (_STK_POOL_STORAGE_SIZE - (3U * 32U) - stk::memory::BytePool::HEADER_SIZE);
+            const size_t hole_payload = (64U - stk::memory::BytePool::HEADER_SIZE - _STK_POOL_GUARD);
+            const size_t tail_payload = (_STK_POOL_STORAGE_SIZE - (3U * 32U) - stk::memory::BytePool::HEADER_SIZE - _STK_POOL_GUARD);
 
             ok &= (fragments == 2U);
             ok &= (largest == tail_payload);
@@ -364,8 +367,8 @@ private:
 
             stk::memory::BytePool small_pool(g_SmallStorage, sizeof(g_SmallStorage)); // 2 x 64-byte blocks
 
-            uint8_t *p1 = static_cast<uint8_t *>(small_pool.TryAlloc(56U)); // 64-byte block, 64 bytes remain
-            uint8_t *p2 = static_cast<uint8_t *>(small_pool.TryAlloc(48U)); // needs 56: remainder 8 < 16, no split
+            uint8_t *p1 = static_cast<uint8_t *>(small_pool.TryAlloc(56U - _STK_POOL_GUARD)); // 64-byte block, 64 bytes remain
+            uint8_t *p2 = static_cast<uint8_t *>(small_pool.TryAlloc(48U - _STK_POOL_GUARD)); // needs 56: remainder 8 < 16, no split
 
             ok &= (p1 != nullptr) && (p2 != nullptr);
 
@@ -375,12 +378,12 @@ private:
 
             if (p2 != nullptr)
             {
-                memset(p2, 0xCD, 56U); // the full 56-byte payload must be usable
+                memset(p2, 0xCD, 56U - _STK_POOL_GUARD); // the full 56-byte payload must be usable
                 ok &= small_pool.Free(p2);
             }
 
             small_pool.GetInfo(sa, sl, sf);
-            ok &= (sa == 56U) && (sl == 56U) && (sf == 1U);
+            ok &= (sa == (56U - _STK_POOL_GUARD)) && (sl == sa) && (sf == 1U);
 
             if (p1 != nullptr)
                 ok &= small_pool.Free(p1); // merges forward with the free second block
@@ -515,11 +518,11 @@ private:
         {
             stk::Sleep(_STK_POOL_TEST_SHORT_SLEEP); // let task 0 fill pool first
 
-            uint8_t *blk = static_cast<uint8_t *>(g_Pool->Alloc(120U)); // blocking
+            uint8_t *blk = static_cast<uint8_t *>(g_Pool->Alloc(120U - _STK_POOL_GUARD)); // blocking
 
             if (blk != nullptr)
             {
-                memset(blk, 0x5A, 120U);
+                memset(blk, 0x5A, 120U - _STK_POOL_GUARD);
                 g_SharedCounter = 1;
                 g_Pool->Free(blk);
             }
@@ -597,8 +600,8 @@ private:
             stk::Sleep(_STK_POOL_TEST_SHORT_SLEEP);
 
             // 248 bytes payload + header = 4 blocks
-            void *blk = g_Pool->Alloc((4U * (_STK_POOL_BLK_PAYLOAD + stk::memory::BytePool::HEADER_SIZE)) -
-                                      stk::memory::BytePool::HEADER_SIZE);
+            void *blk = g_Pool->Alloc((4U * stk::memory::BytePool::RequiredSize(_STK_POOL_BLK_PAYLOAD)) -
+                                      stk::memory::BytePool::HEADER_SIZE - _STK_POOL_GUARD);
             if (blk != nullptr)
             {
                 g_WaiterDone[0] = true;
@@ -795,7 +798,7 @@ private:
 
             void   *blk     = nullptr;
             int64_t start   = GetTimeNowMs();
-            EWaitResult r   = g_Pool->TimedAllocEx(&blk, 120U, 100); // needs 2 adjacent blocks
+            EWaitResult r   = g_Pool->TimedAllocEx(&blk, 120U - _STK_POOL_GUARD, 100); // needs 2 adjacent blocks
             int64_t elapsed = GetTimeNowMs() - start;
 
             // restarting the timeout on every wake-up would give ~170 ms
@@ -1100,12 +1103,12 @@ private:
             ok &= (BP::AlignSize(24U) == 24U);
 
             ok &= (BP::RequiredSize(1U)  == 16U);
-            ok &= (BP::RequiredSize(8U)  == 16U);
+            ok &= (BP::RequiredSize(8U)  == ((_STK_POOL_GUARD != 0U) ? 24U : 16U));
             ok &= (BP::RequiredSize(9U)  == 24U);
-            ok &= (BP::RequiredSize(_STK_POOL_BLK_PAYLOAD) == (_STK_POOL_BLK_PAYLOAD + BP::HEADER_SIZE));
+            ok &= (BP::RequiredSize(_STK_POOL_BLK_PAYLOAD) == (_STK_POOL_BLK_PAYLOAD + _STK_POOL_GUARD + BP::HEADER_SIZE));
 
             ok &= (g_Pool->GetSize() == _STK_POOL_STORAGE_SIZE);
-            ok &= (g_Pool->GetMaxRequest() == (_STK_POOL_STORAGE_SIZE - BP::HEADER_SIZE));
+            ok &= (g_Pool->GetMaxRequest() == (_STK_POOL_STORAGE_SIZE - BP::HEADER_SIZE - _STK_POOL_GUARD));
 
             printf("AlignHelpers: %s\n", ok ? "PASS" : "FAIL");
             if (ok)
@@ -1152,11 +1155,11 @@ private:
                 ok &= heap_pool.IsStorageValid();
                 ok &= (heap_pool.GetSize() >= (heap_size - 7U)) && (heap_pool.GetSize() <= heap_size);
 
-                void *blk = heap_pool.TryAlloc(100U);
+                void *blk = heap_pool.TryAlloc(100U - _STK_POOL_GUARD);
                 ok &= (blk != nullptr);
                 if (blk != nullptr)
                 {
-                    memset(blk, 0x3C, 100U);
+                    memset(blk, 0x3C, 100U - _STK_POOL_GUARD);
                     ok &= heap_pool.Free(blk);
                 }
 
@@ -1171,9 +1174,9 @@ private:
                 stk::memory::BytePool tiny_pool(tiny, sizeof(tiny));
 
                 ok &= tiny_pool.IsStorageValid();
-                ok &= (tiny_pool.GetMaxRequest() == 8U);
+                ok &= (tiny_pool.GetMaxRequest() == (8U - _STK_POOL_GUARD));
 
-                void *blk = tiny_pool.TryAlloc(8U);
+                void *blk = tiny_pool.TryAlloc(8U - _STK_POOL_GUARD);
                 ok &= (blk != nullptr);
                 ok &= (tiny_pool.TryAlloc(1U) == nullptr); // nothing left
                 if (blk != nullptr)
@@ -1187,15 +1190,15 @@ private:
 
                 ok &= mis_pool.IsStorageValid();
                 ok &= (mis_pool.GetSize() == 64U);       // 7 head bytes skipped, 64 bytes usable
-                ok &= (mis_pool.GetMaxRequest() == 56U);
+                ok &= (mis_pool.GetMaxRequest() == (56U - _STK_POOL_GUARD));
 
-                void *blk = mis_pool.TryAlloc(56U);
+                void *blk = mis_pool.TryAlloc(56U - _STK_POOL_GUARD);
                 ok &= (blk != nullptr);
                 ok &= IsAligned8(blk);
                 ok &= (static_cast<uint8_t *>(blk) >= (raw + 8)) && (static_cast<uint8_t *>(blk) < (raw + sizeof(raw)));
                 if (blk != nullptr)
                 {
-                    memset(blk, 0x77, 56U);
+                    memset(blk, 0x77, 56U - _STK_POOL_GUARD);
                     ok &= mis_pool.Free(blk);
                 }
             }
@@ -1555,7 +1558,7 @@ private:
             bool ok = true;
 
             const size_t cap       = g_Pool->GetSize();
-            const size_t blk_total = (_STK_POOL_BLK_PAYLOAD + stk::memory::BytePool::HEADER_SIZE);
+            const size_t blk_total = stk::memory::BytePool::RequiredSize(_STK_POOL_BLK_PAYLOAD);
 
             // fresh pool: every counter is zero, everything is available
             const StatsT s0 = g_Pool->GetStats();
@@ -1594,7 +1597,11 @@ private:
             ok &= (s3.allocated == cap) && (s3.peak_allocated == cap) && (s3.GetAvailable() == 0U);
             ok &= (s3.allocate_count == (1U + _STK_POOL_BLK_COUNT)) && (s3.min_ever_free == 0U);
             ok &= (g_Pool->GetPeakUsedSize() == cap);
+        #if !STK_MEMORY_BYTEPOOL_NEXT_FIT
+            // first-fit restarts at the pool start every time, so the last allocation walked all blocks;
+            // next-fit continues from the rover: the full walk happens only on the failed requests below
             ok &= (g_Pool->GetMaxScanLength() >= _STK_POOL_BLK_COUNT);
+        #endif
             ok &= (s3.alloc_fail_count == 0U) && (g_Pool->GetAllocFailCount() == 0U);
 
             // failed requests: exhaustion (NO_WAIT), oversized request and an expired timeout are counted ...
@@ -1869,7 +1876,7 @@ private:
 
             ok &= sp.IsStorageValid();
             ok &= (sp.GetSize() == 256U); // the embedded buffer is aligned by construction: nothing is trimmed
-            ok &= (sp.GetMaxRequest() == (256U - BP::HEADER_SIZE));
+            ok &= (sp.GetMaxRequest() == (256U - BP::HEADER_SIZE - _STK_POOL_GUARD));
 
             // the largest request spans the whole pool; the pool is then exhausted
             void *whole = sp.TryAlloc(sp.GetMaxRequest());

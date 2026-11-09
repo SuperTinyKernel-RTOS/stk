@@ -32,11 +32,12 @@ namespace sched {
     \par Algorithm
     Each task carries two weight values:
      - <b>Static weight</b> (`GetWeight()`): configured by the application via ITask::GetWeight().
-       Defines the task's desired CPU share relative to other tasks. Must be a positive 24-bit
-       integer (1 .. 0x7FFFFF). A task with weight 3 receives three times as much CPU time as
-       one with weight 1.
+       Defines the task's desired CPU share relative to other tasks. Must be in the range
+       1 .. 0x7FFFFF (keeps the accumulated weights within int32_t). A task with weight 3 receives
+       three times as much CPU time as one with weight 1.
      - <b>Dynamic (current) weight</b> (`GetCurrentWeight()` / `SetCurrentWeight()`): modified
-       each scheduling step by the algorithm below. Starts at 0 when a task is added.
+       each scheduling step by the algorithm below. Reset to NO_WEIGHT (-1) by AddTask(), the same
+       value for every task, so all tasks start from an equal position.
 
     On every call to GetNext() (once per kernel tick):
     -# For every runnable task: `current_weight += static_weight`
@@ -83,7 +84,7 @@ public:
         WEIGHT_API               = 1, //!< This strategy uses per-task static and dynamic weights; the kernel must expose the Weight API on each IKernelTask.
         SLEEP_EVENT_API          = 1, //!< This strategy requires OnTaskSleep() / OnTaskWake() events to keep \c m_total_weight accurate as tasks move between the runnable and sleeping sets.
         DEADLINE_MISSED_API      = 0, //!< This strategy does not use OnTaskDeadlineMissed() events.
-        PRIORITY_INHERITANCE_API = 0, //!< This strategy does not require Priority Inheritance and OnTaskPriorityChange() events.
+        PRIORITY_INHERITANCE_API = 0, //!< This strategy does not require Priority Inheritance and OnTaskWeightChange() events.
         NOSLEEP_YIELD_API        = NoSleepYield, //!< (1) enables OnTaskYield(): yielding task stays runnable instead of sleeping.
         TIMESLICE_API            = 0  //!< This strategy does not support KERNEL_TIMESLICE mode.
     };
@@ -100,11 +101,10 @@ public:
 
     /*! \brief     Add task to the runnable set.
         \param[in] task: Task to add. Must not be \c nullptr.
-        \note      The task's static weight (GetWeight()) is validated: must be a positive
-                   24-bit integer [1, 0x7FFFFF]. Negative or zero weights would break
-                   the algorithm invariant. Values above 0x7FFFFF would risk int32_t overflow
-                   in the accumulated current-weight arithmetic.
-        \note      The dynamic weight (current weight) is reset to 0 before the task is added
+        \note      The task's static weight (GetWeight()) is validated: must be in [1, 0x7FFFFF].
+                   Negative or zero weights would break the algorithm invariant. Values above
+                   0x7FFFFF would risk int32_t overflow in the accumulated current-weight arithmetic.
+        \note      The dynamic weight (current weight) is reset to NO_WEIGHT before the task is added
                    to the runnable set. This gives all newly-added tasks an equal starting
                    position in the selection cycle.
         \note      Delegates to AddActive() which also increments \c m_total_weight.
@@ -154,7 +154,7 @@ public:
         \note      With \c NoSleepYield the task recorded by OnTaskYield() is excluded from step 2
                    (one-shot, it still receives the step 1 increment). If it is the only runnable
                    task it is selected anyway.
-        \note      The assertion `selected != NULL` guards against a logic error where
+        \note      The assertion `next != NULL` guards against a logic error where
                    \c m_tasks is non-empty but no task was picked (should never occur).
     */
     IKernelTask *GetNext() override
@@ -225,7 +225,7 @@ public:
         return next;
     }
 
-    /*! \brief     Get first task in the managed set (used by the kernel for initial scheduling).
+    /*! \brief     Get first task in the managed set (reference task for the kernel, used when it starts and when all tasks sleep).
         \return    The first task in \c m_tasks if any task is runnable, otherwise the first task
                    in \c m_sleep. Asserts if the combined set is empty (GetSize() == 0).
         \note      Preference is given to runnable tasks. The sleep fallback allows the kernel to

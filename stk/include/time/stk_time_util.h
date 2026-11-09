@@ -17,7 +17,7 @@
 namespace stk {
 namespace time {
 
-/*! \struct PeriodicTrigger
+/*! \class PeriodicTrigger
     \brief  Lightweight periodic trigger: returns \c true once per configured period when polled.
 
     Implements an absolute-time based periodic trigger. Internally stores the
@@ -77,8 +77,9 @@ public:
 
     /*! \brief     Change the trigger period while preserving phase.
         \param[in] period: New trigger period in ticks. Must be > 0.
-        \note      Adjusts \c m_next so that the relative progress toward the next
-                   firing is preserved. Takes effect immediately.
+        \note      Moves the next firing to (start of the current period + new period): the time already elapsed
+                   in the current period is kept, so if it is not less than \a period the next Poll() fires at once.
+                   Takes effect immediately. Must be started.
     */
     void SetPeriod(uint32_t period)
     {
@@ -103,7 +104,7 @@ public:
                  only a single \c true is returned and \c m_next is advanced by
                  exactly one period. Subsequent calls will continue to catch up
                  one period at a time until the schedule is realigned.
-        \warning Must be started (constructor with start=true or Restart()).
+        \warning Must be started (constructor with start=true or Restart()), an unstarted trigger fails an assertion.
     */
     bool Poll()
     {
@@ -126,7 +127,7 @@ protected:
     uint32_t m_period; //!< Trigger period in ticks. Modified only by SetPeriod(). Must be > 0.
 };
 
-/*! \struct Stopwatch
+/*! \class Stopwatch
     \brief  Lightweight elapsed-cycle measurement utility.
 
     Measures the number of CPU cycles (or other monotonic counter units) that
@@ -148,7 +149,8 @@ protected:
 
     \note  Not thread-safe. Intended for use within a single task or ISR context.
     \note  If Update() is called before Start(), the first call is treated as a
-           start point and returns 0 cycles elapsed.
+           start point and returns 0 cycles elapsed. A counter value of exactly 0 is
+           indistinguishable from "not started", so a reading of 0 is treated the same way.
     \note  Wrap-around of the underlying counter is handled naturally by
            unsigned subtraction, provided the elapsed time does not exceed
            one full counter period.

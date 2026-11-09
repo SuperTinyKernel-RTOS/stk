@@ -131,7 +131,7 @@ private:
     \brief Partial implementation of the user task with a compile-time scheduling weight.
            Use when the kernel is configured with SwitchStrategySmoothWeightedRoundRobin.
 
-    \tparam _Weight:     Static scheduling weight (positive, non-zero 24-bit integer).
+    \tparam _Weight:     Static scheduling weight (positive, the valid range is defined by the strategy).
                          Higher values cause this task to receive proportionally more CPU time.
     \tparam _StackSize:  Stack size in elements of Word.
     \tparam _AccessMode: Hardware access mode (ACCESS_USER or ACCESS_PRIVILEGED).

@@ -684,7 +684,7 @@ public:
 
     /*! \brief     Called by kernel when a new task starts waiting on this event.
         \param[in] wobj: Wait object representing blocked task.
-        \note      Must be called inside the critical section (see \a hw::CriticalSection, \a sync::ScopedCrticalSection).
+        \note      Must be called inside the critical section (see \a hw::CriticalSection, \a sync::ScopedCriticalSection).
     */
     virtual void AddWaitObject(IWaitObject *wobj) = 0;
 
@@ -701,7 +701,7 @@ public:
 
     /*! \brief     Called by kernel when a waiting task is being removed (timeout expired, wait aborted, task terminated etc.).
         \param[in] wobj: Wait object to remove from the wait list.
-        \note      Must be called inside the critical section (see \a hw::CriticalSection, \a sync::ScopedCrticalSection).
+        \note      Must be called inside the critical section (see \a hw::CriticalSection, \a sync::ScopedCriticalSection).
     */
     virtual void RemoveWaitObject(IWaitObject *wobj) = 0;
 
@@ -722,7 +722,7 @@ public:
     /*! \brief     Find higher weight within linked wait objects.
         \param[in] comp: Weight to compare with.
         \return    Higher weight value than \a comp, or \a NO_WEIGHT if there is no object with a higher weight.
-        \note      Must be called inside the critical section (see \a hw::CriticalSection, \a sync::ScopedCrticalSection).
+        \note      Must be called inside the critical section (see \a hw::CriticalSection, \a sync::ScopedCriticalSection).
     */
     Weight FindWeightHigherThan(Weight comp) const;
 
@@ -762,7 +762,7 @@ public:
     /*! \brief     Get list of tasks blocked on this object.
         \note      Read-only access for diagnostics / telemetry.
         \note      The result is a snapshot: call inside the critical section (see \a hw::CriticalSection,
-                   \a sync::ScopedCrticalSection) if the list may change concurrently.
+                   \a sync::ScopedCriticalSection) if the list may change concurrently.
     */
     virtual const IWaitObject::ListHeadType &GetWaitList() const = 0;
 
@@ -771,7 +771,7 @@ public:
         \return    TId of the first waiter, or \a TID_NONE if no tasks are currently waiting.
         \note      Read-only introspection for diagnostics / telemetry.
         \note      The result is a snapshot: call inside the critical section (see \a hw::CriticalSection,
-                   \a sync::ScopedCrticalSection) if the list may change concurrently.
+                   \a sync::ScopedCriticalSection) if the list may change concurrently.
         \see       GetWaitList
     */
     TId GetFirstWaiterTid() const
@@ -792,7 +792,7 @@ protected:
         \note      The woken task is notified with timeout=false, indicating a successful signal
                    (not a timeout expiry).
         \note      Does nothing if no tasks are currently waiting.
-        \note      Must be called inside the critical section (see \a hw::CriticalSection, \a sync::ScopedCrticalSection).
+        \note      Must be called inside the critical section (see \a hw::CriticalSection, \a sync::ScopedCriticalSection).
     */
     virtual void WakeOne() = 0;
 
@@ -800,7 +800,7 @@ protected:
         \note      Each woken task is notified with timeout=false, indicating a successful signal
                    (not a timeout expiry).
         \note      Does nothing if no tasks are currently waiting.
-        \note      Must be called inside the critical section (see \a hw::CriticalSection, \a sync::ScopedCrticalSection).
+        \note      Must be called inside the critical section (see \a hw::CriticalSection, \a sync::ScopedCriticalSection).
     */
     virtual void WakeAll() = 0;
 
@@ -990,7 +990,7 @@ public:
     virtual void OnExit() {}
 
     /*! \brief     Get static base weight of the task.
-        \return    Static weight value of the task (must be non-zero, positive 24-bit number).
+        \return    Static weight value of the task (must be positive, the valid range is defined by the strategy).
         \see       sched::SwitchStrategyFixedPriority, sched::SwitchStrategySmoothWeightedRoundRobin,
                    IKernelTask::GetWeight, IKernelService::InheritWeight, IKernelService::RestoreWeight
     */

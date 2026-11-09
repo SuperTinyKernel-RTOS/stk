@@ -335,7 +335,7 @@ public:
                      data was written before timeout (this can only happen when \a trigger > 1
                      and the timeout expires after some — but not enough — elements arrive).
                    - Greater than or equal to \a trigger if the threshold was satisfied (the
-                     caller may then assume the trigger callback condition is met).
+                     caller may then assume the trigger condition is met).
         \note      A cancellation (IKernel::CancelTaskWait()) is reported the same way as a timeout.
                    Use \c ReadBulkTriggeredEx() to tell these apart.
     */
@@ -417,10 +417,7 @@ public:
     bool IsFull() const { return (m_count == m_capacity); }
 
     /*! \brief     Verify that the backing storage is valid and the pipe is ready for use.
-        \details   Always \c true for pipes constructed with external storage.
-                   For heap-constructed pipes, \c false if \c operator new failed.
-                   Must be checked after the heap constructor when operating without
-                   exceptions (the typical embedded configuration).
+        \details   \c false only if the buffer pointer is \c nullptr (the constructor asserts against it).
         \return    \c true if the pipe is ready for use.
         \note      ISR-safe.
     */
@@ -481,20 +478,22 @@ inline EWaitResult Pipe::WriteEx(const void *data, Timeout timeout_ticks)
 
     const bool timed_wait = (timeout_ticks != WAIT_INFINITE) && (timeout_ticks != NO_WAIT);
 
-    // capture an absolute deadline once, before entering the wait loop; a different
+    // capture an absolute deadline once (64-bit Ticks, so it stays valid across the 32-bit tick
+    // wraparound), before entering the wait loop; a different
     // producer can steal the just-freed slot between NotifyOne_CS() and this task
     // re-acquiring the critical section (Mesa-style wakeup, not a direct handoff),
     // so re-passing the original timeout_ticks on each retry would silently restart it
-    const Timeout deadline = (timed_wait ?
-        static_cast<Timeout>(GetTicks() + timeout_ticks) : timeout_ticks);
+    const Ticks deadline = (timed_wait ?
+        (GetTicks() + timeout_ticks) : static_cast<Ticks>(0));
 
     while (m_count == m_capacity)
     {
-        Timeout remaining = deadline;
+        Timeout remaining = timeout_ticks;
         if (timed_wait)
         {
-            const Timeout now = static_cast<Timeout>(GetTicks());
-            remaining = (now >= deadline ? NO_WAIT : (deadline - now));
+            // left <= timeout_ticks < WAIT_INFINITE, so the narrowing cast is lossless
+            const Ticks left = (deadline - GetTicks());
+            remaining = ((left > 0) ? static_cast<Timeout>(left) : NO_WAIT);
         }
 
         result = m_cv_not_full.WaitEx(cs_, remaining);
@@ -536,8 +535,8 @@ inline EWaitResult Pipe::WriteBulkEx(const void *src, size_t count, size_t &writ
 
         // capture an absolute deadline once, before entering the wait loop,
         // preventing the timeout from resetting on intermediate partial writes
-        const Timeout deadline = (timed_wait ?
-            static_cast<Timeout>(GetTicks() + timeout_ticks) : timeout_ticks);
+        const Ticks deadline = (timed_wait ?
+            (GetTicks() + timeout_ticks) : static_cast<Ticks>(0));
 
         ScopedCriticalSection cs_;
 
@@ -546,11 +545,12 @@ inline EWaitResult Pipe::WriteBulkEx(const void *src, size_t count, size_t &writ
             // wait until there is at least 1 free slot
             while (m_count == m_capacity)
             {
-                Timeout remaining = deadline;
+                Timeout remaining = timeout_ticks;
                 if (timed_wait)
                 {
-                    const Timeout now = static_cast<Timeout>(GetTicks());
-                    remaining = (now >= deadline ? NO_WAIT : (deadline - now));
+                    // left <= timeout_ticks < WAIT_INFINITE, so the narrowing cast is lossless
+                    const Ticks left = (deadline - GetTicks());
+                    remaining = ((left > 0) ? static_cast<Timeout>(left) : NO_WAIT);
                 }
 
                 const EWaitResult wr = m_cv_not_full.WaitEx(cs_, remaining);
@@ -610,16 +610,17 @@ inline EWaitResult Pipe::ReadEx(void *data, Timeout timeout_ticks)
     // consumer can steal the just-produced element between NotifyOne_CS() and this
     // task re-acquiring the critical section (Mesa-style wakeup, not a direct handoff),
     // so re-passing the original timeout_ticks on each retry would silently restart it
-    const Timeout deadline = (timed_wait ?
-        static_cast<Timeout>(GetTicks() + timeout_ticks) : timeout_ticks);
+    const Ticks deadline = (timed_wait ?
+        (GetTicks() + timeout_ticks) : static_cast<Ticks>(0));
 
     while (m_count == 0U)
     {
-        Timeout remaining = deadline;
+        Timeout remaining = timeout_ticks;
         if (timed_wait)
         {
-            const Timeout now = static_cast<Timeout>(GetTicks());
-            remaining = (now >= deadline ? NO_WAIT : (deadline - now));
+            // left <= timeout_ticks < WAIT_INFINITE, so the narrowing cast is lossless
+            const Ticks left = (deadline - GetTicks());
+            remaining = ((left > 0) ? static_cast<Timeout>(left) : NO_WAIT);
         }
 
         result = m_cv_not_empty.WaitEx(cs_, remaining);
@@ -687,8 +688,8 @@ inline EWaitResult Pipe::ReadBulkEx(void *dst, size_t count, size_t &read_count,
 
         // capture an absolute deadline once, before entering the wait loop,
         // preventing the timeout from resetting on intermediate partial reads
-        const Timeout deadline = (timed_wait ?
-            static_cast<Timeout>(GetTicks() + timeout_ticks) : timeout_ticks);
+        const Ticks deadline = (timed_wait ?
+            (GetTicks() + timeout_ticks) : static_cast<Ticks>(0));
 
         ScopedCriticalSection cs_;
 
@@ -697,11 +698,12 @@ inline EWaitResult Pipe::ReadBulkEx(void *dst, size_t count, size_t &read_count,
             // wait until there is at least 1 element available
             while (m_count == 0U)
             {
-                Timeout remaining = deadline;
+                Timeout remaining = timeout_ticks;
                 if (timed_wait)
                 {
-                    const Timeout now = static_cast<Timeout>(GetTicks());
-                    remaining = (now >= deadline ? NO_WAIT : (deadline - now));
+                    // left <= timeout_ticks < WAIT_INFINITE, so the narrowing cast is lossless
+                    const Ticks left = (deadline - GetTicks());
+                    remaining = ((left > 0) ? static_cast<Timeout>(left) : NO_WAIT);
                 }
 
                 const EWaitResult wr = m_cv_not_empty.WaitEx(cs_, remaining);
@@ -749,18 +751,19 @@ inline EWaitResult Pipe::ReadBulkTriggeredEx(void *dst, size_t trigger, size_t m
 
         // capture an absolute deadline once, before entering the wait loop,
         // preventing the timeout from resetting on intermediate spurious wakeups
-        const Timeout deadline = (timed_wait ?
-            static_cast<Timeout>(GetTicks() + timeout_ticks) : timeout_ticks);
+        const Ticks deadline = (timed_wait ?
+            (GetTicks() + timeout_ticks) : static_cast<Ticks>(0));
 
         ScopedCriticalSection cs_;
 
         while (m_count < trigger)
         {
-            Timeout remaining = deadline;
+            Timeout remaining = timeout_ticks;
             if (timed_wait)
             {
-                const Timeout now = static_cast<Timeout>(GetTicks());
-                remaining = (now >= deadline ? NO_WAIT : (deadline - now));
+                // left <= timeout_ticks < WAIT_INFINITE, so the narrowing cast is lossless
+                const Ticks left = (deadline - GetTicks());
+                remaining = ((left > 0) ? static_cast<Timeout>(left) : NO_WAIT);
             }
 
             const EWaitResult wr = m_cv_not_empty.WaitEx(cs_, remaining);
@@ -876,16 +879,17 @@ public:
         // producer can steal the just-freed slot between NotifyOne_CS() and this task
         // re-acquiring the critical section (Mesa-style wakeup, not a direct handoff),
         // so re-passing the original timeout_ticks on each retry would silently restart it
-        const Timeout deadline = (timed_wait ?
-            static_cast<Timeout>(GetTicks() + timeout_ticks) : timeout_ticks);
+        const Ticks deadline = (timed_wait ?
+            (GetTicks() + timeout_ticks) : static_cast<Ticks>(0));
 
         while (m_count == N)
         {
-            Timeout remaining = deadline;
+            Timeout remaining = timeout_ticks;
             if (timed_wait)
             {
-                const Timeout now = static_cast<Timeout>(GetTicks());
-                remaining = (now >= deadline ? NO_WAIT : (deadline - now));
+                // left <= timeout_ticks < WAIT_INFINITE, so the narrowing cast is lossless
+                const Ticks left = (deadline - GetTicks());
+                remaining = ((left > 0) ? static_cast<Timeout>(left) : NO_WAIT);
             }
 
             result = m_cv_not_full.WaitEx(cs_, remaining);
@@ -963,8 +967,8 @@ public:
 
             // capture an absolute deadline once, before entering the wait loop,
             // preventing the timeout from resetting on intermediate partial writes
-            const Timeout deadline = (timed_wait ?
-                static_cast<Timeout>(GetTicks() + timeout_ticks) : timeout_ticks);
+            const Ticks deadline = (timed_wait ?
+                (GetTicks() + timeout_ticks) : static_cast<Ticks>(0));
 
             ScopedCriticalSection cs_;
 
@@ -973,11 +977,12 @@ public:
                 // wait until there is at least 1 free slot
                 while (m_count == N)
                 {
-                    Timeout remaining = deadline;
+                    Timeout remaining = timeout_ticks;
                     if (timed_wait)
                     {
-                        const Timeout now = static_cast<Timeout>(GetTicks());
-                        remaining = (now >= deadline ? NO_WAIT : (deadline - now));
+                        // left <= timeout_ticks < WAIT_INFINITE, so the narrowing cast is lossless
+                        const Ticks left = (deadline - GetTicks());
+                        remaining = ((left > 0) ? static_cast<Timeout>(left) : NO_WAIT);
                     }
 
                     const EWaitResult wr = m_cv_not_full.WaitEx(cs_, remaining);
@@ -1099,16 +1104,17 @@ public:
         // consumer can steal the just-produced element between NotifyOne_CS() and this
         // task re-acquiring the critical section (Mesa-style wakeup, not a direct handoff),
         // so re-passing the original timeout_ticks on each retry would silently restart it
-        const Timeout deadline = (timed_wait ?
-            static_cast<Timeout>(GetTicks() + timeout_ticks) : timeout_ticks);
+        const Ticks deadline = (timed_wait ?
+            (GetTicks() + timeout_ticks) : static_cast<Ticks>(0));
 
         while (m_count == 0U)
         {
-            Timeout remaining = deadline;
+            Timeout remaining = timeout_ticks;
             if (timed_wait)
             {
-                const Timeout now = static_cast<Timeout>(GetTicks());
-                remaining = (now >= deadline ? NO_WAIT : (deadline - now));
+                // left <= timeout_ticks < WAIT_INFINITE, so the narrowing cast is lossless
+                const Ticks left = (deadline - GetTicks());
+                remaining = ((left > 0) ? static_cast<Timeout>(left) : NO_WAIT);
             }
 
             result = m_cv_not_empty.WaitEx(cs_, remaining);
@@ -1186,8 +1192,8 @@ public:
 
             // capture an absolute deadline once, before entering the wait loop,
             // preventing the timeout from resetting on intermediate partial reads
-            const Timeout deadline = (timed_wait ?
-                static_cast<Timeout>(GetTicks() + timeout_ticks) : timeout_ticks);
+            const Ticks deadline = (timed_wait ?
+                (GetTicks() + timeout_ticks) : static_cast<Ticks>(0));
 
             ScopedCriticalSection cs_;
 
@@ -1196,11 +1202,12 @@ public:
                 // wait until there is at least 1 element available
                 while (m_count == 0U)
                 {
-                    Timeout remaining = deadline;
+                    Timeout remaining = timeout_ticks;
                     if (timed_wait)
                     {
-                        const Timeout now = static_cast<Timeout>(GetTicks());
-                        remaining = (now >= deadline ? NO_WAIT : (deadline - now));
+                        // left <= timeout_ticks < WAIT_INFINITE, so the narrowing cast is lossless
+                        const Ticks left = (deadline - GetTicks());
+                        remaining = ((left > 0) ? static_cast<Timeout>(left) : NO_WAIT);
                     }
 
                     const EWaitResult wr = m_cv_not_empty.WaitEx(cs_, remaining);

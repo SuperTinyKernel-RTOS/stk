@@ -7,6 +7,17 @@
  * License: MIT License, see LICENSE for a full text.
  */
 
+/*! \file  timer_c/example.c
+    \brief Software timers (C API) with a timer host.
+    
+    \example timer_c/example.c
+*/
+
+/*
+ * C version of the \ref timer/example.cpp example using stk_c_time.h: a periodic timer toggles the green
+ * LED every 1 s and a one-shot timer shuts the timer host down.
+ */
+
 #include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>

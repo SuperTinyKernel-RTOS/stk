@@ -7,6 +7,12 @@
  * License: MIT License, see LICENSE for a full text.
  */
 
+/*! \file  blinky_mpu_armv8/example.cpp
+    \brief Blinky with per-task MPU memory protection (ARMv8-M, PMSAv8).
+    
+    \example blinky_mpu_armv8/example.cpp
+*/
+
 #include <stdio.h>
 #include <new>
 #include <pico/runtime.h>

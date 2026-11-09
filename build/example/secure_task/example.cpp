@@ -7,6 +7,12 @@
  * License: MIT License, see LICENSE for a full text.
  */
 
+/*! \file  secure_task/example.cpp
+    \brief User-mode control task with a privileged hardware task and several sync primitives.
+    
+    \example secure_task/example.cpp
+*/
+
 #include <stk.h>
 #include "example.h"
 

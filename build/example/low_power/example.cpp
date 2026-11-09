@@ -35,6 +35,12 @@
  *            (3 LED tasks + 1 Log task; TimerHost adds its own internal tasks).
  */
 
+/*! \file  low_power/example.cpp
+    \brief Low-power demo with sleep and stop modes (STM32F407G-DISC1).
+    
+    \example low_power/example.cpp
+*/
+
 #include <stdio.h> // for printf()
 
 #include <stk.h>

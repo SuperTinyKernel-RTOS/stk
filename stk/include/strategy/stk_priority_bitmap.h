@@ -22,7 +22,8 @@ namespace stk {
 namespace sched {
 
 /*! \class PriorityBitmapTraits
-    \brief Operations on the "ready priorities" bitmap used by SwitchStrategyFixedPriority.
+    \brief Operations on the "ready priorities" bitmap used by SwitchStrategyFixedPriority and
+           SwitchStrategyPreemptionThreshold.
 
     The primary template supports any unsigned integer type (uint8_t, uint16_t, uint32_t, uint64_t).
     To support more priority levels than a native integer can hold use stk::sched::PriorityBitmap (96, 128, ...,
@@ -116,8 +117,8 @@ struct PriorityBitmapTraits
 };
 
 /*! \class PriorityBitmap
-    \brief Two-level bitmap for more priority levels than a native integer can hold (BITS = 64 + x * 32,
-           e.g. 96, 128, 160, 192, 224, 256, ..., 1024).
+    \brief Two-level bitmap for more priority levels than a native integer can hold (BITS is a multiple
+           of 32 above 64, e.g. 96, 128, ..., 1024).
 
     Level 0 is an array of BITS / 32 words (bit \c i lives in word <tt>i / 32</tt>, position <tt>i % 32</tt>).
     Level 1 is a single 32-bit \e summary word where bit \c w is set if and only if word \c w is non-zero.

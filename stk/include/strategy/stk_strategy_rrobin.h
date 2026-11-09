@@ -1,5 +1,5 @@
 /*
- * SuperTinyKernel™ (STK): Lightweight High-Performance Deterministic C++ RTOS for Embedded Systems.
+ * SuperTinyKernel(TM) RTOS: Lightweight High-Performance Deterministic C++ RTOS for Embedded Systems.
  *
  * Source: https://github.com/SuperTinyKernel-RTOS
  *
@@ -20,7 +20,7 @@
 namespace stk {
 namespace sched {
 
-/*! \class SwitchStrategyRoundRobin
+/*! \class SwitchStrategyRoundRobinT
     \brief Round-Robin task-switching strategy: each runnable task receives one time slice
            (one tick interval) in turn before the kernel moves to the next task.
 
@@ -55,7 +55,7 @@ public:
         WEIGHT_API               = 0, //!< This strategy does not use per-task weights; all tasks are treated equally.
         SLEEP_EVENT_API          = 1, //!< This strategy requires OnTaskSleep() / OnTaskWake() events to maintain the active/sleep list split.
         DEADLINE_MISSED_API      = 0, //!< This strategy does not use OnTaskDeadlineMissed() events.
-        PRIORITY_INHERITANCE_API = 0, //!< This strategy does not require Priority Inheritance and OnTaskPriorityChange() events.
+        PRIORITY_INHERITANCE_API = 0, //!< This strategy does not require Priority Inheritance and OnTaskWeightChange() events.
         NOSLEEP_YIELD_API        = NoSleepYield, //!< (1) enables OnTaskYield(): yielding task stays runnable instead of sleeping.
         TIMESLICE_API            = 0  //!< This strategy does not support KERNEL_TIMESLICE mode.
     };
@@ -73,9 +73,9 @@ public:
     /*! \brief     Add task to the runnable set.
         \param[in] task: Task to add. Must not be \c nullptr and must not already be in any list.
         \note      The task is appended to the back of \c m_tasks.
-        \note      Cursor invariant: if \c m_prev was already pointing at the tail before insertion,
-                   it is advanced to the new tail so that GetNext() will return the new task on its
-                   next iteration rather than skipping it.
+        \note      Cursor invariant: if \c m_prev was pointing at the tail before insertion (or the list
+                   was empty), it is moved to the new tail. GetNext() then continues with the head and the
+                   new task waits for its turn at the end of the current rotation.
     */
     void AddTask(IKernelTask *task) override
     {
@@ -137,7 +137,7 @@ public:
         return next;
     }
 
-    /*! \brief     Get first task in the managed set (used by the kernel for initial scheduling).
+    /*! \brief     Get first task in the managed set (reference task for the kernel, used when it starts and when all tasks sleep).
         \return    The first task in \c m_tasks if any task is runnable; otherwise the first task
                    in \c m_sleep. Asserts if the combined set is empty (GetSize() == 0).
         \note      Preference is given to runnable tasks. The sleep fallback allows the kernel to

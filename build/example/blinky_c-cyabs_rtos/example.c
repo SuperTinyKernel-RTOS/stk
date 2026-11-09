@@ -21,6 +21,12 @@
  *
  *---------------------------------------------------------------------------*/
 
+/*! \file  blinky_c-cyabs_rtos/example.c
+    \brief SuperTinyKernel RTOS via Infineon abstraction-rtos API example program.
+    
+    \example blinky_c-cyabs_rtos/example.c
+*/
+
 #include <stdio.h>
 #include <stdint.h>
 #include <stdbool.h>

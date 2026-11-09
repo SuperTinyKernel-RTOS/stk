@@ -7,6 +7,18 @@
  * License: MIT License, see LICENSE for a full text.
  */
 
+/*! \file  once/example.cpp
+    \brief Run-once tasks: the kernel returns from Start() once all tasks have completed.
+    
+    \example once/example.cpp
+*/
+
+/*
+ * Four tasks of a KERNEL_DYNAMIC kernel take their turn one by one: each task lights its LED exclusively
+ * for 1 s and then exits (returns from Run()). Once all tasks have exited, kernel.Start() returns and the
+ * sequence is repeated, finally all LEDs are switched on.
+ */
+
 #include <stk.h>
 #include "example.h"
 

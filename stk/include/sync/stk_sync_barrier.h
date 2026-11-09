@@ -83,6 +83,8 @@ public:
     }
 
     /*! \brief     Destructor.
+        \note      Destroying a barrier while tasks are waiting on it is a logical error (an assertion
+                   is triggered in debug builds by the destructor of the internal ConditionVariable).
     */
     STK_VIRT_DTOR ~Barrier()
     {}
@@ -91,9 +93,9 @@ public:
         \details   Once the last task arrives, all currently waiting tasks are woken up and the
                    barrier resets itself so it can be reused for the next round.
         \note      Cannot be interrupted by a timeout (there is none), but can be interrupted by
-                   \c IKernel::CancelTaskWait(). This overload cannot report that, it returns
-                   \c false the same as a normal (non-last) release. Use \c WaitEx() to tell the
-                   two apart.
+                   \c IKernel::CancelTaskWait(), or fail in the kernel. This overload cannot report
+                   that, it returns \c false the same as a normal (non-last) release. Use \c WaitEx()
+                   to tell them apart.
         \warning   ISR-unsafe.
         \return    True if the calling task was the last one to arrive (and thus released the
                    others), false if the calling task was one of the released waiters.

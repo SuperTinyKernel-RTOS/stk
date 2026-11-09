@@ -7,6 +7,18 @@
  * License: MIT License, see LICENSE for a full text.
  */
 
+/*! \file  sleep/example.cpp
+    \brief Sleep demo: tasks wake up after different sleep times.
+    
+    \example sleep/example.cpp
+*/
+
+/*
+ * Four tasks of a KERNEL_DYNAMIC kernel sleep with stk::Sleep() for 1, 2, 3 and 4 s respectively, then
+ * light up their LED and exit. Once all tasks have completed, the kernel returns from Start() and all LEDs
+ * are switched on. Also shows the tickless idle mode when STK_TICKLESS_IDLE is enabled.
+ */
+
 #include <stk.h>
 #include "example.h"
 

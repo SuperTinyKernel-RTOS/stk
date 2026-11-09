@@ -7,6 +7,20 @@
  * License: MIT License, see LICENSE for a full text.
  */
 
+/*! \file  hrt/example.cpp
+    \brief Hard Real-Time (KERNEL_HRT) scheduling with periodic tasks and deadlines.
+    
+    \example hrt/example.cpp
+*/
+
+/*
+ * Periodic tasks with a period, a deadline and a start delay are scheduled by an EDF (or RM) scheduler.
+ * Hardware LED tasks have the highest priority and are triggered by a control task through pipes (non-blocking
+ * TryRead()/TryWrite() as HRT tasks must never block). The example checks the schedulability of the task set
+ * before starting the kernel and shows how to react on a deadline miss with the
+ * IPlatform::IEventOverrider (the RED LED is switched on).
+ */
+
 #include <stk.h>
 #include <time/stk_time.h>
 #include "example.h"

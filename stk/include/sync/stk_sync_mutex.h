@@ -192,8 +192,8 @@ inline EWaitResult Mutex::TimedLockEx(Timeout timeout_ticks)
     {
         STK_ASSERT(!hw::IsInsideISR()); // API contract: caller must not be in ISR for a blocking call
 
-        // boost priority of the owner to avoid priority inversion (in case of sched::SwitchStrategyFixedPriority,
-        // otherwise ignored by the kernel), noop if ISwitchStrategy::PRIORITY_INHERITANCE_API = 0
+        // boost priority of the owner to avoid priority inversion (strategies with PRIORITY_INHERITANCE_API,
+        // e.g. sched::SwitchStrategyFixedPriority), noop for strategies without it
         svc->InheritWeight(owner_tid, GetUserTaskFromTid(current_tid)->GetWeight());
 
         // mutex owned by another thread (slow path/blocking)
@@ -207,7 +207,7 @@ inline EWaitResult Mutex::TimedLockEx(Timeout timeout_ticks)
             STK_ASSERT(m_owner_tid != current_tid);
 
             // if owner did not change, undo priority boost to avoid stuck elevated priority: lookup for a
-            // higher weight within existing wait objects, noop if ISwitchStrategy::PRIORITY_INHERITANCE_API = 0
+            // higher weight within existing wait objects, noop for strategies without PRIORITY_INHERITANCE_API
             if (owner_tid == m_owner_tid)
             {
                 svc->RestoreWeight(owner_tid, this);
@@ -270,7 +270,7 @@ inline void Mutex::Unlock()
     {
         IKernelService *const svc = IKernelService::GetInstance();
 
-        // restore priority of the owner, noop if ISwitchStrategy::PRIORITY_INHERITANCE_API = 0
+        // restore priority of the owner, noop for strategies without PRIORITY_INHERITANCE_API
         if (m_owner_tid != TID_NONE)
         {
             svc->RestoreWeight(m_owner_tid);
@@ -290,7 +290,7 @@ inline void Mutex::Unlock()
             waiter->Wake(false);
 
             // boost priority from the highest-priority task still in wait list, skip the lookup if none left,
-            // noop if ISwitchStrategy::PRIORITY_INHERITANCE_API = 0
+            // noop for strategies without PRIORITY_INHERITANCE_API
             if (!m_wait_list.IsEmpty())
             {
                 svc->InheritWeight(m_owner_tid,

@@ -1,4 +1,4 @@
-/**
+/*
  * Copyright (c) 2022 Raspberry Pi (Trading) Ltd.
  * Copyright (c) 2022-2026 Neutron Code Limited <stk@neutroncode.com> (STK threading adaptation)
  *
@@ -52,6 +52,12 @@
  * event-driven waits instead of polling.
  * ---------------------------------------------------------------------------
  */
+
+/*! \file  httpd/example.cpp
+    \brief Pico W lwIP httpd + mDNS example ported to STK.
+    
+    \example httpd/example.cpp
+*/
 
 #include <assert.h>
 

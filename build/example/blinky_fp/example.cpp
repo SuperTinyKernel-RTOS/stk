@@ -7,6 +7,19 @@
  * License: MIT License, see LICENSE for a full text.
  */
 
+/*! \file  blinky_fp/example.cpp
+    \brief Blinky with the Fixed-Priority (FP32) scheduling strategy.
+    
+    \example blinky_fp/example.cpp
+*/
+
+/*
+ * Four CPU-loaded tasks blink an LED each and have different priorities (BLUE is the highest, RED is
+ * the lowest), so the higher the priority the more often the LED blinks. With the fixed-priority strategy
+ * tasks must cooperate by giving up the CPU with stk::Sleep(). See also the \ref blinky_swrr/example.cpp
+ * example which does not need such cooperation.
+ */
+
 #include <stk.h>
 #include "example.h"
 

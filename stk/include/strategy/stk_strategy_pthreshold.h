@@ -319,7 +319,9 @@ public:
         AddActive(task);
     }
 
-    /*! \brief     Task weight changed (priority inheritance / restore): move to the new level.
+    /*! \brief     Task weight changed (priority inheritance / restore / SetWeight): move to the new level.
+        \param[in] task: Task whose weight changed (a sleeping task is not touched, the new weight applies when it wakes).
+        \param[in] old_weight: Weight of the task before the change.
         \note      A hold is migrated to the new level if the effective threshold is still above
                    the new priority and the level's hold slot is free; otherwise it is released.
     */
@@ -460,6 +462,10 @@ protected:
     //! Bitmap operations (set/clear/test/empty/highest-set) for the \c ReadyBitmap type.
     typedef PriorityBitmapTraits<ReadyBitmap> BitmapTraits;
 
+    /*! \brief     Append a task to its priority level's runnable list.
+        \param[in] task: Task to make runnable.
+        \note      If the level was empty, the cursor is set to the task and the ready bit is set.
+    */
     void AddActive(IKernelTask *task)
     {
         const Priority prio = GetTaskPriority(task);
@@ -473,6 +479,13 @@ protected:
         }
     }
 
+    /*! \brief     Remove a task from its priority level's runnable list.
+        \param[in] task: Runnable task to remove.
+        \param[in] prio: Priority level the task was registered at.
+        \note      Drops the running-task reference and the hold of the task, repositions the level
+                   cursor (same rules as SwitchStrategyFixedPriority) and clears the ready bit if the
+                   level becomes empty.
+    */
     void RemoveActive(IKernelTask *task, const Priority prio)
     {
         IKernelTask *const next = (*task->GetNext());
@@ -540,6 +553,7 @@ protected:
         }
     }
 
+    //! Priority part (upper 16 bits) of an encoded weight, see MakeWeight().
     static __stk_forceinline Priority DecodePriority(Weight weight)
     {
         return static_cast<Priority>((static_cast<uint32_t>(weight) >> 16) & 0xFFFFU);
@@ -550,6 +564,7 @@ protected:
         return DecodePriority(task->GetWeight());
     }
 
+    //! Threshold part (lower 16 bits) of an encoded weight, see MakeWeight().
     static __stk_forceinline Priority DecodeThreshold(Weight weight)
     {
         return static_cast<Priority>(static_cast<uint32_t>(weight) & 0xFFFFU);

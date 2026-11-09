@@ -7,6 +7,12 @@
  * License: MIT License, see LICENSE for a full text.
  */
 
+/*! \file  blinky_mc/example.cpp
+    \brief Blinky with a control task and LED tasks communicating over pipes and an event.
+    
+    \example blinky_mc/example.cpp
+*/
+
 #include <stk.h>
 #include "example.h"
 
