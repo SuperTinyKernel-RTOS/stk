@@ -23,6 +23,12 @@
  *
  */
 
+/*! \file  audio_mic/main.cpp
+    \brief USB Audio Class 2.0 test microphone running on STK (C++ API).
+    
+    \example audio_mic/main.cpp
+*/
+
 /* plot_audio_samples.py requires following modules:
  * $ sudo apt install libportaudio
  * $ pip3 install sounddevice matplotlib

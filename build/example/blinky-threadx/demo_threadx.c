@@ -1,4 +1,16 @@
 /**************************************************************************/
+
+/*! \file  blinky-threadx/demo_threadx.c
+    \brief Eclipse ThreadX demo running on SuperTinyKernel RTOS (ThreadX API compatibility).
+    
+    \example blinky-threadx/demo_threadx.c
+*/
+
+/*
+ * Small demo imported from Eclipse ThreadX which is used for demonstrating the interoperability of the
+ * ThreadX API with STK. It includes eight threads of different priorities, using a message queue,
+ * semaphore, mutex, event flags group, byte pool and block pool.
+ */
 /*                                                                        */
 /*      Copyright (c) Microsoft Corporation. All rights reserved.         */
 /*      Copyright (c) Eclipse Foundation and contributors.                */

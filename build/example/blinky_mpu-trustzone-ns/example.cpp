@@ -28,6 +28,12 @@
  * -----------------------------------------------------------------------------------------------
  */
 
+/*! \file  blinky_mpu-trustzone-ns/example.cpp
+    \brief TrustZone + per-task MPU sandboxing, Non-Secure side.
+    
+    \example blinky_mpu-trustzone-ns/example.cpp
+*/
+
 #include <new>
 #include <pico/runtime.h>
 

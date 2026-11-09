@@ -7,6 +7,17 @@
  * License: MIT License, see LICENSE for a full text.
  */
 
+/*! \file  timer/example.cpp
+    \brief Software timers with stk::time::TimerHost.
+    
+    \example timer/example.cpp
+*/
+
+/*
+ * A periodic timer toggles the green LED every 100 ms and a one-shot timer stops the timer host after
+ * 20 s. Timers are driven by the stk::time::TimerHost, which runs in its own internal task(s).
+ */
+
 //#define _STK_ASSERT_REDIRECT
 
 #include <stk.h>

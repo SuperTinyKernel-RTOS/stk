@@ -15,7 +15,7 @@
 
 /*! \def   STK_MEMORY_BLOCKPOOL_ALIGN_DEFAULT
     \brief Default block alignment (bytes, power of two, not less than sizeof(void *)) used when a pool is
-           constructed without an explicit alignment. Defaults to 8 so that \c double / \c uint64_t members are
+           constructed without an explicit alignment. Defaults to MemoryAllocator::MIN_ALIGNMENT (8 on typical 32-bit targets) so that \c double / \c uint64_t members are
            properly aligned on 32-bit targets (where sizeof(void *) is only 4).
 */
 #ifndef STK_MEMORY_BLOCKPOOL_ALIGN_DEFAULT
@@ -62,7 +62,7 @@ namespace memory {
         last->next = nullptr. m_free_list points to block_0.
 
     **Alignment**: every block starts on a multiple of the pool alignment (default
-    \c ALIGN_DEFAULT = 8 bytes unless \c STK_MEMORY_BLOCKPOOL_ALIGN_DEFAULT is overridden, so \c double / \c uint64_t members are safe on 32-bit targets;
+    \c ALIGN_DEFAULT (MemoryAllocator::MIN_ALIGNMENT unless \c STK_MEMORY_BLOCKPOOL_ALIGN_DEFAULT is overridden, 8 on typical 32-bit targets);
     pass a larger value for cache-line / DMA / SIMD buffers). A misaligned external buffer is
     corrected internally (like BytePool does): the unaligned head is skipped and the capacity is trimmed
     to what fits. \c TimedAllocT() refuses (returns nullptr) types that do not fit the block size or alignment.
@@ -77,8 +77,8 @@ namespace memory {
 
     **Blocking semantics**: \c TimedAlloc() suspends the calling task via a
     \c ConditionVariable until \c Free() returns a block, or the timeout expires.
-    This replaces the spin-yield polling loop that was used in the old CMSIS wrapper,
-    giving up the CPU completely while blocked instead of burning cycles.
+    The blocked task does not poll:
+    it gives up the CPU completely until it is woken or the timeout expires.
 
     **ISR safety**: \c TryAlloc() and \c Free() are ISR-safe (guarded by a critical
     section) and never touch the condition variable on the allocation path. \c Alloc() and

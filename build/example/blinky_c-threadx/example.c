@@ -21,6 +21,12 @@
  *
  *---------------------------------------------------------------------------*/
 
+/*! \file  blinky_c-threadx/example.c
+    \brief SuperTinyKernel RTOS via ThreadX API wrapper example program.
+    
+    \example blinky_c-threadx/example.c
+*/
+
 #include <stdio.h>
 
 #include "tx_api.h"                     // ThreadX API on SuperTinyKernel

@@ -7,6 +7,19 @@
  * License: MIT License, see LICENSE for a full text.
  */
 
+/*! \file  blinky_c/example.c
+    \brief Blinky (C API): four LED tasks pass a baton to each other with EventFlags.
+    
+    \example blinky_c/example.c
+*/
+
+/*
+ * C version of the \ref blinky/example.cpp example built on the C binding of STK (stk_c.h). Four
+ * tasks block on a shared EventFlags object (stk_ef_wait()), each on its own flag bit, light their LED
+ * exclusively, sleep for 1 s and then set the flag of the next task. Stacks are provided by a static
+ * stack pool and the per-task parameters are passed through the void pointer argument.
+ */
+
 #include <stk_c.h>
 #include <stk_c_time.h>
 #include <stk_c_memory.h>

@@ -7,6 +7,12 @@
  * License: MIT License, see LICENSE for a full text.
  */
 
+/*! \file  blinky_mpu/example.cpp
+    \brief Blinky with per-task MPU memory protection (Cortex-M, ARMv7-M).
+    
+    \example blinky_mpu/example.cpp
+*/
+
 #include <stdio.h>
 #include <new>
 

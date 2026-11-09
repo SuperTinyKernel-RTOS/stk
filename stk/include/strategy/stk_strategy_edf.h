@@ -33,9 +33,9 @@ namespace sched {
     This strategy is only meaningful when used with \c KERNEL_HRT mode. In HRT mode the
     kernel tracks \c duration (active ticks elapsed) per task, making
     \c GetHrtRelativeDeadline() produce meaningful, monotonically decreasing values.
-    Outside HRT mode \c GetHrtRelativeDeadline() returns 0 for every task, so every
-    comparison ties and the first runnable task in \c m_tasks always wins: the other
-    tasks do not run until it sleeps.
+    Outside HRT mode \c GetHrtRelativeDeadline() asserts (debug builds) and returns 0 for every
+    task, so every comparison ties and the first runnable task in \c m_tasks always wins: the
+    other tasks do not run until it sleeps.
 
     \par Tie-breaking
     When two or more tasks share the same relative deadline the first such task encountered
@@ -74,7 +74,7 @@ public:
         WEIGHT_API               = 0, //!< This strategy does not use per-task weights. Deadline tracking is handled by the kernel in KERNEL_HRT mode via GetHrtRelativeDeadline().
         SLEEP_EVENT_API          = 1, //!< This strategy requires OnTaskSleep() / OnTaskWake() events to move tasks between the runnable and sleeping lists.
         DEADLINE_MISSED_API      = 0, //!< This strategy does not use OnTaskDeadlineMissed() events.
-        PRIORITY_INHERITANCE_API = 0, //!< This strategy does not require Priority Inheritance and OnTaskPriorityChange() events.
+        PRIORITY_INHERITANCE_API = 0, //!< This strategy does not require Priority Inheritance and OnTaskWeightChange() events.
         NOSLEEP_YIELD_API        = 0, //!< This strategy does not handle Yield() itself (OnTaskYield() is not used); the kernel puts the yielding task to sleep for a tick.
         TIMESLICE_API            = 0  //!< This strategy does not support KERNEL_TIMESLICE mode.
     };
@@ -173,12 +173,11 @@ public:
         return next;
     }
 
-    /*! \brief     Get first task in the managed set (used by the kernel for initial scheduling).
+    /*! \brief     Get first task in the managed set (reference task for the kernel).
         \return    The first task in \c m_tasks if any task is runnable; otherwise the first task
                    in \c m_sleep. Asserts if the combined set is empty (GetSize() == 0).
-        \note      Returns the list-head task regardless of its deadline. This is called once
-                   at kernel start to seed the initial context; EDF ordering begins with the
-                   first GetNext() call.
+        \note      Returns the list-head task regardless of its deadline. The kernel uses it when it
+                   starts and when all tasks are sleeping; EDF ordering applies to GetNext() only.
     */
     IKernelTask *GetFirst() override
     {
@@ -233,7 +232,7 @@ protected:
     STK_NONCOPYABLE_CLASS(SwitchStrategyEDF);
 
     IKernelTask::ListHeadType m_tasks; //!< Runnable tasks eligible for scheduling. Scanned in full by GetNext() each tick to find the minimum relative deadline.
-    IKernelTask::ListHeadType m_sleep; //!< Sleeping (blocked) tasks not eligible for scheduling. Deadline tracking continues in the kernel while tasks are in this list.
+    IKernelTask::ListHeadType m_sleep; //!< Sleeping (blocked) tasks not eligible for scheduling, e.g. HRT tasks waiting for their next activation.
 };
 
 } // namespace sched

@@ -7,6 +7,20 @@
  * License: MIT License, see LICENSE for a full text.
  */
 
+/*! \file  sync/example.cpp
+    \brief Synchronization primitives: Pipe (or Events) and Mutex between a control and a hardware task.
+    
+    \example sync/example.cpp
+*/
+
+/*
+ * A control task toggles a state every second and sends it to a hardware LED task through a
+ * stk::sync::PipeT (or, with STK_EXAMPLE_USE_PIPE set to 0, through stk::sync::Event objects). The LED
+ * task blocks on the pipe with a timeout, protects the hardware access with a stk::sync::Mutex and signals
+ * that it is ready with an Event. Variants for a single core, a user-mode control task and a dual-core MCU
+ * (RP2350) are provided.
+ */
+
 //#define _STK_ASSERT_REDIRECT
 
 #ifdef _STK_ASSERT_REDIRECT

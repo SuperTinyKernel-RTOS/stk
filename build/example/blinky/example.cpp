@@ -7,6 +7,19 @@
  * License: MIT License, see LICENSE for a full text.
  */
 
+/*! \file  blinky/example.cpp
+    \brief Blinky: four LED tasks pass a baton to each other with stk::sync::EventFlags.
+    
+    \example blinky/example.cpp
+*/
+
+/*
+ * Four tasks (RED, ORANGE, GREEN, BLUE) share one stk::sync::EventFlags object with one flag bit per
+ * task. A task blocks until its own flag is set (the flag is auto-cleared on wake-up), lights its LED
+ * exclusively, sleeps for 1 s and then sets the flag of the next task. Sleeping is done until an exact
+ * timestamp on a running timeline, which makes the LED switching drift-free.
+ */
+
 #include <stk.h>
 #include <sync/stk_sync_eventflags.h>
 #include "example.h"

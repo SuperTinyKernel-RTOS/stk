@@ -90,7 +90,7 @@ extern "C" {
 #define TX_STK_BLOCK_POOL_STORAGE_WORDS (32U)
 #endif
 #ifndef TX_STK_BYTE_POOL_STORAGE_WORDS
-#define TX_STK_BYTE_POOL_STORAGE_WORDS  (24U)
+#define TX_STK_BYTE_POOL_STORAGE_WORDS  (26U)
 #endif
 /* The event flags and timer storage is counted in 64-bit words (not pointer-sized): the event flags object holds a
    64-bit flags word (all 32 ThreadX flags plus the error bit reserved by STK) and the timer object holds 64-bit tick

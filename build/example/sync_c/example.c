@@ -7,6 +7,18 @@
  * License: MIT License, see LICENSE for a full text.
  */
 
+/*! \file  sync_c/example.c
+    \brief Synchronization primitives (C API): Pipe (or Events) and Mutex between a control and a hardware task.
+    
+    \example sync_c/example.c
+*/
+
+/*
+ * C version of the \ref sync/example.cpp example: a control task and a hardware LED task are
+ * synchronized with a pipe (or events) and a mutex using the C binding of STK (stk_c.h). Supports a
+ * dual-core MCU when STK_C_CPU_COUNT is greater than 1.
+ */
+
 //#define _STK_ASSERT_REDIRECT
 
 #ifdef _STK_ASSERT_REDIRECT

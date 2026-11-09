@@ -68,7 +68,7 @@ PROJECT_LOGO           = docs/img/stk_logo.svg
 # entered, it will be relative to the location where doxygen was started. If
 # left blank the current directory will be used.
 
-OUTPUT_DIRECTORY       = doxydoc
+OUTPUT_DIRECTORY       = docs
 
 # If the CREATE_SUBDIRS tag is set to YES then doxygen will create up to 4096
 # sub-directories (in 2 levels) under the output directory of each output format
@@ -910,6 +910,7 @@ WARN_LOGFILE           =
 
 INPUT                  = stk \
                          interop \
+                         build/example \
                          @DOXYGEN_INPUT@
 
 # This tag can be used to specify the character encoding of the source files
@@ -1000,7 +1001,8 @@ EXCLUDE                = deps/cpputest \
                          deps/mbedtls \
                          deps/segger \
                          deps/target \
-                         deps/tinyusb
+                         deps/tinyusb \
+                         build/example/project
 
 # The EXCLUDE_SYMLINKS tag can be used to select whether or not files or
 # directories that are symbolic links (a Unix file system feature) are excluded
@@ -1033,7 +1035,7 @@ EXCLUDE_SYMBOLS        =
 # that contain example code fragments that are included (see the \include
 # command).
 
-EXAMPLE_PATH           =
+EXAMPLE_PATH           = build/example
 
 # If the value of the EXAMPLE_PATH tag contains directories, you can use the
 # EXAMPLE_PATTERNS tag to specify one or more wildcard pattern (like *.cpp and
@@ -1047,7 +1049,7 @@ EXAMPLE_PATTERNS       = *
 # irrespective of the value of the RECURSIVE tag.
 # The default value is: NO.
 
-EXAMPLE_RECURSIVE      = NO
+EXAMPLE_RECURSIVE      = YES
 
 # The IMAGE_PATH tag can be used to specify one or more files or directories
 # that contain images that are to be included in the documentation (see the

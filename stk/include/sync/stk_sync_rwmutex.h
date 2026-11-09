@@ -56,7 +56,7 @@ namespace sync {
     }
     \endcode
 
-    \see   Mutex, ConditionVariable, ScopedReadMutex
+    \see   Mutex, ConditionVariable, ScopedTimedReadMutex, ScopedTimedLock
 */
 class RWMutex final : public IMutex, public ITraceable
 {

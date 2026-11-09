@@ -47,7 +47,7 @@ namespace sync {
            \c uint32_t regardless of \a T.
     \note  **Auto-clear**: by default the matched flags are atomically cleared
            upon a successful \c Wait(). Pass \c OPT_NO_CLEAR to suppress this.
-    \note  **Direct Handover**: \c Set() notifies \b all waiters so that every
+    \note  **Broadcast wake-up**: \c Set() notifies \b all waiters so that every
            task re-evaluates its own predicate after waking. Each waiter clears
            only the flags it matched, so concurrent waiters with disjoint
            flag masks do not interfere with each other.
@@ -181,7 +181,8 @@ public:
 
     /*! \brief     Destructor.
         \note      If tasks are still waiting at destruction time it is a logical error
-                   (dangling waiters). An assertion is triggered in debug builds.
+                   (dangling waiters). An assertion is triggered in debug builds by the
+                   destructor of the internal ConditionVariable.
         \note      MISRA deviation: [STK-DEV-005] Rule 10-3-2.
     */
     STK_VIRT_DTOR ~EventFlagsT() = default;
@@ -256,9 +257,9 @@ public:
         \return    Bitmask of the flags that caused the wakeup (the matched subset),
                    or one of the \c ERROR_* sentinels on failure. Always check
                    \c IsError() before using the return value as a flags mask.
-        \note      If the predicate becomes satisfied in the same tick that the deadline
-                   expires, the wait succeeds and returns the matched flags. The timeout
-                   is only reported when the condition is not met at deadline time.
+        \note      If a Set() satisfies the condition before the timeout is processed, the wait
+                   succeeds and returns the matched flags. Once the timeout has been processed
+                   it is reported even if the flags are set right afterwards.
         \note      Returns \c ERROR_CANCELED, not \c ERROR_TIMEOUT, if the wait was
                    interrupted via \c IKernel::CancelTaskWait() before either the flag
                    condition was met or the deadline expired.
@@ -362,7 +363,7 @@ public:
     /*! \brief     Get list of tasks blocked on this object.
         \note      Read-only access for diagnostics / telemetry.
         \note      The result is a snapshot: call inside the critical section (see \a hw::CriticalSection,
-                   \a sync::ScopedCrticalSection) if the list may change concurrently.
+                   \a sync::ScopedCriticalSection) if the list may change concurrently.
     */
     const IWaitObject::ListHeadType &GetWaitList() const
     {
@@ -374,7 +375,7 @@ public:
         \return    TId of the first waiter, or \a TID_NONE if no tasks are currently waiting.
         \note      Read-only introspection for diagnostics / telemetry.
         \note      The result is a snapshot: call inside the critical section (see \a hw::CriticalSection,
-                   \a sync::ScopedCrticalSection) if the list may change concurrently.
+                   \a sync::ScopedCriticalSection) if the list may change concurrently.
         \see       GetWaitList
     */
     TId GetFirstWaiterTid() const
@@ -508,22 +509,24 @@ inline EWaitResult EventFlagsT<T>::WaitCore(T flags, uint32_t options,
 
     const bool timed_wait = (timeout_ticks != WAIT_INFINITE) && (timeout_ticks != NO_WAIT);
 
-    // capture an absolute deadline once, before entering the wait loop,
+    // capture an absolute deadline once (64-bit Ticks, so it stays valid across the 32-bit tick
+    // wraparound), before entering the wait loop,
     // this prevents the timeout from being silently restarted on each
     // spurious wakeup (e.g. a partial Set() that does not satisfy OPT_WAIT_ALL)
-    const Timeout deadline = (timed_wait ?
-        static_cast<Timeout>(GetTicks() + timeout_ticks) : timeout_ticks);
+    const Ticks deadline = (timed_wait ?
+        (GetTicks() + timeout_ticks) : static_cast<Ticks>(0));
 
     ScopedCriticalSection cs_;
 
     // spin (with blocking) until the predicate is satisfied or we time out
     while (!IsSatisfied(flags, options))
     {
-        Timeout remaining = deadline;
+        Timeout remaining = timeout_ticks;
         if (timed_wait)
         {
-            const Timeout now = static_cast<Timeout>(GetTicks());
-            remaining = (now >= deadline ? NO_WAIT : (deadline - now));
+            // left <= timeout_ticks < WAIT_INFINITE, so the narrowing cast is lossless
+            const Ticks left = (deadline - GetTicks());
+            remaining = ((left > 0) ? static_cast<Timeout>(left) : NO_WAIT);
         }
 
         const EWaitResult wr = m_cv.WaitEx(cs_, remaining);
@@ -641,8 +644,8 @@ inline EWaitResult EventFlagsT<T>::Sync(SyncContext &ctx, T set_flags, T wait_fl
         const bool timed_wait = (timeout_ticks != WAIT_INFINITE) && (timeout_ticks != NO_WAIT);
 
         // absolute deadline captured once (see WaitCore)
-        const Timeout deadline = (timed_wait ?
-            static_cast<Timeout>(GetTicks() + timeout_ticks) : timeout_ticks);
+        const Ticks deadline = (timed_wait ?
+            (GetTicks() + timeout_ticks) : static_cast<Ticks>(0));
 
         ScopedCriticalSection cs_;
 
@@ -676,11 +679,12 @@ inline EWaitResult EventFlagsT<T>::Sync(SyncContext &ctx, T set_flags, T wait_fl
                 break;
             }
 
-            Timeout remaining = deadline;
+            Timeout remaining = timeout_ticks;
             if (timed_wait)
             {
-                const Timeout now = static_cast<Timeout>(GetTicks());
-                remaining = (now >= deadline ? NO_WAIT : (deadline - now));
+                // left <= timeout_ticks < WAIT_INFINITE, so the narrowing cast is lossless
+                const Ticks left = (deadline - GetTicks());
+                remaining = ((left > 0) ? static_cast<Timeout>(left) : NO_WAIT);
             }
 
             const EWaitResult wr = m_cv.WaitEx(cs_, remaining);

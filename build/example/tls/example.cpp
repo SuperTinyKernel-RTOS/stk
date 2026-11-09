@@ -7,6 +7,12 @@
  * License: MIT License, see LICENSE for a full text.
  */
 
+/*! \file  /tls/example.cpp
+    \brief Thread-local storage (TLS) and per-task semaphores.
+    
+    \example /tls/example.cpp
+*/
+
 #include <stk.h>
 #include "example.h"
 

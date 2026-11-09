@@ -14,7 +14,7 @@
 
 /*! \def   STK_MEMORY_PLACEMENT_NEW
     \brief When defined as 1, placement new C++ operator is enabled for memory::MemoryAllocator
-           and for the NewT/DeleteT helpers of the memory pools.
+           and for the NewT/DeleteT/MakeT helpers of the memory pools (including PoolPtr).
     \see   memory::MemoryAllocator::AllocateOneT, memory::MemoryAllocator::AllocateArrayT
 */
 #ifndef STK_MEMORY_PLACEMENT_NEW
@@ -139,8 +139,8 @@ namespace memory {
     \warning The Weak hooks are declared weak and STK does not define them.
              If you provide none of them, on most toolchains the symbols resolve to address 0
              and calling them is a jump to null (a fault at run time), \b not a linker error.
-             The front-end asserts (debug) and fails gracefully in that case (Allocate() returns nullptr,
-             Free() is a noop, GetStats() returns empty Stats); use IsAvailable() to check explicitly.
+             In that case Allocate() and Free() assert (debug) and fail gracefully (Allocate() returns nullptr,
+             Free() is a noop), GetStats() returns empty Stats without asserting; use IsAvailable() to check explicitly.
 
     \par Contract for backend implementations (MemoryAllocator::Weak)
          - Weak::Allocate() must return memory aligned to at least \c MIN_ALIGNMENT bytes.
@@ -176,8 +176,8 @@ struct MemoryAllocator
         \details Defaults to the larger of the toolchain's fundamental alignment
                  (alignof(std::max_align_t)) and the platform stack alignment
                  (STK_STACK_MEMORY_ALIGN, 16 on RISC-V). Can be overridden in stk_config.h
-                 when the underlying allocator guarantees more. Overriding to a smaller
-                 value is rejected at compile time.
+                 when the underlying allocator guarantees more. A value which is not a power of two,
+                 below alignof(std::max_align_t) or below sizeof(void *) is rejected at compile time.
     */
 #ifndef STK_MIN_ALIGNMENT
     #define STK_MIN_ALIGNMENT (stk::Max<size_t>(alignof(std::max_align_t), STK_STACK_MEMORY_ALIGN))
@@ -391,7 +391,8 @@ struct MemoryAllocator
         \param[in] size: Size of the memory chunk in bytes.
         \param[in] alignment: Required alignment, a power of two (valid values below sizeof(void *) are raised to it).
         \param[in] offset: Offset from the alignment boundary, i.e. (result + offset) is aligned.
-        \return    Aligned pointer, nullptr on failure or if arguments are invalid.
+        \return    Aligned pointer, nullptr on failure or if arguments are invalid (\a alignment is not a power of two,
+                   or a non-zero \a offset is not less than \a size).
 
         Layout:
             raw                                  aligned
@@ -541,7 +542,7 @@ struct MemoryAllocator
         \param[in] count: Number of elements to allocate.
         \return    Pointer to the first element, nullptr if allocation failed, count is 0,
                    or count * sizeof(TElement) overflows.
-        \note      Pair with Free() (or FreeArrayT) to release the memory.
+        \note      Pair with FreeTrivialArrayT() (or Free()) to release the memory.
     */
     template <typename TElement>
     static inline TElement *AllocateTrivialArrayT(size_t count)

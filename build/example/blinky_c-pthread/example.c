@@ -7,6 +7,12 @@
  * License: MIT License, see LICENSE for a full text.
  */
 
+/*! \file  blinky_c-pthread/example.c
+    \brief Blinky built on the STK pthread API (stk_c_pthread.h).
+    
+    \example blinky_c-pthread/example.c
+*/
+
 /*
  * Blinky built on the STK pthread API (stk_c_pthread.h).
  *

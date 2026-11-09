@@ -29,7 +29,8 @@ namespace time {
 #endif
 
 /*! \def   STK_TIMER_HANDLER_STACK_SIZE
-    \brief Stack size of the timer handler, increase if your timers consume more (default: 256).
+    \brief Stack size of each timer handler task in elements of \c Word, increase if your OnExpired() callbacks need more (default: 256).
+    \note  The tick task has its own stack (256, at least STK_STACK_SIZE_MIN), both can be supplied via TimerHost::Config.
 */
 #ifndef STK_TIMER_HANDLER_STACK_SIZE
     #define STK_TIMER_HANDLER_STACK_SIZE 256U
@@ -89,7 +90,7 @@ public:
     */
     explicit Timer() 
         : m_deadline(0), m_timestamp(0), m_period(0U), m_delay(0U), m_active(false),
-          m_pending(false), m_rearming(false), m_ready_node(this)
+          m_pending(false), m_rearming(REARM_NONE), m_ready_node(this)
     {}
 
     /*! \brief     Destructor.
@@ -117,7 +118,7 @@ public:
 
     /*! \brief     Check whether the timer is currently active.
         \return    True if the timer has been started and not yet stopped or expired (one-shot).
-        \note      The value is advisory, it is written by the tick task and read without
+        \note      The value is advisory, it is written by the tick task (by Process() in polled mode) and read without
                    synchronization, so it may be transiently stale on multi-core targets.
     */
     bool IsActive() const { return m_active; }
@@ -147,8 +148,8 @@ public:
 
     /*! \brief     Get remaining ticks until the timer next expires.
         \return    Ticks remaining, or 0 if already expired / not active.
-        \note      The value is advisory: it is computed from m_now (the last value written
-                   by the tick task) and may be up to one tick task wake cycle stale.
+        \note      The value is advisory: it is computed from the current tick count and the deadline which the
+                   tick task has stored, so a command which is still waiting in the queue is not reflected yet.
                    If the deadline has already passed but not yet been processed, 0 is returned.
     */
     uint32_t GetRemainingTicks() const;
@@ -163,7 +164,7 @@ private:
         an expiration (stop, restart, ...) can unlink it in O(1).
 
         \note  Linked/unlinked only inside a critical section. Invariant (task mode): the node is
-               linked if and only if m_pending is true.
+               linked if and only if m_pending is true (the tick task sets m_pending just before it links the node).
     */
     struct ReadyNode : public detail::DListEntry<ReadyNode, false>
     {
@@ -181,7 +182,14 @@ private:
     uint32_t      m_delay;     //!< initial delay in ticks of the last start/restart/change (reused by CMD_ACTIVATE)
     volatile bool m_active;    //!< true if active
     volatile bool m_pending;   //!< true if pending to be handled (task mode: m_ready_node is linked)
-    volatile bool m_rearming;  //!< true while a CMD_RESTART / CMD_START_OR_RESET is already in the command queue
+    /*! \brief  Id of the CMD_RESTART / CMD_START_OR_RESET (TimerHost::TimerCommand::EId) which is the last command of
+                this timer waiting in the command queue, REARM_NONE if there is none. A later asynchronous command
+                with the same id is merged into it, a command with another id is queued behind it.
+        \note   Stored as the underlying type of the enum, which is declared by TimerHost after this class.
+                0 is CMD_SHUTDOWN, which never targets a timer, so it serves as REARM_NONE.
+    */
+    volatile uint8_t m_rearming;
+    static const uint8_t REARM_NONE = 0U; //!< no re-arm command is waiting for this timer
     ReadyNode     m_ready_node;//!< hook in the ready list of the host (task mode), see ReadyNode
 };
 
@@ -209,7 +217,7 @@ private:
 
     \note  TimerHost must be initialized before use by calling Initialize() (task mode) or InitializePolled() (polled mode).
            The number of timers is not limited by TimerHost (STK_TIMER_COMMAND_QUEUE_SIZE is the capacity of the command queue).
-           The maximum timer period is bounded by \c uint32_t (~49 days at 1 ms resolution).
+           A delay and a period must not exceed WAIT_INFINITE (INT32_MAX ticks, ~24.8 days at 1 ms resolution).
     \note  Requires a kernel built with stk::KERNEL_SYNC: the command queue is stk::sync::Pipe based, the handler
            tasks are woken by a stk::sync::Event. The list of expired timers is intrusive (no capacity limit
            of its own, a Timer is queued at most once) and is protected by a critical section.
@@ -352,7 +360,7 @@ private:
         uint32_t period = static_cast<uint32_t>(stk::GetTicksFromMs(500));
         if (g_TimerHost.Start(g_Heartbeat, period, period) != stk::time::TimerHost::RES_OK)
         {
-            // e.g. RES_QUEUE_FULL (called from an ISR / before the kernel started), RES_ACTIVE, RES_NOT_READY
+            // e.g. RES_QUEUE_FULL (queue full and the caller can not wait: ISR, kernel not started), RES_ACTIVE, RES_NOT_READY
         }
 
         // start a one-shot notification after 1 second
@@ -379,7 +387,7 @@ private:
     queued and not executed. Positive values report the state of the timer (the command was refused because its
     precondition does not hold) or that the outcome is unknown:
     - RES_OK: synchronous API - the command was executed. Asynchronous API - the command was accepted into the
-      command queue (or coalesced with an identical one already waiting, see Restart()); it is executed later by the
+      command queue (or coalesced with the same Restart() / StartOrReset() of the timer already waiting, see Restart()); it is executed later by the
       tick task and its outcome is not reported;
     - RES_ACTIVE, RES_INACTIVE, RES_NOT_PERIODIC: the timer is not in the state the command requires. The asynchronous
       API evaluates this from the unsynchronized state of the timer, so it is advisory: nothing is queued when it
@@ -412,7 +420,8 @@ private:
       waits for them), in polled mode they get RES_QUEUED.
     - The tick task must be at least as urgent as every task which uses the sync API, otherwise a more urgent
       caller is blocked by a less urgent tick task (priority inversion). Configure the weights via Config.
-    - A command with a completion is never coalesced (see Restart()), every caller gets its own result.
+    - A synchronous command is never coalesced (see Restart()), every caller gets its own result and its arguments
+      are always applied, also when the caller can not wait and the command is queued asynchronously (RES_QUEUED).
     - The wait is not abortable: if it is cancelled (IKernel::CancelTaskWait()) the call keeps waiting, the
       completion lives on the caller's stack and must outlive the tick task's access to it.
     - StopSync() (and every other command which cancels or re-arms a timer) removes an expiration which was already
@@ -435,13 +444,13 @@ class TimerHost
 public:
     enum EConsts : size_t
     {
-        //!< total number of tasks serving this instance
+        //!  total number of tasks serving this instance (task mode)
         TASK_COUNT = (1U + STK_TIMER_THREADS_COUNT),
 
-        //!< stack memory size of the tick task
+        //!  stack memory size of the tick task (elements of Word)
         TASK_TICK_MEMORY_SIZE = Max<size_t>(256U, STK_STACK_SIZE_MIN),
 
-        //!< stack memory size of the timer handler task
+        //!  stack memory size of each timer handler task (elements of Word)
         TASK_HANDLER_STACK_SIZE = Max<size_t>(STK_TIMER_HANDLER_STACK_SIZE, STK_STACK_SIZE_MIN)
     };
 
@@ -460,8 +469,8 @@ public:
         RES_FAIL          = -1, //!< Unspecified failure.
         RES_OK            = 0,  //!< Sync: the command was executed. Async: the command was accepted into the command queue.
         RES_ACTIVE        = 1,  //!< The timer is active, but the command requires it to be inactive (start, activate, change).
-        RES_INACTIVE      = 2,  //!< The timer is not active, but the command requires it to be active (stop, reset).
-        RES_NOT_PERIODIC  = 3,  //!< The timer is not periodic, but the command requires it to be.
+        RES_INACTIVE      = 2,  //!< The timer is not active, but the command requires it to be active (stop, reset, set period).
+        RES_NOT_PERIODIC  = 3,  //!< The timer is not periodic, but the command requires it to be (reset, set period).
         RES_QUEUED        = 4   //!< The calling context can not wait: the command was queued asynchronously, its outcome is unknown.
     };
 
@@ -472,7 +481,7 @@ public:
     {
         bool     active;    //!< True if the timer is active.
         uint32_t remaining; //!< Ticks until the next expiration, 0 if not active or overdue.
-        uint32_t delay;     //!< Initial delay stored by Start(), Restart(), ChangeSync().
+        uint32_t delay;     //!< Initial delay stored by the last start, restart or change command.
         uint32_t period;    //!< Reload period, 0 for a one-shot timer.
     };
 
@@ -491,7 +500,7 @@ public:
         tasks and the internal stack buffers.
 
         \note  Weights are strategy-specific and forwarded to the kernel as is (see "Scheduling weights"
-               in TimerHost). Only NO_WEIGHT is rejected here, all other validation is performed by the
+               in TimerHost). Only NO_WEIGHT is checked here (asserted), all other validation is performed by the
                kernel and its task-switching strategy when the task is added.
         \note  Externally supplied stack buffers must outlive the host, be distinct from each other (the
                kernel rejects a duplicate stack with \a ADD_FAIL_DUPLICATE), and satisfy the stack alignment
@@ -517,7 +526,7 @@ public:
     };
 
     /*! \brief Default constructor. Zero-initializes all internal state.
-        \note  Call Initialize() before using any other member function.
+        \note  Call Initialize() or InitializePolled() before using any other member function.
     */
     explicit TimerHost() 
       : m_task_tick_memory(), m_task_handler_memory(), m_task_tick(), m_task_process(),
@@ -539,7 +548,7 @@ public:
         \return    ADD_OK on success, otherwise the first failure reported by IKernel::AddTask(ITask *), e.g.
                    \a ADD_FAIL_POOL_FULL if the kernel has no free task slots, \a ADD_FAIL_DUPLICATE if a stack
                    is shared, or \a ADD_FAIL_INVALID (e.g. KERNEL_HRT kernel or kernel not initialized).
-        \note      Must be called before Start() of a KERNEL_STATIC kernel and after the kernel was initialized.
+        \note      Must be called before IKernel::Start() of a KERNEL_STATIC kernel and after the kernel was initialized.
         \note      On failure the host is unusable. Tasks added before the failure remain registered with the
                    kernel (blocked on the empty ready list), in KERNEL_DYNAMIC mode they can be released with
                    IKernel::ScheduleTaskRemoval().
@@ -609,6 +618,11 @@ public:
                    stop and re-start, and only one command queue slot is consumed.
                    Useful for watchdog refresh and debounce reset patterns.
                    Safe to call regardless of whether the timer is currently active.
+        \note      Coalescing: if a Restart() of the same timer is the last command of that timer waiting in the
+                   command queue, this call is merged into it: its own \a delay, \a period and call time are
+                   discarded (RES_OK is returned). A StartOrReset() or any other command in between prevents the
+                   merge, the call is queued and the commands run in the order they were issued.
+                   Use RestartSync() when the arguments must always be applied.
     */
     EResult Restart(Timer &tmr, uint32_t delay, uint32_t period = 0);
 
@@ -625,6 +639,7 @@ public:
                    the IsActive() check and the subsequent call.
                    If the timer is active but one-shot, no action is taken (a one-shot
                    timer mid-flight cannot be reset; use Restart() instead).
+                   Coalesced with a waiting StartOrReset() of the same timer in the same way as Restart(), see Restart().
     */
     EResult StartOrReset(Timer &tmr, uint32_t delay, uint32_t period = 0);
 
@@ -653,8 +668,9 @@ public:
         \param[in] tmr: Timer instance. Must not be active.
         \return    RES_OK, RES_ACTIVE if the timer is already active, RES_QUEUED, or an error code
                    (RES_NOT_READY, RES_QUEUE_FULL, RES_CANCELLED).
-        \note      The parameters are those of the last StartSync(), Start(), Restart() or ChangeSync() (the
-                   expiration is relative to the moment of the call).
+        \note      The delay is the one stored by the last StartSync(), Start(), Restart(), StartOrReset() (when it
+                   started the timer) or ChangeSync(), the period is the one currently stored in the timer (SetPeriod()
+                   changes it too). The expiration is relative to the moment of the call.
     */
     EResult ActivateSync(Timer &tmr);
 
@@ -757,12 +773,14 @@ public:
     /*! \brief    Shutdown host instance. All timers are stopped and removed from the host.
         \return   RES_OK if the command was queued, RES_QUEUE_FULL, RES_CANCELLED, RES_NOT_READY (already shut down
                   or not initialized).
-        \note     Task mode: the tick and handler tasks exit. Polled mode: the host stays usable.
+        \note     Task mode: asynchronous, the tick and handler tasks exit later (expirations already handed to the
+                  handlers are still handled first), their timers become inactive and commands still queued behind
+                  the shutdown are failed (synchronous callers get RES_NOT_READY). Polled mode: executed by the next Process(), the host stays usable.
     */
     EResult Shutdown();
 
-    /*! \brief  Get current time.
-        \return Current time (ticks).
+    /*! \brief  Get the time sampled by the last evaluation of the timers (tick task or Process()).
+        \return Time (ticks) of that evaluation, not the live tick count (use GetTicks() for that).
     */
     Ticks GetTimeNow() const { return hw::ReadVolatile64(&m_now); }
 
@@ -923,15 +941,20 @@ private:
         \param[in] wait: Maximum ticks to wait for a free queue slot: NO_WAIT (default) does not wait unless the
                    queue is full and the caller can wait (see CanWait()), WAIT_INFINITE blocks until the tick task
                    has drained at least one command.
+        \param[in] coalesce: True (default) allows an asynchronous CMD_RESTART / CMD_START_OR_RESET to be merged into
+                   one of the same timer which is already waiting. False for a synchronous command which could not
+                   wait (Execute()): its arguments must always be applied.
         \return    RES_OK if the command was queued (or coalesced), RES_NOT_READY if the host has no consumer of
                    the queue, RES_QUEUE_FULL if the queue is full and the caller can not wait, RES_CANCELLED if the
                    wait for a free slot was cancelled.
+        \note      Any command which is not merged ends the coalescing window of its timer: a Restart() issued after
+                   it is queued behind it, so the commands of one timer always run in the order they were issued.
         \note      May be called from any context. When the queue is full a caller which can wait blocks until a
                    slot is free (see "Command queue" in TimerHost), otherwise it receives RES_QUEUE_FULL.
         \warning   A blocking push must not be issued from the context which drains the queue (the tick task,
                    Process() and callbacks run by it), see CanWait().
     */
-    EResult PushCommand(TimerCommand cmd, Timeout wait = NO_WAIT);
+    EResult PushCommand(TimerCommand cmd, Timeout wait = NO_WAIT, bool coalesce = true);
 
     /*! \brief     Check whether the calling context can wait for the completion of a command.
         \return    True in task mode, from a task (not ISR, not the tick task), with the kernel running (not
@@ -987,13 +1010,13 @@ private:
     typedef detail::DListHead<Timer::ReadyNode, false>       ReadyList;
 
     /*! \typedef CommandQueue
-        \brief   Lock-free pipe used to send TimerCommand records from API callers to the tick task.
+        \brief   Pipe used to send TimerCommand records from API callers to the tick task.
     */
     typedef sync::PipeT<TimerCommand, STK_TIMER_COMMAND_QUEUE_SIZE> CommandQueue;
 
     TaskTickMemory                m_task_tick_memory;                             //!< tick task memory
     TimerHostMemory               m_task_handler_memory[STK_TIMER_THREADS_COUNT]; //!< handler task memory
-    TimerWorkerTask               m_task_tick;                                    //!< timer task
+    TimerWorkerTask               m_task_tick;                                    //!< tick task
     TimerWorkerTask               m_task_process[STK_TIMER_THREADS_COUNT];        //!< handler tasks
     detail::DListHead<Timer, false> m_active;                                       //!< active timers (tick task only)
     ReadyList                     m_ready_list;                                   //!< expired timers waiting for a handler task (access only inside a critical section)
@@ -1294,13 +1317,42 @@ inline void TimerHost::UpdateTime()
         next_sleep = ScanTimers(GetTicks());
     }
 
-    // no consumer of the command queue any more: synchronous calls fail instead of waiting forever
+    // no consumer of the command queue any more: new calls fail with RES_NOT_READY instead of waiting forever
     m_ready = false;
 
-    // unlink all timers on shutdown
-    while (Timer::DLEntryType *const tmr = m_active.GetFirst())
+    // stop and release all timers on shutdown (m_pending is left alone: expirations already handed to the
+    // handler tasks are still handled before they exit)
+    Timer *tmr = detail::DListCast::ListEntryToParent<Timer>(m_active.GetFirst());
+    while (tmr != nullptr)
     {
         m_active.Unlink(tmr);
+
+        tmr->m_active   = false;
+        tmr->m_rearming = Timer::REARM_NONE;
+
+        tmr = detail::DListCast::ListEntryToParent<Timer>(m_active.GetFirst());
+    }
+
+    // commands which were queued behind CMD_SHUTDOWN (or are still queued) will never be executed: fail them so
+    // that no synchronous caller waits for a completion forever and no timer stays marked as "re-arm queued"
+    TimerCommand cmd = {};
+    while (m_commands.Read(cmd, NO_WAIT))
+    {
+        if (cmd.timer != nullptr)
+        {
+            cmd.timer->m_rearming = Timer::REARM_NONE;
+        }
+
+        if (cmd.completion != nullptr)
+        {
+            Completion *const completion = cmd.completion;
+
+            completion->info   = TimerInfo();
+            completion->result = RES_NOT_READY;
+            __stk_full_memfence();
+
+            STK_UNUSED(completion->done.Set());
+        }
     }
 }
 
@@ -1385,10 +1437,9 @@ inline Timeout TimerHost::ScanTimers(Ticks now)
                 {
                     Timeout next_deadline = static_cast<Timeout>(tmr->m_deadline - now);
 
-                    // task mode: a (re)loaded deadline always lies in the future, polled mode: the caller
-                    // may poll slower than the period, an overdue timer is served by the next call
-                    STK_ASSERT(m_polled || (next_deadline > 0));
-
+                    // a (re)loaded deadline lies in the future only if the evaluation is not late by a whole
+                    // period or more (task mode: e.g. a long scheduler lock, polled mode: the caller may poll
+                    // slower than the period), an overdue timer is served by the next evaluation
                     if (next_deadline <= 0)
                     {
                         next_deadline = NO_WAIT;
@@ -1398,6 +1449,17 @@ inline Timeout TimerHost::ScanTimers(Ticks now)
                     {
                         next_sleep = next_deadline;
                     }
+                }
+            }
+            else
+            {
+                // expired and not yet claimed by a handler task (only a periodic timer can still be active here):
+                // the handler clears m_pending without waking the tick task, so its reloaded deadline must not
+                // be forgotten, otherwise the tick task could sleep until the next command and miss it.
+                // Poll every tick until the handler has claimed the expiration.
+                if (next_sleep > 1)
+                {
+                    next_sleep = 1;
                 }
             }
         }
@@ -1556,6 +1618,10 @@ inline bool TimerHost::ProcessCommands(Timeout next_sleep)
             break;
         }
 
+        // only the wait for the first command is bounded by the next deadline: the rest of the queue is
+        // drained without blocking, otherwise the sleep would restart after every command and delay the deadlines
+        next_sleep = NO_WAIT;
+
         // outcome reported to a synchronous caller (ignored for an asynchronous command)
         EResult   res  = RES_OK;
         TimerInfo info = {};
@@ -1579,7 +1645,6 @@ inline bool TimerHost::ProcessCommands(Timeout next_sleep)
                 CancelPending(*tmr); // drops an expiration of a previous run which was not handled yet
 
                 m_active.LinkBack(tmr);
-                next_sleep = NO_WAIT;
             }
             else
             {
@@ -1603,7 +1668,6 @@ inline bool TimerHost::ProcessCommands(Timeout next_sleep)
                 CancelPending(*tmr);
 
                 m_active.LinkBack(tmr);
-                next_sleep = NO_WAIT;
             }
             else
             {
@@ -1645,8 +1709,6 @@ inline bool TimerHost::ProcessCommands(Timeout next_sleep)
 
                 tmr->m_deadline = cmd.timestamp + static_cast<Ticks>(tmr->m_period);
                 CancelPending(*tmr);
-
-                next_sleep = NO_WAIT;
             }
             else
             {
@@ -1672,12 +1734,17 @@ inline bool TimerHost::ProcessCommands(Timeout next_sleep)
             tmr->m_delay    = cmd.delay;
             tmr->m_period   = cmd.period;
             tmr->m_active   = true;
-            tmr->m_rearming = false;
             CancelPending(*tmr);
+
+            // this command leaves the queue: a later Restart() must be queued again (a re-arm of another kind
+            // which was queued after this one stays recorded, it is still waiting)
+            if (tmr->m_rearming == TimerCommand::CMD_RESTART)
+            {
+                tmr->m_rearming = Timer::REARM_NONE;
+            }
 
             // re-link to the back of the list
             m_active.LinkBack(tmr);
-            next_sleep = NO_WAIT;
             
         break; }
 
@@ -1685,6 +1752,13 @@ inline bool TimerHost::ProcessCommands(Timeout next_sleep)
         {
             Timer *const tmr = cmd.timer;
             STK_ASSERT(tmr != nullptr);
+
+            // this command leaves the queue: a later StartOrReset() must be queued again, whichever branch below
+            // is taken (a Restart() which was queued after this one stays recorded, it is still waiting)
+            if (tmr->m_rearming == TimerCommand::CMD_START_OR_RESET)
+            {
+                tmr->m_rearming = Timer::REARM_NONE;
+            }
 
             // not currently active: start with supplied parameters
             if (!tmr->m_active)
@@ -1695,7 +1769,6 @@ inline bool TimerHost::ProcessCommands(Timeout next_sleep)
                 tmr->m_delay    = cmd.delay;
                 tmr->m_period   = cmd.period;
                 tmr->m_active   = true;
-                tmr->m_rearming = false;
                 CancelPending(*tmr);
 
                 m_active.LinkBack(tmr);
@@ -1715,8 +1788,6 @@ inline bool TimerHost::ProcessCommands(Timeout next_sleep)
 
             // active one-shot: no action - cannot reset a one-shot mid-flight,
             // caller should use Restart() if unconditional re-arm is needed
-
-            next_sleep = NO_WAIT;
             
         break; }
 
@@ -1797,7 +1868,7 @@ inline bool TimerHost::ProcessCommands(Timeout next_sleep)
 
                     tmr->m_active   = false;
                     tmr->m_pending  = false;
-                    tmr->m_rearming = false;
+                    tmr->m_rearming = Timer::REARM_NONE;
 
                     tmr = detail::DListCast::ListEntryToParent<Timer>(m_active.GetFirst());
                 }
@@ -1846,7 +1917,7 @@ inline bool TimerHost::ProcessCommands(Timeout next_sleep)
 // PushCommand
 // ---------------------------------------------------------------------------
 
-inline TimerHost::EResult TimerHost::PushCommand(TimerCommand cmd, Timeout wait)
+inline TimerHost::EResult TimerHost::PushCommand(TimerCommand cmd, Timeout wait, bool coalesce)
 {
     EResult result = RES_OK;
 
@@ -1863,21 +1934,35 @@ inline TimerHost::EResult TimerHost::PushCommand(TimerCommand cmd, Timeout wait)
                               (cmd.cmd == TimerCommand::CMD_START_OR_RESET);
 
         // rearm coalescing (CMD_RESTART and CMD_START_OR_RESET of asynchronous callers only: a synchronous
-        // caller needs its own result, its command is never merged into another one)
-        if (is_rearm && (cmd.timer != nullptr) && (cmd.completion == nullptr))
+        // caller needs its own result, its command is never merged into another one, and neither is a synchronous
+        // command which could not wait and was queued asynchronously by Execute())
+        const bool coalescable = coalesce && is_rearm && (cmd.timer != nullptr) && (cmd.completion == nullptr);
+
+        if (coalescable)
         {
-            if (cmd.timer->m_rearming)
+            if (cmd.timer->m_rearming == cmd.cmd)
             {
-                // already rearming - successfully coalesced, no need to write to queue
+                // the last command of this timer in the queue is the same re-arm - successfully coalesced,
+                // no need to write to queue
                 proceed_to_write = false;
             }
             else
             {
-                cmd.timer->m_rearming = true;
+                // record this re-arm as the last command of the timer (a different re-arm which is still waiting
+                // stays in the queue ahead of it, the commands run in the order they were issued)
+                cmd.timer->m_rearming = static_cast<uint8_t>(cmd.cmd);
 
                 // prevent compiler from sinking the flag write past Write()
                 __stk_full_memfence();
             }
+        }
+        else
+        if (cmd.timer != nullptr)
+        {
+            // any other command of this timer is queued behind the waiting rearm: end the coalescing window so that
+            // a later Restart() / StartOrReset() is queued behind it too, instead of being merged into the rearm
+            // which runs before this command (Restart, Stop, Restart would otherwise end up stopped)
+            cmd.timer->m_rearming = Timer::REARM_NONE;
         }
 
         // write to command queue
@@ -1897,9 +1982,9 @@ inline TimerHost::EResult TimerHost::PushCommand(TimerCommand cmd, Timeout wait)
             if (!written)
             {
                 // revert the flag if this was a failed rearm attempt
-                if (is_rearm && (cmd.timer != nullptr) && (cmd.completion == nullptr))
+                if (coalescable)
                 {
-                    cmd.timer->m_rearming = false;
+                    cmd.timer->m_rearming = Timer::REARM_NONE;
                 }
 
                 // an unbounded wait fails only if it was cancelled, otherwise the queue is full and the caller
@@ -2056,7 +2141,8 @@ inline TimerHost::EResult TimerHost::Execute(TimerCommand::EId id, Timer &tmr, u
     }
     else
     {
-        // can not wait: queue it asynchronously, the outcome is unknown to the caller
+        // can not wait: queue it asynchronously, the outcome is unknown to the caller (never coalesced: the
+        // arguments of a synchronous command must always be applied)
         const EResult queued = PushCommand({
             .cmd        = id,
             .timer      = &tmr,
@@ -2064,7 +2150,7 @@ inline TimerHost::EResult TimerHost::Execute(TimerCommand::EId id, Timer &tmr, u
             .delay      = delay,
             .period     = period,
             .completion = nullptr
-        });
+        }, NO_WAIT, false);
 
         result = ((queued == RES_OK) ? RES_QUEUED : queued);
     }

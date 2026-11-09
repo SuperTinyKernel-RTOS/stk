@@ -29,6 +29,7 @@ namespace sync {
     This implementation provides:
     - **Nesting (Recursion)**: Allows the owning thread to acquire the lock multiple times
       without deadlocking. Max recursion depth is \c 0xFFFE.
+    - **Busy-waiting**: a contended \c Lock() spins and never gives the CPU to the scheduler.
 
     \code
     // Example: Protecting high-frequency parameter updates
@@ -36,11 +37,11 @@ namespace sync {
 
     void Param_Process_Task() {
         // acquisition is extremely fast if the lock is free
-        g_Lock.Lock();
+        g_ParamLock.Lock();
 
         // ... update parameters ...
 
-        g_Lock.Unlock();
+        g_ParamLock.Unlock();
     }
     \endcode
 
@@ -59,7 +60,7 @@ public:
     {}
 
     /*! \brief    Destructor.
-        \note     If tasks are still waiting at destruction time it is considered a logical error (dangling waiters).
+        \note     Destroying a lock which is still held is considered a logical error.
                   An assertion is triggered in debug builds.
         \note     MISRA deviation: [STK-DEV-005] Rule 10-3-2.
     */
@@ -94,7 +95,10 @@ public:
 private:
     STK_NONCOPYABLE_CLASS(SpinLock);
 
+    //! Increment the recursion count if the lock is already owned by \a locking_tid. \return true if it was.
     bool LockRecursively(TId locking_tid);
+
+    //! Record \a locking_tid as the owner of the just acquired low-level lock (recursion count = 1).
     void MakeLocked(TId locking_tid);
 
     static const uint16_t RECURSION_MAX = 0xFFFEU; //!< maximum nesting depth

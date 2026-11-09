@@ -7,6 +7,12 @@
  * License: MIT License, see LICENSE for a full text.
  */
 
+/*! \file  blinky_mpu-hard/example.cpp
+    \brief Blinky with per-task MPU memory protection on EVKB-IMXRT1050 (Cortex-M7, PMSAv7).
+    
+    \example blinky_mpu-hard/example.cpp
+*/
+
 #include <stdio.h>
 #include <new>
 

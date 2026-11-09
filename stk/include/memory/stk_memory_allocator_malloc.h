@@ -30,7 +30,7 @@
            Include this header in one source file of your build (e.g. a dedicated .cpp) when your
            application or integrated third-party components require dynamic memory allocation via
            \c MemoryAllocator, C++ container helpers (<tt>AllocateOneT</tt>, <tt>AllocateArrayT</tt>,
-           <tt>PoolPtr</tt>), or global \c new / \c delete operators routing (<tt>STK_MEMORY_OVERRIDE_NEW_DELETE=1</tt>),
+           <tt>AllocateAligned</tt>), heap-storage pool constructors, or global \c new / \c delete operators routing (<tt>STK_MEMORY_OVERRIDE_NEW_DELETE=1</tt>),
            and you do not want to write a custom wrapper around `malloc`/`free`.
          - **When NOT to include**:
            1. **Custom Allocator**: If your application provides its own custom implementation of

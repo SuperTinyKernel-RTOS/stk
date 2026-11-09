@@ -17,36 +17,45 @@
 /*! \namespace stk::sync
     \brief     Synchronization primitives for task coordination and resource protection.
 
+    All primitives except ScopedCriticalSection require the kernel to be built with \c KERNEL_SYNC.
+
     ISR SAFETY GUIDELINES:
     ------------------------------------------------------------------------------------
-    Special care must be taken when calling synchronization  methods from within an Interrupt Service Routine (ISR).
+    Methods that can block the caller are **STRICTLY FORBIDDEN** in an ISR. A method which takes a
+    timeout is ISR-safe only with \c NO_WAIT. The table lists the methods that may be called from an ISR.
 
-    As a general rule, methods that can cause the caller to block or sleep are **STRICTLY FORBIDDEN** in ISRs.
-
-    | Primitive             | ISR Safe Methods                                                                                                                                   |
-    | :-------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------- |
-    | **Event**             | \c Set(), \c Pulse(), \c Reset(), \c TryWait()                                                                                                     |
-    | **EventFlagsT**       | \c Set(), \c Clear(), \c And(), \c Get(), \c TryWait(), \c Wait(NO_WAIT), \c TryWaitEx(), \c WaitEx(NO_WAIT), \c Sync(NO_WAIT)                     |
-    | **Semaphore**         | \c Signal(), \c TrySignal(), \c TrySignal(ceiling), \c TryWait(), \c Wait(NO_WAIT), \c WaitEx(NO_WAIT), \c GetCount()                              |
-    | **SpinLock**          | \c None                                                                                                                                            |
-    | **Mutex**             | \c None                                                                                                                                            |
-    | **FastMutex**         | \c None                                                                                                                                            |
-    | **RWMutex**           | \c None                                                                                                                                            |
-    | **ConditionVariable** | \c NotifyOne(), \c NotifyAll(), \c Wait(NO_WAIT)                                                                                                   |
-    | **Barrier**           | \c None                                                                                                                                            |
-    | **Pipe**              | \c Write(NO_WAIT), \c WriteBulk(NO_WAIT), \c TryWrite(), \c TryWriteBulk(), \c Read(NO_WAIT), \c ReadBulk(NO_WAIT), \c TryRead(), \c TryReadBulk() |
-    | **MessageQueue**      | \c Put(NO_WAIT), \c TryPut(), \c Get(NO_WAIT), \c TryGet(), \c Reset()                                                                             |
+    | Primitive             | ISR Safe Methods                                                                                                                                                          |
+    | :-------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+    | **Event**             | \c Set(), \c Pulse(), \c Reset(), \c TryWait(), \c Wait(NO_WAIT), \c WaitEx(NO_WAIT)                                                                                      |
+    | **EventFlagsT**       | \c Set(), \c Clear(), \c And(), \c Get(), \c TryWait(), \c Wait(NO_WAIT), \c TryWaitEx(), \c WaitEx(NO_WAIT), \c Sync(NO_WAIT)                                            |
+    | **Semaphore**         | \c Signal(), \c TrySignal(), \c TrySignal(ceiling), \c TryWait(), \c Wait(NO_WAIT), \c WaitEx(NO_WAIT), \c GetCount()                                                     |
+    | **SpinLock**          | \c None                                                                                                                                                                   |
+    | **Mutex**             | \c TryLock(), \c TimedLock(NO_WAIT), \c TimedLockEx(NO_WAIT), \c Unlock(), \c GetOwner(), \c IsLocked(), \c GetRecursionCount()                                           |
+    | **FastMutex**         | \c TryLock(), \c TimedLock(NO_WAIT), \c TimedLockEx(NO_WAIT), \c Unlock(), \c GetOwner(), \c IsLocked()                                                                   |
+    | **RWMutex**           | \c TryReadLock(), \c TryLock(), \c TimedReadLock(NO_WAIT), \c TimedReadLockEx(NO_WAIT), \c TimedLock(NO_WAIT), \c TimedLockEx(NO_WAIT), \c ReadUnlock(), \c Unlock()   |
+    | **ConditionVariable** | \c NotifyOne(), \c NotifyAll(), \c NotifyOne_CS(), \c NotifyAll_CS(), \c Wait(NO_WAIT), \c WaitEx(NO_WAIT)                                                                |
+    | **Barrier**           | \c None                                                                                                                                                                   |
+    | **Pipe / PipeT**      | \c Write(NO_WAIT), \c WriteBulk(NO_WAIT), \c TryWrite(), \c TryWriteBulk(), \c Read(NO_WAIT), \c ReadBulk(NO_WAIT), \c TryRead(), \c TryReadBulk(), \c Reset()           |
+    | **Pipe** (only)       | \c ReadBulkTriggered(NO_WAIT), \c TryReadBulkTriggered()                                                                                                                  |
+    | **MessageQueue**      | \c Put(NO_WAIT), \c TryPut(), \c PutFront(NO_WAIT), \c TryPutFront(), \c Get(NO_WAIT), \c TryGet(), \c Peek(NO_WAIT), \c TryPeek(), \c PeekFront(NO_WAIT), \c TryPeekFront(), \c Reset() |
 
     NOTE:
+    - The \c *Ex() variants (\c WriteEx(), \c ReadBulkEx(), \c PutEx(), ...) follow the same rules as their
+      plain counterparts.
     - **EventFlagsT**: Applies to every flags type, including the default \c EventFlags typedef
       (\c EventFlagsT<uint32_t>).
-    - **SpinLock**, **Mutex**, **FastMutex**, **RWMutex**: Ownership is tied to a Task ID (\a TId).
-      Since ISRs lack a valid Task ID context, and these primitives use internal Mutex 
-      logic for state protection, their operations are never safe in ISRs.
+    - **Mutex**, **FastMutex**, **RWMutex**: Ownership is tied to a Task ID (\a TId). In an ISR the id is
+      \c TID_ISR_N | exception number (see IsIsrTid()), so a non-blocking acquisition made by an ISR must be
+      released by the same ISR. Never block on them in an ISR. For data shared between a task and an ISR
+      prefer hw::CriticalSection (or ScopedCriticalSection).
+    - **SpinLock**, **Barrier**: Never ISR-safe. SpinLock busy-waits for a lock owned by a task, Barrier blocks.
+    - **Scheduler lock** (IKernelService::LockScheduler()): while it is held only non-blocking use of these
+      primitives is valid (NO_WAIT / Try*() calls and acquisitions which succeed immediately).
 
     WARNING:
-    - Calling a blocking method from an ISR will lead to undefined behavior, memory corruption, or a deadlock.
-      In debug build STK_ASSERT will break code execution if ineligible for ISR method is called.
+    - Calling a blocking method from an ISR leads to undefined behavior, memory corruption or a deadlock.
+      In a debug build STK_ASSERT stops execution when a method which is not allowed in an ISR is called
+      from one.
 */
 namespace stk {
 namespace sync {

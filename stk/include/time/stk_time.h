@@ -24,7 +24,7 @@
     | **PeriodicTrigger**    | stk_time_util.h  | Polling trigger: \c Poll() returns \c true once per period. Absolute next-fire tick, no drift. No kernel tasks needed.       |
     | **Stopwatch**          | stk_time_util.h  | Elapsed-cycle measurement with a caller-supplied time source. Independent of any hardware counter.                           |
     | **TimerHost**          | stk_time_timer.h | Software timer multiplexer: many timers on a fixed set of kernel tasks (task mode) or driven by the application (polled mode). |
-    | **TimerHost::Timer**   | stk_time_timer.h | Abstract timer, override \c OnExpired(). One-shot or periodic.                                                               |
+    | **Timer**              | stk_time_timer.h | Abstract timer, override \c OnExpired(). One-shot or periodic. \c TimerHost::Timer is an alias of it.                          |
 
     KERNEL REQUIREMENTS:
     ------------------------------------------------------------------------------------
@@ -32,7 +32,7 @@
     | :------------------------- | :------------------------------------------------------------------------------------------------------------------- |
     | **PeriodicTrigger**        | Kernel tick counter (\c GetTicks()). No tasks, no \c KERNEL_SYNC.                                                    |
     | **Stopwatch**              | None. The time source is supplied by the caller.                                                                     |
-    | **TimerHost** (task mode)  | \c KERNEL_SYNC and \c KERNEL_DYNAMIC (the host tasks exit on \c Shutdown()). Not usable with \c KERNEL_HRT. Occupies \c 1 + STK_TIMER_THREADS_COUNT task slots. |
+    | **TimerHost** (task mode)  | \c KERNEL_SYNC. Not usable with \c KERNEL_HRT. Occupies \c 1 + STK_TIMER_THREADS_COUNT task slots. \c Shutdown() ends the host tasks, which is meaningful with \c KERNEL_DYNAMIC. |
     | **TimerHost** (polled mode)| \c KERNEL_SYNC. No tasks. Works with \c KERNEL_HRT.                                                                  |
 
     TIMERHOST MODES:
@@ -49,12 +49,14 @@
     | :------------------- | :----------------------------------------------------------------------------------------------------------------------------------- |
     | **PeriodicTrigger**  | \c Restart(), \c Poll(), \c GetPeriod(), \c SetPeriod(): one context only (a task or an ISR), not thread-safe.                      |
     | **Stopwatch**        | \c Start(), \c Update(): one context only (a task or an ISR), not thread-safe. The supplied time source must be callable there.     |
-    | **TimerHost**        | \c None: \c Initialize(), \c InitializePolled(), \c Process() and all commands (\c Start(), \c Stop(), \c Reset(), \c Restart(), \c StartOrReset(), \c SetPeriod(), \c Shutdown()) are called from task context. |
-    | **TimerHost::Timer** | \c None: \c OnExpired() is never called from an ISR, it runs in a handler task (task mode) or inline in the caller of \c Process() (polled mode). |
+    | **TimerHost**        | \c Initialize(), \c InitializePolled(), \c Process(): task context. Commands (\c Start(), \c Stop(), \c Reset(), \c Restart(), \c StartOrReset(), \c SetPeriod(), \c Shutdown() and the \c *Sync() variants): task context or ISR, in an ISR they never block. |
+    | **Timer**            | \c None: \c OnExpired() is never called from an ISR, it runs in a handler task (task mode) or inline in the caller of \c Process() (polled mode). |
 
     NOTE:
     - **TimerHost** commands are asynchronous: they are queued and applied by the tick task (task mode) or by the next
-      \c Process() call (polled mode). They return \c false if the command queue is full.
+      \c Process() call (polled mode). They return \c TimerHost::EResult: \c RES_OK means "accepted", not "executed". When the
+      command queue is full a caller which can wait blocks, any other caller gets \c RES_QUEUE_FULL. The \c *Sync() variants
+      wait for the tick task and return the exact outcome.
     - **Weights** (\c TimerHost::Config) are strategy-specific and forwarded to the kernel unchanged. With
       \c sched::SwitchStrategyPreemptionThreshold they must be set explicitly (\c MakeWeight(p, p)): \c DEFAULT_WEIGHT decodes as
       priority 0 / threshold 1 and every timer task would be held while it runs.

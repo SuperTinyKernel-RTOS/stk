@@ -23,7 +23,8 @@ namespace sync {
     \brief Binary synchronization event (signaled / non-signaled) primitive.
 
     Supports two operation modes:
-    - Auto-reset (default): Set() wakes one waiting task and automatically resets.
+    - Auto-reset (default): Set() wakes one waiting task, which consumes the signal (the event resets).
+                            If nobody is waiting the event stays signaled until a task consumes it.
     - Manual-reset:         Set() wakes all waiting tasks; state remains signaled until Reset().
 
     Additionally, supports \c Pulse(): attempt to release waiters and then reset (Win32 PulseEvent() semantics).
@@ -83,7 +84,8 @@ public:
     /*! \brief     Set event to signaled state.
         \return    \c true if state was changed from non-signaled to signaled,
                    \c false if event was already signaled.
-        \note      - In auto-reset mode: wakes one waiting task (if any) and immediately resets.
+        \note      - In auto-reset mode: wakes one waiting task (if any), which consumes the signal. If no task
+                     is waiting the event stays signaled until a Wait() / TryWait() consumes it.
                    - In manual-reset mode: wakes all waiting tasks (if any); state remains set.
                    - If already signaled, does nothing and returns \c false.
         \warning   The return value indicates whether the event state changed, not whether any
@@ -145,6 +147,7 @@ public:
 private:
     STK_NONCOPYABLE_CLASS(Event);
 
+    //! Applies the auto-reset when a waiter is removed from the wait list because it was woken by a signal.
     void RemoveWaitObject(IWaitObject *wobj) override;
 
     bool m_manual_reset; //!< \c true = manual-reset event, \c false = auto-reset

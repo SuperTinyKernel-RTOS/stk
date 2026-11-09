@@ -35,7 +35,7 @@ namespace sync {
     // Usage example: Producer-Consumer pattern using a fixed-size pipe
     stk::sync::Mutex                        g_Mtx;
     stk::sync::ConditionVariable            g_Cond;
-    stk::sync::Pipe<int, 16>                g_Pipe;
+    stk::sync::PipeT<int, 16>               g_Pipe;
 
     void Task_Consumer() {
         g_Mtx.Lock();
@@ -67,6 +67,8 @@ namespace sync {
 class ConditionVariable final : public SyncObjectBase, public ITraceable
 {
 public:
+    /*! \brief     Constructor.
+    */
     explicit ConditionVariable()
     {}
 
@@ -83,7 +85,8 @@ public:
     /*! \brief     Wait for a signal.
         \details   Atomically releases \a mutex and blocks the calling task. The \a mutex is
                    re-acquired before the function returns, regardless of whether the wake
-                   was caused by a signal, a timeout, or a cancellation.
+                   was caused by a signal, a timeout, or a cancellation. With \a NO_WAIT (or if the
+                   kernel rejects the wait) the task does not block and \a mutex stays held.
         \param[in] mutex: An \a IMutex-compatible lock that must be held by the calling task
                    before Wait() is called. The kernel releases it atomically during suspension
                    and re-acquires it on wake.
@@ -105,7 +108,8 @@ public:
         \param[in] timeout_ticks: Same as \c Wait(). \a NO_WAIT always yields
                    \c WAIT_RESULT_TIMEOUT without blocking (consistent with a poll that
                    found the condition not yet met).
-        \return    \c WAIT_RESULT_SIGNAL, \c WAIT_RESULT_TIMEOUT, or \c WAIT_RESULT_CANCELED.
+        \return    \c WAIT_RESULT_SIGNAL, \c WAIT_RESULT_TIMEOUT, \c WAIT_RESULT_CANCELED, or
+                   \c WAIT_RESULT_FAIL if the kernel rejected the wait (e.g. the scheduler is locked).
         \warning   ISR-safe only with timeout_ticks=NO_WAIT, ISR-unsafe otherwise.
     */
     EWaitResult WaitEx(IMutex &mutex, Timeout timeout_ticks = WAIT_INFINITE);

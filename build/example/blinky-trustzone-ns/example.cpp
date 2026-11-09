@@ -7,6 +7,20 @@
  * License: MIT License, see LICENSE for a full text.
  */
 
+/*! \file  blinky-trustzone-ns/example.cpp
+    \brief TrustZone blinky, Non-Secure side (RP2350, Cortex-M33).
+    
+    \example blinky-trustzone-ns/example.cpp
+*/
+
+/*
+ * Non-Secure binary of the STK TrustZone example. Four LED tasks pass a baton to each other with
+ * stk::sync::EventFlags just like in the \ref blinky/example.cpp example. The kernel is initialized on the Secure
+ * side, the Non-Secure side only adds its tasks and starts the scheduler. Must be used together with the
+ * Secure side of the example, see \ref blinky-trustzone-sc/example.cpp. See README.md in the example folder for
+ * the details.
+ */
+
 #include <stk.h>
 #include <sync/stk_sync.h>
 #include <time/stk_time.h>

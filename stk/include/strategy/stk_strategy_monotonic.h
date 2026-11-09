@@ -79,7 +79,7 @@ public:
         WEIGHT_API               = 0, //!< This strategy does not use per-task weights. Priority is derived from HRT timing parameters (GetHrtPeriodicity() for RM, GetHrtDeadline() for DM) at AddTask() time.
         SLEEP_EVENT_API          = 0, //!< This strategy does not use OnTaskSleep() / OnTaskWake() events. Sleeping tasks remain in \c m_tasks and are skipped by GetNext() via IKernelTask::IsSleeping(). Delivering these events will trigger an assertion.
         DEADLINE_MISSED_API      = 0, //!< This strategy does not use OnTaskDeadlineMissed() events.
-        PRIORITY_INHERITANCE_API = 0, //!< This strategy does not require Priority Inheritance and OnTaskPriorityChange() events.
+        PRIORITY_INHERITANCE_API = 0, //!< This strategy does not require Priority Inheritance and OnTaskWeightChange() events.
         NOSLEEP_YIELD_API        = 0, //!< This strategy does not handle Yield() itself (OnTaskYield() is not used); the kernel puts the yielding task to sleep for a tick.
         TIMESLICE_API            = 0  //!< This strategy does not support KERNEL_TIMESLICE mode.
     };
@@ -213,13 +213,12 @@ public:
         return next;
     }
 
-    /*! \brief     Get the first task in the managed set (used by the kernel for initial scheduling).
+    /*! \brief     Get the first task in the managed set (reference task for the kernel, used when it starts and when all tasks sleep).
         \return    The first task in \c m_tasks (highest priority due to sort order).
                    Asserts if \c m_tasks is empty.
         \note      Because all tasks (runnable and sleeping) reside in \c m_tasks there is no
                    sleep-list fallback path, unlike RR, SWRR, EDF, and FP strategies. The
-                   returned task may be sleeping; the kernel uses it only to seed the initial
-                   context before the first GetNext() call.
+                   returned task may be sleeping and is not necessarily the one to run, GetNext() decides.
     */
     IKernelTask *GetFirst() override
     {
@@ -273,12 +272,14 @@ private:
 
     \note  All methods are \c static. This class is not instantiated, call its methods directly
            as \c SchedulabilityCheck::IsSchedulableWCRT<N>(strategy).
+    \note  The HRT deadline is used as the execution budget C and the period as the deadline T of the
+           analysis (implicit-deadline model).
     \see   SwitchStrategyMonotonic, IsSchedulableWCRT, CalculateWCRT
 */
 class SchedulabilityCheck
 {
 public:
-    /*! \class TaskTiming
+    /*! \struct TaskTiming
         \brief Execution deadline and scheduling period for a single periodic HRT task,
                used as input to CalculateWCRT() and GetTaskCpuLoad().
 
@@ -297,7 +298,7 @@ public:
         uint32_t period;   //!< Scheduling period T of the task (ticks), from GetHrtPeriodicity(). Used as the interference divisor Tj in CalculateWCRT() and the CPU load denominator in GetTaskCpuLoad().
     };
 
-    /*! \class TaskCpuLoad
+    /*! \struct TaskCpuLoad
         \brief CPU utilisation values for a single task, in whole percent.
     */
     struct TaskCpuLoad
@@ -306,7 +307,7 @@ public:
         uint16_t total; //!< Cumulative CPU load of this task plus all higher-priority tasks, in percent (running sum from index 0).
     };
 
-    /*! \class TaskInfo
+    /*! \struct TaskInfo
         \brief Analysis results for a single task: CPU load and computed WCRT.
     */
     struct TaskInfo
@@ -315,7 +316,7 @@ public:
         uint32_t    wcrt;     //!< Worst-Case Response Time in ticks. Task is schedulable if wcrt <= period (T).
     };
 
-    /*! \class SchedulabilityCheckResult
+    /*! \struct SchedulabilityCheckResult
         \brief Result of a WCRT schedulability test: overall verdict plus per-task details.
 
         The number of tasks is fixed at compile time through the \a TTaskCount template
@@ -419,9 +420,7 @@ public:
 
        where the sum runs over all higher-priority tasks j (index < t). Cj =
        tasks[j].duration and Tj = tasks[j].period. Iteration continues until
-       convergence (W(n+1) == W(n)) or W(n+1) > Tx (deadline miss confirmed). A \c goto
-       is used for the iteration step to avoid re-initialising loop variables inside the
-       outer \c for block.
+       convergence (W(n+1) == W(n)) or W(n+1) > Tx (deadline miss confirmed).
 
        The highest-priority task (index 0) has no higher-priority interference; its WCRT
        is set directly to its own WCET (\c tasks[0].duration) without iteration.

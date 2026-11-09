@@ -35,6 +35,12 @@
  * -----------------------------------------------------------------------------------------------
  */
 
+/*! \file  blinky_mpu-trustzone-sc/example.cpp
+    \brief TrustZone + per-task MPU sandboxing, Secure side.
+    
+    \example blinky_mpu-trustzone-sc/example.cpp
+*/
+
 #include <setjmp.h>
 #include <stdio.h>
 #include <pico/runtime.h>

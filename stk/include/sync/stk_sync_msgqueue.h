@@ -366,11 +366,8 @@ public:
     */
     bool IsFull() const { return (m_count == m_capacity); }
 
-    /*! \brief     Verify that the backing storage is valid and the pool is ready for use.
-        \details   Always \c true for pools constructed with external storage.
-                   For heap-constructed queue, \c false if \c operator new failed.
-                   Must be checked after the heap constructor when operating without
-                   exceptions (the typical embedded configuration).
+    /*! \brief     Verify that the backing storage is valid and the queue is ready for use.
+        \details   \c false only if the buffer pointer is \c nullptr (the constructor asserts against it).
         \return    \c true if the queue is ready for use.
         \note      ISR-safe.
     */
@@ -437,20 +434,22 @@ inline EWaitResult MessageQueue::WaitNotFull(IMutex &cs, Timeout timeout_ticks)
 
     const bool timed_wait = (timeout_ticks != WAIT_INFINITE) && (timeout_ticks != NO_WAIT);
 
-    // capture an absolute deadline once, before entering the wait loop; a different
+    // capture an absolute deadline once (64-bit Ticks, so it stays valid across the 32-bit tick
+    // wraparound), before entering the wait loop; a different
     // producer can steal the just-freed slot between NotifyOne_CS() and this task
     // re-acquiring the critical section (Mesa-style wakeup, not a direct handoff),
     // so re-passing the original timeout_ticks on each retry would silently restart it
-    const Timeout deadline = (timed_wait ?
-        static_cast<Timeout>(GetTicks() + timeout_ticks) : timeout_ticks);
+    const Ticks deadline = (timed_wait ?
+        (GetTicks() + timeout_ticks) : static_cast<Ticks>(0));
 
     while (m_count == m_capacity)
     {
-        Timeout remaining = deadline;
+        Timeout remaining = timeout_ticks;
         if (timed_wait)
         {
-            const Timeout now = static_cast<Timeout>(GetTicks());
-            remaining = (now >= deadline ? NO_WAIT : (deadline - now));
+            // left <= timeout_ticks < WAIT_INFINITE, so the narrowing cast is lossless
+            const Ticks left = (deadline - GetTicks());
+            remaining = ((left > 0) ? static_cast<Timeout>(left) : NO_WAIT);
         }
 
         result = m_cv_not_full.WaitEx(cs, remaining);
@@ -479,16 +478,17 @@ inline EWaitResult MessageQueue::WaitNotEmpty(IMutex &cs, Timeout timeout_ticks)
     // between NotifyOne_CS() and this task re-acquiring the critical section (Mesa-style
     // wakeup, not a direct handoff), so re-passing the original timeout_ticks on each
     // retry would silently restart it
-    const Timeout deadline = (timed_wait ?
-        static_cast<Timeout>(GetTicks() + timeout_ticks) : timeout_ticks);
+    const Ticks deadline = (timed_wait ?
+        (GetTicks() + timeout_ticks) : static_cast<Ticks>(0));
 
     while (m_count == 0U)
     {
-        Timeout remaining = deadline;
+        Timeout remaining = timeout_ticks;
         if (timed_wait)
         {
-            const Timeout now = static_cast<Timeout>(GetTicks());
-            remaining = (now >= deadline ? NO_WAIT : (deadline - now));
+            // left <= timeout_ticks < WAIT_INFINITE, so the narrowing cast is lossless
+            const Ticks left = (deadline - GetTicks());
+            remaining = ((left > 0) ? static_cast<Timeout>(left) : NO_WAIT);
         }
 
         result = m_cv_not_empty.WaitEx(cs, remaining);
