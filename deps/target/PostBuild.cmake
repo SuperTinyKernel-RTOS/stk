@@ -1,4 +1,7 @@
-if (ARM)
+if (VENDOR_RPI)
+    # ELF, BIN, HEX, MAP (and UF2 with picotool) outputs, see the Pico SDK
+    pico_add_extra_outputs(${TARGET_BINARY})
+elseif (ARM)
     add_custom_command(TARGET ${TARGET_BINARY}
         POST_BUILD
         COMMAND ${CMAKE_SIZE} ${TARGET_BINARY}                                 # Show size stats of the binary

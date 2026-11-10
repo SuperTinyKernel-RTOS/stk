@@ -13,6 +13,6 @@ if (VENDOR_STM32)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/stm32fx)
 endif()
 
-if (RISCV)
+if (RISCV AND NOT VENDOR_RPI)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/risc-v)
 endif()

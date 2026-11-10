@@ -1,0 +1,24 @@
+/*
+ * SuperTinyKernel(TM) RTOS: Lightweight High-Performance Deterministic C++ RTOS for Embedded Systems.
+ *
+ * Source: https://github.com/SuperTinyKernel-RTOS
+ *
+ * Copyright (c) 2022-2026 Neutron Code Limited <stk@neutroncode.com>. All Rights Reserved.
+ * License: MIT License, see LICENSE for a full text.
+ */
+
+// Common entry point for the examples which export RunExample() (see example.h of each example).
+// Used by the CMake build only, Eclipse projects provide their own main.cpp.
+
+extern "C" void RunExample();
+
+int main(int argc, char *argv[])
+{
+    (void)argc;
+    (void)argv;
+
+    RunExample();
+
+    // should not reach here
+    return 1;
+}
