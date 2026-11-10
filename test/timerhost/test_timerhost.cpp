@@ -1366,11 +1366,13 @@ static bool PolledCoalescing()
     time::Timer &t = g_PolledTimer1;
     bool ok = true;
 
-    // 1. Restart + Restart: the second is merged into the first, its delay/period/time are discarded
+    // 1. Restart + Restart: the second is merged into the first and the latest call wins, the waiting command
+    //    runs with the delay/period of the last merged call (the earlier arguments are discarded)
     ok = ok && (host.Restart(t, 100) == TH::RES_OK);
-    ok = ok && (host.Restart(t, 500, 500) == TH::RES_OK); // coalesced, still RES_OK
+    ok = ok && (host.Restart(t, 300) == TH::RES_OK);       // coalesced, still RES_OK
+    ok = ok && (host.Restart(t, 500, 500) == TH::RES_OK);  // coalesced again
     PollOnce();
-    ok = ok && t.IsActive() && (t.GetDelay() == 100) && (t.GetPeriod() == 0) && (host.GetSize() == 1);
+    ok = ok && t.IsActive() && (t.GetDelay() == 500) && (t.GetPeriod() == 500) && (host.GetSize() == 1);
 
     // 2. the command left the queue: the next Restart() is queued again and applied
     ok = ok && (host.Restart(t, 200) == TH::RES_OK);
@@ -1472,7 +1474,7 @@ static bool RunPolledScenario(int32_t scenario)
            10 = Process() never blocks when nothing is active; 11 = the synchronous API can not wait in this
            mode: commands are queued (RES_QUEUED) and QuerySync() is an advisory snapshot; 12 = result codes of the
            asynchronous API (RES_OK, RES_ACTIVE, RES_INACTIVE, RES_NOT_PERIODIC, RES_INVALID_PARAM); 13 = a full
-           command queue gives RES_QUEUE_FULL in a context which can not wait; 14 = coalescing of identical
+           command queue gives RES_QUEUE_FULL in a context which can not wait; 14 = coalescing (latest call wins) of identical
            Restart() / StartOrReset() commands waiting in the queue (a different command in between prevents the
            merge and the commands keep their order), the "re-arm queued" record being cleared by every branch of
            CMD_START_OR_RESET, and RestartSync() which can not wait never being coalesced.

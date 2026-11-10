@@ -90,7 +90,7 @@ public:
     */
     explicit Timer() 
         : m_deadline(0), m_timestamp(0), m_period(0U), m_delay(0U), m_active(false),
-          m_pending(false), m_rearming(REARM_NONE), m_ready_node(this)
+          m_pending(false), m_rearm(), m_ready_node(this)
     {}
 
     /*! \brief     Destructor.
@@ -176,21 +176,62 @@ private:
 
     STK_NONCOPYABLE_CLASS(Timer);
 
-    Ticks         m_deadline;  //!< absolute expiration time (ticks)
-    Ticks         m_timestamp; //!< absolute time at which timer expired (ticks), updated by TimerHost
-    uint32_t      m_period;    //!< reload period in ticks (0 = one-shot)
-    uint32_t      m_delay;     //!< initial delay in ticks of the last start/restart/change (reused by CMD_ACTIVATE)
-    volatile bool m_active;    //!< true if active
-    volatile bool m_pending;   //!< true if pending to be handled (task mode: m_ready_node is linked)
-    /*! \brief  Id of the CMD_RESTART / CMD_START_OR_RESET (TimerHost::TimerCommand::EId) which is the last command of
-                this timer waiting in the command queue, REARM_NONE if there is none. A later asynchronous command
-                with the same id is merged into it, a command with another id is queued behind it.
-        \note   Stored as the underlying type of the enum, which is declared by TimerHost after this class.
-                0 is CMD_SHUTDOWN, which never targets a timer, so it serves as REARM_NONE.
+    /*! \struct Rearm
+        \brief  Record of the re-arm command (CMD_RESTART / CMD_START_OR_RESET) of the timer which is the last one
+                waiting in the command queue, with the parameters of the latest call merged into it
+                ("latest call wins"). A later asynchronous command with the same id is merged into it, a command
+                with another id is queued behind it.
+        \note   Accessed inside a critical section only.
     */
-    volatile uint8_t m_rearming;
-    static const uint8_t REARM_NONE = 0U; //!< no re-arm command is waiting for this timer
-    ReadyNode     m_ready_node;//!< hook in the ready list of the host (task mode), see ReadyNode
+    struct Rearm
+    {
+        /*! \enum  EState
+            \brief Values and flags of Rearm::id.
+        */
+        enum EState : uint8_t
+        {
+            NONE  = 0U,   //!< no re-arm command is waiting for this timer
+            CLAIM = 0x80U //!< flag: the caller which recorded the re-arm is still writing the command
+        };
+
+        explicit Rearm() : id(NONE), timestamp(0), delay(0U), period(0U), seq(0U)
+        {}
+
+        /*! \brief     Store the arguments of a re-arm command (\a id and \a seq are not touched).
+            \param[in] cmd: CMD_RESTART / CMD_START_OR_RESET command (TimerHost::TimerCommand).
+            \note      A template because TimerHost::TimerCommand is declared after Timer, any type with
+                       \a timestamp, \a delay and \a period members is accepted.
+        */
+        template <class TCommand>
+        void Set(const TCommand &cmd)
+        {
+            timestamp = cmd.timestamp;
+            delay     = cmd.delay;
+            period    = cmd.period;
+        }
+
+        /*! \brief  Id of the CMD_RESTART / CMD_START_OR_RESET (TimerHost::TimerCommand::EId) which is the last command
+                    of this timer waiting in the command queue (optionally with the CLAIM flag), NONE if there is none.
+            \note   Stored as the underlying type of the enum, which is declared by TimerHost after this class.
+                    0 is CMD_SHUTDOWN, which never targets a timer, so it serves as NONE.
+            \note   The other fields are valid while \a id holds the id (without CLAIM) of the command identified by \a seq.
+        */
+        volatile uint8_t id;
+
+        Ticks    timestamp; //!< call-site timestamp of the latest merged re-arm
+        uint32_t delay;     //!< delay of the latest merged re-arm
+        uint32_t period;    //!< period of the latest merged re-arm
+        uint32_t seq;       //!< sequence number of the waiting re-arm command (0 is never used)
+    };
+
+    Ticks         m_deadline;   //!< absolute expiration time (ticks)
+    Ticks         m_timestamp;  //!< absolute time at which timer expired (ticks), updated by TimerHost
+    uint32_t      m_period;     //!< reload period in ticks (0 = one-shot)
+    uint32_t      m_delay;      //!< initial delay in ticks of the last start/restart/change (reused by CMD_ACTIVATE)
+    volatile bool m_active;     //!< true if active
+    volatile bool m_pending;    //!< true if pending to be handled (task mode: m_ready_node is linked)
+    Rearm         m_rearm;      //!< latest merged re-arm, see Rearm
+    ReadyNode     m_ready_node; //!< hook in the ready list of the host (task mode), see ReadyNode
 };
 
 /*! \class TimerHost
@@ -619,10 +660,11 @@ public:
                    Useful for watchdog refresh and debounce reset patterns.
                    Safe to call regardless of whether the timer is currently active.
         \note      Coalescing: if a Restart() of the same timer is the last command of that timer waiting in the
-                   command queue, this call is merged into it: its own \a delay, \a period and call time are
-                   discarded (RES_OK is returned). A StartOrReset() or any other command in between prevents the
-                   merge, the call is queued and the commands run in the order they were issued.
-                   Use RestartSync() when the arguments must always be applied.
+                   command queue, this call is merged into it (RES_OK is returned): the latest call wins,
+                   the waiting command is executed with the \a delay, \a period and call time of the last merged
+                   call, the arguments of the earlier calls are discarded. A StartOrReset() or any other command in
+                   between prevents the merge, the call is queued and the commands run in the order they were issued.
+                   Use RestartSync() when the arguments of every call must be applied.
     */
     EResult Restart(Timer &tmr, uint32_t delay, uint32_t period = 0);
 
@@ -811,6 +853,11 @@ private:
               m_mode(ACCESS_USER), m_weight(DEFAULT_WEIGHT)
         {}
 
+        /*! \brief     Destructor.
+            \note      MISRA deviation: [STK-DEV-005] Rule 10-3-2.
+        */
+        STK_VIRT_DTOR ~TimerWorkerTask() = default;
+
         // ITask
         EAccessMode GetAccessMode() const override { return m_mode; }
         void OnDeadlineMissed(uint32_t)   override {}
@@ -906,7 +953,15 @@ private:
         uint32_t    delay;      //!< initial delay ticks (CMD_START / CMD_RESTART / CMD_START_OR_RESET / CMD_CHANGE)
         uint32_t    period;     //!< reload period ticks (CMD_START / CMD_RESTART / CMD_START_OR_RESET / CMD_SET_PERIOD / CMD_CHANGE)
         Completion *completion; //!< completion point of the synchronous caller, \c nullptr for an asynchronous command
+        uint32_t    rearm_seq;  //!< Timer::m_rearm.seq of a recorded (mergeable) re-arm, 0 for any other command
     };
+
+    /*! \brief     Replace the arguments of a re-arm command with those of the latest merged call.
+        \param[in,out] cmd: CMD_RESTART / CMD_START_OR_RESET about to be executed.
+        \note      Only the command which owns the record (same id and sequence, no caller still writing) takes the
+                   stored arguments and ends the record, an older command of the same timer keeps its own.
+    */
+    static void TakeRearm(TimerCommand &cmd);
 
     /*! \brief  Tick task body: drives the timer list and dispatches expired timers.
         \note   Runs exclusively in the tick task context. Loops until CMD_SHUTDOWN is received.
@@ -949,6 +1004,8 @@ private:
                    wait for a free slot was cancelled.
         \note      Any command which is not merged ends the coalescing window of its timer: a Restart() issued after
                    it is queued behind it, so the commands of one timer always run in the order they were issued.
+                   The record of the timer and the (non-blocking) write of the command happen in one critical section
+                   (the lock is re-entrant); only a wait for a free slot happens outside of it.
         \note      May be called from any context. When the queue is full a caller which can wait blocks until a
                    slot is free (see "Command queue" in TimerHost), otherwise it receives RES_QUEUE_FULL.
         \warning   A blocking push must not be issued from the context which drains the queue (the tick task,
@@ -1317,8 +1374,13 @@ inline void TimerHost::UpdateTime()
         next_sleep = ScanTimers(GetTicks());
     }
 
-    // no consumer of the command queue any more: new calls fail with RES_NOT_READY instead of waiting forever
-    m_ready = false;
+    // no consumer of the command queue any more: new calls fail with RES_NOT_READY instead of waiting forever.
+    // Cleared under the lock PushCommand() checks it with: a command is either already queued (drained below) or
+    // rejected, never written after the final drain.
+    {
+        const hw::CriticalSection::ScopedLock cs;
+        m_ready = false;
+    }
 
     // stop and release all timers on shutdown (m_pending is left alone: expirations already handed to the
     // handler tasks are still handled before they exit)
@@ -1327,8 +1389,13 @@ inline void TimerHost::UpdateTime()
     {
         m_active.Unlink(tmr);
 
-        tmr->m_active   = false;
-        tmr->m_rearming = Timer::REARM_NONE;
+        tmr->m_active = false;
+
+        {
+            // the record is shared with the callers of other cores
+            const hw::CriticalSection::ScopedLock cs;
+            tmr->m_rearm.id = Timer::Rearm::NONE;
+        }
 
         tmr = detail::DListCast::ListEntryToParent<Timer>(m_active.GetFirst());
     }
@@ -1340,7 +1407,8 @@ inline void TimerHost::UpdateTime()
     {
         if (cmd.timer != nullptr)
         {
-            cmd.timer->m_rearming = Timer::REARM_NONE;
+            const hw::CriticalSection::ScopedLock cs;
+            cmd.timer->m_rearm.id = Timer::Rearm::NONE;
         }
 
         if (cmd.completion != nullptr)
@@ -1422,7 +1490,7 @@ inline Timeout TimerHost::ScanTimers(Ticks now)
                     else
                     {
                         {
-                            hw::CriticalSection::ScopedLock cs;
+                            const hw::CriticalSection::ScopedLock cs;
 
                             STK_ASSERT(!tmr->m_ready_node.IsLinked());
                             m_ready_list.LinkBack(&tmr->m_ready_node);
@@ -1517,7 +1585,7 @@ inline void TimerHost::ProcessTimers()
         // dequeue and claim the expiration in one critical section: a command which cancels it
         // (CancelPending) either runs before (nothing to dequeue) or after (too late, the callback runs)
         {
-            hw::CriticalSection::ScopedLock cs;
+            const hw::CriticalSection::ScopedLock cs;
 
             if (!m_ready_list.IsEmpty())
             {
@@ -1723,6 +1791,10 @@ inline bool TimerHost::ProcessCommands(Timeout next_sleep)
             Timer *const tmr = cmd.timer;
             STK_ASSERT(tmr != nullptr);
 
+            // this command leaves the queue: take the arguments of the latest Restart() merged into it
+            // (a later Restart() must be queued again)
+            TakeRearm(cmd);
+
             // unlink if currently in the active list
             if (tmr->IsLinked())
             {
@@ -1736,13 +1808,6 @@ inline bool TimerHost::ProcessCommands(Timeout next_sleep)
             tmr->m_active   = true;
             CancelPending(*tmr);
 
-            // this command leaves the queue: a later Restart() must be queued again (a re-arm of another kind
-            // which was queued after this one stays recorded, it is still waiting)
-            if (tmr->m_rearming == TimerCommand::CMD_RESTART)
-            {
-                tmr->m_rearming = Timer::REARM_NONE;
-            }
-
             // re-link to the back of the list
             m_active.LinkBack(tmr);
             
@@ -1753,12 +1818,9 @@ inline bool TimerHost::ProcessCommands(Timeout next_sleep)
             Timer *const tmr = cmd.timer;
             STK_ASSERT(tmr != nullptr);
 
-            // this command leaves the queue: a later StartOrReset() must be queued again, whichever branch below
-            // is taken (a Restart() which was queued after this one stays recorded, it is still waiting)
-            if (tmr->m_rearming == TimerCommand::CMD_START_OR_RESET)
-            {
-                tmr->m_rearming = Timer::REARM_NONE;
-            }
+            // this command leaves the queue: take the arguments of the latest StartOrReset() merged into it
+            // (a later StartOrReset() must be queued again), whichever branch below is taken
+            TakeRearm(cmd);
 
             // not currently active: start with supplied parameters
             if (!tmr->m_active)
@@ -1866,9 +1928,14 @@ inline bool TimerHost::ProcessCommands(Timeout next_sleep)
                 {
                     m_active.Unlink(tmr);
 
-                    tmr->m_active   = false;
-                    tmr->m_pending  = false;
-                    tmr->m_rearming = Timer::REARM_NONE;
+                    tmr->m_active  = false;
+                    tmr->m_pending = false;
+
+                    {
+                        // the record is shared with the callers of other cores
+                        const hw::CriticalSection::ScopedLock cs;
+                        tmr->m_rearm.id = Timer::Rearm::NONE;
+                    }
 
                     tmr = detail::DListCast::ListEntryToParent<Timer>(m_active.GetFirst());
                 }
@@ -1917,6 +1984,26 @@ inline bool TimerHost::ProcessCommands(Timeout next_sleep)
 // PushCommand
 // ---------------------------------------------------------------------------
 
+inline void TimerHost::TakeRearm(TimerCommand &cmd)
+{
+    Timer *const tmr = cmd.timer;
+
+    const hw::CriticalSection::ScopedLock cs;
+
+    // the record belongs to this command if it names it (same id and sequence). If its writer is still finishing
+    // (CLAIM) nobody could have merged into it yet, the stored arguments are the command's own. The record
+    // ends here either way, so a later call is queued again.
+    if ((cmd.rearm_seq != 0U) && (tmr->m_rearm.seq == cmd.rearm_seq) &&
+        ((tmr->m_rearm.id & static_cast<uint8_t>(~Timer::Rearm::CLAIM)) == static_cast<uint8_t>(cmd.cmd)))
+    {
+        cmd.timestamp = tmr->m_rearm.timestamp;
+        cmd.delay     = tmr->m_rearm.delay;
+        cmd.period    = tmr->m_rearm.period;
+
+        tmr->m_rearm.id = Timer::Rearm::NONE;
+    }
+}
+
 inline TimerHost::EResult TimerHost::PushCommand(TimerCommand cmd, Timeout wait, bool coalesce)
 {
     EResult result = RES_OK;
@@ -1938,55 +2025,108 @@ inline TimerHost::EResult TimerHost::PushCommand(TimerCommand cmd, Timeout wait,
         // command which could not wait and was queued asynchronously by Execute())
         const bool coalescable = coalesce && is_rearm && (cmd.timer != nullptr) && (cmd.completion == nullptr);
 
-        if (coalescable)
+        // sequence number of the re-arm record created by this call (0 = none), see below
+        uint32_t claim_seq = 0U;
+
+        // outcome of the first, non-blocking attempt to write the command
+        bool written = false;
+
         {
-            if (cmd.timer->m_rearming == cmd.cmd)
+            // the record of the timer is shared with the other callers and the tick task: it is examined, updated
+            // and the command written in one critical section, so the order of the records equals the order of the
+            // commands in the queue and two callers never both decide "the other one has queued it"
+            // (the lock is re-entrant, the queue takes it too)
+            const hw::CriticalSection::ScopedLock cs;
+
+            Timer *const tmr = cmd.timer;
+            const uint8_t id = static_cast<uint8_t>(cmd.cmd);
+
+            if (!m_ready)
             {
-                // the last command of this timer in the queue is the same re-arm - successfully coalesced,
-                // no need to write to queue
+                // shut down since the check above (another core): the tick task drains the queue only once, a command
+                // written now would never be executed and its record would stay set
+                result           = RES_NOT_READY;
                 proceed_to_write = false;
             }
             else
+            if (tmr != nullptr)
             {
-                // record this re-arm as the last command of the timer (a different re-arm which is still waiting
-                // stays in the queue ahead of it, the commands run in the order they were issued)
-                cmd.timer->m_rearming = static_cast<uint8_t>(cmd.cmd);
+                if (coalescable && (tmr->m_rearm.id == id))
+                {
+                    // the same re-arm is waiting in the queue and its writer is done: merge into it, the latest
+                    // call wins - the waiting command takes these arguments when the tick task executes it
+                    tmr->m_rearm.Set(cmd);
 
-                // prevent compiler from sinking the flag write past Write()
-                __stk_full_memfence();
+                    proceed_to_write = false;
+                }
+                else
+                if (coalescable && ((tmr->m_rearm.id & Timer::Rearm::CLAIM) == 0U))
+                {
+                    // record this re-arm as the last command of the timer (a different re-arm which is still waiting
+                    // stays in the queue ahead of it, the commands run in the order they were issued)
+                    if (++tmr->m_rearm.seq == 0U)
+                    {
+                        ++tmr->m_rearm.seq;
+                    }
+
+                    tmr->m_rearm.Set(cmd);
+                    tmr->m_rearm.id = id;
+
+                    cmd.rearm_seq = tmr->m_rearm.seq;
+                    claim_seq     = tmr->m_rearm.seq;
+                }
+                else
+                {
+                    // any other command of this timer (or a re-arm while another caller is still writing its record)
+                    // is queued behind the waiting re-arm: end the coalescing window so that a later Restart() /
+                    // StartOrReset() is queued behind it too, instead of being merged into the re-arm which runs
+                    // before this command (Restart, Stop, Restart would otherwise end up stopped)
+                    tmr->m_rearm.id = Timer::Rearm::NONE;
+                }
+            }
+
+            if (proceed_to_write)
+            {
+                written = m_commands.Write(cmd, NO_WAIT);
+
+                if (!written && (claim_seq != 0U))
+                {
+                    // the queue is full: the record stays claimed while this caller waits for a slot below (nobody
+                    // merges into a command which is not queued yet), a caller which does not wait withdraws it
+                    tmr->m_rearm.id = (((wait != NO_WAIT) || CanWait()) ?
+                                       static_cast<uint8_t>(id | Timer::Rearm::CLAIM) : static_cast<uint8_t>(Timer::Rearm::NONE));
+                }
             }
         }
-        else
-        if (cmd.timer != nullptr)
-        {
-            // any other command of this timer is queued behind the waiting rearm: end the coalescing window so that
-            // a later Restart() / StartOrReset() is queued behind it too, instead of being merged into the rearm
-            // which runs before this command (Restart, Stop, Restart would otherwise end up stopped)
-            cmd.timer->m_rearming = Timer::REARM_NONE;
-        }
 
-        // write to command queue
-        if (proceed_to_write)
+        // queue full: a caller which can wait blocks until the tick task has drained a slot instead of failing,
+        // the tick task never waits for a caller, so the wait ends. Reached only on a full queue, the fast path
+        // above is a single non-blocking write.
+        if (proceed_to_write && !written)
         {
-            bool blocking = (wait == WAIT_INFINITE);
-            bool written  = m_commands.Write(cmd, wait);
+            const Timeout slow_wait = ((wait != NO_WAIT) ? wait : (CanWait() ? WAIT_INFINITE : NO_WAIT));
+            const bool    blocking  = (slow_wait == WAIT_INFINITE);
 
-            // queue full: a caller which can wait blocks until the tick task has drained a slot instead of failing,
-            // the tick task never waits for a caller, so the wait ends. Checked only now to keep the fast path short.
-            if (!written && (wait == NO_WAIT) && CanWait())
+            if (slow_wait != NO_WAIT)
             {
-                blocking = true;
-                written  = m_commands.Write(cmd, WAIT_INFINITE);
+                written = m_commands.Write(cmd, slow_wait);
+            }
+
+            if (claim_seq != 0U)
+            {
+                // complete the claimed record: a written command opens the merge window, a failed write closes it.
+                // Only if it is still this call's record (another command of the timer may have ended or replaced it).
+                const hw::CriticalSection::ScopedLock cs;
+
+                if ((cmd.timer->m_rearm.seq == claim_seq) &&
+                    (cmd.timer->m_rearm.id == static_cast<uint8_t>(static_cast<uint8_t>(cmd.cmd) | Timer::Rearm::CLAIM)))
+                {
+                    cmd.timer->m_rearm.id = (written ? static_cast<uint8_t>(cmd.cmd) : static_cast<uint8_t>(Timer::Rearm::NONE));
+                }
             }
 
             if (!written)
             {
-                // revert the flag if this was a failed rearm attempt
-                if (coalescable)
-                {
-                    cmd.timer->m_rearming = Timer::REARM_NONE;
-                }
-
                 // an unbounded wait fails only if it was cancelled, otherwise the queue is full and the caller
                 // can not wait (ISR, kernel not running, polled mode, tick task): it may retry or escalate
                 result = (blocking ? RES_CANCELLED : RES_QUEUE_FULL);
@@ -2021,7 +2161,7 @@ inline void TimerHost::CancelPending(Timer &tmr)
     {
         // atomic with the claim done by a handler task (ProcessTimers): either the handler has dequeued the
         // timer already (it runs the callback, too late to cancel) or it finds nothing and never sees the timer
-        hw::CriticalSection::ScopedLock cs;
+        const hw::CriticalSection::ScopedLock cs;
 
         if (tmr.m_ready_node.IsLinked())
         {

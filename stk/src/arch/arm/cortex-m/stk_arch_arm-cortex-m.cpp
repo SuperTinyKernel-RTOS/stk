@@ -583,9 +583,11 @@ uint32_t s_StkSystemCoreClock[STK_ARCH_CPU_COUNT];
 STK_MPU_KERNEL_DATA_SECTION
 uint32_t s_StkSpinlockTimeoutIters = 0xFFFFFFFU;
 
+#if (STK_ARCH_CPU_COUNT > 1U)
 //! Global lock to synchronize critical sections of multiple cores.
 STK_MPU_KERNEL_BSS_SECTION
 volatile bool s_StkCortexmCsuLock = false;
+#endif
 
 /*! \brief     Start scheduler.
     \note      Triggered via SVC. This will transition CPU to SVC Handler.
@@ -1774,7 +1776,9 @@ struct Context final : public PlatformContext
         STK_ASSERT(hw::PtrToWord(__stk_mpu_shared_code_end) - hw::PtrToWord(__stk_mpu_shared_code_start) > 0U);
         STK_ASSERT(hw::PtrToWord(__stk_mpu_shared_data_end) - hw::PtrToWord(__stk_mpu_shared_data_start) > 0U);
     #endif
+    #if (STK_ARCH_CPU_COUNT > 1U)
         STK_ASSERT(s_StkCortexmCsuLock == false);
+    #endif
         STK_ASSERT(g_StkLastPanicId == KERNEL_PANIC_NONE);
 
         m_csu            = 0U;
@@ -1859,8 +1863,11 @@ struct Context final : public PlatformContext
     {
         if (m_csu_nesting == 0U)
         {
-            // ONLY attempt the global spinlock if we aren't already nested
+        #if (STK_ARCH_CPU_COUNT > 1U)
+            // ONLY attempt the global spinlock if we aren't already nested;
+            // it provides inter-core exclusion only and is redundant on a single core
             HW_SpinLockLock(s_StkCortexmCsuLock);
+        #endif
 
             // store the hardware interrupt state to restore later
             m_csu = current_ses;
@@ -1890,8 +1897,10 @@ struct Context final : public PlatformContext
             // capture the state before releasing lock
             restore_ses = m_csu;
 
+        #if (STK_ARCH_CPU_COUNT > 1U)
             // release global lock
             HW_SpinLockUnlock(s_StkCortexmCsuLock);
+        #endif
 
             released = true;
         }
