@@ -99,7 +99,7 @@ extern "C" {
 #define TX_STK_EVENT_FLAGS_STORAGE_DWORDS (16U)
 #endif
 #ifndef TX_STK_TIMER_STORAGE_DWORDS
-#define TX_STK_TIMER_STORAGE_DWORDS     (8U)
+#define TX_STK_TIMER_STORAGE_DWORDS     (13U)
 #endif
 
 /* ------------------------------------------------------------------------- */
