@@ -435,10 +435,12 @@ uint32_t s_StkSystemCoreClock[STK_ARCH_CPU_COUNT];
 STK_MPU_KERNEL_DATA_SECTION
 uint32_t s_StkSpinlockTimeoutIters = 0xFFFFFFFU;
 
+#if (STK_ARCH_CPU_COUNT > 1U)
 /*! \brief  Global lock to synchronize critical sections of multiple cores.
 */
 STK_MPU_KERNEL_BSS_SECTION
 volatile bool s_StkRiscvCsuLock = false;
+#endif
 
 /*! \brief  Order all predecessor Read/Write with all successor Read/Write (similar to ARM's __DSB(DSB ISH)).
 */
@@ -991,7 +993,9 @@ struct Context final : public PlatformContext
 
         STK_STATIC_ASSERT_DESC_N(SP, offsetof(Stack, SP) == 0U,
             "expect Stack::mode member at offset of 0 (first member)");
+    #if (STK_ARCH_CPU_COUNT > 1U)
         STK_ASSERT(s_StkRiscvCsuLock == false);
+    #endif
         STK_ASSERT(g_StkLastPanicId == KERNEL_PANIC_NONE);
 
         // init ISR's stack
@@ -1024,11 +1028,13 @@ struct Context final : public PlatformContext
             }
         }
 
-        // Re-derive the s_StkRiscvCsuLock spin-lock timeout from the now-configured core
-        // clock. Redundant across harts (each hart's Context::Initialize() calls this),
-        // but idempotent and cheap - and must run before any critical section is entered
-        // for real, since s_StkSpinlockTimeoutIters otherwise still holds its conservative
-        // pre-init fallback value.
+        // Re-derive the spin-lock timeout from the now-configured core clock. It is used by
+        // hw::SpinLock (always) and by the global critical-section lock s_StkRiscvCsuLock
+        // (multi-core builds only; on a single hart that lock is compiled out). Redundant
+        // across harts (each hart's Context::Initialize() calls this), but idempotent and
+        // cheap - and must run before any spinlock is used for real, since
+        // s_StkSpinlockTimeoutIters otherwise still holds its conservative pre-init fallback
+        // value.
         HW_InitSpinlockTimeout();
 
         // mcycle counter must be enabled per-core
@@ -1099,8 +1105,11 @@ struct Context final : public PlatformContext
 
         if (m_csu_nesting == 0U)
         {
-            // ONLY attempt the global spinlock if we aren't already nested
+        #if (STK_ARCH_CPU_COUNT > 1U)
+            // ONLY attempt the global spinlock if we aren't already nested;
+            // it provides inter-core exclusion only and is redundant on a single core
             HW_SpinLockLock(s_StkRiscvCsuLock);
+        #endif
 
             // store the hardware interrupt state to restore later
             m_csu = current_ses;
@@ -1116,7 +1125,11 @@ struct Context final : public PlatformContext
 
     __stk_forceinline void ExitCriticalSection()
     {
-        STK_ASSERT(m_csu_nesting != 0U);
+        if (m_csu_nesting == 0U)
+        {
+            // invariant violated: unbalanced Exit, uint8_t would wrap to 255 and the lock would never release
+            STK_KERNEL_PANIC(KERNEL_PANIC_CS_NESTING_OVERFLOW);
+        }
         --m_csu_nesting;
 
         if (m_csu_nesting == 0U)
@@ -1124,8 +1137,10 @@ struct Context final : public PlatformContext
             // capture the state before releasing lock
             const Word ses_to_restore = m_csu;
 
+        #if (STK_ARCH_CPU_COUNT > 1U)
             // release global lock
             HW_SpinLockUnlock(s_StkRiscvCsuLock);
+        #endif
 
             // restore hardware interrupts
             HW_CriticalSectionEnd(ses_to_restore);
@@ -1634,7 +1649,7 @@ extern "C" STK_RISCV_ISR_SECTION __stk_attr_naked void STK_SYSTICK_HANDLER()
     STK_ASM_SAVE_CONTEXT
 
     // 2. store task SP into s_StkRiscvSpIsrInt[hart] directly (plain Word, no struct indirection)
-#if (STK_ARCH_CPU_COUNT > 1)
+#if (STK_ARCH_CPU_COUNT > 1U)
     "csrr t0, mhartid                    \n"
     "la   t1, s_StkRiscvSpIsrInt         \n"
     "slli t0, t0, " REGBYTES_LOG2 "      \n" // t0 = hart * sizeof(Word)
@@ -1646,7 +1661,7 @@ extern "C" STK_RISCV_ISR_SECTION __stk_attr_naked void STK_SYSTICK_HANDLER()
 #endif
 
     // 3. switch to private ISR stack
-#if (STK_ARCH_CPU_COUNT > 1)
+#if (STK_ARCH_CPU_COUNT > 1U)
     "csrr t0, mhartid                    \n"
     "la   t1, s_StkRiscvStackIsr         \n"
     "slli t0, t0, " REGBYTES_LOG2 "      \n"
@@ -1662,7 +1677,7 @@ extern "C" STK_RISCV_ISR_SECTION __stk_attr_naked void STK_SYSTICK_HANDLER()
     "jal  ra, TrySwitchContext           \n"
 
     // 5. restore the interrupted task's SP from s_StkRiscvSpIsrInt[hart]
-#if (STK_ARCH_CPU_COUNT > 1)
+#if (STK_ARCH_CPU_COUNT > 1U)
     "csrr t0, mhartid                    \n"
     "la   t1, s_StkRiscvSpIsrInt         \n"
     "slli t0, t0, " REGBYTES_LOG2 "      \n"
@@ -1716,7 +1731,7 @@ extern "C" STK_RISCV_ISR_SECTION __stk_attr_naked void STK_MSI_HANDLER()
     // all integer registers are now saved. t0/t1 are free to use as scratch.
     // "la" loads the address of the global array - a linker-time constant,
     // no compiler-generated runtime code, safe to use here
-#if (STK_ARCH_CPU_COUNT > 1)
+#if (STK_ARCH_CPU_COUNT > 1U)
     "csrr t0, mhartid                    \n"
     "la   t1, s_StkRiscvStackIdle        \n"
     "slli t0, t0, " REGBYTES_LOG2 "      \n" // t0 = hart * sizeof(Stack*)
@@ -1729,7 +1744,7 @@ extern "C" STK_RISCV_ISR_SECTION __stk_attr_naked void STK_MSI_HANDLER()
     SREG " sp, 0(t1)                     \n" // Stack::SP = task's sp (SP is first member)
 
     // 3. clear exception: MSIP[hart] = 0
-#if (STK_ARCH_CPU_COUNT > 1)
+#if (STK_ARCH_CPU_COUNT > 1U)
     "csrr  t0, mhartid                   \n"
     "slli  t0, t0, 2                     \n" // t0 = hart * 4
     "li    t1, %[clint_msip_base]        \n"
@@ -1741,7 +1756,7 @@ extern "C" STK_RISCV_ISR_SECTION __stk_attr_naked void STK_MSI_HANDLER()
     "fence rw, rw                        \n" // fence rw,rw  - ensure the write is visible before re-enable
 
     // 4. load SP from s_StkRiscvStackActive[hart]->SP
-#if (STK_ARCH_CPU_COUNT > 1)
+#if (STK_ARCH_CPU_COUNT > 1U)
     "csrr t0, mhartid                    \n"
     "la   t1, s_StkRiscvStackActive      \n"
     "slli t0, t0, " REGBYTES_LOG2 "      \n"
@@ -1816,7 +1831,7 @@ extern "C" STK_RISCV_ISR_SECTION __stk_attr_naked void STK_SYSTICK_HANDLER()
     // all integer registers are now saved. t0/t1 are free to use as scratch.
     // "la" loads the address of the global array - a linker-time constant,
     // no compiler-generated runtime code, safe to use here
-#if (STK_ARCH_CPU_COUNT > 1)
+#if (STK_ARCH_CPU_COUNT > 1U)
     "csrr t0, mhartid                    \n"
     "la   t1, s_StkRiscvStackActive      \n"
     "slli t0, t0, " REGBYTES_LOG2 "      \n"  // t0 = hart * sizeof(Stack*)
@@ -1829,7 +1844,7 @@ extern "C" STK_RISCV_ISR_SECTION __stk_attr_naked void STK_SYSTICK_HANDLER()
     SREG " sp, 0(t1)                     \n"  // Stack::SP = task's sp (SP is first member)
 
     // 3. switch to private ISR stack
-#if (STK_ARCH_CPU_COUNT > 1)
+#if (STK_ARCH_CPU_COUNT > 1U)
     "csrr t0, mhartid                    \n"
     "la   t1, s_StkRiscvStackIsr         \n"
     "slli t0, t0, " REGBYTES_LOG2 "      \n"
@@ -1851,7 +1866,7 @@ extern "C" STK_RISCV_ISR_SECTION __stk_attr_naked void STK_SYSTICK_HANDLER()
     // 5. reload SP from s_StkRiscvStackActive[hart]->SP
     // TrySwitchContext updated s_StkRiscvStackActive[hart] before returning,
     // we re-read it fresh to pick up any task switch the scheduler made
-#if (STK_ARCH_CPU_COUNT > 1)
+#if (STK_ARCH_CPU_COUNT > 1U)
     "csrr t0, mhartid                    \n"
     "la   t1, s_StkRiscvStackActive      \n"
     "slli t0, t0, " REGBYTES_LOG2 "      \n"
