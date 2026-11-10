@@ -529,13 +529,14 @@ struct StkEventFlags
 stk::time::TimerHost *g_TimerHost = nullptr;
 stk::Word             g_TimerHostBuf[StkGetWordCountForType<stk::time::TimerHost>()];
 
-class StkTimer final : public stk::time::TimerHost::Timer
+class StkTimer final : public stk::time::Timer
 {
     STK_NONCOPYABLE_CLASS(StkTimer);
   
 public:
     explicit StkTimer(osTimerFunc_t const func, osTimerType_t tt, void *arg, const char *name)
-        : m_func(func), m_argument(arg), m_type(tt), m_name(name), m_period_ticks(0U), m_started(false), m_cb_owned(true)
+        : m_func(func), m_argument(arg), m_type(tt), m_name(name), m_period_ticks(0U), m_started(false),
+          m_cb_owned(true)
     {}
     virtual ~StkTimer() = default;
 

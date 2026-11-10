@@ -1196,7 +1196,8 @@ inline TimerHost::EResult TimerHost::Start(Timer &tmr, uint32_t delay, uint32_t 
             .timestamp  = GetTicks(),
             .delay      = delay,
             .period     = period,
-            .completion = nullptr
+            .completion = nullptr,
+            .rearm_seq  = 0U
         });
     }
     else
@@ -1224,7 +1225,8 @@ inline TimerHost::EResult TimerHost::Stop(Timer &tmr)
             .timestamp  = 0LL,
             .delay      = 0U,
             .period     = 0U,
-            .completion = nullptr
+            .completion = nullptr,
+            .rearm_seq  = 0U
         });
     }
     else
@@ -1260,7 +1262,8 @@ inline TimerHost::EResult TimerHost::Reset(Timer &tmr)
             .timestamp  = GetTicks(),
             .delay      = 0U,
             .period     = 0U,
-            .completion = nullptr
+            .completion = nullptr,
+            .rearm_seq  = 0U
         });
     }
 
@@ -1282,7 +1285,8 @@ inline TimerHost::EResult TimerHost::Restart(Timer &tmr, uint32_t delay, uint32_
             .timestamp  = GetTicks(),
             .delay      = delay,
             .period     = period,
-            .completion = nullptr
+            .completion = nullptr,
+            .rearm_seq  = 0U
         });
 }
 
@@ -1301,7 +1305,8 @@ inline TimerHost::EResult TimerHost::StartOrReset(Timer &tmr, uint32_t delay, ui
             .timestamp  = GetTicks(),
             .delay      = delay,
             .period     = period,
-            .completion = nullptr
+            .completion = nullptr,
+            .rearm_seq  = 0U
         });
 }
 
@@ -1335,7 +1340,8 @@ inline TimerHost::EResult TimerHost::SetPeriod(Timer &tmr, uint32_t period)
             .timestamp  = 0LL,
             .delay      = 0U,
             .period     = period,
-            .completion = nullptr
+            .completion = nullptr,
+            .rearm_seq  = 0U
         });
     }
 
@@ -1354,7 +1360,8 @@ inline TimerHost::EResult TimerHost::Shutdown()
         .timestamp  = 0LL,
         .delay      = 0U,
         .period     = 0U,
-        .completion = nullptr
+        .completion = nullptr,
+        .rearm_seq  = 0U
     });
 }
 
@@ -2227,7 +2234,8 @@ inline TimerHost::EResult TimerHost::Execute(TimerCommand::EId id, Timer &tmr, u
             .timestamp  = GetTicks(),
             .delay      = delay,
             .period     = period,
-            .completion = &completion
+            .completion = &completion,
+            .rearm_seq  = 0U
         }, WAIT_INFINITE);
 
         if (queued == RES_OK)
@@ -2289,7 +2297,8 @@ inline TimerHost::EResult TimerHost::Execute(TimerCommand::EId id, Timer &tmr, u
             .timestamp  = GetTicks(),
             .delay      = delay,
             .period     = period,
-            .completion = nullptr
+            .completion = nullptr,
+            .rearm_seq  = 0U
         }, NO_WAIT, false);
 
         result = ((queued == RES_OK) ? RES_QUEUED : queued);

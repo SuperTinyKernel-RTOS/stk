@@ -570,15 +570,6 @@ private:
 class SpinLock
 {
 public:
-    /*! \enum  EState
-        \brief Internal lock state values.
-    */
-    enum EState
-    {
-        UNLOCKED = 0, //!< Lock is free and available for acquisition.
-        LOCKED        //!< Lock is held by a thread or core.
-    };
-
     /*! \class ScopedLock
         \brief RAII guard: locks the spin lock on construction and unlocks it on destruction.
 
@@ -613,6 +604,14 @@ public:
         STK_NONCOPYABLE_CLASS(ScopedLock);
         SpinLock &m_sl;
     };
+
+#ifdef _STK_ARCH_X86_WIN32
+    static constexpr long UNLOCKED = 0;     //!< Lock is free and available for acquisition.
+    static constexpr long LOCKED   = 1;     //!< Lock is held by a thread or core.
+#else
+    static constexpr bool UNLOCKED = false; //!< Lock is free and available for acquisition.
+    static constexpr bool LOCKED   = true;  //!< Lock is held by a thread or core.
+#endif
 
     /*! \brief Construct a SpinLock (unlocked by default).
     */
@@ -659,9 +658,9 @@ protected:
     STK_NONCOPYABLE_CLASS(SpinLock);
 
 #ifdef _STK_ARCH_X86_WIN32
-    volatile long m_lock; //!< Lock state (see EState). \c long required by Win32 Interlocked API (InterlockedCompareExchange).
+    volatile long m_lock;                   //!< Lock state. \c long required by Win32 Interlocked API (InterlockedCompareExchange).
 #else
-    volatile bool m_lock __stk_aligned(4U); //!< Lock state (see EState). 4-byte aligned to prevent cache word boundary crossing on 32-bit cores.
+    volatile bool m_lock __stk_aligned(4U); //!< Lock state. 4-byte aligned to prevent cache word boundary crossing on 32-bit cores.
 #endif
 };
 
