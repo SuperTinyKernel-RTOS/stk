@@ -11,6 +11,13 @@
 list(APPEND TARGET_DEPS stk)
 list(APPEND TARGET_LIBS stk)
 
+# SEGGER SystemView tracing (must follow stk on the link line)
+if (ENABLE_SEGGER_SYSVIEW AND TARGET segger)
+    include_directories(${ROOT_DIR}/deps/segger)
+    list(APPEND TARGET_DEPS segger)
+    list(APPEND TARGET_LIBS segger)
+endif()
+
 # Target
 if (VENDOR_STM32)
     include(${ROOT_DIR}/deps/target/stm32fx/ProjectInclude.cmake)
@@ -19,6 +26,10 @@ if (VENDOR_STM32)
     set(CMAKE_C_LINK_FLAGS "${CMAKE_C_LINK_FLAGS} ${LINKER_FLAGS}")
     set(CMAKE_CXX_LINK_FLAGS "${CMAKE_CXX_LINK_FLAGS} ${LINKER_FLAGS}")
     set(TARGET_BINARY ${TARGET_NAME}.elf)
+elseif (VENDOR_RPI)
+    include(${ROOT_DIR}/deps/target/rpi/ProjectIncludeLib.cmake)
+    # note: Pico SDK names the output <target>.elf itself
+    set(TARGET_BINARY ${TARGET_NAME})
 elseif (RISCV)
     include(${ROOT_DIR}/deps/target/risc-v/ProjectInclude.cmake)
     include(${ROOT_DIR}/deps/target/risc-v/ProjectIncludeLib.cmake)

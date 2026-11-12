@@ -89,6 +89,19 @@ extern "C" {
     #define STK_C_CPU_COUNT (1)
 #endif
 
+/*! \def       STK_C_KERNEL_TYPE_CPU_0
+    \brief     Kernel type of core 0 (default: dynamic kernel, Fixed-Priority strategy with 32 priority levels,
+               support for synchronization primitives enabled).
+    \note      Used only if not defined by the user (stk_config.h, compiler flags or CMake
+               STK_C_KERNEL_TYPE_CPU_0). See STK_C_KERNEL_TYPE_CPU_X below for other cores and types.
+*/
+#ifndef STK_C_KERNEL_TYPE_CPU_0
+    #define STK_C_KERNEL_TYPE_CPU_0 Kernel<KERNEL_DYNAMIC | KERNEL_SYNC | KERNEL_TICKLESS, \
+                                           STK_C_KERNEL_MAX_TASKS, \
+                                           sched::SwitchStrategyFP32_NSY, \
+                                           PlatformDefault>
+#endif
+
 /*! \def       STK_SYNC_DEBUG_NAMES
     \brief     Enable names for synchronization primitives for debugging/tracing purpose.
 */
@@ -102,7 +115,7 @@ extern "C" {
     \brief     Assertion macro used inside STK C bindings
 */
 #define STK_C_ASSERT(e) assert(e)
-  
+
 /*! \def       STK_STATIC_CAST
     \brief     Convenience wrapper for static_cast and C-style cast.
     \param[in] type: Value type.
@@ -308,7 +321,7 @@ typedef enum stk_resume_result_t {
         ), \
         sizeof(stk_word_t) \
     )
-   
+
 // =============================================================================
 // Attributes
 // =============================================================================
@@ -380,10 +393,37 @@ stk_version_info_t stk_get_version(void);
      KERNEL_STATIC   - fixed task list; tasks must never return from their entry function.
      KERNEL_DYNAMIC  - tasks may be added/removed at runtime and may return when done.
      KERNEL_HRT      - Hard Real-Time mode; must be combined with KERNEL_STATIC or KERNEL_DYNAMIC.
+                       Tasks are scheduled periodically and have an execution deadline, the whole system
+                       fails (hard fault) when a task misses its deadline.
      KERNEL_SYNC     - enables synchronization primitives (Mutex, Event, Semaphore, etc.).
      KERNEL_TICKLESS - tickless low-power idle; suppresses the SysTick when all tasks sleep.
                        Requires STK_TICKLESS_IDLE=1 in stk_config.h.
                        INCOMPATIBLE with KERNEL_HRT (HRT requires a continuous tick).
+     KERNEL_TIMESLICE - time-slicing: the running task is rotated behind its same-priority peers when its
+                       quantum (ITask::GetTimeSlice()) expires.
+                       Requires a strategy with TIMESLICE_API = 1 (SwitchStrategyPT32_TS / PT64_TS),
+                       all other strategies do not support it (TIMESLICE_API = 0).
+                       INCOMPATIBLE with KERNEL_HRT.
+     KERNEL_TELEMETRY - enables introspection functions for diagnostics / telemetry (see IKernel::GetTaskState).
+
+   Task switching strategies (stk::sched), grouped by the kernel modes they are designed for.
+   Every strategy below can be used in place of the strategy shown in the variant lines, within
+   the constraints of its group:
+
+     Non-HRT only (do NOT combine with KERNEL_HRT; STATIC/DYNAMIC, SYNC, TICKLESS allowed):
+       SwitchStrategyRR,    SwitchStrategyRR_NSY    - Round-Robin (_NSY: Yield() keeps the task runnable)
+       SwitchStrategySWRR,  SwitchStrategySWRR_NSY  - Smooth Weighted Round-Robin
+       SwitchStrategyFP32,  SwitchStrategyFP32_NSY  - Fixed Priority, 32 levels (default of CPU_0)
+       SwitchStrategyFP64,  SwitchStrategyFP64_NSY  - Fixed Priority, 64 levels
+       SwitchStrategyPT32,  SwitchStrategyPT64      - Fixed Priority with Preemption-Threshold, 32/64 levels
+       SwitchStrategyPT32_TS, SwitchStrategyPT64_TS - same, with time-slicing (requires KERNEL_TIMESLICE)
+
+     HRT only (require KERNEL_HRT; never with KERNEL_TICKLESS):
+       SwitchStrategyRM, SwitchStrategyDM, SwitchStrategyEDF
+       (SwitchStrategyRR is also accepted in HRT mode, see the HRT variants below)
+
+   FP64/PT64 use 64-bit bitmaps (two registers and a two-step scan on 32-bit MCUs), prefer the
+   32-level strategies unless more than 32 priority levels are needed.
 
 // Standard variants
 Kernel<KERNEL_STATIC,  STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyRR, PlatformDefault>
@@ -392,6 +432,8 @@ Kernel<KERNEL_STATIC,  STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategySWRR, Platfo
 Kernel<KERNEL_DYNAMIC, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategySWRR, PlatformDefault>
 Kernel<KERNEL_STATIC,  STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyFP32, PlatformDefault>
 Kernel<KERNEL_DYNAMIC, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyFP32, PlatformDefault>
+Kernel<KERNEL_STATIC,  STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyPT32, PlatformDefault>
+Kernel<KERNEL_DYNAMIC, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyPT32, PlatformDefault>
 
 // HRT variants (KERNEL_TICKLESS must NOT be combined with any of these)
 Kernel<KERNEL_STATIC  | KERNEL_HRT, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyRR, PlatformDefault>
@@ -410,6 +452,8 @@ Kernel<KERNEL_STATIC  | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrate
 Kernel<KERNEL_DYNAMIC | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategySWRR, PlatformDefault>
 Kernel<KERNEL_STATIC  | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyFP32, PlatformDefault>
 Kernel<KERNEL_DYNAMIC | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyFP32, PlatformDefault>
+Kernel<KERNEL_STATIC  | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyPT32, PlatformDefault>
+Kernel<KERNEL_DYNAMIC | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyPT32, PlatformDefault>
 
 // HRT variants with KERNEL_SYNC
 Kernel<KERNEL_STATIC  | KERNEL_HRT | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyRR,  PlatformDefault>
@@ -428,6 +472,8 @@ Kernel<KERNEL_STATIC  | KERNEL_TICKLESS, STK_C_KERNEL_MAX_TASKS, sched::SwitchSt
 Kernel<KERNEL_DYNAMIC | KERNEL_TICKLESS, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategySWRR, PlatformDefault>
 Kernel<KERNEL_STATIC  | KERNEL_TICKLESS, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyFP32, PlatformDefault>
 Kernel<KERNEL_DYNAMIC | KERNEL_TICKLESS, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyFP32, PlatformDefault>
+Kernel<KERNEL_STATIC  | KERNEL_TICKLESS, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyPT32, PlatformDefault>
+Kernel<KERNEL_DYNAMIC | KERNEL_TICKLESS, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyPT32, PlatformDefault>
 
 // Tickless variants with KERNEL_SYNC
 Kernel<KERNEL_STATIC  | KERNEL_TICKLESS | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyRR,   PlatformDefault>
@@ -436,15 +482,33 @@ Kernel<KERNEL_STATIC  | KERNEL_TICKLESS | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, s
 Kernel<KERNEL_DYNAMIC | KERNEL_TICKLESS | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategySWRR, PlatformDefault>
 Kernel<KERNEL_STATIC  | KERNEL_TICKLESS | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyFP32, PlatformDefault>
 Kernel<KERNEL_DYNAMIC | KERNEL_TICKLESS | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyFP32, PlatformDefault>
+Kernel<KERNEL_STATIC  | KERNEL_TICKLESS | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyPT32, PlatformDefault>
+Kernel<KERNEL_DYNAMIC | KERNEL_TICKLESS | KERNEL_SYNC, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyPT32, PlatformDefault>
+
+// Further non-HRT strategies. <MODE> is any non-HRT combination of KERNEL_STATIC | KERNEL_DYNAMIC
+// (exactly one), optionally with KERNEL_SYNC and/or KERNEL_TICKLESS, e.g. KERNEL_DYNAMIC | KERNEL_SYNC | KERNEL_TICKLESS.
+// The default kernel of core 0 is exactly this form with sched::SwitchStrategyFP32_NSY:
+Kernel<KERNEL_DYNAMIC | KERNEL_SYNC | KERNEL_TICKLESS, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyFP32_NSY, PlatformDefault>
+Kernel<<MODE>, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyRR_NSY,   PlatformDefault>
+Kernel<<MODE>, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategySWRR_NSY, PlatformDefault>
+Kernel<<MODE>, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyFP32_NSY, PlatformDefault>
+Kernel<<MODE>, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyFP64,     PlatformDefault>
+Kernel<<MODE>, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyFP64_NSY, PlatformDefault>
+Kernel<<MODE>, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyPT64,     PlatformDefault>
+
+// Time-slicing variants (strategy and KERNEL_TIMESLICE go together, never with KERNEL_HRT)
+Kernel<<MODE> | KERNEL_TIMESLICE, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyPT32_TS, PlatformDefault>
+Kernel<<MODE> | KERNEL_TIMESLICE, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyPT64_TS, PlatformDefault>
 */
 
 /*! \def       STK_C_KERNEL_TYPE_CPU_X
     \brief     Kernel type definition per CPU core.
     \note      STK_C_KERNEL_TYPE_CPU_X type will be assigned to X core.
     \note      Supported mode flags: KERNEL_STATIC, KERNEL_DYNAMIC, KERNEL_HRT, KERNEL_SYNC,
-               KERNEL_TICKLESS. See the "Available kernel type definitions" block above for
-               valid combinations. KERNEL_TICKLESS requires STK_TICKLESS_IDLE=1 in stk_config.h
-               and must NOT be combined with KERNEL_HRT.
+               KERNEL_TICKLESS, KERNEL_TIMESLICE, KERNEL_TELEMETRY. See the "Available kernel type
+               definitions" block above for valid combinations. KERNEL_TICKLESS requires
+               STK_TICKLESS_IDLE=1 in stk_config.h, KERNEL_TICKLESS and KERNEL_TIMESLICE must NOT be
+               combined with KERNEL_HRT.
 
     \code
     // Example of kernel type definition for 8 cores.
@@ -869,7 +933,7 @@ stk_timeout_t stk_ticks_from_ms_clamped_to_timeout(stk_timeout_t ms);
 static inline stk_tick_t stk_ticks_from_ms_r(stk_time_t msec, uint32_t resolution)
 {
     stk_time_t result = 0LL;
-    
+
     if (resolution != 0U)
     {
         const stk_time_t total_scaled = msec * 1000LL;
@@ -1537,7 +1601,7 @@ typedef struct stk_event_t stk_event_t;
     \param[in] manual_reset: True for manual-reset, False for auto-reset.
     \return    Event handle.
 */
-stk_event_t *stk_event_create(stk_event_mem_t *const membuf, 
+stk_event_t *stk_event_create(stk_event_mem_t *const membuf,
                               bool             manual_reset);
 
 /*! \brief     Destroy an Event.

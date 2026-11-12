@@ -165,6 +165,47 @@
 
 
 // =============================================================================
+// C INTERFACE (stk_c.h, stk_c_time.h, stk_c_memory.h, see BUILD_C_IFACE)
+// =============================================================================
+
+// Maximum number of tasks per kernel instance of the C interface
+#cmakedefine STK_C_KERNEL_MAX_TASKS @STK_C_KERNEL_MAX_TASKS@
+
+// Number of kernel instances / CPU cores of the C interface
+#cmakedefine STK_C_CPU_COUNT @STK_C_CPU_COUNT@
+
+// Kernel type per CPU core (core 0 defaults to Kernel<KERNEL_STATIC, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyRR, PlatformDefault>)
+#cmakedefine STK_C_KERNEL_TYPE_CPU_0 @STK_C_KERNEL_TYPE_CPU_0@
+#cmakedefine STK_C_KERNEL_TYPE_CPU_1 @STK_C_KERNEL_TYPE_CPU_1@
+#cmakedefine STK_C_KERNEL_TYPE_CPU_2 @STK_C_KERNEL_TYPE_CPU_2@
+#cmakedefine STK_C_KERNEL_TYPE_CPU_3 @STK_C_KERNEL_TYPE_CPU_3@
+#cmakedefine STK_C_KERNEL_TYPE_CPU_4 @STK_C_KERNEL_TYPE_CPU_4@
+#cmakedefine STK_C_KERNEL_TYPE_CPU_5 @STK_C_KERNEL_TYPE_CPU_5@
+#cmakedefine STK_C_KERNEL_TYPE_CPU_6 @STK_C_KERNEL_TYPE_CPU_6@
+#cmakedefine STK_C_KERNEL_TYPE_CPU_7 @STK_C_KERNEL_TYPE_CPU_7@
+
+// Capacity of the command queue of the C TimerHost
+#cmakedefine STK_C_TIMER_COMMAND_QUEUE_MAX @STK_C_TIMER_COMMAND_QUEUE_MAX@
+
+// Stack size of the C TimerHost handler tasks
+#cmakedefine STK_C_TIMER_HANDLER_STACK_SIZE @STK_C_TIMER_HANDLER_STACK_SIZE@
+
+// Number of C TimerHost handler tasks
+#cmakedefine STK_C_TIMER_THREADS_COUNT @STK_C_TIMER_THREADS_COUNT@
+
+// Maximum number of concurrent block pools / byte pools of the C interface
+#cmakedefine STK_C_BLOCKPOOL_MAX @STK_C_BLOCKPOOL_MAX@
+#cmakedefine STK_C_BYTEPOOL_MAX @STK_C_BYTEPOOL_MAX@
+
+// General-purpose allocator of the C interface: 0 = malloc/free, 1 = deterministic ISR-safe allocator
+#cmakedefine STK_C_MEMORY_DEFAULT_ALLOCATOR @STK_C_MEMORY_DEFAULT_ALLOCATOR@
+
+// Counter / flags word types of the C Semaphore and EventFlags (uint8_t, uint16_t, uint32_t or uint64_t)
+#cmakedefine STK_C_SEM_VALUE_TYPE @STK_C_SEM_VALUE_TYPE@
+#cmakedefine STK_C_EF_VALUE_TYPE @STK_C_EF_VALUE_TYPE@
+
+
+// =============================================================================
 // CUSTOM HANDLERS & OVERRIDES
 // =============================================================================
 

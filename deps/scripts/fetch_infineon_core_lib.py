@@ -59,10 +59,10 @@ def main() -> int:
     fetch_root = Path(__file__).resolve().parent # be relative to the script's location, not caller's Path.cwd()
 
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--dest", type=Path, default=fetch_root / "infineon" / "core-lib",
+    parser.add_argument("--dest", type=Path, default=fetch_root / ".." / "infineon" / "core-lib",
                         help="destination directory (default: ./infineon/core-lib)")
-    parser.add_argument("--branch", type=str, default="main",
-                        help="branch, tag, or commit to checkout (default: main)")
+    parser.add_argument("--branch", type=str, default="master",
+                        help="branch, tag, or commit to checkout (default: master)")
     args = parser.parse_args()
 
     repo_url = "https://github.com/Infineon/core-lib.git"
@@ -77,7 +77,7 @@ def main() -> int:
         
         # Try checking out requested branch, fallback to master/main if checkout fails
         if not run_cmd(["git", "checkout", args.branch], cwd=dest_path):
-            fallback = "master" if args.branch == "main" else "main"
+            fallback = "main" if args.branch == "master" else "master"
             print(f"Branch '{args.branch}' checkout failed, attempting fallback to '{fallback}'...")
             if not run_cmd(["git", "checkout", fallback], cwd=dest_path):
                 return 1
