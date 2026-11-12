@@ -42,9 +42,7 @@
 #include <memory/stk_memory.h>  // for placement new
 
 // Check correctness of stk_config.h
-#ifndef STK_C_KERNEL_TYPE_CPU_0
-#error "Missing STK_C_KERNEL_TYPE_CPU_0: Kernel type for CPU0 must be defined via stk_config.h or compiler flags."
-#endif
+// note: STK_C_KERNEL_TYPE_CPU_0 defaults to a static Round-Robin kernel (see stk_c.h) if not defined by the user
 #ifndef STK_C_CPU_COUNT
 #error "Missing STK_C_CPU_COUNT: CPU count must be defined via stk_config.h or compiler flags."
 #endif

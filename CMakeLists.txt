@@ -74,17 +74,39 @@ set(STK_TICKLESS_TICKS_MAX            ""   CACHE STRING "Maximum suppressed tick
 set(STK_SLEEP_TRAP_STACK_SIZE         ""   CACHE STRING "Stack size (words) of the sleep trap, empty = default (see stk_defs.h for details)")
 
 # ==============================================================================
-# 5. MPU & Memory Protection Settings
+# MPU & Memory Protection Settings
 # ==============================================================================
 set(STK_MPU_TASK_REGIONS              ""   CACHE STRING "Number of MPU regions per task (2, 4, 6, 8, 12, 16), empty = default")
 
 # ==============================================================================
-# 6. Advanced Tuning & Stack Parameters
+# Advanced Tuning & Stack Parameters
 # ==============================================================================
 set(STK_STACK_SIZE_MIN                ""   CACHE STRING "Minimum stack size in Word elements, empty = default (see stk_defs.h for details)")
 set(STK_CS_NESTINGS_MAX               ""   CACHE STRING "Maximum critical section nesting depth, empty = default (see stk_defs.h for details)")
 set(STK_TIMER_THREADS_COUNT           ""   CACHE STRING "Number of threads handling timers in TimerHost, empty = default (see stk_defs.h for details)")
 set(STK_TIMER_COMMAND_QUEUE_SIZE      ""   CACHE STRING "Capacity of TimerHost command queue, empty = default (see stk_defs.h for details)")
+
+# ==============================================================================
+# C Interface (see stk_c.h, stk_c_time.h, stk_c_memory.h), empty = default
+# ==============================================================================
+set(STK_C_KERNEL_MAX_TASKS            ""   CACHE STRING "C interface: max tasks per kernel instance, empty = default (4)")
+set(STK_C_CPU_COUNT                   ""   CACHE STRING "C interface: number of kernel instances / CPU cores, empty = default (1)")
+set(STK_C_KERNEL_TYPE_CPU_0           ""   CACHE STRING "C interface: kernel type of core 0, empty = default (Kernel<KERNEL_STATIC, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyRR, PlatformDefault>)")
+set(STK_C_KERNEL_TYPE_CPU_1           ""   CACHE STRING "C interface: kernel type of core 1, empty = not defined")
+set(STK_C_KERNEL_TYPE_CPU_2           ""   CACHE STRING "C interface: kernel type of core 2, empty = not defined")
+set(STK_C_KERNEL_TYPE_CPU_3           ""   CACHE STRING "C interface: kernel type of core 3, empty = not defined")
+set(STK_C_KERNEL_TYPE_CPU_4           ""   CACHE STRING "C interface: kernel type of core 4, empty = not defined")
+set(STK_C_KERNEL_TYPE_CPU_5           ""   CACHE STRING "C interface: kernel type of core 5, empty = not defined")
+set(STK_C_KERNEL_TYPE_CPU_6           ""   CACHE STRING "C interface: kernel type of core 6, empty = not defined")
+set(STK_C_KERNEL_TYPE_CPU_7           ""   CACHE STRING "C interface: kernel type of core 7, empty = not defined")
+set(STK_C_TIMER_COMMAND_QUEUE_MAX     ""   CACHE STRING "C interface: capacity of TimerHost command queue, empty = default (32)")
+set(STK_C_TIMER_HANDLER_STACK_SIZE    ""   CACHE STRING "C interface: stack size of TimerHost handler tasks, empty = default (256)")
+set(STK_C_TIMER_THREADS_COUNT         ""   CACHE STRING "C interface: number of TimerHost handler tasks, empty = default (1)")
+set(STK_C_BLOCKPOOL_MAX               ""   CACHE STRING "C interface: max concurrent block pools, empty = default (8)")
+set(STK_C_BYTEPOOL_MAX                ""   CACHE STRING "C interface: max concurrent byte pools, empty = default (8)")
+set(STK_C_MEMORY_DEFAULT_ALLOCATOR    ""   CACHE STRING "C interface: general-purpose allocator, 0 = malloc/free, 1 = deterministic allocator, empty = default (0)")
+set(STK_C_SEM_VALUE_TYPE              ""   CACHE STRING "C interface: semaphore counter type (uint8_t, uint16_t, uint32_t, uint64_t), empty = default (uint16_t)")
+set(STK_C_EF_VALUE_TYPE               ""   CACHE STRING "C interface: event flags word type (uint8_t, uint16_t, uint32_t, uint64_t), empty = default (uint32_t)")
 
 # ==============================================================================
 # ==============================================================================

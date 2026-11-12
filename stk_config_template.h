@@ -104,4 +104,26 @@
 #define STK_TIMER_COMMAND_QUEUE_SIZE 32U    /* Capacity of TimerHost command queue */
 #define STK_MEMORY_PLACEMENT_NEW     1U     /* Enable C++ placement new operator support in memory allocator */
 
+
+// =============================================================================
+// C INTERFACE (stk_c.h, stk_c_time.h, stk_c_memory.h)
+// =============================================================================
+// All values below are optional, the defaults are shown. Uncomment to override.
+
+//#define STK_C_KERNEL_MAX_TASKS         (4)    /* Maximum number of tasks per kernel instance */
+//#define STK_C_CPU_COUNT                (1)    /* Number of kernel instances / CPU cores */
+
+// Kernel type per core. If STK_C_KERNEL_TYPE_CPU_0 is not defined, the default is used:
+//#define STK_C_KERNEL_TYPE_CPU_0 Kernel<KERNEL_STATIC, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyRR, PlatformDefault>
+//#define STK_C_KERNEL_TYPE_CPU_1 Kernel<KERNEL_STATIC, STK_C_KERNEL_MAX_TASKS, sched::SwitchStrategyRR, PlatformDefault>
+
+//#define STK_C_TIMER_COMMAND_QUEUE_MAX  (32U)  /* Capacity of the TimerHost command queue */
+//#define STK_C_TIMER_HANDLER_STACK_SIZE (256U) /* Stack size of the TimerHost handler tasks */
+//#define STK_C_TIMER_THREADS_COUNT      (1U)   /* Number of TimerHost handler tasks */
+//#define STK_C_BLOCKPOOL_MAX            (8U)   /* Maximum number of concurrent block pools */
+//#define STK_C_BYTEPOOL_MAX             (8U)   /* Maximum number of concurrent byte pools */
+//#define STK_C_MEMORY_DEFAULT_ALLOCATOR (0)    /* 0 = malloc/free, 1 = deterministic ISR-safe allocator */
+//#define STK_C_SEM_VALUE_TYPE           uint16_t /* Semaphore counter type */
+//#define STK_C_EF_VALUE_TYPE            uint32_t /* Event flags word type */
+
 #endif /* STK_CONFIG_H_ */
