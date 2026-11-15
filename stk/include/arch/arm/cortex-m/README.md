@@ -43,7 +43,8 @@ The Cortex-M port targets both privileged and unprivileged thread modes. Context
 
 - ARMv6-M (Cortex-M0, M0+, M1) — Thumb-1 ISA, no hardware privilege separation
 - ARMv7-M (Cortex-M3, M4, M7) — Thumb-2, full privilege/unprivilege separation, DWT cycle counter
-- ARMv8-M (Cortex-M23, M33) — ARMv8-M Baseline and Mainline, optional TrustZone
+- ARMv8-M (Cortex-M23, M33, M35P) — ARMv8-M Baseline and Mainline, optional TrustZone
+- ARMv8.1-M (Cortex-M52, M55, M85) — ARMv8.1-M Mainline, optional TrustZone
 - Optional FPU (single and double precision, auto-detected via `__FPU_PRESENT` / `__FPU_USED`)
 - Single-core and SMP (dual-core) configurations
 - Tickless idle with DWT-based drift correction on M3+
@@ -65,6 +66,8 @@ The Cortex-M port targets both privileged and unprivileged thread modes. Context
 | Cortex-M7 | ARMv7-M | Optional | Yes | Yes | No | Optional (PMSAv7) |
 | Cortex-M23 | ARMv8-M Baseline | No | No | Yes | Optional | Optional (PMSAv8) |
 | Cortex-M33 | ARMv8-M Mainline | Optional | Yes | Yes | Optional | Optional (PMSAv8) |
+| Cortex-M35P | ARMv8-M Mainline | Optional | Yes | Yes | Optional | Optional (PMSAv8) |
+| Cortex-M52 / M55 / M85 | ARMv8.1-M Mainline | Optional | Yes | Yes | Optional | Optional (PMSAv8) |
 
 MPU presence is auto-detected from CMSIS's `__MPU_PRESENT`; `STK_MPU`/`STK_MPU_STACK_GUARD` only need to be defined to turn the feature on, not to select the register layout.
 
@@ -205,7 +208,7 @@ Tickless idle suppresses SysTick interrupts during idle periods, reducing power 
 
 ### Privilege Modes
 
-On Cortex-M3 and higher (where `CONTROL_nPRIV_Msk` is defined), STK supports per-task privilege levels. Each task stack carries an `ACCESS_PRIVILEGED` or `ACCESS_UNPRIVILEGED` flag that is applied to the `CONTROL` register on every context switch.
+On Cortex-M3 and higher (where `CONTROL_nPRIV_Msk` is defined), STK supports per-task privilege levels. Each task stack carries an `ACCESS_PRIVILEGED` or `ACCESS_USER` flag that is applied to the `CONTROL` register on every context switch.
 
 - **Privileged tasks** run with full access to all registers and peripherals.
 - **Unprivileged tasks** are restricted by the MPU (if configured). Critical section entry/exit from unprivileged mode is performed via SVC to escalate privilege temporarily.
@@ -262,9 +265,11 @@ STK includes optional MPU support for both the legacy ARMv7-M/PMSAv7 layout (Cor
 |--------|---------|-------------|
 | `STK_MPU` | `0` | Set to `1` to enable MPU support. Requires an MPU to actually be present (`__MPU_PRESENT == 1` from CMSIS) — enabling it on a core without an MPU is a build-time `#error`. |
 | `STK_MPU_STACK_GUARD` | `0` | Set to `1` to additionally enable a per-task stack-guard MPU region, reconfigured on every context switch from each task's `TaskMpu` state. Requires `STK_MPU=1` (a build-time `#error` otherwise). |
-| `STK_MPU_TASK_REGIONS` | `2` | Number of hardware MPU region slots reserved per task (`stk::TaskMpu::NUM_REGIONS`), only consumed when `STK_MPU_STACK_GUARD=1`. Slot 0 is always the automatic stack guard; the remaining `STK_MPU_TASK_REGIONS - 1` slots are available to the application via `ITask::GetMpuRegions()`. **Supported values: `2`, `4`, or `6` only** — anything else is a build-time `#error`. A smaller value frees up more MPU regions for static/global use (see `STK_CORTEX_M_MPU_TASK_REGION_IDX` below) at the cost of fewer application-defined per-task regions. |
+| `STK_MPU_TASK_REGIONS` | `2` | Number of hardware MPU region slots reserved per task (`stk::TaskMpu::NUM_REGIONS`), only consumed when `STK_MPU_STACK_GUARD=1`. Slot 0 is always the automatic stack guard; the remaining `STK_MPU_TASK_REGIONS - 1` slots are available to the application via `ITask::GetMpuRegions()`. **Supported values: `2`, `4`, `6`, `8`, `12`, or `16` only** — anything else is a build-time `#error`. A smaller value frees up more MPU regions for static/global use (see `STK_CORTEX_M_MPU_TASK_REGION_IDX` below) at the cost of fewer application-defined per-task regions. |
 | `STK_CORTEX_M_MPU_REGIONS_MAX` | `8` | Number of MPU regions supported by the MPU peripheral. Override if your device has more or fewer than 8 regions. |
-| `STK_CORTEX_M_MPU_TASK_REGION_IDX` | `STK_CORTEX_M_MPU_REGIONS_MAX - STK_MPU_TASK_REGIONS` | First MPU region index reserved for per-task regions (the stack guard and any per-task `GetMpuRegions()` entries occupy the last `STK_MPU_TASK_REGIONS` regions). Must not collide with your statically-configured regions. **Alignment constraint:** the context-switch burst write uses RBAR aliases that wrap within 4-region hardware blocks. For `STK_MPU_TASK_REGIONS <= 4`, the index must satisfy `(IDX % 4) <= (4 - STK_MPU_TASK_REGIONS)`. For `STK_MPU_TASK_REGIONS == 6`, the burst splits into a full 4-region block followed by a 2-region block, so the base index must be block-aligned: `(IDX % 4) == 0`. Violating this is a build-time `static_assert` failure. |
+| `STK_CORTEX_M_MPU_TASK_REGION_IDX` | `STK_CORTEX_M_MPU_REGIONS_MAX - STK_MPU_TASK_REGIONS` | First MPU region index reserved for per-task regions (the stack guard and any per-task `GetMpuRegions()` entries occupy the last `STK_MPU_TASK_REGIONS` regions). Must not collide with your statically-configured regions. **Alignment constraint:** the context-switch burst write uses RBAR aliases that wrap within 4-region hardware blocks. For `STK_MPU_TASK_REGIONS <= 4`, the index must satisfy `(IDX % 4) <= (4 - STK_MPU_TASK_REGIONS)`. For `STK_MPU_TASK_REGIONS > 4` (`6`, `8`, `12`, `16`), the burst is split into consecutive 4-region blocks (plus a final 2-region block for `6`), so the base index must be block-aligned: `(IDX % 4) == 0`. Violating this is a build-time `static_assert` failure. |
+| `STK_MPU_TASK_REGIONS_NS` | `STK_MPU_TASK_REGIONS` | TrustZone only: per-task region slots for the Non-Secure MPU bank. Same supported values (`2`, `4`, `6`, `8`, `12`, `16`). |
+| `STK_CORTEX_M_MPU_TASK_REGION_IDX_NS` | `STK_CORTEX_M_MPU_REGIONS_MAX - STK_MPU_TASK_REGIONS_NS` | Non-Secure counterpart of `STK_CORTEX_M_MPU_TASK_REGION_IDX`, subject to the same alignment `static_assert`. |
 
 The low-level region-programming functions (`ConfigureRegion`, `ConfigureStatic`, `ConfigureDynamic`, `ApplyRegion`, `DisableRegion`, `Enable`) live in `stk::hw::mpu` but are declared and defined entirely inside `stk_arch_arm-cortex-m.cpp` — **they are driver-internal and not exposed by any public header**, so application code cannot call them directly. Applications configure the MPU exclusively through the two hooks below; the driver translates both into these internal calls automatically:
 
@@ -565,7 +570,7 @@ Either a spin-lock (`hw::SpinLock` or the internal lock behind `hw::CriticalSect
 
 **Build error: `static_assert` on `STK_CORTEX_M_MPU_TASK_REGION_IDX` alignment**
 
-The MPU per-task region burst-copy uses RBAR aliases that wrap within 4-region hardware blocks, which constrains where the task-region window may start. For `STK_MPU_TASK_REGIONS <= 4`, `STK_CORTEX_M_MPU_TASK_REGION_IDX % 4` must be `<= 4 - STK_MPU_TASK_REGIONS`; for `STK_MPU_TASK_REGIONS == 6` the index must be block-aligned (`% 4 == 0`). Adjust your static/global region allocation so the task-region window lands on a valid boundary, or override `STK_CORTEX_M_MPU_TASK_REGION_IDX` explicitly.
+The MPU per-task region burst-copy uses RBAR aliases that wrap within 4-region hardware blocks, which constrains where the task-region window may start. For `STK_MPU_TASK_REGIONS <= 4`, `STK_CORTEX_M_MPU_TASK_REGION_IDX % 4` must be `<= 4 - STK_MPU_TASK_REGIONS`; for `STK_MPU_TASK_REGIONS > 4` (6, 8, 12 or 16) the index must be block-aligned (`% 4 == 0`). Adjust your static/global region allocation so the task-region window lands on a valid boundary, or override `STK_CORTEX_M_MPU_TASK_REGION_IDX` explicitly.
 
 **On Cortex-M0: `HiResClock::GetTimeUs()` is jittery**
 

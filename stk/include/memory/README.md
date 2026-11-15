@@ -55,7 +55,7 @@ At construction all blocks are chained: `block_i->next = block_{i+1}`, `last->ne
 | Constant | Value | Description |
 |---|---|---|
 | `CAPACITY_MAX` | `0xFFFE` | Maximum number of blocks per pool. |
-| `ALIGN_DEFAULT` | `8` (`16` on RISC-V) | Default block alignment in bytes (`STK_MEMORY_BLOCKPOOL_ALIGN_DEFAULT`). |
+| `ALIGN_DEFAULT` | `STK_MEMORY_BLOCKPOOL_ALIGN_DEFAULT` = `MemoryAllocator::MIN_ALIGNMENT` (8 on 32-bit ARM, 16 on RISC-V) | Default block alignment in bytes. |
 
 ---
 
@@ -357,9 +357,10 @@ Define these in your build system (not in a single source file): several of them
 | `STK_MEMORY_PLACEMENT_NEW` | `1` | Enables placement `new`: the object helpers (`NewT`, `PoolPtr`, …), `StaticBlockPoolFor` and the `MemoryAllocator` typed helpers. |
 | `STK_MEMORY_NO_HEAP` | `0` | `1` removes every reference to `MemoryAllocator::Allocate()` / `Free()`: heap-storage constructors, typed/aligned helpers and the `new`/`delete` override. Pools remain usable with embedded or external storage. Use it to prove (and enforce) a zero-heap configuration. |
 | `STK_MEMORY_POOL_CHECKS` | `1` if `_DEBUG` or `DEBUG` is defined, else `0` | Expensive diagnostics: `BlockMemoryPool` O(n) double-free walk, payload fill patterns (`0xCD` on allocation, `0xDD` on free) and `BytePool` block-start validation. Set it explicitly — `_DEBUG`/`DEBUG` are not reliably defined by embedded toolchains. |
-| `STK_MEMORY_BLOCKPOOL_ALIGN_DEFAULT` | `8` (`16` if `_STK_ARCH_RISC_V` is defined) | Default `BlockMemoryPool` block alignment. Define as `sizeof(void *)` for the smallest possible blocks (4 bytes on 32-bit targets) at the cost of 4-byte alignment there. |
+| `STK_MEMORY_BLOCKPOOL_ALIGN_DEFAULT` | `MemoryAllocator::MIN_ALIGNMENT` (see `STK_MIN_ALIGNMENT`) | Default `BlockMemoryPool` block alignment. Define as `sizeof(void *)` for the smallest possible blocks (4 bytes on 32-bit targets) at the cost of 4-byte alignment there. |
 | `STK_MEMORY_BLOCKPOOL_BITMAP` | `0` | One "allocated" bit per block: O(1) double-free detection in release builds (costs an integer division per alloc/free). Size external buffers with `RequiredStorageSize()`. |
-| `STK_MEMORY_BYTEPOOL_ALIGN_DEFAULT` | `8` (`16` if `_STK_ARCH_RISC_V` is defined) | `BytePool` payload alignment, power of two ≥ 4. Also sets `HEADER_SIZE = max(8, alignment)`. |
+| `STK_MIN_ALIGNMENT` | `max(alignof(std::max_align_t), STK_STACK_MEMORY_ALIGN)` | Value of `MemoryAllocator::MIN_ALIGNMENT`: minimum alignment guaranteed by `Allocate()` and the default for both pools (typically 8 on 32-bit ARM, 16 on RISC-V). Can be overridden in `stk_config.h`. |
+| `STK_MEMORY_BYTEPOOL_ALIGN_DEFAULT` | `MemoryAllocator::MIN_ALIGNMENT` (see `STK_MIN_ALIGNMENT`) | `BytePool` payload alignment, power of two ≥ 4. Also sets `HEADER_SIZE = max(8, alignment)`. |
 | `STK_MEMORY_BYTEPOOL_GUARD` | `0` | 4-byte guard word after every allocation, verified on `Free()` (payload overrun detection). Included in `RequiredSize()` / `GetMaxRequest()`. |
 | `STK_MEMORY_BYTEPOOL_NEXT_FIT` | `0` | Start searches where the previous allocation ended instead of at the beginning: usually a shorter critical section when many used blocks accumulate at the start, at the price of somewhat more fragmentation. |
 | `STK_MEMORY_OVERRIDE_NEW_DELETE` | `0` | Route global `new` / `delete` to `MemoryAllocator` (see above). |
@@ -522,7 +523,7 @@ void Task_Worker()
 
 ```cpp
 // Try to acquire a block for up to 100 ticks; proceed only if successful
-void *blk = g_SensorPool.TimedAlloc(stk::GetTicksFromMsec(100));
+void *blk = g_SensorPool.TimedAlloc(stk::GetTicksFromMs(100));
 if (blk != nullptr)
 {
     UseBlock(blk);
@@ -549,7 +550,7 @@ stk::sync::MessageQueueT<8, sizeof(void *)> g_TxQueue;
 void Task_Producer()
 {
     // Wait up to 100 ms for 64 contiguous bytes
-    char *msg = static_cast<char *>(g_BytePool.TimedAlloc(64U, stk::GetTicksFromMsec(100)));
+    char *msg = static_cast<char *>(g_BytePool.TimedAlloc(64U, stk::GetTicksFromMs(100)));
     if (msg != nullptr)
     {
         FormatMessage(msg, 64U);

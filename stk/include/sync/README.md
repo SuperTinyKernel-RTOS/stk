@@ -25,15 +25,15 @@ An RAII-style low-level synchronization primitive that disables interrupts on th
 
 ### 2. Mutex (`sync::Mutex`)
 A recursive mutual exclusion primitive used to protect shared resources.
-- **Features**: Supports `Lock`, `TryLock`, `Unlock`, and `TimedLock`.
+- **Features**: Supports `Lock`, `TryLock`, `Unlock`, `TimedLock`, and `TimedLockEx` (returns the full `EWaitResult`). Also `GetOwner()`, `IsLocked()` and `GetRecursionCount()`; max recursion depth is `0xFFFE`.
 - **Priority Inheritance**: Temporarily boosts the priority of the lock owner when a higher-priority task blocks on `Lock()`/`TimedLock()`, mitigating priority inversion; the boost is restored automatically on `Unlock()` (no-op on switch strategies that don't support priority inheritance).
 - **Low-Power Aware**: Waiting tasks are suspended by the kernel.
 
 ### 3. Fast Mutex (`sync::FastMutex`)
 A lightweight non-recursive (binary) mutex with ownership tracking.
-- **Features**: Supports `Lock`, `TryLock`, `Unlock`, and `TimedLock`.
+- **Features**: Supports `Lock`, `TryLock`, `Unlock`, `TimedLock`, and `TimedLockEx` (returns the full `EWaitResult`). Also `GetOwner()` and `IsLocked()`.
 - **Smaller and faster**: Keeps no recursion counter — the only state is the owner thread id — which shortens the lock/unlock paths and reduces the object size compared to `sync::Mutex`.
-- **Non-Recursive**: A thread that already owns the mutex must not lock it again. This is a contract violation: it asserts in debug builds, and in release builds `TimedLock()`/`TryLock()` fail immediately (return `false`) instead of dead-locking.
+- **Non-Recursive**: A thread that already owns the mutex must not lock it again. This is an unrecoverable contract violation: `Lock()`, `TryLock()`, `TimedLock()` and `TimedLockEx()` raise `KERNEL_PANIC_SYNC_DEADLOCK` in every build (debug and release) when the caller already owns the mutex.
 - **Direct Handover**: On `Unlock()` ownership is transferred directly to the first waiter (FIFO ordering).
 - **Priority Inheritance**: Supported in the same way as `sync::Mutex` (no-op on switch strategies that don't support priority inheritance).
 - **Low-Power Aware**: Waiting tasks are suspended by the kernel.
@@ -61,7 +61,7 @@ A binary signaling primitive supporting Auto-reset and Manual-reset modes.
 
 ### 7. Semaphore (`sync::Semaphore` / `sync::SemaphoreT<T>`)
 A counting signaling primitive used for resource tracking or producer-consumer patterns.
-- **Selectable Counter Type**: `sync::SemaphoreT<T>` is a template over an unsigned counter type `T` (`uint8_t`, `uint16_t`, `uint32_t`, `uint64_t`); signed types are rejected at compile time. `sync::Semaphore` is a `typedef` for `SemaphoreT<uint16_t>` (max count `0xFFFF`), so existing code keeps working unchanged. `SemaphoreT<T>::COUNT_MAX` is the maximum value of `T`, and `ValueType` exposes the counter type. Note that `uint8_t` does not necessarily reduce the object size because of alignment padding, verify with `sizeof()` on your target.
+- **Selectable Counter Type**: `sync::SemaphoreT<T>` is a template over an unsigned counter type `T` (`uint8_t`, `uint16_t`, `uint32_t`, `uint64_t`); signed types are rejected at compile time. `sync::Semaphore` is a `typedef` for `SemaphoreT<uint16_t>` (max count `0xFFFF`), so existing code keeps working unchanged. `SemaphoreT<T>::COUNT_MAX` is the maximum value of `T`, and `CounterValueType` exposes the counter type. Note that `uint8_t` does not necessarily reduce the object size because of alignment padding, verify with `sizeof()` on your target.
 - **Wide Counters**: A counter wider than a pointer (e.g. `uint64_t` on a 32-bit MCU) is supported: all updates are done under a critical section, and `GetCount()` takes it too, so the value can never be read torn. Counters up to the native word size are read with a single aligned load.
 - **Direct Handover**: When semaphore is signaled, kernel immediately transfers the resource to the first waiting task (FIFO ordering).
 - **Bounded Signal**: `TrySignal()` posts without exceeding `max_count`, returning `false` instead of asserting — safe for multiple concurrent signalers where a redundant post should be tolerated rather than treated as a caller error.
@@ -83,7 +83,7 @@ A fixed-capacity, fixed-message-size FIFO queue for inter-task communication ove
 - **Buffer flexibility**: `MessageQueue` operates over an externally supplied buffer; `MessageQueueT<N, MSG>` owns its storage internally with compile-time capacity and message size.
 - **C-ABI friendly**: Message payload is always transferred via `memcpy`, so the message type does not need to be a C++ assignable type.
 - **FIFO and priority insertion**: `Put()`/`TryPut()` enqueue at the back of the queue (FIFO order); `PutFront()`/`TryPutFront()` enqueue at the front, making the message the next one `Get()` will return — useful for urgent/priority messages.
-- **Non-destructive peek**: `Peek()`/`TryPeek()` inspect the next FIFO message without removing it; `PeekFront()`/`TryPeekFront()` inspect the most recently front-inserted message without removing it.
+- **Non-destructive peek**: `Peek()`/`TryPeek()` copy out the message `Get()` would return next without removing it; `PeekFront()`/`TryPeekFront()` behave identically (the read slot is also where `PutFront()` inserts, so a pending front-inserted message is seen first) and exist for symmetry with `PutFront()`. The `*Ex()` variants (`PutEx()`, `GetEx()`, `PeekEx()`, ...) return the full `EWaitResult`.
 - **Blocking semantics**: `Put()`/`PutFront()` block if the queue is full; `Get()`/`Peek()`/`PeekFront()` block if the queue is empty, until the timeout expires.
 - **Reset support**: `Reset()` discards all messages and wakes blocked producers.
 - **Low-Power Aware**: Waiting tasks are suspended by the kernel.
@@ -118,7 +118,7 @@ A cyclic rendezvous point that blocks a fixed-size group of tasks until all of t
 - **Cyclic**: Automatically resets after releasing the group, ready for the next round without re-creation.
 - **Generation Tracking**: An internal generation counter distinguishes successive rounds and guards against spurious wakeups.
 - **Last-Arriver Signal**: `Wait()` returns `true` for the single task that triggers release of the group, `false` for all others — useful for once-per-round bookkeeping.
-- **Cancellable Waits**: `WaitEx()` returns the full `EResult` (`BARRIER_RELEASED`, `BARRIER_LAST_ARRIVAL`, `BARRIER_CANCELED`), distinguishing a wait cancelled via `IKernel::CancelTaskWait()` from a normal release; a cancelled arrival is rolled back so it can't trip the barrier short-handed.
+- **Cancellable Waits**: `WaitEx()` returns the full `EResult` (`BARRIER_RELEASED`, `BARRIER_LAST_ARRIVAL`, `BARRIER_CANCELED`, `BARRIER_FAILED`), distinguishing a wait cancelled via `IKernel::CancelTaskWait()` from a normal release, and a wait rejected by the kernel (e.g. the scheduler is locked) as `BARRIER_FAILED`; a cancelled or failed arrival is rolled back so it can't trip the barrier short-handed.
 - **Introspection**: `GetThreshold()` returns the configured party count.
 - **Built on Mutex/ConditionVariable**: Composed from `sync::Mutex` and `sync::ConditionVariable`.
 - **Low-Power Aware**: Waiting tasks are suspended by the kernel.

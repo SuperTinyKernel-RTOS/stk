@@ -36,7 +36,7 @@ This document is the reference for the x86 Win32 simulation port of STK (`stk\sr
 The Win32 port maps the STK kernel API onto native Windows OS primitives:
 
 - Each STK task becomes a **Windows thread** (`CreateThread`), created suspended and resumed/suspended by the scheduler.
-- The scheduler tick is driven by a dedicated **timer thread** running at `THREAD_PRIORITY_TIME_CRITICAL`, which fires at the configured tick interval using `WaitForSingleObject` with a millisecond timeout.
+- The scheduler tick is driven by a dedicated **timer thread** running at `THREAD_PRIORITY_TIME_CRITICAL`, which fires at the configured tick interval using `WaitForMultipleObjects` (tick handle plus a forced-switch event) with a millisecond timeout.
 - Context switching is implemented by **suspending the outgoing task's thread** (`SuspendThread`) and **resuming the incoming task's thread** (`ResumeThread`).
 - Critical sections use a **Windows `CRITICAL_SECTION`** object combined with suspend/resume of the timer thread to block preemption.
 - High-resolution time is provided by **`QueryPerformanceCounter`** (QPC).
@@ -51,7 +51,7 @@ This design means the full STK task model — task creation, sleeping, waiting o
 | Toolchain | Compiler | Notes |
 |-----------|----------|-------|
 | Visual Studio 2019 / 2022 | MSVC (`cl.exe`) | Primary development environment. x86 and x64 both supported. |
-| MinGW-w64 | GCC | `g++ -std=c++11` or higher. Requires linking `-lwinmm` if not auto-linked. |
+| MinGW-w64 | GCC | `g++ -std=c++11` or higher. `Winmm.dll` is loaded dynamically — no `-lwinmm` needed. |
 | Clang for Windows (LLVM) | Clang/LLVM | Both MSVC-compatible (`clang-cl`) and GCC-compatible (`clang++`) modes work. |
 
 C++11 or later is required. The port uses `std::list` and `std::vector` from the standard library.
@@ -64,11 +64,11 @@ Understanding the simulation model helps when interpreting timing behaviour and 
 
 ### Task model
 
-Each task is a real Windows thread created with `CreateThread` at `Initialize()` / `InitStack()` time, with the stack size set to the task's configured stack size. All task threads start in the **suspended** state. The scheduler activates the first task by calling `ResumeThread` on it at `Start()`.
+Each task is a real Windows thread created with `CreateThread` (suspended) when the kernel calls `InitStack()` for it, with the stack size set to the task's configured stack size. All task threads start in the **suspended** state. The scheduler activates the first task by calling `ResumeThread` on it at `Start()`.
 
 ### Tick and context switching
 
-A dedicated **timer thread** is created at `THREAD_PRIORITY_TIME_CRITICAL` when `Start()` is called. It loops on `WaitForSingleObject` with a `wait_ms` timeout derived from the tick resolution. On each timeout it calls `ProcessTick()`, which:
+A dedicated **timer thread** is created at `THREAD_PRIORITY_TIME_CRITICAL` when `Start()` is called. It loops on `WaitForMultipleObjects` with a `wait_ms` timeout derived from the tick resolution; it also wakes early when a task thread signals the forced-switch event (e.g. a task that has just exited, or an explicit `ForceContextSwitch()`), in which case the switch is serviced on the timer thread. On each timeout it calls `ProcessTick()`, which:
 
 1. Acquires the Win32 `CRITICAL_SECTION`.
 2. Calls the STK scheduler (`OnTick`).
@@ -80,7 +80,7 @@ A dedicated **timer thread** is created at `THREAD_PRIORITY_TIME_CRITICAL` when 
 
 ### Winmm.dll and timer resolution
 
-On initialization, STK dynamically loads `Winmm.dll` and calls `timeBeginPeriod(1)` to request 1 ms timer resolution from the Windows multimedia timer system. This reduces the default 15 ms timer granularity to approximately 1 ms, making the simulation tick more responsive. The DLL is unloaded when the context is destroyed.
+On initialization, STK dynamically resolves `timeBeginPeriod` from `Winmm.dll` (loading the DLL only if the process has not already loaded it) and calls `timeBeginPeriod(1)` to request 1 ms timer resolution from the Windows multimedia timer system. This reduces the default 15 ms timer granularity to approximately 1 ms, making the simulation tick more responsive. The DLL is unloaded when the context is destroyed, only if STK loaded it. `timeBeginPeriod(1)` is also re-issued in `Start()`; `timeEndPeriod` is never called.
 
 ---
 
@@ -141,8 +141,9 @@ These defines are shared with all STK ports and apply normally in simulation:
 
 | Define | Default | Description |
 |--------|---------|-------------|
-| `stk_cs_NESTINGS_MAX` | `16` | Maximum nesting depth for `hw::CriticalSection`. Exceeding this triggers `KERNEL_PANIC_CS_NESTING_OVERFLOW`. |
-| `STK_TICKLESS_IDLE` | `0` | Tickless idle is **not supported** on Win32. The timer thread always fires at the configured interval. Setting this to `1` has no effect. |
+| `STK_CS_NESTINGS_MAX` | `16` | Maximum nesting depth for `hw::CriticalSection`. Exceeding this triggers `KERNEL_PANIC_CS_NESTING_OVERFLOW`. |
+| `STK_TICKLESS_IDLE` | `0` | When `1`, the timer thread sleeps for `m_sleep_ticks` ticks (converted to ms) reported by the scheduler instead of waking on every tick, and the value is passed to `IEventOverrider::OnSleep()`. There is no WFI equivalent, and `IPlatform::Suspend()` / `Resume()` are unsupported (assert). |
+| `STK_TLS` | `0` | Set to `1` to enable `hw::GetTls()` / `hw::SetTls()` (backed by a Windows TLS slot, see [Thread-Local Storage](#thread-local-storage-tls)). |
 | `STK_SEGGER_SYSVIEW` | `0` | SEGGER SystemView integration. Can be enabled on Win32 for trace-level testing if the SystemView host application is connected. |
 | `STK_SYNC_DEBUG_NAMES` | `0` | Attach string names to synchronization primitives. Useful for debugging simulated task interactions. |
 
@@ -154,7 +155,7 @@ The Win32 port is a **functional simulation**, not a real-time simulation. Timin
 
 **Minimum tick resolution is 1 ms.** Windows is not a real-time OS. Even with `timeBeginPeriod(1)`, the multimedia timer and thread scheduler introduce jitter of approximately ±1 ms per tick. Do not use the Win32 port to validate hard real-time timing behaviour.
 
-**Ticks are not cycle-accurate.** The timer thread uses `WaitForSingleObject` with a millisecond timeout. The actual elapsed time between ticks depends on the Windows scheduler load and other running processes.
+**Ticks are not cycle-accurate.** The timer thread waits with a millisecond timeout (`WaitForMultipleObjects`). The actual elapsed time between ticks depends on the Windows scheduler load and other running processes.
 
 **`HiResClock::GetTimeUs()` is accurate.** The `QueryPerformanceCounter`-based clock runs independently of the tick mechanism and provides sub-microsecond resolution on modern hardware (typically ~100 ns). It is suitable for measuring relative durations within the simulation.
 
@@ -170,11 +171,11 @@ The Win32 port is a **functional simulation**, not a real-time simulation. Timin
 
 | Method | Implementation | Notes |
 |--------|---------------|-------|
-| `GetCycles()` | `QueryPerformanceCounter` relative to simulation start | Returns elapsed QPC ticks since `Initialize()`. |
-| `GetFrequency()` | `QueryPerformanceFrequency` | Returns the hardware QPC frequency (typically 10 MHz on modern hardware, up to ~10 GHz on some CPUs). |
+| `GetCycles()` | `QueryPerformanceCounter` relative to simulation start | Returns elapsed QPC ticks since the clock was first used. |
+| `GetFrequency()` | `QueryPerformanceFrequency` | Returns the QPC frequency truncated to `uint32_t` (typically 10 MHz on modern Windows). |
 | `GetTimeUs()` | `(GetCycles() * 1000000ULL) / GetFrequency()` | Accurate to ~100 ns on modern Windows hardware. |
 
-QPC is monotonic and not affected by wall-clock adjustments. It is safe to call from any task thread. The clock origin is set at `Initialize()` time, so `GetCycles()` returns 0 at start and increases from there.
+QPC is monotonic and not affected by wall-clock adjustments. It is safe to call from any task thread. The clock origin is captured when the clock object is first used (function-local static, first call to `HiResClock` or `GetSysTimerCount()`), so `GetCycles()` counts from that moment.
 
 ---
 
@@ -187,13 +188,13 @@ QPC is monotonic and not affected by wall-clock adjustments. It is safe to call 
 
 The timer thread never suspends itself — if it is the caller, the suspend/resume is skipped to avoid deadlock.
 
-**`hw::SpinLock`** uses `InterlockedCompareExchange` (atomic test-and-set) and `InterlockedExchange` (atomic clear). The spin-lock includes a priority-inversion avoidance mechanism: after 100 spin iterations without acquiring the lock, it calls `::Sleep(0)` or `::Sleep(1)` alternately to yield the CPU and allow the lock holder to run.
+**`hw::SpinLock`** uses `InterlockedCompareExchange` (atomic test-and-set) and `InterlockedExchange` (atomic clear). The spin-lock includes a priority-inversion avoidance mechanism: after 100 spin iterations without acquiring the lock, it calls `::Sleep(0)` or `::Sleep(1)` alternately to yield the CPU and allow the lock holder to run. If the lock is still not acquired after roughly 16.7 million such rounds (`0xFFFFFF`), `KERNEL_PANIC_SPINLOCK_DEADLOCK` is raised.
 
 ---
 
 ## Thread-Local Storage (TLS)
 
-TLS (`stk::hw::GetTls()` / `stk::hw::SetTls()`) is backed by a single Windows TLS slot allocated with `TlsAlloc()` during `Initialize()`. Each task thread has an independent TLS value. The slot is freed with `TlsFree()` when the context is destroyed.
+TLS (`stk::hw::GetTls()` / `stk::hw::SetTls()`) is available only when `STK_TLS=1` and is backed by a single Windows TLS slot allocated with `TlsAlloc()` during `Initialize()`. Each task thread has an independent TLS value. The slot is freed with `TlsFree()` when the context is destroyed.
 
 This matches the per-task TLS semantics on embedded targets (where TLS is stored in a CPU register such as `tp` on RISC-V or `r9` on ARM).
 
@@ -205,7 +206,7 @@ On embedded targets, STK manages a fixed memory buffer as the task stack. On Win
 
 This means:
 - Stack overflow detection via the filler watermark does **not** apply to Win32 — Windows manages the actual stack and will throw a stack overflow exception if the thread overflows.
-- `STK_STACK_SIZE_MIN` is not enforced as a hard lower bound for task execution on Win32, but the allocation must still be large enough to hold the `TaskContext` struct (two `Word`-size slots minimum).
+- `STK_STACK_SIZE_MIN` is not enforced as a hard lower bound for task execution on Win32, but the allocation must still be large enough to hold the `TaskContext` struct (it is placed two `Word`s into the stack buffer, so the buffer must hold those slots plus the whole `TaskContext`, several words).
 - The stack size you configure still controls the Windows thread stack size, so size it appropriately for your task's call depth.
 
 ---
@@ -214,7 +215,7 @@ This means:
 
 | Feature | Status | Reason |
 |---------|--------|--------|
-| Tickless idle (`STK_TICKLESS_IDLE`) | Not supported | Timer thread always fires at the fixed interval; no WFI equivalent. |
+| `IPlatform::Suspend()` / `Resume()` / `SetCpuFrequency()` | Not supported | Assert if called; no low-power state or runtime frequency scaling exists in simulation. |
 | `hw::IsInsideISR()` | Always `false` | No ISR context exists in the simulation. |
 | Privilege modes | Not applicable | Win32 has no equivalent of Cortex-M unprivileged thread mode or RISC-V U-mode. |
 | TrustZone / security states | Not applicable | x86 Win32 only. |
@@ -270,7 +271,7 @@ clang++ -std=c++17 -I stk/include stk_arch_x86-win32.cpp your_app.cpp -o simulat
 
 **Tasks never switch / scheduler appears to be stuck**
 
-The timer thread uses `WaitForSingleObject` with a millisecond timeout. If `resolution_us` is less than 1000, it is clamped to 1 ms. Check that `Start()` has been called — it is a blocking call that launches the timer thread and joins until all tasks exit.
+The timer thread waits with a millisecond timeout. If `resolution_us` is less than 1000, it is clamped to 1 ms. Check that `Start()` has been called — it is a blocking call that launches the timer thread and joins until all tasks exit.
 
 **Simulation runs much slower or faster than the embedded target**
 
@@ -278,11 +279,11 @@ Expected — Windows is not real-time. Absolute tick timing differs from embedde
 
 **`assert` fires in `Initialize()` saying TLS allocation failed**
 
-Windows has a limited number of TLS slots per process (at least 64 guaranteed, up to 1088 with `TLS_MINIMUM_AVAILABLE`). If your process exhausts TLS slots (e.g. due to many DLLs each allocating TLS), STK cannot allocate its slot. This is extremely rare in practice. Reducing the number of DLLs or static TLS users resolves it.
+Only possible with `STK_TLS=1`. Windows has a limited number of TLS slots per process (at least 64 guaranteed, up to 1088 with `TLS_MINIMUM_AVAILABLE`). If your process exhausts TLS slots (e.g. due to many DLLs each allocating TLS), STK cannot allocate its slot. This is extremely rare in practice. Reducing the number of DLLs or static TLS users resolves it.
 
 **`STK_KERNEL_PANIC` spins forever and the debugger cannot break in**
 
-`STK_PANIC_HANDLER_DEFAULT` loops on `__stk_relax_cpu()` (which maps to `_mm_pause()` on x86). Set a breakpoint on `STK_PANIC_HANDLER_DEFAULT` before running, or add a `__debugbreak()` call at the top of the function by providing a custom panic handler via `_STK_ASSERT_REDIRECT`.
+`STK_PANIC_HANDLER_DEFAULT` loops on `__stk_relax_cpu()` (which maps to `_mm_pause()` on x86). Set a breakpoint on `STK_PANIC_HANDLER_DEFAULT` before running, or add a `__debugbreak()` call at the top of the function by providing a custom panic handler by defining `STK_PANIC_HANDLER` in `stk_config.h`.
 
 **Critical section deadlock in simulation**
 

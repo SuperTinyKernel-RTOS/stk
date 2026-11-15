@@ -1,6 +1,6 @@
 # STK Scheduling Strategies
 
-**Path:** `includes/stk/strategy/`
+**Path:** `stk/include/strategy/`
 
 Each strategy is a standalone header-only class that implements the `ITaskSwitchStrategy` interface. The kernel is templated on the strategy type, so you select a scheduling policy at compile time with zero runtime overhead.
 
@@ -74,7 +74,9 @@ Classic fixed-priority preemptive scheduling. Tasks are assigned a numeric prior
 
 **No-sleep yield (`SwitchStrategyFP32_NSY`, `SwitchStrategyFP64_NSY`):** `Yield()` keeps the task runnable and hands the CPU to the next task at the **same** priority level (or continues if the task is alone at its level). A yield never hands the CPU to a lower priority level, unlike the legacy sleep-based yield.
 
-**Capability flags:** `WEIGHT_API = 1` (weight = priority level), `SLEEP_EVENT_API = 1`, `NOSLEEP_YIELD_API = 0` (`1` for `_NSY`)
+**Priority constants:** the class provides ready-made levels scaled to `MAX_PRIORITIES`: `PRIORITY_HIGHEST` (`MAX_PRIORITIES - 1`), `PRIORITY_HIGH`, `PRIORITY_ABOVE_NORMAL`, `PRIORITY_NORMAL` (`MAX_PRIORITIES / 2`), `PRIORITY_BELOW_NORMAL`, `PRIORITY_LOWER`, `PRIORITY_ABOVE_LOWEST` and `PRIORITY_LOWEST` (0), e.g. `SwitchStrategyFP32::PRIORITY_HIGH` (23 on `FP32`).
+
+**Capability flags:** `WEIGHT_API = 1` (weight = priority level), `SLEEP_EVENT_API = 1`, `PRIORITY_INHERITANCE_API = 1`, `NOSLEEP_YIELD_API = 0` (`1` for `_NSY`)
 
 **Best for:**
 - Systems with clearly defined task importance tiers.
@@ -147,7 +149,7 @@ template <> struct PriorityBitmapTraits<MyBitmap>
 
 Dynamic scheduling that always runs the task closest to missing its deadline. EDF is provably optimal for single-processor systems — if a feasible schedule exists, EDF will find it.
 
-**Algorithm:** O(n) linear scan over runnable tasks each tick, comparing `GetHrtRelativeDeadline()` (= deadline − elapsed duration). The task with the minimum value wins, ties broken by insertion order. No per-task state is maintained between ticks. Requires `KERNEL_HRT` mode.
+**Algorithm:** O(n) linear scan over runnable tasks each tick, comparing `GetHrtRelativeDeadline()` (= deadline − elapsed duration). The task with the minimum value wins. Ties go to the task nearest the list head: tasks keep the order in which they were added, except that a task which sleeps and wakes is re-appended at the back (implementation-defined, not guaranteed stable across versions). No per-task state is maintained between ticks. Requires `KERNEL_HRT` mode; outside it every relative deadline is 0, so the first runnable task always wins and the others starve until it sleeps.
 
 **Capability flags:** `WEIGHT_API = 0`, `SLEEP_EVENT_API = 1`
 
