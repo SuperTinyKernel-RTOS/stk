@@ -20,8 +20,6 @@
 #
 # A missing git, Python or history is not an error: the revision falls back to 0 / "unknown".
 
-option(ENABLE_REVISION "Embed git revision in stk_version.h" ON)
-
 set(_STK_GEN_REVISION_SCRIPT ${CMAKE_CURRENT_LIST_DIR}/gen_revision.py)
 
 function(stk_generate_revision TARGET)

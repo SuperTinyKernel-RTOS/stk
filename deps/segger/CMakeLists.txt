@@ -27,12 +27,22 @@ option(SEGGER_RTT_SYSCALLS "Retarget newlib stdio to SEGGER RTT" OFF)
 set(SEGGER_CONFIG_SOURCES     "" CACHE STRING "Additional application sources compiled into the segger library")
 set(SEGGER_CONFIG_INCLUDE_DIR "" CACHE PATH   "Folder with application-specific SEGGER_*_Conf.h files (searched first)")
 
+include_directories(
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/systemview/Config
+    ${CMAKE_CURRENT_SOURCE_DIR}/systemview/SEGGER
+    ${CMAKE_CURRENT_SOURCE_DIR}/systemview/SYSVIEW
+    ${CMAKE_CURRENT_SOURCE_DIR}/rtt/Config
+    ${CMAKE_CURRENT_SOURCE_DIR}/rtt/RTT
+)
+
 set(SEGGER_SRC
-    ${CMAKE_CURRENT_SOURCE_DIR}/SEGGER_RTT.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/SEGGER_RTT_printf.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/SEGGER_SYSVIEW.c)
+    ${CMAKE_CURRENT_SOURCE_DIR}/rtt/RTT/SEGGER_RTT.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/rtt/RTT/SEGGER_RTT_printf.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/systemview/SYSVIEW/SEGGER_SYSVIEW.c
+)
 if (SEGGER_RTT_SYSCALLS)
-    list(APPEND SEGGER_SRC ${CMAKE_CURRENT_SOURCE_DIR}/SEGGER_RTT_Syscalls_GCC.c)
+    list(APPEND SEGGER_SRC ${CMAKE_CURRENT_SOURCE_DIR}/rtt/Syscalls/SEGGER_RTT_Syscalls_GCC.c)
 endif()
 # Hand-written RTT write routine: SystemView selects it automatically on Cortex-M3 and newer with GCC (see
 # SEGGER_RTT.h, _CORE_HAS_RTT_ASM_SUPPORT), the file is empty where it is not applicable (e.g. Cortex-M0)
@@ -43,7 +53,7 @@ if (ARM)
         set(CMAKE_ASM_FLAGS "${CMAKE_C_FLAGS}")
     endif()
     enable_language(ASM)
-    list(APPEND SEGGER_SRC ${CMAKE_CURRENT_SOURCE_DIR}/SEGGER_RTT_ASM_ARMv7M.S)
+    list(APPEND SEGGER_SRC ${CMAKE_CURRENT_SOURCE_DIR}/rtt/RTT/SEGGER_RTT_ASM_ARMv7M.S)
 endif()
 list(APPEND SEGGER_SRC ${SEGGER_CONFIG_SOURCES})
 

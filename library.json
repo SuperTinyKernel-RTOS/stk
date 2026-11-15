@@ -1,0 +1,81 @@
+{
+  "name": "SuperTinyKernel",
+  "version": "1.8.0",
+  "description": "Lightweight, deterministic, bare-metal C++ RTOS for ARM Cortex-M and RISC-V MCUs. Includes x86/Windows simulator and 100% unit-test code coverage.",
+  "keywords": [
+    "rtos",
+    "kernel",
+    "scheduler",
+    "deterministic",
+    "real-time",
+    "bare-metal",
+    "cpp",
+    "cortex-m",
+    "riscv",
+    "emulator",
+    "embedded"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/SuperTinyKernel-RTOS/stk.git"
+  },
+  "authors": [
+    {
+      "name": "Neutron Code Limited",
+      "email": "contact@supertinykernel.org",
+      "url": "https://supertinykernel.org",
+      "maintainer": true
+    }
+  ],
+  "license": "MIT",
+  "homepage": "https://supertinykernel.org",
+  "frameworks": "*",
+  "platforms": [
+    "ststm32",
+    "nxpimxrt",
+    "nxplpc",
+    "freescalekinetis",
+    "raspberrypi",
+    "nordicnrf51",
+    "nordicnrf52",
+    "atmelsam",
+    "siliconlabsefm32",
+    "maxim32",
+    "teensy",
+    "titiva",
+    "infineonxmc",
+    "renesas-ra",
+    "gd32v",
+    "sifive",
+    "espressif32",
+    "native"
+  ],
+  "export": {
+    "exclude": [
+      ".github",
+      "build/benchmark",
+      "build/test",
+      "build/example",
+      "deps/cpputest",
+      "deps/infineon",
+      "deps/lwip",
+      "deps/mbedtls",
+      "deps/tinyusb",
+      "deps/target/rpi",
+      "deps/target/stm32fx",
+      "docs",
+      "test",
+      "LICENSES",
+      "REUSE.toml",
+      "coverage.sh",
+      ".gitignore",
+      "update_version.py",
+      "version.txt"
+    ]
+  },
+  "build": {
+    "srcDir": "stk/src",
+    "includeDir": "stk/include",
+    "libArchive": false
+  }
+}

@@ -9,38 +9,13 @@
 
 cmake_minimum_required(VERSION 3.14)
 
-# Raspberry Pi RP2040/RP2350: the Pico SDK (vendored in deps/target/rpi) must be set up before project() as it selects
-# the toolchain, see deps/target/rpi/ProjectInclude.cmake for the options (PICO_PLATFORM, PICO_BOARD, ...)
-option(VENDOR_RPI                     "Target Raspberry Pi RP2040/RP2350 devices (Pico SDK)" OFF)
-if (VENDOR_RPI)
-    set(PICO_PLATFORM rp2350-arm-s CACHE STRING "Pico SDK platform: rp2350-arm-s, rp2040, rp2350-riscv")
-    set(PICO_BOARD    pico2_w      CACHE STRING "Pico SDK board")
-    # picotool (UF2 generation for RP2350) is fetched and built by the SDK, which is not always wanted: ELF/BIN/HEX are produced anyway
-    if (NOT DEFINED PICO_NO_PICOTOOL)
-        set(PICO_NO_PICOTOOL 1 CACHE BOOL "Do not use picotool (set to 0 to produce UF2 files)")
-    endif()
-    # lwIP and mbedTLS are not vendored: use deps/lwip and deps/mbedtls when cloned there (see build/example/httpd*)
-    if (NOT PICO_LWIP_PATH AND NOT DEFINED ENV{PICO_LWIP_PATH} AND EXISTS ${CMAKE_CURRENT_LIST_DIR}/deps/lwip/src)
-        set(PICO_LWIP_PATH ${CMAKE_CURRENT_LIST_DIR}/deps/lwip CACHE PATH "Path to lwIP")
-    endif()
-    if (NOT PICO_MBEDTLS_PATH AND NOT DEFINED ENV{PICO_MBEDTLS_PATH} AND EXISTS ${CMAKE_CURRENT_LIST_DIR}/deps/mbedtls/library)
-        set(PICO_MBEDTLS_PATH ${CMAKE_CURRENT_LIST_DIR}/deps/mbedtls CACHE PATH "Path to Mbed TLS")
-    endif()
-    include(${CMAKE_CURRENT_LIST_DIR}/deps/target/rpi/pico_sdk_init.cmake)
-endif()
-
 project(global)
-
-if (VENDOR_RPI)
-    enable_language(ASM)
-    pico_sdk_init()
-    include(${CMAKE_CURRENT_LIST_DIR}/deps/target/rpi/ProjectInclude.cmake)
-endif()
 
 # ==============================================================================
 # Vendor & Target Options
 # ==============================================================================
-option(VENDOR_STM32                   "Target STM32 devices"                  OFF)
+option(VENDOR_STM32                   "Target ST STM32 devices"               OFF)
+option(VENDOR_RPI                     "Target Raspberry Pi RP2040/RP2350 devices (Pico SDK)" OFF)
 
 # ==============================================================================
 # Core Build Options
@@ -60,6 +35,8 @@ option(ENABLE_MPU                     "Enable hardware MPU support"           OF
 option(ENABLE_MPU_STACK_GUARD         "Enable MPU stack guard per switch"     OFF)
 option(ENABLE_STRICT_COMPLIANCY       "Disallow performance workarounds"      OFF)
 option(ENABLE_SEGGER_SYSVIEW          "Enable SEGGER SystemView tracing"      OFF)
+option(ENABLE_REVISION                "Embed git revision in stk_version.h"    ON)
+option(ENABLE_SBOM                    "Generate an SPDX 2.3 SBOM (sbom/stk.spdx.json)" OFF)
 
 # ==============================================================================
 # General
