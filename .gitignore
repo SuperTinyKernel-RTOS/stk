@@ -8,3 +8,9 @@ doxydoc
 *.launch
 .vs
 *.vcxproj.user
+deps/infineon
+deps/lwip
+deps/mbedtls
+deps/segger/rtt
+deps/segger/systemview
+deps/tinyusb

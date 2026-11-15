@@ -1,0 +1,187 @@
+{
+  "schema": 1,
+
+  "scope_note": "Scope: the STK library and the third-party code its build configuration brings in. Not covered: examples, benchmarks, tests (CppUTest), interop adapters for other RTOS APIs (CMSIS-RTOS2, Infineon abstraction layer, FreeRTOS/ThreadX shims), middleware ports (lwIP, mbedTLS, TinyUSB) and the Raspberry Pi target.",
+
+  "unsupported_when": {
+    "any": ["VENDOR_RPI"],
+    "reason": "Raspberry Pi (Pico SDK) targets are not covered by the SBOM yet"
+  },
+
+  "root": {
+    "name": "stk",
+    "description": "SuperTinyKernel (STK): lightweight high-performance deterministic C++ RTOS for embedded systems.",
+    "supplier": "Organization: Neutron Code Limited (stk@neutroncode.com)",
+    "license": "MIT",
+    "copyright": "Copyright (c) 2022-2026 Neutron Code Limited <stk@neutroncode.com>",
+    "homepage": "https://github.com/SuperTinyKernel-RTOS/stk",
+    "download": "git+https://github.com/SuperTinyKernel-RTOS/stk",
+    "purl": "pkg:github/supertinykernel-rtos/stk"
+  },
+
+  "license_refs": {
+    "LicenseRef-SEGGER-SystemView": {
+      "name": "SEGGER SystemView and RTT license",
+      "file": "LICENSES/LicenseRef-SEGGER-SystemView.txt"
+    }
+  },
+
+  "components": [
+    {
+      "id": "arm-cmsis-core",
+      "name": "Arm CMSIS-Core",
+      "supplier": "Organization: Arm Limited",
+      "license": "Apache-2.0",
+      "copyright": "Copyright (c) 2009-2021 Arm Limited",
+      "download": "https://github.com/ARM-software/CMSIS_5",
+      "purl": "pkg:github/arm-software/cmsis_5",
+      "relationship": "DEPENDS_ON",
+      "comment": "Core headers (core_cm*.h, cmsis_gcc.h, ...) included through the device header (_STK_DEVICE_INC) when compiling the library.",
+      "paths": ["deps/target/stm32fx/include/cmsis"],
+      "when": { "all": ["VENDOR_STM32"] }
+    },
+    {
+      "id": "arm-cmsis-dsp-headers",
+      "name": "Arm CMSIS-DSP headers",
+      "supplier": "Organization: Arm Limited",
+      "license": "BSD-3-Clause",
+      "copyright": "Copyright (C) 2010-2015 ARM Limited",
+      "download": "https://github.com/ARM-software/CMSIS_5",
+      "purl": "pkg:github/arm-software/cmsis_5",
+      "relationship": "DEPENDS_ON",
+      "comment": "arm_math.h, arm_common_tables.h and arm_const_structs.h, shipped beside the CMSIS-Core headers.",
+      "paths": [
+        "deps/target/stm32fx/include/cmsis/arm_math.h",
+        "deps/target/stm32fx/include/cmsis/arm_common_tables.h",
+        "deps/target/stm32fx/include/cmsis/arm_const_structs.h"
+      ],
+      "when": { "all": ["VENDOR_STM32"] }
+    },
+    {
+      "id": "uos-cortexm-glue",
+      "name": "uOS++ Cortex-M startup, newlib and trace glue",
+      "supplier": "Person: Liviu Ionescu",
+      "license": "MIT",
+      "copyright": "Copyright (c) 2014 Liviu Ionescu",
+      "download": "https://github.com/micro-os-plus",
+      "relationship": "DEPENDS_ON",
+      "comment": "Startup sequence, exception handlers, newlib syscalls, trace and linker scripts of the stm32fx target support library.",
+      "paths": [
+        "deps/target/stm32fx/src/cortexm",
+        "deps/target/stm32fx/src/diag",
+        "deps/target/stm32fx/src/newlib",
+        "deps/target/stm32fx/include/arm",
+        "deps/target/stm32fx/include/cortexm",
+        "deps/target/stm32fx/include/diag"
+      ],
+      "when": { "all": ["VENDOR_STM32"] }
+    },
+    {
+      "id": "stm32cube-f0",
+      "name": "STM32F0 HAL driver and CMSIS device files",
+      "version": "1.7.4",
+      "supplier": "Organization: STMicroelectronics",
+      "license": "BSD-3-Clause",
+      "copyright": "Copyright (c) STMicroelectronics",
+      "download": "https://github.com/STMicroelectronics/STM32CubeF0",
+      "purl": "pkg:github/stmicroelectronics/stm32cubef0",
+      "relationship": "DEPENDS_ON",
+      "comment": "HAL driver version 1.7.4 from STM32Cube_FW_F0_V1.11.1 (see README-DEVICE.md in the folders below).",
+      "paths": [
+        "deps/target/stm32fx/include/stm32f0-hal",
+        "deps/target/stm32fx/src/stm32f0-hal",
+        "deps/target/stm32fx/src/stm32f0-cmsis"
+      ],
+      "when": { "all": ["VENDOR_STM32", "TARGET_CORTEX_M0"] }
+    },
+    {
+      "id": "stm32cube-f1",
+      "name": "STM32F1 HAL driver and CMSIS device files",
+      "version": "1.1.7",
+      "supplier": "Organization: STMicroelectronics",
+      "license": "BSD-3-Clause",
+      "copyright": "Copyright (c) STMicroelectronics",
+      "download": "https://github.com/STMicroelectronics/STM32CubeF1",
+      "purl": "pkg:github/stmicroelectronics/stm32cubef1",
+      "relationship": "DEPENDS_ON",
+      "comment": "HAL driver version 1.1.7 from STM32Cube_FW_F1_V1.8.3 (see README-DEVICE.md in the folders below).",
+      "paths": [
+        "deps/target/stm32fx/include/stm32f1-hal",
+        "deps/target/stm32fx/src/stm32f1-hal",
+        "deps/target/stm32fx/src/stm32f1-cmsis"
+      ],
+      "when": { "all": ["VENDOR_STM32", "TARGET_CORTEX_M3"] }
+    },
+    {
+      "id": "stm32cube-f4",
+      "name": "STM32F4 HAL driver and CMSIS device files",
+      "version": "1.7.10",
+      "supplier": "Organization: STMicroelectronics",
+      "license": "BSD-3-Clause",
+      "copyright": "Copyright (c) STMicroelectronics",
+      "download": "https://github.com/STMicroelectronics/STM32CubeF4",
+      "purl": "pkg:github/stmicroelectronics/stm32cubef4",
+      "relationship": "DEPENDS_ON",
+      "comment": "HAL driver version 1.7.10 from STM32Cube_FW_F4_V1.25.2 (see README-DEVICE.md in the folders below).",
+      "paths": [
+        "deps/target/stm32fx/include/stm32f4-hal",
+        "deps/target/stm32fx/src/stm32f4-hal",
+        "deps/target/stm32fx/src/stm32f4-cmsis"
+      ],
+      "when": { "all": ["VENDOR_STM32", "TARGET_CORTEX_M4"] }
+    },
+
+    {
+      "id": "riscv-csr-encoding",
+      "name": "RISC-V CSR encoding header (riscv-opcodes)",
+      "supplier": "NOASSERTION",
+      "license": "NOASSERTION",
+      "copyright": "NOASSERTION",
+      "download": "https://github.com/riscv/riscv-opcodes",
+      "relationship": "DEPENDS_ON",
+      "comment": "Selected as the device header (_STK_DEVICE_INC) for RISC-V builds. The file carries no license header and its upstream license has not been verified: resolve before relying on this SBOM.",
+      "paths": ["deps/target/risc-v/include/risc-v/encoding.h"],
+      "when": { "all": ["RISCV"], "none": ["VENDOR_RPI"] }
+    },
+    {
+      "id": "riscv-startup",
+      "name": "RISC-V startup code and vector table",
+      "supplier": "NOASSERTION",
+      "license": "Unlicense",
+      "copyright": "NONE",
+      "relationship": "DEPENDS_ON",
+      "comment": "startup.c, vector_table.c, vector_table.h of the risc-v target support library (public domain dedication, no copyright line in the files).",
+      "paths": [
+        "deps/target/risc-v/src/init/startup.c",
+        "deps/target/risc-v/src/init/vector_table.c",
+        "deps/target/risc-v/src/init/vector_table.h"
+      ],
+      "when": { "all": ["RISCV"], "none": ["VENDOR_RPI"] }
+    },
+    {
+      "id": "sifive-metal-ld",
+      "name": "SiFive linker script (metal.ld)",
+      "supplier": "Organization: SiFive Inc.",
+      "license": "Apache-2.0",
+      "copyright": "Copyright (c) 2020 SiFive Inc.",
+      "relationship": "DEPENDS_ON",
+      "comment": "Default linker script of the risc-v target support library.",
+      "paths": ["deps/target/risc-v/src/ld/metal.ld"],
+      "when": { "all": ["RISCV"], "none": ["VENDOR_RPI"] }
+    },
+
+    {
+      "id": "segger-systemview",
+      "name": "SEGGER RTT and SystemView",
+      "version": "3.30",
+      "supplier": "Organization: SEGGER Microcontroller GmbH",
+      "license": "LicenseRef-SEGGER-SystemView",
+      "copyright": "Copyright (c) 1995-2021 SEGGER Microcontroller GmbH",
+      "download": "https://www.segger.com/products/development-tools/systemview/",
+      "relationship": "STATIC_LINK",
+      "comment": "Tracing, linked in when ENABLE_SEGGER_SYSVIEW=ON. SEGGER recommends not to modify these sources.",
+      "paths": ["deps/segger"],
+      "when": { "all": ["ENABLE_SEGGER_SYSVIEW"] }
+    }
+  ]
+}

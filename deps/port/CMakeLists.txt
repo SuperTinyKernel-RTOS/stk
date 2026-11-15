@@ -36,5 +36,5 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/tinyusb)
 
 # Pico SDK backends (async_context, cyw43_arch, lwip) need the SDK, i.e. -DVENDOR_RPI=ON
 if (VENDOR_RPI)
-    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/rpi)
+    #add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/rpi)
 endif()

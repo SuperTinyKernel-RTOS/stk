@@ -135,6 +135,18 @@ macro(stk_add_example _EX_NAME)
             ${ROOT_DIR}/stk/include
             ${CMAKE_CURRENT_SOURCE_DIR}
             ${_EX_INCLUDES})
+            
+        # SEGGER SystemView headers (stk.h uses them when STK_SEGGER_SYSVIEW=1)
+        if (ENABLE_SEGGER_SYSVIEW)
+            include_directories(
+                ${ROOT_DIR}/deps/segger
+                ${ROOT_DIR}/deps/segger/systemview/SEGGER
+                ${ROOT_DIR}/deps/segger/systemview/Config
+                ${ROOT_DIR}/deps/segger/systemview/SYSVIEW
+                ${ROOT_DIR}/deps/segger/rtt/RTT
+                ${ROOT_DIR}/deps/segger/rtt/Config
+            )
+        endif()
 
         # Per-example compile definitions
         if (_EX_DEFINES)
