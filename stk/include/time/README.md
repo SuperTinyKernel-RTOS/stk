@@ -124,7 +124,6 @@ Recommended: the tick task at least as urgent as the handler tasks, otherwise a 
 | `QuerySync(timer, info)` | Fills a `TimerInfo` snapshot (`active`, `remaining`, `delay`, `period`) evaluated by the tick task, so all fields belong to the same moment. |
 | `IsHostTid(tid)` | Returns `true` in task mode if `tid` is the tick task or a handler task (i.e. the caller is `TimerHost` code or an `OnExpired()` callback). |
 | `Shutdown()` | Stops all timers. Task mode: terminates the tick and handler tasks. Polled mode: the host stays usable. Returns `RES_OK` (queued), or `RES_NOT_READY` if the host is already shut down. |
-
 | `IsEmpty()` | Returns `true` if no timers are currently active (advisory). |
 | `GetSize()` | Returns the count of currently active timers (advisory). |
 | `GetTimeNow()` | Returns the last tick value written by the tick task. |
@@ -257,14 +256,15 @@ void TaskRun()
 #include <time/stk_time_util.h>
 
 stk::time::Stopwatch sw;
+stk::hw::HiResClock  g_Clock; // instance-based clock, needs a Privileged/Secure context; one instance per context
 
 void MeasureWork()
 {
-    sw.Start([]() { return stk::hw::HiResClock::GetCycles(); });
+    sw.Start([]() { return g_Clock.GetCycles(); });
 
     DoWork();
 
-    stk::Cycles elapsed = sw.Update([]() { return stk::hw::HiResClock::GetCycles(); });
+    stk::Cycles elapsed = sw.Update([]() { return g_Clock.GetCycles(); });
     LogCycles(elapsed);
 }
 ```
@@ -290,7 +290,7 @@ class NotifyTimer : public stk::time::Timer
 public:
     void OnExpired(stk::time::TimerHost *host) override
     {
-        g_Event.Signal();
+        g_Event.Set();
     }
 };
 
