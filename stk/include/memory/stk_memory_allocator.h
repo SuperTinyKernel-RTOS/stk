@@ -71,11 +71,11 @@
              embedded) - invokes the no-return hook \c STK_MEMORY_NEW_OOM_ACTION() (default \c std::terminate(),
              same as libstdc++);
              the \c std::nothrow forms return \c nullptr.
-    \note   The replacement functions are emitted \b weak in every translation unit that includes this header
+    \note  The replacement functions are emitted \b weak in every translation unit that includes this header
            with the macro enabled (the standard forbids \c inline replacements), so it is safe to enable the
            macro in the build system. A strong definition of any of these operators elsewhere in the program
            takes precedence.
-    \note   Subject to the MemoryAllocator contract (thread-safety, no ISR use unless your implementation
+    \note  Subject to the MemoryAllocator contract (thread-safety, no ISR use unless your implementation
            allows it). The backend MemoryAllocator::Weak::Allocate() must not itself use \c new (infinite recursion).
            Requires heap support (\c STK_MEMORY_NO_HEAP must be 0).
 */
@@ -93,7 +93,7 @@
            It \b must not return (panic, reset, log-and-halt...): a throwing \c new never yields \c nullptr and
            compilers rely on that, so if the action does return, \c std::terminate() is called right after it.
            Default: \c std::terminate().
-    \note   Not used if exceptions are enabled (\c std::bad_alloc is thrown instead).
+    \note  Not used if exceptions are enabled (\c std::bad_alloc is thrown instead).
 */
 #if STK_MEMORY_OVERRIDE_NEW_DELETE
     #include <new>
@@ -197,11 +197,11 @@ struct MemoryAllocator
          "MIN_ALIGNMENT must be at least pointer-aligned");
 
     /*! \struct Stats
-        \brief Snapshot of the memory allocator's statistics.
-        \note  The Record*() methods are not atomic: they must be called with the allocator lock held
-               (e.g. inside the critical section that protects the allocator state).
-        \note  BlockMemoryPool and BytePool keep a live instance of this structure and return a copy of it
-               from their GetStats(), so all allocators report identical semantics.
+        \brief  Snapshot of the memory allocator's statistics.
+        \note   The Record*() methods are not atomic: they must be called with the allocator lock held
+                (e.g. inside the critical section that protects the allocator state).
+        \note   BlockMemoryPool and BytePool keep a live instance of this structure and return a copy of it
+                from their GetStats(), so all allocators report identical semantics.
     */
     struct Stats
     {

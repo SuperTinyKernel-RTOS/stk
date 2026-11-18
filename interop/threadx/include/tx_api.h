@@ -71,6 +71,10 @@ extern "C" {
 #define TX_TIMER_THREAD_STACK_SIZE      (1024U) /* kept for source compatibility, see above */
 #endif
 
+/* Wait order of mutexes, semaphores, queues and block pools: FIFO as in ThreadX (STK itself would default to priority
+   order). tx_mutex/semaphore/block_pool_prioritize() switch the object to priority order. Override the default with
+   -DTX_STK_WAIT_ORDER_DEFAULT=stk::WAIT_ORDER_PRIORITY_PACKED (or stk::WAIT_ORDER_AUTO) when building threadx_stk.cpp. */
+
 /* Size (in pointer-sized words) of the opaque storage inside every control block. The implementation
    verifies at compile time that the STK objects fit, increase the value if a static assertion fires. */
 #ifndef TX_STK_THREAD_STORAGE_WORDS

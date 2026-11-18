@@ -252,6 +252,9 @@ class SyncObjectBase
     friend class IKernelService;
 
 public:
+    /*! \note Always appends (arrival order, O(1)). The wait order policy is applied when a waiter is
+              selected for waking, not here, see FindNextWaiter.
+    */
     void AddWaitObject(IWaitObject *wobj) override
     {
         ISyncObject::AddWaitObject(m_wait_list, wobj);
@@ -267,11 +270,27 @@ public:
         return m_wait_list;
     }
 
+    EWaitOrder GetWaitOrder() const override
+    {
+        return m_wait_order;
+    }
+
+    /*! \brief     Change the policy used to select the next waiter to serve.
+        \param[in] order: Wait order.
+        \note      Safe at any time: the wait list is never pre-sorted, the policy is applied at wake time.
+        \see       EWaitOrder, STK_SYNC_WAIT_ORDER_DEFAULT
+    */
+    void SetWaitOrder(EWaitOrder order)
+    {
+        m_wait_order = order;
+    }
+
 protected:
     /*! \brief     Constructor.
+        \param[in] order: Policy used to select the next waiter to serve.
         \note      Can not be standalone object, must be inherited by the implementation.
     */
-    explicit SyncObjectBase() : m_wait_list()
+    explicit SyncObjectBase(EWaitOrder order = STK_SYNC_WAIT_ORDER_DEFAULT) : m_wait_list(), m_wait_order(order)
     {}
 
     /*! \brief Destructor.
@@ -308,7 +327,18 @@ protected:
         return m_wait_list;
     }
 
-    IWaitObject::ListHeadType m_wait_list; //!< Tasks blocked on this object.
+    /*! \brief     Get the waiter which is served next according to the wait order.
+        \return    Wait object, or \c NULL if nobody is waiting.
+        \note      Must be called inside the critical section (see \a hw::CriticalSection, \a sync::ScopedCriticalSection).
+        \see       ISyncObject::FindNextWaiter
+    */
+    IWaitObject *GetNextWaitObject()
+    {
+        return ISyncObject::FindNextWaiter(m_wait_list, m_wait_order);
+    }
+
+    IWaitObject::ListHeadType m_wait_list;  //!< Tasks blocked on this object (arrival order).
+    EWaitOrder                m_wait_order; //!< Policy used to select the next waiter to serve.
 };
 
 //! Implementation of ISyncObject::Tick, see \a ISyncObject. Placed here as it depends on hw namespace.
@@ -353,7 +383,8 @@ inline Weight ISyncObject::FindWeightHigherThan(Weight comp) const
 
     while (itr != nullptr)
     {
-        const Weight w = GetUserTaskFromTid(itr->GetTid())->GetWeight();
+        // effective weight (run-time override and inherited boost included), same as used by FindNextWaiter
+        const Weight w = itr->GetKernelTask()->GetWeight();
         if (w > max_weight)
         {
             max_weight = w;
@@ -363,6 +394,113 @@ inline Weight ISyncObject::FindWeightHigherThan(Weight comp) const
     }
 
     return ((max_weight > comp) ? max_weight : NO_WEIGHT);
+}
+
+namespace detail {
+
+//! Selection key of WAIT_ORDER_PRIORITY: the highest current (effective) task weight wins.
+struct WaiterKeyWeight
+{
+    typedef Weight KeyType;
+
+    static KeyType Get(const IKernelTask *task) { return task->GetWeight(); }
+    static bool IsBetter(KeyType candidate, KeyType best) { return (candidate > best); }
+};
+
+//! Selection key of WAIT_ORDER_DEADLINE: the least remaining HRT deadline wins (earliest deadline first).
+struct WaiterKeyDeadline
+{
+    typedef Timeout KeyType;
+
+    static KeyType Get(const IKernelTask *task) { return task->GetHrtRelativeDeadline(); }
+    static bool IsBetter(KeyType candidate, KeyType best) { return (candidate < best); }
+};
+
+//! Selection key of WAIT_ORDER_PRIORITY_PACKED: the highest priority wins, the priority being the high 16 bits of a
+//! weight packed as (priority << 16 | threshold), see SwitchStrategyPreemptionThreshold (the threshold is ignored).
+struct WaiterKeyPackedPriority
+{
+    typedef Weight KeyType;
+
+    static KeyType Get(const IKernelTask *task) { return static_cast<KeyType>(static_cast<uint32_t>(task->GetWeight()) >> 16); }
+    static bool IsBetter(KeyType candidate, KeyType best) { return (candidate > best); }
+};
+
+//! Selection key of WAIT_ORDER_PERIOD: the shortest scheduling period wins (Rate-Monotonic rank).
+struct WaiterKeyPeriod
+{
+    typedef Timeout KeyType;
+
+    static KeyType Get(const IKernelTask *task) { return task->GetHrtPeriodicity(); }
+    static bool IsBetter(KeyType candidate, KeyType best) { return (candidate < best); }
+};
+
+//! Selection key of WAIT_ORDER_DEADLINE_FIXED: the shortest configured deadline wins (Deadline-Monotonic rank).
+struct WaiterKeyDeadlineFixed
+{
+    typedef Timeout KeyType;
+
+    static KeyType Get(const IKernelTask *task) { return task->GetHrtDeadline(); }
+    static bool IsBetter(KeyType candidate, KeyType best) { return (candidate < best); }
+};
+
+//! Pick the best waiter by \a TKey, the earliest arrival wins among equal keys (FIFO tie-break).
+template <class TKey, class TObj, class TList>
+inline TObj *SelectBestWaiter(TList &wlist)
+{
+    TObj *best = DListCast::ListEntryToParent<TObj>(wlist.GetFirst());
+
+    if (best != nullptr)
+    {
+        typename TKey::KeyType best_key = TKey::Get(best->GetKernelTask());
+
+        for (TObj *itr = DListCast::ListEntryToParent<TObj>(best->GetNext());
+             itr != nullptr;
+             itr = DListCast::ListEntryToParent<TObj>(itr->GetNext()))
+        {
+            const typename TKey::KeyType key = TKey::Get(itr->GetKernelTask());
+
+            // strictly better only: an equal key does not displace the earlier arrival
+            if (TKey::IsBetter(key, best_key))
+            {
+                best     = itr;
+                best_key = key;
+            }
+        }
+    }
+
+    return best;
+}
+
+} // namespace detail
+
+//! Implementation of ISyncObject::FindNextWaiter, see \a ISyncObject. Placed here as it depends on \a IKernelTask.
+//! \note O(1) and free of virtual calls for 0 or 1 waiter. Otherwise the selection is delegated to the kernel
+//!       (IKernelService::SelectWaiter) which has it compiled for its own strategy and mode only.
+inline IWaitObject *ISyncObject::FindNextWaiter(IWaitObject::ListHeadType &wlist, EWaitOrder order)
+{
+    IWaitObject *const first = detail::DListCast::ListEntryToParent<IWaitObject>(wlist.GetFirst());
+
+    // nothing to choose from with 0 or 1 waiter (this also avoids a trip to the kernel for nothing)
+    return (((first == nullptr) || (first->GetNext() == nullptr)) ?
+        first : IKernelService::GetInstance()->SelectWaiter(wlist, order));
+}
+
+//! Implementation of ISyncObject::FindNextWaiter (const), see \a ISyncObject.
+inline const IWaitObject *ISyncObject::FindNextWaiter(const IWaitObject::ListHeadType &wlist, EWaitOrder order)
+{
+    // selection only reads the list, the kernel interface is non-const as its result is handed out mutable
+    return FindNextWaiter(const_cast<IWaitObject::ListHeadType &>(wlist), order);
+}
+
+//! Implementation of ISyncObject::GetNextWaiter, see \a ISyncObject.
+inline TId ISyncObject::GetNextWaiter() const
+{
+    const hw::CriticalSection::ScopedLock cs_;
+
+    const IWaitObject *const obj = FindNextWaiter(GetWaitList(), GetWaitOrder());
+
+    return ((obj != nullptr) ? obj->GetTid() : TID_NONE);
 }
 
 /*! \brief     Get task/thread Id of the calling task.
@@ -642,6 +780,40 @@ static __stk_forceinline ELockResult RestoreSchedulerLock(bool locked)
     \see     LockScheduler, UnlockScheduler, RestoreSchedulerLock, IKernelService::ScopedSchedulerLock
 */
 typedef IKernelService::ScopedSchedulerLock ScopedSchedulerLock;
+
+/*! \brief     Get the wait order which suits the kernel mode and the scheduling strategy in use.
+    \return    WAIT_ORDER_DEADLINE (KERNEL_HRT), WAIT_ORDER_PRIORITY (strategies with WEIGHT_API and
+               PRIORITY_INHERITANCE_API) or WAIT_ORDER_FIFO. Never WAIT_ORDER_AUTO.
+    \warning   Requires a running kernel (see IKernelService::GetInstance()). Do not call it from a constructor of
+               a statically allocated object: pass WAIT_ORDER_AUTO instead (the default), which defers the decision
+               until a waiter is selected.
+    \see       IKernelService::GetDefaultWaitOrder, EWaitOrder
+*/
+static __stk_forceinline EWaitOrder GetDefaultWaitOrder()
+{
+    return IKernelService::GetInstance()->GetDefaultWaitOrder();
+}
+
+/*! \brief     Get the effective scheduling weight of a task at run-time.
+    \param[in] tid: Id of the task.
+    \return    Inherited weight while the task is boosted by priority inheritance, otherwise its base weight.
+               DEFAULT_WEIGHT for strategies without WEIGHT_API.
+    \note      Snapshot, see IKernelService::GetWeight.
+    \see       IKernelService::GetWeight, SetWeight
+*/
+static __stk_forceinline Weight GetWeight(TId tid)
+{
+    return IKernelService::GetInstance()->GetWeight(tid);
+}
+
+/*! \brief     Get the effective scheduling weight of the calling task.
+    \return    See GetWeight(TId).
+    \warning   ISR-unsafe (resolves the calling task via GetTid()).
+*/
+static __stk_forceinline Weight GetWeight()
+{
+    return GetWeight(GetTid());
+}
 
 /*! \brief     Change the base scheduling weight of a task at run-time.
     \param[in] tid: Id of the task.

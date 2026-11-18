@@ -7,7 +7,7 @@
 - **Zero Fragmentation**: Fixed-size block allocator guarantees no heap fragmentation over time.
 - **O(1) Alloc and Free**: Intrusive singly-linked free-list provides constant-time allocation and release with a minimal critical section.
 - **Three Storage Modes**: Pools can embed their own storage (`StaticBlockPool`, `StaticBytePool` — zero heap, nothing to size by hand), use caller-supplied static storage, or use heap-allocated storage, selectable per instance.
-- **Blocking Semantics**: `Alloc()` and `TimedAlloc()` suspend the calling task via a `ConditionVariable` until a block becomes available, giving up the CPU completely rather than spin-waiting.
+- **Blocking Semantics**: `Alloc()` and `TimedAlloc()` suspend the calling task via a `ConditionVariable` until a block becomes available, giving up the CPU completely rather than spin-waiting. When several tasks wait, the one served next is chosen by the [wait order](../sync/README.md#wait-order) of that `ConditionVariable` (by default it follows the scheduling strategy: highest priority first for priority-based strategies, arrival order for round-robin).
 - **ISR Safety**: `TryAlloc()` and `Free()` are ISR-safe. Blocking paths are task-context only.
 - **Typed API**: Template wrappers (`AllocT<T>()`, `TryAllocT<T>()`, etc.) eliminate manual casts and refuse types that do not fit the block size or alignment.
 - **Object Helpers and `PoolPtr`**: `NewT<T>(args...)` / `DeleteT()` construct and destroy objects in pool memory, and `MakeT<T>()` returns an owning `PoolPtr` that returns the object to its pool automatically.
@@ -43,8 +43,8 @@ At construction all blocks are chained: `block_i->next = block_{i+1}`, `last->ne
 | Mode | Constructor / type | Storage ownership |
 |---|---|---|
 | Embedded (zero heap) | `StaticBlockPool<blksz, cap [, align]>` | The pool object itself |
-| External (static/stack) | `BlockMemoryPool(cap, blksz, buf, bufsz [, name [, align]])` | Caller — never freed by pool |
-| Heap-allocated | `BlockMemoryPool(cap, blksz [, name [, align]])` | Pool — freed in destructor |
+| External (static/stack) | `BlockMemoryPool(cap, blksz, buf, bufsz [, name [, align [, order]]])` | Caller — never freed by pool |
+| Heap-allocated | `BlockMemoryPool(cap, blksz [, name [, align [, order]]])` | Pool — freed in destructor |
 
 > **Note**: When using heap storage without exceptions (the typical embedded configuration), always call `IsStorageValid()` immediately after construction to detect allocation failure before first use. An invalid pool never blocks: every allocation fails immediately.
 
@@ -65,7 +65,8 @@ At construction all blocks are chained: `block_i->next = block_{i+1}`, `last->ne
 explicit BlockMemoryPool(size_t capacity, size_t raw_block_size,
                          uint8_t *storage, size_t storage_size,
                          const char *name = nullptr,
-                         size_t alignment = ALIGN_DEFAULT);
+                         size_t alignment = ALIGN_DEFAULT,
+                         EWaitOrder order = STK_SYNC_WAIT_ORDER_DEFAULT);
 ```
 
 Constructs a pool over caller-supplied storage. The pool holds a reference to `storage` without taking ownership. The buffer should be aligned to `alignment` and sized to hold at least `RequiredStorageSize(capacity, raw_block_size, alignment)` bytes — asserted at construction time. If the buffer is smaller, the capacity is trimmed to what fits; if it cannot hold even one block (or an argument is invalid), the pool is left invalid (`IsStorageValid() == false`).
@@ -77,7 +78,8 @@ Constructs a pool over caller-supplied storage. The pool holds a reference to `s
 ```cpp
 explicit BlockMemoryPool(size_t capacity, size_t raw_block_size,
                          const char *name = nullptr,
-                         size_t alignment = ALIGN_DEFAULT);
+                         size_t alignment = ALIGN_DEFAULT,
+                         EWaitOrder order = STK_SYNC_WAIT_ORDER_DEFAULT);
 ```
 
 Allocates the storage via `MemoryAllocator::AllocateAligned` (non-throwing, overflow-checked, start aligned to the pool alignment). On destruction the buffer is freed automatically with `FreeAligned`. Check `IsStorageValid()` after construction when exceptions are disabled. Not available when `STK_MEMORY_NO_HEAP` is `1`.
@@ -108,7 +110,7 @@ The memory returned by these methods is **uninitialized**. To allocate *and cons
 bool Free(void *ptr);
 ```
 
-Returns a previously allocated block to the pool in O(1). Pushes the block onto the free-list head and wakes exactly one task blocked inside `Alloc()` or `TimedAlloc()`, if any. ISR-safe.
+Returns a previously allocated block to the pool in O(1) (plus, while tasks are blocked in `Alloc()`, selecting the waiter to wake: O(n) in the number of waiters inside the critical section unless the wait order is `WAIT_ORDER_FIFO`). Pushes the block onto the free-list head and wakes exactly one task blocked inside `Alloc()` or `TimedAlloc()`, if any: the highest-priority waiter with a priority-based strategy, the longest-waiting one otherwise (see [Wait order](#wait-order-of-blocked-allocators)). ISR-safe.
 
 Returns `true` on success. Returns `false` (and triggers an assertion in debug builds) if `ptr` is `nullptr`, out of the pool's range, misaligned, or already free. How reliably a double-free is detected depends on the configuration:
 
@@ -139,6 +141,9 @@ Returns `true` on success. Returns `false` (and triggers an assertion in debug b
 | `GetPeakUsedCount()` | Yes | High watermark: maximum number of blocks allocated at the same time. |
 | `GetAllocFailCount()` | Yes | Number of requests that failed because the pool was exhausted (timeouts and `NO_WAIT` misses). |
 | `GetStats()` | Yes | Consistent [`MemoryAllocator::Stats`](#statistics) snapshot (in bytes). |
+| `GetWaitList()` | Yes | Read-only list of tasks blocked in `Alloc()` / `TimedAlloc()`; a snapshot, read it inside a critical section if it may change. |
+| `GetNextWaiter()` | Yes | Id of the blocked task that the next `Free()` would serve first according to the wait order (`TID_NONE` if nobody waits). Diagnostics / telemetry. |
+| `GetWaitOrder()` / `SetWaitOrder(order)` | Yes / No | Read / change the `EWaitOrder` used to pick the blocked allocator served by `Free()`. `SetWaitOrder()` is safe at any time. |
 
 ---
 
@@ -194,7 +199,7 @@ m_first                                                    m_end
 bool Free(void *ptr);
 ```
 
-Marks the block free, merges it with following free blocks, and wakes **all** tasks blocked in `Alloc()` / `TimedAlloc()` so each can re-check its own request (requests differ in size, so waking only one could leave a satisfiable request asleep). ISR-safe, but not constant time.
+Marks the block free, merges it with following free blocks, and wakes **all** tasks blocked in `Alloc()` / `TimedAlloc()` so each can re-check its own request (requests differ in size, so waking only one could leave a satisfiable request asleep). Because everybody is woken, the wait order does not apply here: the scheduler decides who runs first, so under a priority-based strategy the highest-priority waiter gets the first chance to claim the memory. ISR-safe, but not constant time.
 
 Returns `false` (and triggers an assertion in debug builds) if `ptr` is `nullptr`, outside the pool, misaligned, or not in use. Double-free is caught through the block's state marker in every build; builds with `STK_MEMORY_POOL_CHECKS=1` additionally verify that the pointer is the start of a real block. With `STK_MEMORY_BYTEPOOL_GUARD=1` a payload overrun (overwritten guard word) is also reported and the damaged block is kept rather than merged into a possibly corrupted list.
 
@@ -216,6 +221,8 @@ Returns `false` (and triggers an assertion in debug builds) if `ptr` is `nullptr
 | `GetPeakUsedSize()` | Yes | High watermark of pool consumption in bytes (headers included). |
 | `GetAllocFailCount()` | Yes | Number of requests that could not be satisfied: timeouts, `NO_WAIT` misses and requests larger than `GetMaxRequest()` (zero-sized requests are not counted). |
 | `GetMaxScanLength()` | Yes | Longest block-list walk (in blocks) of any allocation so far. The walk runs inside the critical section, so this measures the allocator's worst-case interrupt/scheduler blocking time — use it to decide whether an ISR may call `TryAlloc()`. |
+| `GetWaitList()` | Yes | Read-only list of tasks blocked in `Alloc()` / `TimedAlloc()`; a snapshot, read it inside a critical section if it may change. |
+| `GetNextWaiter()` | Yes | Id of the first blocked task per the wait order (`TID_NONE` if nobody waits). Diagnostics / telemetry; `Free()` wakes all waiters, so this is not who gets the memory. |
 
 Constants: `BLOCK_ALIGN`, `HEADER_SIZE`.
 
@@ -663,13 +670,31 @@ The same table applies to `BytePool` (`size` is the first argument of the alloc 
 
 ---
 
+## Wait order of blocked allocators
+
+Each pool owns an internal `sync::ConditionVariable` that tasks block on in `Alloc()` / `TimedAlloc()`. It uses the default wait order (`STK_SYNC_WAIT_ORDER_DEFAULT`, i.e. `WAIT_ORDER_AUTO`), so it follows the scheduling strategy, see [Wait Order](../sync/README.md#wait-order):
+
+| Pool | Wake-up on `Free()` | Effect of the wait order |
+|---|---|---|
+| `BlockMemoryPool` | One waiter (`NotifyOne`) | The waiter chosen by the wait order gets the freed block: highest priority first with Fixed-Priority / Preemption-Threshold (a high-priority task is no longer queued behind lower-priority allocators, mitigating priority inversion), earliest deadline with EDF, arrival order with Round-Robin / SWRR. |
+| `BytePool` | All waiters (`NotifyAll`) | Not applicable, every waiter re-checks its own request; the scheduler decides who runs first. |
+
+`BlockMemoryPool` (and `StaticBlockPool`) take an optional `EWaitOrder` as the last constructor argument and offer `SetWaitOrder()` / `GetWaitOrder()`; the default is `STK_SYNC_WAIT_ORDER_DEFAULT`. `BytePool` has no such option because it wakes all waiters, so an order would have no effect. To restore strict arrival order (FIFO, no starvation of low-priority allocators) globally, define `STK_SYNC_WAIT_ORDER_DEFAULT` as `stk::WAIT_ORDER_FIFO` in `stk_config.h`.
+
+```cpp
+stk::memory::StaticBlockPool<64, 8> g_PktPool("pkt");                        // follows the scheduling strategy
+stk::memory::StaticBlockPool<64, 8> g_LogPool("log", stk::WAIT_ORDER_FIFO);  // always fair
+```
+
+---
+
 ## Notes and Caveats
 
 - **Lifetime**: Destroying a pool while tasks are blocked inside `Alloc()` or `TimedAlloc()` is a logical error. An assertion is triggered in debug builds by the internal `ConditionVariable` destructor. Destroying a pool with outstanding blocks is also asserted.
 - **Double-free**: See the detection table under `BlockMemoryPool::Free()` and the `BytePool` description. Null pointers after `Free()` to avoid silent corruption.
 - **Blocking paths require `KERNEL_SYNC`**: `Alloc()` and `TimedAlloc()` (with a non-zero timeout) depend on the `ConditionVariable` primitive and require the kernel to be compiled with `KERNEL_SYNC`. `TryAlloc()` and `Free()` are always available regardless of kernel mode.
 - **Non-copyable**: `BlockMemoryPool` and `BytePool` are non-copyable and non-movable.
-- **`BytePool` starvation**: freed memory is not reserved for the longest-waiting task, so a large request can be starved by a stream of small ones. Every `Free()` wakes all waiters, each of which re-scans the pool.
+- **`BytePool` starvation**: freed memory is not reserved for the longest-waiting task, so a large request can be starved by a stream of small ones. Every `Free()` wakes all waiters, each of which re-scans the pool, so the wait order is not applied and the scheduler (task priority) decides who claims the memory first.
 - **Global pool objects**: with heap storage they would be constructed before the heap is usable; use embedded or external storage.
 - **`stk_memory_allocator_default.h`** and **`stk_memory_allocator_malloc.h`** define functions (the `MemoryAllocator::Weak` hooks): include only one of them, in exactly one translation unit, and not from a shared/umbrella header.
 
@@ -689,3 +714,4 @@ Behavior that differs from earlier versions of this module:
 - **`STK_MEMORY_POOL_CHECKS`** replaces the hard-wired `_DEBUG` / `DEBUG` test (which remains its default).
 - **`BytePool::BLOCK_ALIGN`** is public and configurable (default 8, 16 on RISC-V); `HEADER_SIZE` is `max(8, BLOCK_ALIGN)`.
 - **Heap-storage constructors** are removed when `STK_MEMORY_NO_HEAP=1`.
+- **Wait order**: tasks blocked in `BlockMemoryPool::Alloc()` / `TimedAlloc()` are now served by the default `EWaitOrder` of the kernel (priority order with priority-based strategies) instead of strictly FIFO; pass `stk::WAIT_ORDER_FIFO` to the constructor (or define `STK_SYNC_WAIT_ORDER_DEFAULT` as `stk::WAIT_ORDER_FIFO`) to restore the old behavior. `BlockMemoryPool` / `StaticBlockPool` constructors gained a trailing `EWaitOrder` parameter (source-compatible). `GetNextWaiter()` is new (replaces `GetFirstWaiterTid()`), see [Wait order of blocked allocators](#wait-order-of-blocked-allocators).

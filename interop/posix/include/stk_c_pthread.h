@@ -257,9 +257,9 @@ typedef uintptr_t pthread_stk_word_t;
 /*! \brief     Sizes (in pthread_stk_word_t units) of the opaque storage for the C++ sync objects.
     \note      Verified at compile time against sizeof() of the real objects by stk_c_pthread.cpp.
 */
-#define STK_C_PTHREAD_MUTEX_WORDS   (10U + (STK_SYNC_DEBUG_NAMES ? 1U : 0U))
-#define STK_C_PTHREAD_CV_WORDS      (7U + (STK_SYNC_DEBUG_NAMES ? 1U : 0U))
-#define STK_C_PTHREAD_RWMUTEX_WORDS (17U + (STK_SYNC_DEBUG_NAMES ? 3U : 0U))
+#define STK_C_PTHREAD_MUTEX_WORDS   (11U + (STK_SYNC_DEBUG_NAMES ? 1U : 0U))
+#define STK_C_PTHREAD_CV_WORDS      (8U + (STK_SYNC_DEBUG_NAMES ? 1U : 0U))
+#define STK_C_PTHREAD_RWMUTEX_WORDS (19U + (STK_SYNC_DEBUG_NAMES ? 3U : 0U))
 #define STK_C_PTHREAD_BARRIER_WORDS (STK_C_PTHREAD_MUTEX_WORDS + STK_C_PTHREAD_CV_WORDS + 4U + (STK_SYNC_DEBUG_NAMES ? 1U : 0U))
 
 typedef struct pthread_stk_mutex_mem_t   { pthread_stk_word_t data[STK_C_PTHREAD_MUTEX_WORDS]   __stk_pthread_aligned; } pthread_stk_mutex_mem_t;

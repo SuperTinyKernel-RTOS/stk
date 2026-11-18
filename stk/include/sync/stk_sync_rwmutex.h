@@ -37,6 +37,12 @@ namespace sync {
     \note  Non-recursive: a task must not call ReadLock() or Lock() more than once
            without a matching unlock. Doing so will deadlock.
 
+    \note  **Wait order**: the order is configurable for the waiting writers only (see EWaitOrder):
+           WAIT_ORDER_FIFO serves the writer that started waiting first, WAIT_ORDER_PRIORITY serves
+           the writer with the highest task weight (arrival order among equal weights), the weight is
+           read when the lock is released. Waiting readers are always released together (NotifyAll),
+           so their order is irrelevant. Writer preference over readers is unchanged in both modes.
+
     \code
     // Example: Protecting app settings
     stk::sync::RWMutex g_SettingsLock;
@@ -61,9 +67,15 @@ namespace sync {
 class RWMutex final : public IMutex, public ITraceable
 {
 public:
-    /*! \brief  Construct an RWMutex in the unlocked state with no active readers or writers.
+    /*! \brief     Construct an RWMutex in the unlocked state with no active readers or writers.
+        \param[in] writer_order: Policy used to select which waiting writer is woken next when the lock
+                   becomes free: WAIT_ORDER_FIFO (arrival order, fair) or WAIT_ORDER_PRIORITY (highest
+                   task weight first, arrival order among equal weights).
+        \note      WAIT_ORDER_PRIORITY is meaningful for strategies with WEIGHT_API, see EWaitOrder.
     */
-    explicit RWMutex() : m_readers(0U), m_writers_waiting(0U), m_writer_active(false)
+    explicit RWMutex(EWaitOrder writer_order = STK_SYNC_WAIT_ORDER_DEFAULT)
+        : m_cv_readers(WAIT_ORDER_FIFO), m_cv_writers(writer_order),
+          m_readers(0U), m_writers_waiting(0U), m_writer_active(false)
     {}
 
     /*! \brief  Destructor.
@@ -234,8 +246,9 @@ public:
     bool TryLock() { return TimedLock(NO_WAIT); }
 
     /*! \brief     Release the exclusive writer lock (IMutex interface).
-        \details   Releases the lock and prioritizes waking waiting writers. If no
-                   writers are waiting, wakes all waiting readers.
+        \details   Releases the lock and prioritizes waking waiting writers (the next one is selected
+                   according to the writer wait order, see EWaitOrder). If no writers are waiting,
+                   wakes all waiting readers.
         \warning   ISR-safe.
     */
     void Unlock() override;
@@ -246,8 +259,8 @@ private:
     static const uint16_t READERS_MAX = 0xFFFEU; //!< maximum number of concurrent readers
     static const uint16_t WRITERS_MAX = 0xFFFEU; //!< maximum number of waiting writers
 
-    ConditionVariable m_cv_readers;      //!< signaled when readers can proceed
-    ConditionVariable m_cv_writers;      //!< signaled when a writer can proceed
+    ConditionVariable m_cv_readers;      //!< signaled when readers can proceed (always NotifyAll, order irrelevant)
+    ConditionVariable m_cv_writers;      //!< signaled when a writer can proceed (NotifyOne, wait order applies)
     uint16_t          m_readers;         //!< current active reader count
     uint16_t          m_writers_waiting; //!< count of writers waiting for access
     bool              m_writer_active;   //!< true if a writer currently holds the lock

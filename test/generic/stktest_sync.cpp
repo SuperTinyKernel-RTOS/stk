@@ -87,10 +87,14 @@ static struct SyncWaitWakeRelaxCpuContext
         ++counter;
 
         if (!wake_all && (counter >= 5))
+        {
             sobj->WakeOne();
+        }
         else
         if (wake_all && (counter >= 7))
+        {
             sobj->WakeAll();
+        }
     }
 }
 g_SyncWaitWakeRelaxCpuContext;
@@ -109,13 +113,13 @@ TEST(Sync, SyncWait_Wake)
     MutexMock mutex;
     SyncObjectMock sobj;
 
-    g_SyncWaitWakeRelaxCpuContext.platform = platform;
-    g_SyncWaitWakeRelaxCpuContext.sobj     = &sobj;
-    g_RelaxCpuHandler = SyncWaitWakeRelaxCpu;
-
     kernel.Initialize();
     kernel.AddTask(&task);
     kernel.Start();
+
+    g_SyncWaitWakeRelaxCpuContext.platform = platform;
+    g_SyncWaitWakeRelaxCpuContext.sobj     = &sobj;
+    g_RelaxCpuHandler = SyncWaitWakeRelaxCpu;
 
     MutexMock::ScopedLock guard(mutex);
 
@@ -137,6 +141,13 @@ TEST(Sync, SyncWait_Wake)
     CHECK_EQUAL(8, g_SyncWaitWakeRelaxCpuContext.counter);
     CHECK_EQUAL(WAIT_RESULT_SIGNAL, wresult); // expect no timeout
     CHECK_EQUAL(true, mutex.m_locked); // expect locked mutex after Wait return
+}
+
+TEST(Sync, SyncDefaultWaitOrder)
+{
+    SyncObjectMock sobj;
+
+    CHECK_EQUAL(WAIT_ORDER_AUTO, sobj.GetWaitOrder());
 }
 
 // ============================================================================ //
@@ -318,9 +329,9 @@ TEST(Sync, SyncObjectBase_DestroyNotLinked)
     CHECK_EQUAL(0, test::g_CriticalSectionState); // critical section is balanced
 }
 
-// ============================================================================ //
-// ======== ISyncObject::GetWaitList().GetSize() / ISyncObject::GetFirstWaiterTid() ===== //
-// ============================================================================ //
+// ================================================================================== //
+// ======== ISyncObject::GetWaitList().GetSize() / ISyncObject::GetNextWaiter() ===== //
+// ================================================================================== //
 
 // Wait object which is not bound to a task: allows to fill a wait list with waiters of chosen ids
 // without a kernel. Wake() mimics the real wait object, which removes itself from the wait list.
@@ -330,6 +341,8 @@ struct WaitObjectStub final : public IWaitObject
     {}
 
     TId GetTid() const override { return m_tid; }
+
+    IKernelTask *GetKernelTask() const { return nullptr; }
 
     void Wake(bool) override
     {
@@ -356,8 +369,6 @@ struct WaiterListStub final : public SyncObjectBase
 {
     explicit WaiterListStub() : SyncObjectBase()
     {}
-
-    STK_VIRT_DTOR ~WaiterListStub() = default;
 
     void Add(WaitObjectStub &w)
     {
@@ -389,46 +400,58 @@ static const TId TEST_TID_3 = 0x300;
 
 TEST(Sync, WaiterIntrospection_Empty)
 {
+    // need existing kernel for stk::detail::ResolveWaitOrder to succeed
+    Kernel<KERNEL_STATIC | KERNEL_SYNC, 1, sched::SwitchStrategyRR, PlatformTestMock> kernel;
+    kernel.Initialize();
+
     WaiterListStub sobj;
     const ISyncObject &iface = sobj; // read-only introspection must be usable on a const interface
 
     CHECK_EQUAL(0, iface.GetWaitList().GetSize());
-    CHECK_EQUAL(TID_NONE, iface.GetFirstWaiterTid());
+    CHECK_EQUAL(TID_NONE, iface.GetNextWaiter());
 }
 
 TEST(Sync, WaiterIntrospection_SingleWaiter)
 {
+    // need existing kernel for stk::detail::ResolveWaitOrder to succeed
+    Kernel<KERNEL_STATIC | KERNEL_SYNC, 1, sched::SwitchStrategyRR, PlatformTestMock> kernel;
+    kernel.Initialize();
+
     WaiterListStub sobj;
     WaitObjectStub w1(TEST_TID_1);
 
     sobj.Add(w1);
 
     CHECK_EQUAL(1, sobj.GetWaitList().GetSize());
-    CHECK_EQUAL(TEST_TID_1, sobj.GetFirstWaiterTid());
+    CHECK_EQUAL(TEST_TID_1, sobj.GetNextWaiter());
 
     sobj.Remove(w1);
 
     CHECK_EQUAL(0, sobj.GetWaitList().GetSize());
-    CHECK_EQUAL(TID_NONE, sobj.GetFirstWaiterTid());
+    CHECK_EQUAL(TID_NONE, sobj.GetNextWaiter());
 }
 
 TEST(Sync, WaiterIntrospection_FifoOrder)
 {
+    // need existing kernel for stk::detail::ResolveWaitOrder to succeed
+    Kernel<KERNEL_STATIC | KERNEL_SYNC, 1, sched::SwitchStrategyRR, PlatformTestMock> kernel;
+    kernel.Initialize();
+
     WaiterListStub sobj;
     WaitObjectStub w1(TEST_TID_1), w2(TEST_TID_2), w3(TEST_TID_3);
 
     sobj.Add(w1);
     CHECK_EQUAL(1, sobj.GetWaitList().GetSize());
-    CHECK_EQUAL(TEST_TID_1, sobj.GetFirstWaiterTid());
+    CHECK_EQUAL(TEST_TID_1, sobj.GetNextWaiter());
 
     // waiters are appended to the back: the first one stays the first one
     sobj.Add(w2);
     CHECK_EQUAL(2, sobj.GetWaitList().GetSize());
-    CHECK_EQUAL(TEST_TID_1, sobj.GetFirstWaiterTid());
+    CHECK_EQUAL(TEST_TID_1, sobj.GetNextWaiter());
 
     sobj.Add(w3);
     CHECK_EQUAL(3, sobj.GetWaitList().GetSize());
-    CHECK_EQUAL(TEST_TID_1, sobj.GetFirstWaiterTid());
+    CHECK_EQUAL(TEST_TID_1, sobj.GetNextWaiter());
 
     sobj.Remove(w1);
     sobj.Remove(w2);
@@ -437,6 +460,10 @@ TEST(Sync, WaiterIntrospection_FifoOrder)
 
 TEST(Sync, WaiterIntrospection_RemoveFirst)
 {
+    // need existing kernel for stk::detail::ResolveWaitOrder to succeed
+    Kernel<KERNEL_STATIC | KERNEL_SYNC, 1, sched::SwitchStrategyRR, PlatformTestMock> kernel;
+    kernel.Initialize();
+
     WaiterListStub sobj;
     WaitObjectStub w1(TEST_TID_1), w2(TEST_TID_2), w3(TEST_TID_3);
 
@@ -447,19 +474,23 @@ TEST(Sync, WaiterIntrospection_RemoveFirst)
     // the next waiter in the FIFO order becomes the first
     sobj.Remove(w1);
     CHECK_EQUAL(2, sobj.GetWaitList().GetSize());
-    CHECK_EQUAL(TEST_TID_2, sobj.GetFirstWaiterTid());
+    CHECK_EQUAL(TEST_TID_2, sobj.GetNextWaiter());
 
     sobj.Remove(w2);
     CHECK_EQUAL(1, sobj.GetWaitList().GetSize());
-    CHECK_EQUAL(TEST_TID_3, sobj.GetFirstWaiterTid());
+    CHECK_EQUAL(TEST_TID_3, sobj.GetNextWaiter());
 
     sobj.Remove(w3);
     CHECK_EQUAL(0, sobj.GetWaitList().GetSize());
-    CHECK_EQUAL(TID_NONE, sobj.GetFirstWaiterTid());
+    CHECK_EQUAL(TID_NONE, sobj.GetNextWaiter());
 }
 
 TEST(Sync, WaiterIntrospection_RemoveMiddleAndLast)
 {
+    // need existing kernel for stk::detail::ResolveWaitOrder to succeed
+    Kernel<KERNEL_STATIC | KERNEL_SYNC, 1, sched::SwitchStrategyRR, PlatformTestMock> kernel;
+    kernel.Initialize();
+
     WaiterListStub sobj;
     WaitObjectStub w1(TEST_TID_1), w2(TEST_TID_2), w3(TEST_TID_3);
 
@@ -470,17 +501,21 @@ TEST(Sync, WaiterIntrospection_RemoveMiddleAndLast)
     // removing a waiter from the middle or the tail (timeout, cancel) does not change the first one
     sobj.Remove(w2);
     CHECK_EQUAL(2, sobj.GetWaitList().GetSize());
-    CHECK_EQUAL(TEST_TID_1, sobj.GetFirstWaiterTid());
+    CHECK_EQUAL(TEST_TID_1, sobj.GetNextWaiter());
 
     sobj.Remove(w3);
     CHECK_EQUAL(1, sobj.GetWaitList().GetSize());
-    CHECK_EQUAL(TEST_TID_1, sobj.GetFirstWaiterTid());
+    CHECK_EQUAL(TEST_TID_1, sobj.GetNextWaiter());
 
     sobj.Remove(w1);
 }
 
 TEST(Sync, WaiterIntrospection_ReAddGoesToBack)
 {
+    // need existing kernel for stk::detail::ResolveWaitOrder to succeed
+    Kernel<KERNEL_STATIC | KERNEL_SYNC, 1, sched::SwitchStrategyRR, PlatformTestMock> kernel;
+    kernel.Initialize();
+
     WaiterListStub sobj;
     WaitObjectStub w1(TEST_TID_1), w2(TEST_TID_2);
 
@@ -492,10 +527,10 @@ TEST(Sync, WaiterIntrospection_ReAddGoesToBack)
     sobj.Add(w1);
 
     CHECK_EQUAL(2, sobj.GetWaitList().GetSize());
-    CHECK_EQUAL(TEST_TID_2, sobj.GetFirstWaiterTid());
+    CHECK_EQUAL(TEST_TID_2, sobj.GetNextWaiter());
 
     sobj.Remove(w2);
-    CHECK_EQUAL(TEST_TID_1, sobj.GetFirstWaiterTid());
+    CHECK_EQUAL(TEST_TID_1, sobj.GetNextWaiter());
 
     sobj.Remove(w1);
 }
@@ -528,6 +563,10 @@ TEST(Sync, WaiterIntrospection_CountTracksAddedWaiters)
 
 TEST(Sync, WaiterIntrospection_FirstIsTheOneWokenNext)
 {
+    // need existing kernel for stk::detail::ResolveWaitOrder to succeed
+    Kernel<KERNEL_STATIC | KERNEL_SYNC, 1, sched::SwitchStrategyRR, PlatformTestMock> kernel;
+    kernel.Initialize();
+
     WaiterListStub sobj;
     WaitObjectStub w1(TEST_TID_1), w2(TEST_TID_2), w3(TEST_TID_3);
 
@@ -535,25 +574,25 @@ TEST(Sync, WaiterIntrospection_FirstIsTheOneWokenNext)
     sobj.Add(w2);
     sobj.Add(w3);
 
-    // GetFirstWaiterTid() predicts the waiter which WakeOne() wakes next
-    CHECK_EQUAL(TEST_TID_1, sobj.GetFirstWaiterTid());
+    // GetNextWaiter() predicts the waiter which WakeOne() wakes next
+    CHECK_EQUAL(TEST_TID_1, sobj.GetNextWaiter());
     sobj.WakeFirst();
     CHECK_EQUAL(1, w1.m_wake_count);
     CHECK_EQUAL(0, w2.m_wake_count);
     CHECK_EQUAL(0, w3.m_wake_count);
     CHECK_EQUAL(2, sobj.GetWaitList().GetSize());
 
-    CHECK_EQUAL(TEST_TID_2, sobj.GetFirstWaiterTid());
+    CHECK_EQUAL(TEST_TID_2, sobj.GetNextWaiter());
     sobj.WakeFirst();
     CHECK_EQUAL(1, w2.m_wake_count);
     CHECK_EQUAL(0, w3.m_wake_count);
     CHECK_EQUAL(1, sobj.GetWaitList().GetSize());
 
-    CHECK_EQUAL(TEST_TID_3, sobj.GetFirstWaiterTid());
+    CHECK_EQUAL(TEST_TID_3, sobj.GetNextWaiter());
     sobj.WakeFirst();
     CHECK_EQUAL(1, w3.m_wake_count);
     CHECK_EQUAL(0, sobj.GetWaitList().GetSize());
-    CHECK_EQUAL(TID_NONE, sobj.GetFirstWaiterTid());
+    CHECK_EQUAL(TID_NONE, sobj.GetNextWaiter());
 
     // nobody is waiting: harmless
     sobj.WakeFirst();
@@ -562,6 +601,10 @@ TEST(Sync, WaiterIntrospection_FirstIsTheOneWokenNext)
 
 TEST(Sync, WaiterIntrospection_WakeAll)
 {
+    // need existing kernel for stk::detail::ResolveWaitOrder to succeed
+    Kernel<KERNEL_STATIC | KERNEL_SYNC, 1, sched::SwitchStrategyRR, PlatformTestMock> kernel;
+    kernel.Initialize();
+
     WaiterListStub sobj;
     WaitObjectStub w1(TEST_TID_1), w2(TEST_TID_2), w3(TEST_TID_3);
 
@@ -576,7 +619,7 @@ TEST(Sync, WaiterIntrospection_WakeAll)
     CHECK_EQUAL(1, w2.m_wake_count);
     CHECK_EQUAL(1, w3.m_wake_count);
     CHECK_EQUAL(0, sobj.GetWaitList().GetSize());
-    CHECK_EQUAL(TID_NONE, sobj.GetFirstWaiterTid());
+    CHECK_EQUAL(TID_NONE, sobj.GetNextWaiter());
 }
 
 // ---------------------------------------------------------------------------- //
@@ -621,9 +664,9 @@ static struct WaiterIntrospectContext
 
     bool                sampled_waiting;  // the object was sampled while the task was blocked on it
     size_t              count_waiting;    // GetWaitList().GetSize() while the task is blocked
-    TId                 tid_waiting;      // GetFirstWaiterTid() while the task is blocked
+    TId                 tid_waiting;      // GetNextWaiter() while the task is blocked
     size_t              count_after_wake; // GetWaitList().GetSize() right after Wake(), before the next tick
-    TId                 tid_after_wake;   // GetFirstWaiterTid() right after Wake(), before the next tick
+    TId                 tid_after_wake;   // GetNextWaiter() right after Wake(), before the next tick
 
     void Process()
     {
@@ -634,7 +677,7 @@ static struct WaiterIntrospectContext
         {
             // the task has been blocked for 2 ticks
             count_waiting   = sobj->GetWaitList().GetSize();
-            tid_waiting     = sobj->GetFirstWaiterTid();
+            tid_waiting     = sobj->GetNextWaiter();
             sampled_waiting = true;
         }
         else
@@ -646,7 +689,7 @@ static struct WaiterIntrospectContext
 
                 // Wake() removes the waiter from the wait list immediately, no tick is needed
                 count_after_wake = sobj->GetWaitList().GetSize();
-                tid_after_wake   = sobj->GetFirstWaiterTid();
+                tid_after_wake   = sobj->GetNextWaiter();
             }
             else
             if (end == END_CANCEL)
@@ -688,7 +731,7 @@ static void Test_WaiterIntrospection(WaiterIntrospectContext::EEnd end, const EW
 
     // nobody has waited yet
     CHECK_EQUAL(0, sobj.GetWaitList().GetSize());
-    CHECK_EQUAL(TID_NONE, sobj.GetFirstWaiterTid());
+    CHECK_EQUAL(TID_NONE, sobj.GetNextWaiter());
 
     MutexMock::ScopedLock guard(mutex);
 
@@ -711,7 +754,7 @@ static void Test_WaiterIntrospection(WaiterIntrospectContext::EEnd end, const EW
 
     // however the wait ended, the waiter is gone from the wait list
     CHECK_EQUAL(0, sobj.GetWaitList().GetSize());
-    CHECK_EQUAL(TID_NONE, sobj.GetFirstWaiterTid());
+    CHECK_EQUAL(TID_NONE, sobj.GetNextWaiter());
 }
 
 TEST(Sync, WaiterIntrospection_TaskWaitEndedByWake)
@@ -727,6 +770,165 @@ TEST(Sync, WaiterIntrospection_TaskWaitEndedByTimeout)
 TEST(Sync, WaiterIntrospection_TaskWaitEndedByCancel)
 {
     Test_WaiterIntrospection(WaiterIntrospectContext::END_CANCEL, WAIT_RESULT_CANCELED, 10);
+}
+
+// ============================================================================ //
+// ================= KernelTask::IsSyncWaiting (via Kernel) =================== //
+// ============================================================================ //
+
+// exposes KernelTask::IsSyncWaiting() of the task bound to a given user task
+template <uint8_t TMode>
+struct IsSyncWaitingKernel : public Kernel<TMode, 1, sched::SwitchStrategyRR, PlatformTestMock>
+{
+    typedef Kernel<TMode, 1, sched::SwitchStrategyRR, PlatformTestMock> BaseType;
+
+    // false if the user task is not bound to any slot
+    bool CallIsSyncWaiting(const ITask *user_task)
+    {
+        const typename BaseType::KernelTask *const task = BaseType::FindTaskByUserTask(user_task);
+
+        return (task != nullptr) && task->IsSyncWaiting();
+    }
+
+    bool IsTaskBound(const ITask *user_task)
+    {
+        return (BaseType::FindTaskByUserTask(user_task) != nullptr);
+    }
+};
+
+typedef IsSyncWaitingKernel<KERNEL_STATIC | KERNEL_SYNC> IsSyncWaitingSyncKernel;
+
+static struct IsSyncWaitingContext
+{
+    IsSyncWaitingContext()
+    {
+        Reset();
+    }
+
+    void Reset()
+    {
+        counter           = 0;
+        wake              = false;
+        waiting_on_entry  = false;
+        waiting_before_wake = false;
+        waiting_after_wake  = true;
+        platform          = NULL;
+        kernel            = NULL;
+        sobj              = NULL;
+        task              = NULL;
+    }
+
+    uint32_t               counter;
+    bool                   wake;                // wake the waiter on 5th tick, otherwise let the wait time out
+    bool                   waiting_on_entry;    // IsSyncWaiting() on the first spin iteration of the blocked task
+    bool                   waiting_before_wake; // IsSyncWaiting() right before WakeOne()
+    bool                   waiting_after_wake;  // IsSyncWaiting() right after WakeOne()
+    PlatformTestMock      *platform;
+    IsSyncWaitingSyncKernel *kernel;
+    SyncObjectMock        *sobj;
+    ITask                 *task;
+
+    void Process()
+    {
+        if (counter == 0)
+        {
+            waiting_on_entry = kernel->CallIsSyncWaiting(task);
+        }
+
+        platform->ProcessTick();
+        ++counter;
+
+        if (wake && (counter == 5))
+        {
+            waiting_before_wake = kernel->CallIsSyncWaiting(task);
+
+            sobj->WakeOne();
+
+            waiting_after_wake = kernel->CallIsSyncWaiting(task);
+        }
+    }
+}
+g_IsSyncWaitingContext;
+
+static void IsSyncWaitingRelaxCpu()
+{
+    g_IsSyncWaitingContext.Process();
+}
+
+static void Test_IsSyncWaiting(bool wake, Timeout wait_ticks, EWaitResult expected_result)
+{
+    IsSyncWaitingSyncKernel kernel;
+    PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
+    TaskMock<ACCESS_USER> task;
+    MutexMock mutex;
+    SyncObjectMock sobj;
+
+    kernel.Initialize();
+    kernel.AddTask(&task);
+    kernel.Start();
+
+    // not waiting before any wait is started
+    CHECK_TRUE(kernel.IsTaskBound(&task));
+    CHECK_FALSE(kernel.CallIsSyncWaiting(&task));
+
+    g_IsSyncWaitingContext.Reset();
+    g_IsSyncWaitingContext.platform = platform;
+    g_IsSyncWaitingContext.kernel   = &kernel;
+    g_IsSyncWaitingContext.sobj     = &sobj;
+    g_IsSyncWaitingContext.task     = &task;
+    g_IsSyncWaitingContext.wake     = wake;
+
+    decltype(g_RelaxCpuHandler) prev_handler = g_RelaxCpuHandler;
+    g_RelaxCpuHandler = IsSyncWaitingRelaxCpu;
+
+    MutexMock::ScopedLock guard(mutex);
+
+    const EWaitResult wresult = IKernelService::GetInstance()->Wait(&sobj, &mutex, wait_ticks);
+
+    g_RelaxCpuHandler = prev_handler;
+
+    CHECK_EQUAL(expected_result, wresult);
+
+    // the task was registered in the sync object's wait list while it was blocked
+    CHECK_TRUE(g_IsSyncWaitingContext.waiting_on_entry);
+
+    if (wake)
+    {
+        CHECK_TRUE(g_IsSyncWaitingContext.waiting_before_wake);
+
+        // Wake() removes the wait object from the wait list immediately
+        CHECK_FALSE(g_IsSyncWaitingContext.waiting_after_wake);
+    }
+
+    // however the wait ended, the task is not waiting anymore
+    CHECK_FALSE(kernel.CallIsSyncWaiting(&task));
+}
+
+TEST(Sync, KernelTask_IsSyncWaiting_WokenBySignal)
+{
+    Test_IsSyncWaiting(true, 10, WAIT_RESULT_SIGNAL);
+}
+
+TEST(Sync, KernelTask_IsSyncWaiting_EndedByTimeout)
+{
+    Test_IsSyncWaiting(false, 4, WAIT_RESULT_TIMEOUT);
+}
+
+TEST(Sync, KernelTask_IsSyncWaiting_NotSyncMode)
+{
+    // without KERNEL_SYNC there is no wait object: always false
+    IsSyncWaitingKernel<KERNEL_STATIC> kernel;
+    TaskMock<ACCESS_USER> task;
+
+    kernel.Initialize();
+    kernel.AddTask(&task);
+
+    CHECK_TRUE(kernel.IsTaskBound(&task));
+    CHECK_FALSE(kernel.CallIsSyncWaiting(&task));
+
+    kernel.Start();
+
+    CHECK_FALSE(kernel.CallIsSyncWaiting(&task));
 }
 
 #if CPPUTEST_USE_NEW_MACROS

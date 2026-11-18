@@ -417,7 +417,9 @@ private:
     of timers. (STK_TIMER_COUNT_MAX is the deprecated name of this macro.) When the queue is full:
     - a caller which can wait (task context, task mode, kernel running, not the tick task) blocks until the tick task
       has drained a slot, no command is lost and nothing is asserted. An asynchronous call is therefore non-blocking
-      only while the queue has room;
+      only while the queue has room. When several callers are blocked, a freed slot goes to the one selected by the
+      wait order of the command queue (see stk::EWaitOrder): by default the highest-priority caller first with
+      priority-based strategies, arrival order otherwise;
     - a caller which can not wait (ISR, kernel not started, polled mode, the tick task) gets RES_QUEUE_FULL, nothing
       is queued.
     A blocking call must not be made from a critical section or with interrupts disabled. The wait ends when a slot is
@@ -995,7 +997,8 @@ private:
         \param[in] cmd: Fully initialized TimerCommand to push.
         \param[in] wait: Maximum ticks to wait for a free queue slot: NO_WAIT (default) does not wait unless the
                    queue is full and the caller can wait (see CanWait()), WAIT_INFINITE blocks until the tick task
-                   has drained at least one command.
+                   has drained at least one command. Of several blocked callers the one selected by the wait order
+                   of the command queue (see stk::EWaitOrder) gets the freed slot.
         \param[in] coalesce: True (default) allows an asynchronous CMD_RESTART / CMD_START_OR_RESET to be merged into
                    one of the same timer which is already waiting. False for a synchronous command which could not
                    wait (Execute()): its arguments must always be applied.

@@ -81,7 +81,8 @@ public:
         DEADLINE_MISSED_API      = 0, //!< This strategy does not use OnTaskDeadlineMissed() events.
         PRIORITY_INHERITANCE_API = 0, //!< This strategy does not require Priority Inheritance and OnTaskWeightChange() events.
         NOSLEEP_YIELD_API        = 0, //!< This strategy does not handle Yield() itself (OnTaskYield() is not used); the kernel puts the yielding task to sleep for a tick.
-        TIMESLICE_API            = 0  //!< This strategy does not support KERNEL_TIMESLICE mode.
+        TIMESLICE_API            = 0, //!< This strategy does not support KERNEL_TIMESLICE mode.
+        WAIT_ORDER_HINT          = ((TStrategyType == MSS_TYPE_RATE) ? WAIT_ORDER_PERIOD : WAIT_ORDER_DEADLINE_FIXED) //!< The same static rank as in AddTask(): the shortest period (RM) or the shortest configured deadline (DM) is served first (see EWaitOrder).
     };
 
     /*! \brief Construct an empty strategy with no tasks.

@@ -647,6 +647,108 @@ uint32_t stk_periodic_trigger_get_period(const stk_periodic_trigger_t *trig);
 
 /** @} */
 
+/*! \defgroup c_api_stopwatch STK C Stopwatch API
+    \brief    Pure C interface for stk::time::Stopwatch.
+    \details  Measures the number of cycles (or other monotonic counter units) which elapsed between
+              successive stk_stopwatch_update() calls. The time source is supplied by the caller as a
+              function pointer, so the stopwatch does not depend on a particular hardware counter.
+              Ready-made variants for the high-resolution clock exist (\c _hires).
+
+    Typical usage:
+    \code
+    static stk_hires_clock_mem_t clk_mem;
+    stk_hires_clock_t *clk = stk_hires_clock_create(&clk_mem);
+
+    static stk_stopwatch_mem_t sw_mem;
+    stk_stopwatch_t *sw = stk_stopwatch_create(&sw_mem);
+
+    stk_stopwatch_start_hires(sw, clk);
+    // ... work to be measured ...
+    stk_cycle_t cycles = stk_stopwatch_update_hires(sw, clk);   // cycles since start
+
+    // A custom time source:
+    static stk_cycle_t read_counter(void *ctx) { return *(volatile uint64_t *)ctx; }
+    stk_stopwatch_start(sw, read_counter, &g_counter);
+    stk_cycle_t dt = stk_stopwatch_update(sw, read_counter, &g_counter);
+    \endcode
+
+    \note  Not thread-safe. Intended for use within a single task or ISR context.
+    \note  A counter value of exactly 0 is indistinguishable from "not started": if the first reading is 0
+           the next update treats itself as the start point and returns 0.
+    \note  Wrap-around of the counter is handled by unsigned subtraction, provided the elapsed time does
+           not exceed one full counter period.
+    @{
+*/
+
+/*! \brief  A memory size (multiples of stk_word_t) required for Stopwatch instance.
+*/
+#define STK_STOPWATCH_IMPL_SIZE (2U)
+
+/*! \brief  Opaque memory container for a \a stk_stopwatch_t instance.
+    \note   Declare as \c static or on the stack (not on the heap).
+    \note   Aligned to 8 bytes due to Stopwatch using a 64-bit Cycles type.
+*/
+typedef struct stk_stopwatch_mem_t {
+    stk_word_t data[STK_STOPWATCH_IMPL_SIZE] __stk_c_align(8U);
+} stk_stopwatch_mem_t;
+
+/*! \brief  Opaque handle to a \a stk::time::Stopwatch instance.
+*/
+typedef struct stk_stopwatch_t stk_stopwatch_t;
+
+/*! \brief     Time source of a stopwatch.
+    \param[in] ctx: User context passed to stk_stopwatch_start() / stk_stopwatch_update().
+    \return    Current value of a monotonic counter (e.g. CPU cycle counter).
+*/
+typedef stk_cycle_t (*stk_stopwatch_now_func_t)(void *ctx);
+
+/*! \brief     Construct a Stopwatch instance in the supplied memory buffer.
+    \param[in] membuf: Pointer to the caller-supplied memory container.
+    \return    Stopwatch handle, or \c NULL if \a membuf is \c NULL.
+    \note      The stopwatch is initially stopped: call stk_stopwatch_start() before the first meaningful
+               stk_stopwatch_update(), otherwise the first update acts as the start point and returns 0.
+*/
+stk_stopwatch_t *stk_stopwatch_create(stk_stopwatch_mem_t *const membuf);
+
+/*! \brief     Destroy instance (calls the C++ destructor in-place).
+    \param[in] sw: Stopwatch handle. May be \c NULL (no-op).
+*/
+void stk_stopwatch_destroy(stk_stopwatch_t *const sw);
+
+/*! \brief     Capture the start time.
+    \param[in] sw: Stopwatch handle.
+    \param[in] now: Time source. Must not be \c NULL.
+    \param[in] ctx: Context passed to \a now (may be \c NULL).
+    \note      Resets the reference point: the next stk_stopwatch_update() measures from this moment.
+*/
+void stk_stopwatch_start(stk_stopwatch_t *sw, stk_stopwatch_now_func_t now, void *ctx);
+
+/*! \brief     Get the number of cycles elapsed since the last start or update.
+    \param[in] sw: Stopwatch handle.
+    \param[in] now: Time source. Must be the same source as used in the preceding start. Must not be \c NULL.
+    \param[in] ctx: Context passed to \a now (may be \c NULL).
+    \return    Elapsed cycles since the previous reference point, 0 if the stopwatch was not started.
+    \note      Updates the reference point, so each successive call measures the interval since the previous one.
+*/
+stk_cycle_t stk_stopwatch_update(stk_stopwatch_t *sw, stk_stopwatch_now_func_t now, void *ctx);
+
+/*! \brief     Capture the start time using the high-resolution clock as the time source.
+    \param[in] sw: Stopwatch handle.
+    \param[in] clk: High-resolution clock handle, see stk_hires_clock_create().
+    \see       stk_stopwatch_start, stk_hires_cycles
+*/
+void stk_stopwatch_start_hires(stk_stopwatch_t *sw, stk_hires_clock_t *clk);
+
+/*! \brief     Get the number of cycles elapsed since the last start or update, using the high-resolution clock.
+    \param[in] sw: Stopwatch handle.
+    \param[in] clk: High-resolution clock handle. Must be the same clock as used in the preceding start.
+    \return    Elapsed cycles, convert with stk_hires_frequency().
+    \see       stk_stopwatch_update, stk_hires_cycles
+*/
+stk_cycle_t stk_stopwatch_update_hires(stk_stopwatch_t *sw, stk_hires_clock_t *clk);
+
+/** @} */
+
 #ifdef __cplusplus
 }
 #endif
@@ -688,6 +790,7 @@ namespace time {
     class TimerHost;
     class Timer;
     class PeriodicTrigger;
+    class Stopwatch;
 } // namespace time
 } // namespace stk
 
@@ -714,6 +817,13 @@ extern "C" stk::time::Timer *stk_timer_get_instance(stk_timer_t *tmr);
     \note      C++ callers only (guarded by \c __cplusplus); not part of the C ABI.
 */
 extern "C" stk::time::PeriodicTrigger *stk_periodic_trigger_get_instance(stk_periodic_trigger_t *trig);
+
+/*! \brief     Get the underlying C++ \c stk::time::Stopwatch object wrapped by a \c stk_stopwatch_t handle.
+    \param[in] sw: Stopwatch handle obtained via \c stk_stopwatch_create().
+    \return    Pointer to the wrapped \c stk::time::Stopwatch instance. Never \c NULL for a valid handle.
+    \note      C++ callers only (guarded by \c __cplusplus); not part of the C ABI.
+*/
+extern "C" stk::time::Stopwatch *stk_stopwatch_get_instance(stk_stopwatch_t *sw);
 #endif // __cplusplus
 
 /** @} */

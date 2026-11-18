@@ -448,17 +448,19 @@ public:
         return m_cv.GetWaitList();
     }
 
-    /*! \brief     Get id of the task which is first in the wait list (FIFO order), i.e. the one
-                   that WakeOne() would wake next.
-        \return    TId of the first waiter, or \a TID_NONE if no tasks are currently waiting.
+    /*! \brief     Get id of the first blocked task according to the wait order (see \c EWaitOrder).
+        \return    TId of that waiter, or \a TID_NONE if no tasks are currently waiting.
+        \note      \c Free() wakes all waiters (each re-checks its own request), so the wait order does not
+                   decide who gets the memory: the scheduler does (higher priority runs first).
         \note      Read-only introspection for diagnostics / telemetry.
-        \note      The result is a snapshot: call inside the critical section (see \a hw::CriticalSection,
-                   \a sync::ScopedCriticalSection) if the list may change concurrently.
+        \note      Enters a critical section (nestable, see \a hw::CriticalSection), so the wait list is walked safely
+                   while it is modified concurrently (tick handler, ISR, other cores). The result is still a snapshot:
+                   hold a critical section around this call and the others (e.g. GetWaitList) to read them consistently.
         \see       GetWaitList
     */
-    TId GetFirstWaiterTid() const
+    TId GetNextWaiter() const
     {
-        return m_cv.GetFirstWaiterTid();
+        return m_cv.GetNextWaiter();
     }
 
 private:

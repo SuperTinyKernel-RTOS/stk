@@ -68,8 +68,14 @@ class ConditionVariable final : public SyncObjectBase, public ITraceable
 {
 public:
     /*! \brief     Constructor.
+        \param[in] order: Policy used by NotifyOne() to select which waiting task is woken:
+                   WAIT_ORDER_FIFO (arrival order, fair) or WAIT_ORDER_PRIORITY (highest task weight first,
+                   arrival order among equal weights). The weight is read at the moment of the notification,
+                   so run-time weight changes of the waiting tasks are honored. NotifyAll() wakes every
+                   waiter and is not affected.
+        \note      WAIT_ORDER_PRIORITY is meaningful for strategies with WEIGHT_API, see EWaitOrder.
     */
-    explicit ConditionVariable()
+    explicit ConditionVariable(EWaitOrder order = STK_SYNC_WAIT_ORDER_DEFAULT) : SyncObjectBase(order)
     {}
 
     /*! \brief     Destructor.
@@ -114,12 +120,13 @@ public:
     */
     EWaitResult WaitEx(IMutex &mutex, Timeout timeout_ticks = WAIT_INFINITE);
 
-    /*! \brief     Wake one waiting task.
+    /*! \brief     Wake one waiting task: the first one in arrival order (WAIT_ORDER_FIFO) or the one with
+                   the highest task weight (WAIT_ORDER_PRIORITY), see EWaitOrder.
         \note      ISR-safe.
     */
     void NotifyOne();
 
-    /*! \brief     Wake one waiting task.
+    /*! \brief     Wake one waiting task, see NotifyOne().
         \warning   Caller must lock Critical Section or use ScopedCriticalSection prior calling this function.
         \note      ISR-safe.
     */
@@ -188,7 +195,7 @@ inline void ConditionVariable::NotifyOne()
 
 inline void ConditionVariable::NotifyOne_CS()
 {
-    WakeOne(); // wakes the first task in the wait list (FIFO order), if any
+    WakeOne(); // wakes the next task selected by the wait order (first in FIFO order), if any
 }
 
 // ---------------------------------------------------------------------------

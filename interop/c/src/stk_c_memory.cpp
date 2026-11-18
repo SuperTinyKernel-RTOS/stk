@@ -79,14 +79,16 @@ struct stk_blockpool_t
 {
     // Constructor forwarded to the external-storage BlockMemoryPool ctor.
     stk_blockpool_t(size_t capacity, size_t raw_block_size,
-                    uint8_t *storage, size_t storage_size, const char *name, size_t alignment)
-        : handle(capacity, raw_block_size, storage, storage_size, name, alignment)
+                    uint8_t *storage, size_t storage_size, const char *name, size_t alignment,
+                    EWaitOrder order)
+        : handle(capacity, raw_block_size, storage, storage_size, name, alignment, order)
     {}
 
 #if STK_MEMORY_HAS_HEAP
     // Constructor forwarded to the heap-storage BlockMemoryPool ctor.
-    stk_blockpool_t(size_t capacity, size_t raw_block_size, const char *name, size_t alignment)
-        : handle(capacity, raw_block_size, name, alignment)
+    stk_blockpool_t(size_t capacity, size_t raw_block_size, const char *name, size_t alignment,
+                    EWaitOrder order)
+        : handle(capacity, raw_block_size, name, alignment, order)
     {}
 #endif
 
@@ -279,10 +281,11 @@ extern "C" {
 // BlockPool - lifecycle
 // -----------------------------------------------------------------------------
 
-stk_blockpool_t *stk_blockpool_create_ex(size_t      capacity,
-                                         size_t      raw_block_size,
-                                         const char *name,
-                                         size_t      alignment)
+stk_blockpool_t *stk_blockpool_create_ex(size_t           capacity,
+                                         size_t           raw_block_size,
+                                         const char      *name,
+                                         size_t           alignment,
+                                         stk_wait_order_t order)
 {
     STK_ASSERT(capacity > 0U);
     STK_ASSERT(raw_block_size > 0U);
@@ -299,12 +302,14 @@ stk_blockpool_t *stk_blockpool_create_ex(size_t      capacity,
 
     if (slot != nullptr)
     {
-        result = ConstructIn<stk_blockpool_t>(slot->mem, capacity, raw_block_size, name, alignment);
+        result = ConstructIn<stk_blockpool_t>(slot->mem, capacity, raw_block_size, name, alignment,
+                                              static_cast<EWaitOrder>(order));
     }
 #else
     // heap support is compiled out (STK_MEMORY_NO_HEAP): use stk_blockpool_create_static*()
     STK_UNUSED(name);
     STK_UNUSED(alignment);
+    STK_UNUSED(order);
 #endif
 
     return result;
@@ -312,15 +317,17 @@ stk_blockpool_t *stk_blockpool_create_ex(size_t      capacity,
 
 stk_blockpool_t *stk_blockpool_create(size_t capacity, size_t raw_block_size, const char *name)
 {
-    return stk_blockpool_create_ex(capacity, raw_block_size, name, BlockMemoryPool::ALIGN_DEFAULT);
+    return stk_blockpool_create_ex(capacity, raw_block_size, name, BlockMemoryPool::ALIGN_DEFAULT,
+                                   static_cast<stk_wait_order_t>(STK_SYNC_WAIT_ORDER_DEFAULT));
 }
 
-stk_blockpool_t *stk_blockpool_create_static_ex(size_t      capacity,
-                                                size_t      raw_block_size,
-                                                uint8_t    *storage_ptr,
-                                                size_t      storage_size,
-                                                const char *name,
-                                                size_t      alignment)
+stk_blockpool_t *stk_blockpool_create_static_ex(size_t           capacity,
+                                                size_t           raw_block_size,
+                                                uint8_t         *storage_ptr,
+                                                size_t           storage_size,
+                                                const char      *name,
+                                                size_t           alignment,
+                                                stk_wait_order_t order)
 {
     STK_ASSERT(capacity > 0U);
     STK_ASSERT(raw_block_size > 0U);
@@ -338,7 +345,8 @@ stk_blockpool_t *stk_blockpool_create_static_ex(size_t      capacity,
     if (slot != nullptr)
     {
         result = ConstructIn<stk_blockpool_t>(slot->mem, capacity, raw_block_size,
-                                              storage_ptr, storage_size, name, alignment);
+                                              storage_ptr, storage_size, name, alignment,
+                                              static_cast<EWaitOrder>(order));
     }
 
     return result;
@@ -351,7 +359,8 @@ stk_blockpool_t *stk_blockpool_create_static(size_t      capacity,
                                              const char *name)
 {
     return stk_blockpool_create_static_ex(capacity, raw_block_size, storage_ptr, storage_size, name,
-                                          BlockMemoryPool::ALIGN_DEFAULT);
+                                          BlockMemoryPool::ALIGN_DEFAULT,
+                                          static_cast<stk_wait_order_t>(STK_SYNC_WAIT_ORDER_DEFAULT));
 }
 
 void stk_blockpool_destroy(stk_blockpool_t *pool)
@@ -498,6 +507,29 @@ bool stk_blockpool_is_empty(const stk_blockpool_t *pool)
     STK_ASSERT(pool != nullptr);
 
     return pool->handle.IsEmpty();
+}
+
+void stk_blockpool_set_wait_order(stk_blockpool_t *pool, stk_wait_order_t order)
+{
+    STK_ASSERT(pool != nullptr);
+
+    pool->handle.SetWaitOrder(static_cast<EWaitOrder>(order));
+}
+
+stk_wait_order_t stk_blockpool_get_wait_order(const stk_blockpool_t *pool)
+{
+    STK_ASSERT(pool != nullptr);
+
+    return static_cast<stk_wait_order_t>(pool->handle.GetWaitOrder());
+}
+
+stk_tid_t stk_blockpool_get_next_waiter(const stk_blockpool_t *pool)
+{
+    STK_ASSERT(pool != nullptr);
+
+    const sync::ScopedCriticalSection cs_;
+
+    return static_cast<stk_tid_t>(pool->handle.GetNextWaiter());
 }
 
 BlockMemoryPool *stk_blockpool_get_instance(stk_blockpool_t *pool)
@@ -698,6 +730,15 @@ size_t stk_bytepool_get_max_request(const stk_bytepool_t *pool)
     STK_ASSERT(pool != nullptr);
 
     return pool->handle.GetMaxRequest();
+}
+
+stk_tid_t stk_bytepool_get_next_waiter(const stk_bytepool_t *pool)
+{
+    STK_ASSERT(pool != nullptr);
+
+    const sync::ScopedCriticalSection cs_;
+
+    return static_cast<stk_tid_t>(pool->handle.GetNextWaiter());
 }
 
 BytePool *stk_bytepool_get_instance(stk_bytepool_t *pool)

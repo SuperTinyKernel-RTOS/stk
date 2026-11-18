@@ -41,6 +41,23 @@ STK_STATIC_ASSERT_DESC((TX_MAX_PRIORITIES >= 1U) && (TX_MAX_PRIORITIES <= 1024U)
 
 typedef stk::sched::SwitchStrategyPreemptionThreshold<TX_MAX_PRIORITIES, true> StkStrategy;
 
+// ----------------------------------------------------------------------------
+// Wait order of the synchronization objects (stk::EWaitOrder)
+//
+// ThreadX suspends threads in FIFO order, unless tx_*_prioritize() is called. STK's own default (WAIT_ORDER_AUTO)
+// would resolve to priority order for this strategy, so objects are created with TX_STK_WAIT_ORDER_DEFAULT = FIFO
+// to keep the ThreadX semantics, and tx_*_prioritize() switches the object to priority order
+// (WAIT_ORDER_PRIORITY_PACKED: the priority is the high half of the weight, the preemption-threshold is ignored, equal
+// priorities are served in arrival order). Override the default with -DTX_STK_WAIT_ORDER_DEFAULT=stk::WAIT_ORDER_AUTO
+// (or WAIT_ORDER_PRIORITY_PACKED) to get priority-ordered wait lists everywhere without calling tx_*_prioritize().
+// ----------------------------------------------------------------------------
+
+#ifndef TX_STK_WAIT_ORDER_DEFAULT
+#define TX_STK_WAIT_ORDER_DEFAULT       stk::WAIT_ORDER_FIFO
+#endif
+
+constexpr stk::EWaitOrder WAIT_ORDER_PRIORITIZED = stk::WAIT_ORDER_PRIORITY_PACKED;
+
 // KERNEL_TELEMETRY: IKernel::GetTaskState() is used for the exact thread states (tx_thread_info_get(),
 // tx_thread_suspend(), tx_thread_wait_abort())
 typedef stk::Kernel<stk::KERNEL_DYNAMIC | stk::KERNEL_SYNC | stk::KERNEL_TIMESLICE | stk::KERNEL_TELEMETRY
@@ -265,40 +282,25 @@ TX_THREAD *ThreadFromTid(stk::TId tid)
 }
 
 // Fills the "first suspended thread / suspended count" outputs of a *_info_get() call from the wait list of an STK
-// synchronization object (ISyncObject::GetWaitList().GetSize()/GetFirstWaiterTid()). Both values are read in one critical
-// section so that they are consistent with each other.
-static void FillSuspended(const stk::ISyncObject &sobj, TX_THREAD **first_suspended, ULONG *suspended_count)
+// object (stk::ISyncObject, stk::sync::EventFlagsT, stk::memory::BlockMemoryPool, stk::memory::BytePool): the wait list
+// size and the next waiter to be served, which follows the wait order of the object (GetNextWaiter(), FIFO by default,
+// priority order after tx_*_prioritize()), like the first thread of the ThreadX suspension list. Both values are read in
+// one critical section so that they are consistent with each other.
+template <class TWaitable>
+static void FillSuspended(const TWaitable &obj, TX_THREAD **first_suspended, ULONG *suspended_count)
 {
     size_t   count = 0U;
-    stk::TId first = stk::TID_NONE;
+    stk::TId next  = stk::TID_NONE;
 
     {
         const stk::sync::ScopedCriticalSection cs_;
 
-        count = sobj.GetWaitList().GetSize();
-        first = sobj.GetFirstWaiterTid();
+        count = obj.GetWaitList().GetSize();
+        next  = obj.GetNextWaiter();
     }
 
     if (suspended_count != nullptr) { *suspended_count = static_cast<ULONG>(count); }
-    if (first_suspended != nullptr) { *first_suspended = ThreadFromTid(first); } // TID_NONE -> nullptr
-}
-
-// Fills the "first suspended thread / suspended count" outputs of a *_info_get() call from the wait list of
-// stk::EventFlags.
-static void FillSuspended(const StkEventFlags &wf, TX_THREAD **first_suspended, ULONG *suspended_count)
-{
-    size_t   count = 0U;
-    stk::TId first = stk::TID_NONE;
-
-    {
-        const stk::sync::ScopedCriticalSection cs_;
-
-        count = wf.GetWaitList().GetSize();
-        first = wf.GetFirstWaiterTid();
-    }
-
-    if (suspended_count != nullptr) { *suspended_count = static_cast<ULONG>(count); }
-    if (first_suspended != nullptr) { *first_suspended = ThreadFromTid(first); } // TID_NONE -> nullptr
+    if (first_suspended != nullptr) { *first_suspended = ThreadFromTid(next); } // TID_NONE -> nullptr
 }
 
 // A blocking call is only valid in thread context (not ISR, not the timer thread, kernel running).
@@ -1157,7 +1159,8 @@ UINT tx_mutex_create(TX_MUTEX *mutex_ptr, TX_NAME_CONST CHAR *name_ptr, UINT inh
     }
     else
     {
-        stk::sync::Mutex *const m = new (static_cast<void *>(mutex_ptr->tx_mutex_stk_storage)) stk::sync::Mutex();
+        stk::sync::Mutex *const m = new (static_cast<void *>(mutex_ptr->tx_mutex_stk_storage))
+            stk::sync::Mutex(TX_STK_WAIT_ORDER_DEFAULT);
         m->SetTraceName(name_ptr);
 
         mutex_ptr->tx_mutex_name = name_ptr;
@@ -1270,8 +1273,16 @@ UINT tx_mutex_info_get(TX_MUTEX *mutex_ptr, TX_NAME_CONST CHAR **name, ULONG *co
 
 UINT tx_mutex_prioritize(TX_MUTEX *mutex_ptr)
 {
-    // waiters are served in FIFO order, priority ordering of the wait list is not supported (noop)
-    return (IsValidMutex(mutex_ptr) ? TX_SUCCESS : TX_MUTEX_ERROR);
+    UINT result = TX_MUTEX_ERROR;
+
+    if (IsValidMutex(mutex_ptr))
+    {
+        // the owner receives the mutex in priority order from now on (not a one-time reordering of the current waiters)
+        MutexOf(mutex_ptr)->SetWaitOrder(WAIT_ORDER_PRIORITIZED);
+        result = TX_SUCCESS;
+    }
+
+    return result;
 }
 
 // ============================================================================
@@ -1324,7 +1335,7 @@ UINT tx_semaphore_create(TX_SEMAPHORE *semaphore_ptr, TX_NAME_CONST CHAR *name_p
     else
     {
         StkSemaphore *const s = new (static_cast<void *>(semaphore_ptr->tx_semaphore_stk_storage))
-            StkSemaphore(initial_count, StkSemaphore::COUNT_MAX);
+            StkSemaphore(initial_count, StkSemaphore::COUNT_MAX, TX_STK_WAIT_ORDER_DEFAULT);
         s->SetTraceName(name_ptr);
 
         semaphore_ptr->tx_semaphore_name       = name_ptr;
@@ -1459,7 +1470,16 @@ UINT tx_semaphore_info_get(TX_SEMAPHORE *semaphore_ptr, TX_NAME_CONST CHAR **nam
 
 UINT tx_semaphore_prioritize(TX_SEMAPHORE *semaphore_ptr)
 {
-    return (IsValidSem(semaphore_ptr) ? TX_SUCCESS : TX_SEMAPHORE_ERROR); // noop: FIFO wait list
+    UINT result = TX_SEMAPHORE_ERROR;
+
+    if (IsValidSem(semaphore_ptr))
+    {
+        // the token goes to the highest priority waiter from now on (not a one-time reordering of the current waiters)
+        SemOf(semaphore_ptr)->SetWaitOrder(WAIT_ORDER_PRIORITIZED);
+        result = TX_SUCCESS;
+    }
+
+    return result;
 }
 
 UINT tx_semaphore_put_notify(TX_SEMAPHORE *semaphore_ptr,
@@ -1761,7 +1781,7 @@ UINT tx_queue_create(TX_QUEUE *queue_ptr, TX_NAME_CONST CHAR *name_ptr, UINT mes
         else
         {
             stk::sync::MessageQueue *const q = new (static_cast<void *>(queue_ptr->tx_queue_stk_storage))
-                stk::sync::MessageQueue(static_cast<uint8_t *>(queue_start), capacity, msg_bytes);
+                stk::sync::MessageQueue(static_cast<uint8_t *>(queue_start), capacity, msg_bytes, TX_STK_WAIT_ORDER_DEFAULT);
             q->SetTraceName(name_ptr);
 
             queue_ptr->tx_queue_name         = name_ptr;
@@ -1831,9 +1851,9 @@ UINT tx_queue_info_get(TX_QUEUE *queue_ptr, TX_NAME_CONST CHAR **name, ULONG *en
         if (name != nullptr)              { *name              = queue_ptr->tx_queue_name; }
         if (enqueued != nullptr)          { *enqueued          = static_cast<ULONG>(q->GetCount()); }
         if (available_storage != nullptr) { *available_storage = static_cast<ULONG>(q->GetSpace()); }
-        if (first_suspended != nullptr)   { *first_suspended   = nullptr; }
-        if (suspended_count != nullptr)   { *suspended_count   = 0U; }
         if (next_queue != nullptr)        { *next_queue        = nullptr; }
+
+        FillSuspended(*q, first_suspended, suspended_count);
 
         result = TX_SUCCESS;
     }
@@ -1843,7 +1863,16 @@ UINT tx_queue_info_get(TX_QUEUE *queue_ptr, TX_NAME_CONST CHAR **name, ULONG *en
 
 UINT tx_queue_prioritize(TX_QUEUE *queue_ptr)
 {
-    return (IsValidQueue(queue_ptr) ? TX_SUCCESS : TX_QUEUE_ERROR); // noop: FIFO wait list
+    UINT result = TX_QUEUE_ERROR;
+
+    if (IsValidQueue(queue_ptr))
+    {
+        // receivers and senders are served in priority order from now on (not a one-time reordering of the current waiters)
+        QueueOf(queue_ptr)->SetWaitOrder(WAIT_ORDER_PRIORITIZED);
+        result = TX_SUCCESS;
+    }
+
+    return result;
 }
 
 // ----------------------------------------------------------------------------
@@ -2014,7 +2043,8 @@ UINT tx_block_pool_create(TX_BLOCK_POOL *pool_ptr, TX_NAME_CONST CHAR *name_ptr,
 
             stk::memory::BlockMemoryPool *const p = new (static_cast<void *>(pool_ptr->tx_block_pool_stk_storage))
                 stk::memory::BlockMemoryPool(capacity, static_cast<size_t>(block_size) + BLOCK_HDR_SIZE,
-                    static_cast<uint8_t *>(pool_start), (capacity * stride), name_ptr);
+                    static_cast<uint8_t *>(pool_start), (capacity * stride), name_ptr,
+                    stk::memory::BlockMemoryPool::ALIGN_DEFAULT, TX_STK_WAIT_ORDER_DEFAULT);
             p->SetTraceName(name_ptr);
 
             pool_ptr->tx_block_pool_name = name_ptr;
@@ -2140,9 +2170,9 @@ UINT tx_block_pool_info_get(TX_BLOCK_POOL *pool_ptr, TX_NAME_CONST CHAR **name, 
         if (name != nullptr)             { *name             = pool_ptr->tx_block_pool_name; }
         if (available_blocks != nullptr) { *available_blocks = static_cast<ULONG>(p->GetFreeCount()); }
         if (total_blocks != nullptr)     { *total_blocks     = static_cast<ULONG>(p->GetCapacity()); }
-        if (first_suspended != nullptr)  { *first_suspended  = nullptr; }
-        if (suspended_count != nullptr)  { *suspended_count  = 0U; }
         if (next_pool != nullptr)        { *next_pool        = nullptr; }
+
+        FillSuspended(*p, first_suspended, suspended_count);
 
         result = TX_SUCCESS;
     }
@@ -2152,7 +2182,16 @@ UINT tx_block_pool_info_get(TX_BLOCK_POOL *pool_ptr, TX_NAME_CONST CHAR **name, 
 
 UINT tx_block_pool_prioritize(TX_BLOCK_POOL *pool_ptr)
 {
-    return (IsValidBlockPool(pool_ptr) ? TX_SUCCESS : TX_POOL_ERROR); // noop: FIFO wait list
+    UINT result = TX_POOL_ERROR;
+
+    if (IsValidBlockPool(pool_ptr))
+    {
+        // the freed block goes to the highest priority waiter from now on (not a one-time reordering of the current waiters)
+        BlockPoolOf(pool_ptr)->SetWaitOrder(WAIT_ORDER_PRIORITIZED);
+        result = TX_SUCCESS;
+    }
+
+    return result;
 }
 
 // ============================================================================
@@ -2434,9 +2473,9 @@ UINT tx_byte_pool_info_get(TX_BYTE_POOL *pool_ptr, TX_NAME_CONST CHAR **name, UL
         if (name != nullptr)            { *name            = pool_ptr->tx_byte_pool_name; }
         if (available_bytes != nullptr) { *available_bytes = static_cast<ULONG>(available); }
         if (fragments != nullptr)       { *fragments       = static_cast<ULONG>(frags); }
-        if (first_suspended != nullptr) { *first_suspended = nullptr; } // BytePool does not expose its wait list yet
-        if (suspended_count != nullptr) { *suspended_count = 0U; }
         if (next_pool != nullptr)       { *next_pool       = nullptr; }
+
+        FillSuspended(BytePoolOf(pool_ptr)->Pool(), first_suspended, suspended_count);
 
         result = TX_SUCCESS;
     }
@@ -2446,7 +2485,8 @@ UINT tx_byte_pool_info_get(TX_BYTE_POOL *pool_ptr, TX_NAME_CONST CHAR **name, UL
 
 UINT tx_byte_pool_prioritize(TX_BYTE_POOL *pool_ptr)
 {
-    return (IsValidBytePool(pool_ptr) ? TX_SUCCESS : TX_POOL_ERROR); // noop: FIFO wait list
+    // noop: Free() wakes all blocked allocators and each re-checks its own request, so there is no wait order to apply
+    return (IsValidBytePool(pool_ptr) ? TX_SUCCESS : TX_POOL_ERROR);
 }
 
 // ============================================================================

@@ -108,7 +108,8 @@ public:
         DEADLINE_MISSED_API      = 0, //!< Not used.
         PRIORITY_INHERITANCE_API = 1, //!< OnTaskWeightChange() events are handled.
         NOSLEEP_YIELD_API        = 1, //!< OnTaskYield() events are handled.
-        TIMESLICE_API            = (TIMESLICE ? 1 : 0) //!< Sticky GetNext() and OnTaskTimeSlice() (see TIMESLICE template parameter).
+        TIMESLICE_API            = (TIMESLICE ? 1 : 0), //!< Sticky GetNext() and OnTaskTimeSlice() (see TIMESLICE template parameter).
+        WAIT_ORDER_HINT          = WAIT_ORDER_PRIORITY_PACKED //!< Only the priority (high 16 bits of the weight) ranks blocked tasks, the threshold is not an urgency: equal priorities are served in arrival order (see EWaitOrder).
     };
 
     /*! \brief     Build a task weight from an STK priority and threshold.

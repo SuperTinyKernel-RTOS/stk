@@ -567,6 +567,41 @@ stk_resume_result_t stk_kernel_resume_task(stk_kernel_t *k, stk_task_t *tsk)
     return static_cast<stk_resume_result_t>(CastCToKernelInterface(k)->ResumeTask(&tsk->handle));
 }
 
+bool stk_kernel_get_task_state(const stk_kernel_t *k, stk_task_t *tsk, stk_task_state_info_t *info)
+{
+    // C task state enum must stay in sync with its C++ counterpart (values are cast directly)
+    STK_STATIC_ASSERT_DESC(static_cast<int32_t>(STK_TASK_STATE_REMOVED)   == static_cast<int32_t>(stk::TASK_STATE_REMOVED),   "stk_task_state_t mismatch");
+    STK_STATIC_ASSERT_DESC(static_cast<int32_t>(STK_TASK_STATE_READY)     == static_cast<int32_t>(stk::TASK_STATE_READY),     "stk_task_state_t mismatch");
+    STK_STATIC_ASSERT_DESC(static_cast<int32_t>(STK_TASK_STATE_SLEEPING)  == static_cast<int32_t>(stk::TASK_STATE_SLEEPING),  "stk_task_state_t mismatch");
+    STK_STATIC_ASSERT_DESC(static_cast<int32_t>(STK_TASK_STATE_WAITING)   == static_cast<int32_t>(stk::TASK_STATE_WAITING),   "stk_task_state_t mismatch");
+    STK_STATIC_ASSERT_DESC(static_cast<int32_t>(STK_TASK_STATE_SUSPENDED) == static_cast<int32_t>(stk::TASK_STATE_SUSPENDED), "stk_task_state_t mismatch");
+    STK_STATIC_ASSERT_DESC(static_cast<int32_t>(STK_TASK_STATE_EXITING)   == static_cast<int32_t>(stk::TASK_STATE_EXITING),   "stk_task_state_t mismatch");
+
+    STK_ASSERT(k != nullptr);
+    STK_ASSERT(tsk != nullptr);
+    STK_ASSERT(info != nullptr);
+
+    stk::TaskStateInfo si = {};
+    const bool ok = CastCToKernelInterfaceConst(k)->GetTaskState(&tsk->handle, si);
+
+    if (ok)
+    {
+        info->state     = static_cast<stk_task_state_t>(si.state);
+        info->wait_obj  = si.wait_obj;
+        info->remaining = static_cast<stk_timeout_t>(si.remaining);
+    }
+
+    return ok;
+}
+
+void stk_kernel_cancel_task_wait(stk_kernel_t *k, stk_task_t *tsk)
+{
+    STK_ASSERT(k != nullptr);
+    STK_ASSERT(tsk != nullptr);
+
+    CastCToKernelInterface(k)->CancelTaskWait(&tsk->handle);
+}
+
 size_t stk_kernel_enumerate_tasks(stk_kernel_t *k, stk_task_t **tasks, size_t max_count)
 {
     STK_ASSERT(k != nullptr);
@@ -603,6 +638,13 @@ void stk_kernel_resume(stk_kernel_t *k, stk_timeout_t elapsed_ticks)
     STK_ASSERT(k != nullptr);
 
     CastCToKernelInterface(k)->GetPlatform()->Resume(static_cast<stk::Timeout>(elapsed_ticks));
+}
+
+void stk_kernel_set_cpu_frequency(stk_kernel_t *k, uint8_t core_id, uint32_t frequency)
+{
+    STK_ASSERT(k != nullptr);
+
+    CastCToKernelInterface(k)->GetPlatform()->SetCpuFrequency(core_id, frequency);
 }
 
 void stk_kernel_process_tick(stk_kernel_t *k)
@@ -706,6 +748,13 @@ stk_tid_t stk_task_get_id(const stk_task_t *tsk)
     return stk::GetTidFromUserTask(&tsk->handle);
 }
 
+size_t stk_task_get_stack_space(const stk_task_t *tsk)
+{
+    STK_ASSERT(tsk != nullptr);
+
+    return tsk->handle.GetStackSpace();
+}
+
 stk::ITask *stk_task_get_instance(stk_task_t *tsk)
 {
     STK_ASSERT(tsk != nullptr);
@@ -799,6 +848,71 @@ bool          stk_sleep_until(stk_tick_t ts)     { return stk::SleepUntil(ts); }
 void          stk_sleep_cancel(stk_tid_t tid)    { stk::SleepCancel(tid); }
 void          stk_yield(void)                    { stk::Yield(); }
 void          stk_exit_task(void)                { stk::ExitTask(); }
+
+stk_wait_order_t stk_get_default_wait_order(void)
+{
+    // C wait order enum must stay in sync with its C++ counterpart (values are cast directly)
+    STK_STATIC_ASSERT_DESC(static_cast<int32_t>(STK_WAIT_ORDER_FIFO)            == static_cast<int32_t>(stk::WAIT_ORDER_FIFO),            "stk_wait_order_t mismatch");
+    STK_STATIC_ASSERT_DESC(static_cast<int32_t>(STK_WAIT_ORDER_PRIORITY)        == static_cast<int32_t>(stk::WAIT_ORDER_PRIORITY),        "stk_wait_order_t mismatch");
+    STK_STATIC_ASSERT_DESC(static_cast<int32_t>(STK_WAIT_ORDER_DEADLINE)        == static_cast<int32_t>(stk::WAIT_ORDER_DEADLINE),        "stk_wait_order_t mismatch");
+    STK_STATIC_ASSERT_DESC(static_cast<int32_t>(STK_WAIT_ORDER_PRIORITY_PACKED) == static_cast<int32_t>(stk::WAIT_ORDER_PRIORITY_PACKED), "stk_wait_order_t mismatch");
+    STK_STATIC_ASSERT_DESC(static_cast<int32_t>(STK_WAIT_ORDER_PERIOD)          == static_cast<int32_t>(stk::WAIT_ORDER_PERIOD),          "stk_wait_order_t mismatch");
+    STK_STATIC_ASSERT_DESC(static_cast<int32_t>(STK_WAIT_ORDER_DEADLINE_FIXED)  == static_cast<int32_t>(stk::WAIT_ORDER_DEADLINE_FIXED),  "stk_wait_order_t mismatch");
+    STK_STATIC_ASSERT_DESC(static_cast<int32_t>(STK_WAIT_ORDER_AUTO)            == static_cast<int32_t>(stk::WAIT_ORDER_AUTO),            "stk_wait_order_t mismatch");
+
+    return static_cast<stk_wait_order_t>(stk::GetDefaultWaitOrder());
+}
+
+stk_weight_t stk_get_weight(stk_tid_t tid)
+{
+    return static_cast<stk_weight_t>(stk::GetWeight(static_cast<stk::TId>(tid)));
+}
+
+stk_weight_t stk_get_weight_self(void)
+{
+    return static_cast<stk_weight_t>(stk::GetWeight());
+}
+
+stk_weight_t stk_set_weight(stk_tid_t tid, stk_weight_t weight)
+{
+    return static_cast<stk_weight_t>(stk::SetWeight(static_cast<stk::TId>(tid), static_cast<stk::Weight>(weight)));
+}
+
+stk_weight_t stk_set_weight_self(stk_weight_t weight)
+{
+    return static_cast<stk_weight_t>(stk::SetWeight(static_cast<stk::Weight>(weight)));
+}
+
+stk_timeout_t stk_set_time_slice(stk_tid_t tid, stk_timeout_t ticks)
+{
+    return static_cast<stk_timeout_t>(stk::SetTimeSlice(static_cast<stk::TId>(tid), static_cast<stk::Timeout>(ticks)));
+}
+
+stk_timeout_t stk_set_time_slice_self(stk_timeout_t ticks)
+{
+    return static_cast<stk_timeout_t>(stk::SetTimeSlice(static_cast<stk::Timeout>(ticks)));
+}
+
+stk_lock_result_t stk_lock_scheduler(void)
+{
+    // C lock result enum must stay in sync with its C++ counterpart (values are cast directly)
+    STK_STATIC_ASSERT_DESC(static_cast<int32_t>(STK_LOCK_FAIL_ISR)     == static_cast<int32_t>(stk::LOCK_FAIL_ISR),     "stk_lock_result_t mismatch");
+    STK_STATIC_ASSERT_DESC(static_cast<int32_t>(STK_LOCK_FAIL)         == static_cast<int32_t>(stk::LOCK_FAIL),         "stk_lock_result_t mismatch");
+    STK_STATIC_ASSERT_DESC(static_cast<int32_t>(STK_LOCK_WAS_UNLOCKED) == static_cast<int32_t>(stk::LOCK_WAS_UNLOCKED), "stk_lock_result_t mismatch");
+    STK_STATIC_ASSERT_DESC(static_cast<int32_t>(STK_LOCK_WAS_LOCKED)   == static_cast<int32_t>(stk::LOCK_WAS_LOCKED),   "stk_lock_result_t mismatch");
+
+    return static_cast<stk_lock_result_t>(stk::LockScheduler());
+}
+
+stk_lock_result_t stk_unlock_scheduler(void)
+{
+    return static_cast<stk_lock_result_t>(stk::UnlockScheduler());
+}
+
+stk_lock_result_t stk_restore_scheduler_lock(bool locked)
+{
+    return static_cast<stk_lock_result_t>(stk::RestoreSchedulerLock(locked));
+}
 
 // -----------------------------------------------------------------------------
 // Thread-Local Storage (TLS) API

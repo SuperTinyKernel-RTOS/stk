@@ -38,7 +38,7 @@ The simplest fair scheduling policy. Each runnable task is given one time slice 
 
 **No-sleep yield (`SwitchStrategyRR_NSY`):** `Yield()` keeps the task runnable and the cursor is set to the yielding task, so the next tick goes to its successor (or back to the task itself if it is the only runnable one).
 
-**Capability flags:** `WEIGHT_API = 0`, `SLEEP_EVENT_API = 1`, `NOSLEEP_YIELD_API = 0` (`1` for `_NSY`)
+**Capability flags:** `WEIGHT_API = 0`, `SLEEP_EVENT_API = 1`, `NOSLEEP_YIELD_API = 0` (`1` for `_NSY`), `WAIT_ORDER_HINT = WAIT_ORDER_FIFO`
 
 **Best for:**
 - Simple systems where all tasks are considered equal.
@@ -56,7 +56,7 @@ Proportional CPU distribution with burst-free interleaving. A task with weight 3
 
 **No-sleep yield (`SwitchStrategySWRR_NSY`):** `Yield()` keeps the task runnable. The next selection excludes the yielding task (one-shot), unless it is the only runnable task. It still accrues its static weight in that step, so the proportional accounting is preserved.
 
-**Capability flags:** `WEIGHT_API = 1`, `SLEEP_EVENT_API = 1`, `NOSLEEP_YIELD_API = 0` (`1` for `_NSY`)
+**Capability flags:** `WEIGHT_API = 1`, `SLEEP_EVENT_API = 1`, `NOSLEEP_YIELD_API = 0` (`1` for `_NSY`), `WAIT_ORDER_HINT = WAIT_ORDER_FIFO` (a weight is a CPU share, not urgency)
 
 **Best for:**
 - Mixed workloads with meaningfully different CPU demands.
@@ -76,7 +76,7 @@ Classic fixed-priority preemptive scheduling. Tasks are assigned a numeric prior
 
 **Priority constants:** the class provides ready-made levels scaled to `MAX_PRIORITIES`: `PRIORITY_HIGHEST` (`MAX_PRIORITIES - 1`), `PRIORITY_HIGH`, `PRIORITY_ABOVE_NORMAL`, `PRIORITY_NORMAL` (`MAX_PRIORITIES / 2`), `PRIORITY_BELOW_NORMAL`, `PRIORITY_LOWER`, `PRIORITY_ABOVE_LOWEST` and `PRIORITY_LOWEST` (0), e.g. `SwitchStrategyFP32::PRIORITY_HIGH` (23 on `FP32`).
 
-**Capability flags:** `WEIGHT_API = 1` (weight = priority level), `SLEEP_EVENT_API = 1`, `PRIORITY_INHERITANCE_API = 1`, `NOSLEEP_YIELD_API = 0` (`1` for `_NSY`)
+**Capability flags:** `WEIGHT_API = 1` (weight = priority level), `SLEEP_EVENT_API = 1`, `PRIORITY_INHERITANCE_API = 1`, `NOSLEEP_YIELD_API = 0` (`1` for `_NSY`), `WAIT_ORDER_HINT = WAIT_ORDER_PRIORITY`
 
 **Best for:**
 - Systems with clearly defined task importance tiers.
@@ -105,7 +105,7 @@ static stk::Kernel<stk::KERNEL_STATIC | stk::KERNEL_TIMESLICE, 3, stk::sched::Sw
 - **Held tasks are not time-sliced** (as in ThreadX): a task holding its threshold (*T* > *P*) keeps the CPU until it sleeps, yields or is removed. The slice is reloaded when a task goes to sleep or yields.
 - **Without `_TS`** (`SwitchStrategyPT32`) the slice is fixed at 1 tick: every `GetNext()` rotates the highest ready level.
 
-**Capability flags:** `WEIGHT_API = 1` (weight = encoded priority/threshold), `SLEEP_EVENT_API = 1`, `PRIORITY_INHERITANCE_API = 1`, `NOSLEEP_YIELD_API = 1`, `TIMESLICE_API = 0` (`1` for `_TS`)
+**Capability flags:** `WEIGHT_API = 1` (weight = encoded priority/threshold), `SLEEP_EVENT_API = 1`, `PRIORITY_INHERITANCE_API = 1`, `NOSLEEP_YIELD_API = 1`, `TIMESLICE_API = 0` (`1` for `_TS`), `WAIT_ORDER_HINT = WAIT_ORDER_PRIORITY_PACKED` (priority = high 16 bits of the weight, threshold ignored)
 
 **Differences from ThreadX:** STK priority numbering, the number of priority levels is limited by the bitmap type (32 for `PT32`, 64 for `PT64`, up to 1024 with `PriorityBitmap<>`); without `_TS` the time slice is fixed at 1 tick with no per-task length, with `_TS` the quantum is in kernel ticks.
 
@@ -151,7 +151,7 @@ Dynamic scheduling that always runs the task closest to missing its deadline. ED
 
 **Algorithm:** O(n) linear scan over runnable tasks each tick, comparing `GetHrtRelativeDeadline()` (= deadline − elapsed duration). The task with the minimum value wins. Ties go to the task nearest the list head: tasks keep the order in which they were added, except that a task which sleeps and wakes is re-appended at the back (implementation-defined, not guaranteed stable across versions). No per-task state is maintained between ticks. Requires `KERNEL_HRT` mode; outside it every relative deadline is 0, so the first runnable task always wins and the others starve until it sleeps.
 
-**Capability flags:** `WEIGHT_API = 0`, `SLEEP_EVENT_API = 1`
+**Capability flags:** `WEIGHT_API = 0`, `SLEEP_EVENT_API = 1`, `WAIT_ORDER_HINT = WAIT_ORDER_DEADLINE`
 
 **Best for:**
 - Hard real-time systems where deadlines vary and fixed-priority assignment is difficult.
@@ -170,7 +170,7 @@ Two classic static-priority real-time algorithms in a single templated class:
 
 **Algorithm:** `AddTask()` performs an O(n) insertion sort by `GetHrtPeriodicity()` (RM) or `GetHrtDeadline()` (DM). `GetNext()` simply returns the first non-sleeping task from the sorted list. Sleeping tasks stay in-place and are skipped inline — no separate sleep list. Includes a `SchedulabilityCheck::IsSchedulableWCRT()` companion utility for offline WCRT analysis. Requires `KERNEL_HRT` mode.
 
-**Capability flags:** `WEIGHT_API = 0`, `SLEEP_EVENT_API = 0`
+**Capability flags:** `WEIGHT_API = 0`, `SLEEP_EVENT_API = 0`, `WAIT_ORDER_HINT = WAIT_ORDER_PERIOD` for RM, `WAIT_ORDER_DEADLINE_FIXED` for DM
 
 **Best for:**
 - Strictly periodic hard real-time workloads (control loops, sensor sampling, comms protocols).
@@ -258,6 +258,38 @@ If a strategy declines a yield (for example the task is not in its runnable set)
 | `NOSLEEP_YIELD_API`        | `1`   | Strategy implements `OnTaskYield()`; the yielding task stays runnable (non-HRT modes only)                                              |
 | `TIMESLICE_API`            | `0`   | Strategy does not support `KERNEL_TIMESLICE` (`OnTaskTimeSlice()` is never called)                                                      |
 | `TIMESLICE_API`            | `1`   | `GetNext()` is sticky (does not rotate same-priority peers itself) and `OnTaskTimeSlice()` rotates them; required by `KERNEL_TIMESLICE` |
+| `WAIT_ORDER_HINT` (optional) | an `EWaitOrder` | Wait order used by synchronization objects with `WAIT_ORDER_AUTO` (the default): what "most urgent" means for this strategy. If omitted the kernel derives it, see [Wait Order Hint](#wait-order-hint) |
+
+---
+
+## Wait Order Hint
+
+`stk::sync` objects choose which blocked task to serve next by an `EWaitOrder` policy. With the default `WAIT_ORDER_AUTO` the choice is delegated to the strategy through the optional `WAIT_ORDER_HINT` constant of its `EConfig` (see `IKernelService::GetDefaultWaitOrder()` and [`include/sync/README.md`](../sync/README.md#wait-order)). Only the strategy knows what "urgent" means for it, e.g. a weight is a priority in Fixed-Priority but a CPU share in SWRR, where serving the largest weight first would starve the small shares.
+
+| Strategy                                                           | `WAIT_ORDER_HINT`            | Waiter served first                              |
+|--------------------------------------------------------------------|------------------------------|--------------------------------------------------|
+| `SwitchStrategyRR`                                                 | `WAIT_ORDER_FIFO`            | Longest-waiting                                  |
+| `SwitchStrategySWRR`                                               | `WAIT_ORDER_FIFO`            | Longest-waiting                                  |
+| `SwitchStrategyFP32` / `FP64` / `FixedPriority<N>`                 | `WAIT_ORDER_PRIORITY`        | Highest effective weight (inherited included)    |
+| `SwitchStrategyPT32` / `PT64` / `PreemptionThreshold<N>` (+ `_TS`) | `WAIT_ORDER_PRIORITY_PACKED` | Highest priority (high 16 bits of the weight)    |
+| `SwitchStrategyEDF`                                                | `WAIT_ORDER_DEADLINE`        | Least remaining relative deadline                |
+| `SwitchStrategyRM`                                                 | `WAIT_ORDER_PERIOD`          | Shortest period                                  |
+| `SwitchStrategyDM`                                                 | `WAIT_ORDER_DEADLINE_FIXED`  | Shortest configured deadline                     |
+
+The hint is **optional**: a strategy that does not declare it (a user-defined one, and presumably the commercial MCAS/MCAS4, whose sources are not covered here) keeps compiling and the kernel classifies it by mode and capabilities: `KERNEL_HRT` gives `WAIT_ORDER_DEADLINE`; `WEIGHT_API = 1` together with `PRIORITY_INHERITANCE_API = 1` gives `WAIT_ORDER_PRIORITY`; anything else gives `WAIT_ORDER_FIFO`. Declare the hint when that guess would be wrong, for example a custom rate-monotonic strategy should use `WAIT_ORDER_PERIOD` rather than the remaining deadline. The `WAIT_ORDER_DEADLINE`, `WAIT_ORDER_PERIOD` and `WAIT_ORDER_DEADLINE_FIXED` orders require `KERNEL_HRT`.
+
+```cpp
+enum EConfig
+{
+    WEIGHT_API               = 1,
+    SLEEP_EVENT_API          = 1,
+    DEADLINE_MISSED_API      = 0,
+    PRIORITY_INHERITANCE_API = 1,
+    NOSLEEP_YIELD_API        = 0,
+    TIMESLICE_API            = 0,
+    WAIT_ORDER_HINT          = stk::WAIT_ORDER_PRIORITY // optional
+};
+```
 
 ---
 

@@ -174,7 +174,7 @@ public:
         \param[in] initial_flags: Initial value of the flags word.
                    Only bits covered by \c FLAGS_MASK are meaningful; the most significant bit is reserved.
     */
-    explicit EventFlagsT(T initial_flags = 0U) : m_flags(initial_flags)
+    explicit EventFlagsT(T initial_flags = 0U) : m_flags(initial_flags), m_cv(WAIT_ORDER_FIFO)
     {
         STK_ASSERT((initial_flags & ERROR_MASK) == 0U); // API contract: the reserved bit must not be set
     }
@@ -370,17 +370,19 @@ public:
         return m_cv.GetWaitList();
     }
 
-    /*! \brief     Get id of the task which is first in the wait list (FIFO order), i.e. the one
-                   that WakeOne() would wake next.
+    /*! \brief     Get id of the task which is first in the wait list (arrival order).
+        \note      The internal condition variable is always notified with NotifyAll() and therefore uses
+                   WAIT_ORDER_FIFO: wait order selection does not apply to event flags.
         \return    TId of the first waiter, or \a TID_NONE if no tasks are currently waiting.
         \note      Read-only introspection for diagnostics / telemetry.
-        \note      The result is a snapshot: call inside the critical section (see \a hw::CriticalSection,
-                   \a sync::ScopedCriticalSection) if the list may change concurrently.
+        \note      Enters a critical section (nestable, see \a hw::CriticalSection), so the wait list is walked safely
+                   while it is modified concurrently (tick handler, ISR, other cores). The result is still a snapshot:
+                   hold a critical section around this call and the others (e.g. GetWaitList) to read them consistently.
         \see       GetWaitList
     */
-    TId GetFirstWaiterTid() const
+    TId GetNextWaiter() const
     {
-        return m_cv.GetFirstWaiterTid();
+        return m_cv.GetNextWaiter();
     }
 
 private:
@@ -413,7 +415,7 @@ private:
     EWaitResult WaitCore(T flags, uint32_t options, Timeout timeout_ticks, T &actual_flags);
 
     volatile T        m_flags; //!< flags word (the most significant bit is reserved for errors)
-    ConditionVariable m_cv;    //!< woken by Set() to re-evaluate waiting tasks
+    ConditionVariable m_cv;    //!< woken by Set() to re-evaluate waiting tasks (NotifyAll only, FIFO order)
 };
 
 #if (__cplusplus < 201703L)

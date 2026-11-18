@@ -216,6 +216,11 @@
 			<locationURI>PARENT-4-PROJECT_LOC/test/generic/stktest_sync.cpp</locationURI>
 		</link>
 		<link>
+			<name>src/test/generic/stktest_sync_waitorder.cpp</name>
+			<type>1</type>
+			<locationURI>PARENT-4-PROJECT_LOC/test/generic/stktest_sync_waitorder.cpp</locationURI>
+		</link>
+		<link>
 			<name>src/test/generic/stktest_time.cpp</name>
 			<type>1</type>
 			<locationURI>PARENT-4-PROJECT_LOC/test/generic/stktest_time.cpp</locationURI>
@@ -744,6 +749,11 @@
 			<name>deps/stk/include/sync/stk_sync_eventflags.h</name>
 			<type>1</type>
 			<locationURI>PARENT-4-PROJECT_LOC/stk/include/sync/stk_sync_eventflags.h</locationURI>
+		</link>
+		<link>
+			<name>deps/stk/include/sync/stk_sync_fastmutex.h</name>
+			<type>1</type>
+			<locationURI>PARENT-4-PROJECT_LOC/stk/include/sync/stk_sync_fastmutex.h</locationURI>
 		</link>
 		<link>
 			<name>deps/stk/include/sync/stk_sync_msgqueue.h</name>

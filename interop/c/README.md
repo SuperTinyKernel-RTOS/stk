@@ -54,6 +54,7 @@ pure C API with no C++ headers required in your source files.
   - [Message Queue](#message-queue)
   - [Reader-Writer Lock](#reader-writer-lock)
   - [Barrier](#barrier)
+  - [Wait Order](#wait-order)
 - [Memory: Block Pool](#memory-block-pool)
 - [Memory: Byte Pool](#memory-byte-pool)
 - [Memory: General-Purpose Allocator](#memory-general-purpose-allocator)
@@ -589,6 +590,15 @@ for (size_t i = 0; i < n; i++) {
 }
 ```
 
+`stk_task_get_stack_space(tsk)` reports the stack high-water mark: the number of stack **words** (not bytes)
+which were never used, found via the stack watermark pattern. It returns 0 if the stack is fully used or the
+watermark was overwritten. It is a read-only scan, so for a running task the value is a snapshot, but it is
+ISR-safe and useful for sizing stacks:
+
+```c
+size_t free_words = stk_task_get_stack_space(tasks[i]);
+```
+
 `stk_kernel_enumerate_tasks()` is ISR-safe.
 
 ### Manual Tick Injection
@@ -620,6 +630,14 @@ stk_timeout_t sleep_ticks = stk_kernel_suspend(k); /* ISR-safe */
 
 /* On wake: */
 stk_kernel_resume(k, elapsed_ticks);               /* ISR-safe */
+```
+
+If the core clock changes at run-time (PLL or clock-tree reconfiguration, frequency scaling), tell the
+kernel the new frequency, otherwise tick timing accuracy degrades:
+
+```c
+stk_kernel_set_cpu_frequency(k, 0, 48000000);     /* core 0 now runs at 48 MHz, ISR-safe */
+stk_kernel_set_cpu_frequency(k, 0xFF, 96000000);  /* 0xFF = all cores */
 ```
 
 ### Platform Event Overrider
@@ -674,7 +692,7 @@ objects (declared only under `__cplusplus`, not part of the C ABI):
 | `stk_sem_get_instance` | `stk::sync::SemaphoreT<stk_sem_val_t> *` |
 | `stk_hires_clock_get_instance` | `stk::hw::HiResClock *` |
 | `stk_blockpool_get_instance`, `stk_bytepool_get_instance` | `stk::memory::BlockMemoryPool` / `BytePool` |
-| `stk_timerhost_get_instance`, `stk_timer_get_instance`, `stk_periodic_trigger_get_instance` | `stk::time::*` objects |
+| `stk_timerhost_get_instance`, `stk_timer_get_instance`, `stk_periodic_trigger_get_instance`, `stk_stopwatch_get_instance` | `stk::time::*` objects |
 
 ---
 
@@ -725,6 +743,11 @@ bool ok = stk_mutex_trylock(mtx);           /* non-blocking */
 bool ok = stk_mutex_timed_lock(mtx, 100);   /* ticks timeout */
 stk_mutex_unlock(mtx);
 
+/* Query (ISR-safe; snapshots, stable only for the owner): */
+stk_tid_t owner = stk_mutex_get_owner(mtx);          /* 0 if free */
+bool locked     = stk_mutex_is_locked(mtx);
+uint16_t depth  = stk_mutex_get_recursion_count(mtx); /* 0 if free */
+
 stk_mutex_destroy(mtx);
 ```
 
@@ -737,7 +760,9 @@ EventFlags, Reader-Writer Lock, Pipe and Message Queue calls.
 Non-recursive (binary) mutex: smaller and faster than `stk_mutex_t`, but the owner must not
 lock it again. Re-locking is an unrecoverable contract violation: the kernel panics with
 `KERNEL_PANIC_SYNC_DEADLOCK` in all build configurations. Ownership
-is handed directly to the first waiter (FIFO) on unlock.
+is handed directly to the next waiter on unlock, selected by the [wait order](#wait-order)
+(`stk_fastmutex_create_ex()`; by default the highest-priority waiter with priority-based strategies,
+arrival order otherwise).
 
 ```c
 static stk_fastmutex_mem_t fmtx_mem;
@@ -748,6 +773,10 @@ bool ok = stk_fastmutex_trylock(fmtx);           /* non-blocking */
 bool ok = stk_fastmutex_timed_lock(fmtx, 100);   /* ticks timeout */
 stk_wait_result_t r = stk_fastmutex_timed_lock_ex(fmtx, 100);
 stk_fastmutex_unlock(fmtx);
+
+/* Query (ISR-safe; snapshots, may be stale for a non-owner): */
+stk_tid_t owner = stk_fastmutex_get_owner(fmtx);   /* 0 if free */
+bool locked     = stk_fastmutex_is_locked(fmtx);
 
 stk_fastmutex_destroy(fmtx);
 ```
@@ -861,8 +890,9 @@ A binary signal (signaled / non-signaled). Supports auto-reset and manual-reset 
 
 ```c
 static stk_event_mem_t ev_mem;
-/* false = auto-reset, true = manual-reset */
-stk_event_t *ev = stk_event_create(&ev_mem, false);
+/* manual_reset: false = auto-reset, true = manual-reset
+   initial_state: false = non-signaled, true = signaled */
+stk_event_t *ev = stk_event_create(&ev_mem, false, false);
 
 /* From ISR or another task: */
 bool changed = stk_event_set(ev);   /* signal — ISR-safe; true if it was non-signaled */
@@ -877,6 +907,10 @@ stk_wait_result_t r = stk_event_wait_ex(ev, 100); /* distinguishes timeout / can
 
 stk_event_destroy(ev);
 ```
+
+`stk_event_create_ex()` additionally takes a [wait order](#wait-order), which selects the task woken
+by an auto-reset `stk_event_set()` / `stk_event_pulse()` (a manual-reset event wakes all waiters, so
+the order has no effect on it).
 
 ### EventFlags
 
@@ -1029,6 +1063,7 @@ stk_pipe_get_space(pipe);
 stk_pipe_is_empty(pipe);
 stk_pipe_is_full(pipe);
 stk_pipe_is_storage_valid(pipe);
+stk_pipe_get_buffer(pipe);   /* raw backing buffer passed to stk_pipe_create() */
 
 stk_pipe_destroy(pipe);
 ```
@@ -1140,6 +1175,71 @@ case STK_BARRIER_CANCELED:     /* wait cancelled; arrival rolled back */ break;
 }
 ```
 
+### Wait Order
+
+When a primitive wakes a **single** blocked task (mutex hand-over, `stk_sem_signal()`, auto-reset
+`stk_event_set()`, `stk_cv_notify_one()`, a producer or consumer on a full or empty pipe or queue, a
+freed block pool block), the task is chosen by a policy of type `stk_wait_order_t` (a direct match
+for `stk::EWaitOrder`). The wait list is always kept in arrival order and the policy is applied at wake
+time, so run-time weight changes and priority inheritance of blocked tasks are honored.
+
+| `stk_wait_order_t` | Serves first |
+|--------------------|--------------|
+| `STK_WAIT_ORDER_FIFO` | The task which started waiting first (fair, no starvation) |
+| `STK_WAIT_ORDER_PRIORITY` | The highest task weight (priority), arrival order among equals |
+| `STK_WAIT_ORDER_PRIORITY_PACKED` | The highest priority (high 16 bits of a packed weight), arrival order among equals |
+| `STK_WAIT_ORDER_DEADLINE` | The least remaining HRT deadline (`KERNEL_HRT` only) |
+| `STK_WAIT_ORDER_PERIOD` | The shortest HRT period, Rate-Monotonic rank (`KERNEL_HRT` only) |
+| `STK_WAIT_ORDER_DEADLINE_FIXED` | The shortest configured HRT deadline, Deadline-Monotonic rank (`KERNEL_HRT` only) |
+| `STK_WAIT_ORDER_AUTO` | Resolved at wake time to the order preferred by the scheduling strategy, see `stk_get_default_wait_order()` |
+
+The default is `STK_SYNC_WAIT_ORDER_DEFAULT`, which is `STK_WAIT_ORDER_AUTO` unless it is overridden in
+`stk_config.h` (for example define it as `stk::WAIT_ORDER_FIFO` to get strict arrival order everywhere).
+
+Every `stk_*_create()` function uses the default. Use the `_create_ex()` form to choose the order at
+creation, and the `stk_*_set_wait_order()` / `stk_*_get_wait_order()` functions to change or read it later:
+
+```c
+static stk_sem_mem_t sem_mem;
+/* 0 initial, default maximum, highest-priority waiter is served first */
+stk_sem_t *sem = stk_sem_create_ex(&sem_mem, 0, 0, STK_WAIT_ORDER_PRIORITY);
+
+stk_sem_set_wait_order(sem, STK_WAIT_ORDER_FIFO);     /* safe at any time */
+stk_wait_order_t order = stk_sem_get_wait_order(sem); /* may be STK_WAIT_ORDER_AUTO */
+
+stk_tid_t next = stk_sem_get_next_waiter(sem);        /* task which would be served next, 0 if none */
+```
+
+`stk_*_get_next_waiter()` is read-only diagnostics: it runs inside a critical section but the result is a
+snapshot that may be stale immediately. With `STK_WAIT_ORDER_AUTO` and more than one waiter it needs a
+running kernel.
+
+| Primitive | Choose at creation | Change / read order | Next waiter |
+|-----------|--------------------|---------------------|-------------|
+| Mutex | `stk_mutex_create_ex()` | `stk_mutex_set_wait_order()` / `stk_mutex_get_wait_order()` | `stk_mutex_get_next_waiter()` |
+| FastMutex | `stk_fastmutex_create_ex()` | `stk_fastmutex_set_wait_order()` / `stk_fastmutex_get_wait_order()` | `stk_fastmutex_get_next_waiter()` |
+| Condition Variable | `stk_cv_create_ex()` | `stk_cv_set_wait_order()` / `stk_cv_get_wait_order()` | `stk_cv_get_next_waiter()` |
+| Semaphore | `stk_sem_create_ex()` | `stk_sem_set_wait_order()` / `stk_sem_get_wait_order()` | `stk_sem_get_next_waiter()` |
+| Event | `stk_event_create_ex()` | `stk_event_set_wait_order()` / `stk_event_get_wait_order()` | `stk_event_get_next_waiter()` |
+| Block Pool | `stk_blockpool_create_ex()`, `stk_blockpool_create_static_ex()` | `stk_blockpool_set_wait_order()` / `stk_blockpool_get_wait_order()` | `stk_blockpool_get_next_waiter()` |
+| Pipe | `stk_pipe_create_ex()` | — | — |
+| Message Queue | `stk_msgq_create_ex()` | `stk_msgq_set_wait_order()` / `stk_msgq_get_wait_order()` | `stk_msgq_get_next_waiter()` |
+| Reader-Writer Lock | `stk_rwmutex_create_ex()` (writers only) | — | — |
+| EventFlags | — (always FIFO) | — | `stk_ef_get_next_waiter()` |
+| Byte Pool | — (a free wakes all waiters) | — | `stk_bytepool_get_next_waiter()` |
+
+Notes:
+
+- The Condition Variable order applies to `stk_cv_notify_one()`; `stk_cv_notify_all()` wakes everyone.
+- The Reader-Writer Lock order applies to waiting writers only. Waiting readers are always released
+  together, and the writer preference over readers is the same for every order.
+- EventFlags and the Byte Pool always wake all waiters, so they have no configurable order. For them
+  `get_next_waiter()` returns the first waiter in arrival order, which is not necessarily the task that
+  ends up using the released flags or memory.
+- The Pipe and Message Queue order applies to both blocked readers and blocked writers. A Message Queue
+  order can be changed at any time and does not affect the order of the messages in the queue; a Pipe
+  order is fixed at creation.
+
 ---
 
 ## Memory: Block Pool
@@ -1150,7 +1250,8 @@ the same size, so allocation and deallocation are O(1).
 Blocks are aligned to the pool alignment: `STK_BLOCKPOOL_ALIGN`
 (`STK_MEMORY_BLOCKPOOL_ALIGN_DEFAULT`, 8 bytes by default, 16 on RISC-V), so `double` /
 `uint64_t` members are safe on 32-bit targets. The `_ex` creation functions take an explicit
-alignment (a power of two, not less than `sizeof(void *)`) for cache-line, DMA or SIMD buffers.
+alignment (a power of two, not less than `sizeof(void *)`) for cache-line, DMA or SIMD buffers, and
+a [wait order](#wait-order) which selects the blocked allocator that receives the next freed block.
 
 > The `STK_MEMORY_*` macros change sizing and layout rules shared with the C++ classes. Set them in
 > the build system so that every C and C++ translation unit sees the same values. The C macros
@@ -1196,7 +1297,8 @@ forms of the macros (`STK_BLOCKPOOL_STORAGE_DECL_EX`, `STK_BLOCKPOOL_STORAGE_SIZ
 STK_BLOCKPOOL_STORAGE_DECL_EX(g_dma_storage, 4, 100, 32);   /* 4 blocks, 32-byte aligned */
 
 stk_blockpool_t *dma_pool = stk_blockpool_create_static_ex(
-    4, 100, (uint8_t *)g_dma_storage, sizeof(g_dma_storage), "dma_pool", 32);
+    4, 100, (uint8_t *)g_dma_storage, sizeof(g_dma_storage), "dma_pool", 32,
+    STK_WAIT_ORDER_FIFO);
 ```
 
 A misaligned buffer start is corrected internally and the capacity is trimmed to what fits
@@ -1208,8 +1310,14 @@ A misaligned buffer start is corrected internally and the capacity is trimmed to
 stk_blockpool_t *pool = stk_blockpool_create(PKT_COUNT, PKT_SIZE, "pkt_pool");
 if (pool == NULL || !stk_blockpool_is_storage_valid(pool)) { /* slot pool exhausted or allocation failed */ }
 
-/* With an explicit alignment: */
-stk_blockpool_t *pool2 = stk_blockpool_create_ex(PKT_COUNT, PKT_SIZE, "pkt_pool", 32);
+/* With an explicit alignment and wait order: */
+stk_blockpool_t *pool2 = stk_blockpool_create_ex(PKT_COUNT, PKT_SIZE, "pkt_pool", 32,
+                                                 STK_WAIT_ORDER_PRIORITY);
+
+/* The wait order can be read and changed later; get_next_waiter() is read-only diagnostics: */
+stk_blockpool_set_wait_order(pool2, STK_WAIT_ORDER_FIFO);
+stk_wait_order_t order = stk_blockpool_get_wait_order(pool2);
+stk_tid_t next = stk_blockpool_get_next_waiter(pool2);   /* 0 if nobody is blocked */
 ```
 
 `stk_blockpool_create()` and `stk_bytepool_create()` return `NULL` if heap support is compiled out
@@ -1323,8 +1431,9 @@ void *p = stk_bytepool_try_alloc(bp, 64);             /* non-blocking, ISR-safe 
 
 A request larger than `stk_bytepool_get_max_request()` fails immediately instead
 of blocking forever. A free wakes all blocked allocators, because a coalesced block may
-satisfy several of them. `stk_bytepool_timed_alloc()` is ISR-safe only with
-`STK_NO_WAIT`.
+satisfy several of them, so a byte pool has no configurable [wait order](#wait-order).
+`stk_bytepool_get_next_waiter()` returns the first blocked task in arrival order (0 if none), for
+diagnostics only. `stk_bytepool_timed_alloc()` is ISR-safe only with `STK_NO_WAIT`.
 
 To tell a timeout from a cancellation or an invalid request, use the `_ex` form:
 
@@ -1649,6 +1758,38 @@ stk_periodic_trigger_get_period(trig);   /* currently configured period in ticks
 stk_periodic_trigger_destroy(trig);      /* NULL-safe no-op */
 ```
 
+### Stopwatch
+
+Measures the cycles (or other monotonic counter units) elapsed between successive updates. The
+time source is passed in by the caller, so the stopwatch does not depend on a particular hardware
+counter. Ready-made `_hires` variants use the [high-resolution clock](#high-resolution-clock).
+
+```c
+#include <stk_c_time.h>
+
+static stk_stopwatch_mem_t sw_mem;
+stk_stopwatch_t *sw = stk_stopwatch_create(&sw_mem);
+
+/* High-resolution clock as the time source: */
+stk_stopwatch_start_hires(sw, clk);          /* clk from stk_hires_clock_create() */
+/* ... work to be measured ... */
+stk_cycle_t cycles = stk_stopwatch_update_hires(sw, clk);   /* cycles since start; also the new reference point */
+uint64_t us = (cycles * 1000000ULL) / stk_hires_frequency(clk);
+
+/* Custom time source: a function pointer plus a context: */
+static stk_cycle_t read_counter(void *ctx) { return *(volatile uint64_t *)ctx; }
+
+stk_stopwatch_start(sw, read_counter, &g_counter);
+stk_cycle_t dt = stk_stopwatch_update(sw, read_counter, &g_counter);   /* same source as start */
+
+stk_stopwatch_destroy(sw);   /* NULL-safe no-op */
+```
+
+Each `update` returns the interval since the previous `start` or `update`. Calling `update` before `start`
+makes that call the start point and returns 0; a counter reading of exactly 0 is treated the same
+way as "not started". Counter wrap-around is handled by unsigned subtraction as long as the interval
+is shorter than a full counter period. A stopwatch is not thread-safe: use it from one task or ISR.
+
 ---
 
 ## Thread-Local Storage (TLS)
@@ -1694,7 +1835,7 @@ Destroying it again is a double free.
 
 **Stack size too small** — Start with 256 words and increase if you observe
 hard faults or corrupted data. If in doubt, use a stack watermarking tool and
-add at least 20–30% margin.
+add at least 20–30% margin (`stk_task_get_stack_space()` reports the unused part of a task stack).
 
 **`stk_sleep_ms()` in an HRT task** — HRT tasks must use `stk_yield()` to
 signal end-of-period. Calling `stk_sleep_ms()` in an HRT task is not supported

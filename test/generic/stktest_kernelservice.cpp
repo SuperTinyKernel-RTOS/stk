@@ -1188,6 +1188,221 @@ TEST(KernelService, SetWeightUnsupportedStrategyReturnsNoWeight)
 }
 
 // ============================================================================ //
+// =+======= KernelService::GetWeight / GetDefaultWaitOrder (no hint) ========= //
+// ============================================================================ //
+
+TEST(KernelService, GetWeightWeightedStrategy)
+{
+    // WEIGHT_API == 1: the weight is taken from the task bound to the id
+    KernelMock<KERNEL_STATIC, 2, sched::SwitchStrategySWRR, PlatformTestMock> kernel;
+    TaskMockW<7, ACCESS_USER> task1;
+    TaskMockW<3, ACCESS_USER> task2;
+    PlatformTestMock *platform = static_cast<PlatformTestMock *>(kernel.GetPlatform());
+    Stack *&active = platform->m_stack_active;
+
+    kernel.Initialize();
+    kernel.AddTask(&task1);
+    kernel.AddTask(&task2);
+    kernel.Start();
+
+    // caller is the task which is active at the moment, but the weight can be requested for any task by its id
+    CHECK_TRUE(active != NULL);
+    CHECK_EQUAL(7, g_KernelService->GetWeight(task1.GetTid()));
+    CHECK_EQUAL(3, g_KernelService->GetWeight(task2.GetTid()));
+}
+
+TEST(KernelService, GetWeightPriorityStrategy)
+{
+    Kernel<KERNEL_STATIC, 1, sched::SwitchStrategyFP32, PlatformTestMock> kernel;
+    TaskMockW<5, ACCESS_USER> task;
+
+    kernel.Initialize();
+    kernel.AddTask(&task);
+    kernel.Start();
+
+    CHECK_EQUAL(5, g_KernelService->GetWeight(g_KernelService->GetTid()));
+}
+
+TEST(KernelService, GetWeightUnweightedStrategy)
+{
+    // WEIGHT_API == 0: all tasks have DEFAULT_WEIGHT, the task lookup is skipped (even an unknown id is accepted)
+    Kernel<KERNEL_STATIC, 1, sched::SwitchStrategyRR, PlatformTestMock> kernel;
+    TaskMock<ACCESS_USER> task;
+
+    kernel.Initialize();
+    kernel.AddTask(&task);
+    kernel.Start();
+
+    CHECK_EQUAL(DEFAULT_WEIGHT, g_KernelService->GetWeight(g_KernelService->GetTid()));
+    CHECK_EQUAL(DEFAULT_WEIGHT, g_KernelService->GetWeight(TID_NONE));
+}
+
+// Minimal round-robin strategy which declares NO WAIT_ORDER_HINT (like a user-defined one written before the hint was
+// introduced): Kernel::KernelService::GetDefaultWaitOrder() must derive the order from the kernel mode and the capabilities.
+template <bool TWeighted, bool TPriorityInheritance>
+class NoHintStrategy final : public ITaskSwitchStrategy
+{
+public:
+    enum EConfig
+    {
+        WEIGHT_API               = (TWeighted ? 1 : 0),
+        SLEEP_EVENT_API          = 1,
+        DEADLINE_MISSED_API      = 0,
+        PRIORITY_INHERITANCE_API = (TPriorityInheritance ? 1 : 0),
+        NOSLEEP_YIELD_API        = 0,
+        TIMESLICE_API            = 0
+        // note: no WAIT_ORDER_HINT
+    };
+
+    NoHintStrategy() : m_tasks(), m_sleep(), m_prev(nullptr)
+    {}
+
+    STK_VIRT_DTOR ~NoHintStrategy() = default;
+
+    void AddTask(IKernelTask *task) override
+    {
+        const bool tail = (m_prev == m_tasks.GetLast());
+
+        m_tasks.LinkBack(task);
+
+        if (tail)
+        {
+            m_prev = task;
+        }
+    }
+
+    void RemoveTask(IKernelTask *task) override
+    {
+        if (task->GetHead() == &m_tasks)
+        {
+            RemoveActive(task);
+        }
+        else
+        {
+            m_sleep.Unlink(task);
+        }
+    }
+
+    IKernelTask *GetNext() override
+    {
+        IKernelTask *next = m_prev;
+
+        if (next != nullptr)
+        {
+            next   = (*next->GetNext());
+            m_prev = next;
+        }
+
+        return next;
+    }
+
+    IKernelTask *GetFirst() override
+    {
+        return (*(!m_tasks.IsEmpty() ? m_tasks.GetFirst() : m_sleep.GetFirst()));
+    }
+
+    size_t GetSize() const override
+    {
+        return m_tasks.GetSize() + m_sleep.GetSize();
+    }
+
+    void OnTaskSleep(IKernelTask *task) override
+    {
+        RemoveActive(task);
+        m_sleep.LinkBack(task);
+    }
+
+    void OnTaskWake(IKernelTask *task) override
+    {
+        m_sleep.Unlink(task);
+        m_tasks.LinkBack(task);
+
+        if (m_prev == nullptr)
+        {
+            m_prev = task;
+        }
+    }
+
+private:
+    STK_NONCOPYABLE_CLASS(NoHintStrategy);
+
+    void RemoveActive(IKernelTask *task)
+    {
+        IKernelTask *const next = (*task->GetNext());
+
+        m_tasks.Unlink(task);
+
+        if (next == task)
+        {
+            m_prev = nullptr;
+        }
+        else if (m_prev == task)
+        {
+            m_prev = (*next->GetPrev());
+        }
+        else
+        {
+        }
+    }
+
+    IKernelTask::ListHeadType m_tasks;
+    IKernelTask::ListHeadType m_sleep;
+    IKernelTask              *m_prev;
+};
+
+TEST(KernelService, DefaultWaitOrderNoHintHrt)
+{
+    // no hint + KERNEL_HRT (unweighted): urgency is the remaining deadline
+    Kernel<KERNEL_STATIC | KERNEL_HRT, 1, NoHintStrategy<false, false>, PlatformTestMock> kernel;
+    TaskMock<ACCESS_USER> task;
+
+    kernel.Initialize();
+    kernel.AddTask(&task, 2, 1, 0);
+    kernel.Start();
+
+    CHECK_EQUAL(WAIT_ORDER_DEADLINE, g_KernelService->GetDefaultWaitOrder());
+}
+
+TEST(KernelService, DefaultWaitOrderNoHintPriority)
+{
+    // no hint + weights which are priorities (priority inheritance requires that): highest weight first
+    Kernel<KERNEL_STATIC, 1, NoHintStrategy<true, true>, PlatformTestMock> kernel;
+    TaskMockW<1, ACCESS_USER> task;
+
+    kernel.Initialize();
+    kernel.AddTask(&task);
+    kernel.Start();
+
+    CHECK_EQUAL(WAIT_ORDER_PRIORITY, g_KernelService->GetDefaultWaitOrder());
+}
+
+TEST(KernelService, DefaultWaitOrderNoHintWeightedFifo)
+{
+    // no hint + weights without priority inheritance (a weight is a CPU share, e.g. weighted round-robin): arrival order
+    Kernel<KERNEL_STATIC, 1, NoHintStrategy<true, false>, PlatformTestMock> kernel;
+    TaskMockW<1, ACCESS_USER> task;
+
+    kernel.Initialize();
+    kernel.AddTask(&task);
+    kernel.Start();
+
+    CHECK_EQUAL(WAIT_ORDER_FIFO, g_KernelService->GetDefaultWaitOrder());
+}
+
+TEST(KernelService, DefaultWaitOrderNoHintFifo)
+{
+    // no hint + no weights, not HRT: arrival order
+    Kernel<KERNEL_STATIC, 1, NoHintStrategy<false, false>, PlatformTestMock> kernel;
+    TaskMock<ACCESS_USER> task;
+
+    kernel.Initialize();
+    kernel.AddTask(&task);
+    kernel.Start();
+
+    CHECK_EQUAL(WAIT_ORDER_FIFO, g_KernelService->GetDefaultWaitOrder());
+}
+
+// ============================================================================ //
 // =+==================== KernelServiceIsrSafety ============================== //
 // ============================================================================ //
 

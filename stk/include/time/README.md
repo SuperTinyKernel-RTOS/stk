@@ -49,7 +49,7 @@ A software timer multiplexer that manages many independent `Timer` instances on 
 **Internal architecture:**
 
 - **Tick task**: Maintains the active timer list, evaluates deadlines each wake cycle, and hands expired timers over to the handler tasks. Sleeps until the nearest deadline when no commands are pending.
-- **Handler task(s)** (`STK_TIMER_THREADS_COUNT`, default 1): Take expired timers from the ready list and invoke their `OnExpired()` callbacks. They sleep on an event while the list is empty.
+- **Handler task(s)** (`STK_TIMER_THREADS_COUNT`, default 1): Take expired timers from the ready list and invoke their `OnExpired()` callbacks. They sleep on an event while the list is empty; when several handler tasks are idle, the event wakes one of them according to the [wait order](../sync/README.md#wait-order) (handlers share one weight, so in practice the longest-idle handler runs first).
 - **Ready list**: An intrusive list of expired timers, one node per `Timer`, protected by a short critical section. A timer is queued at most once, so the list has no capacity of its own and can never overflow. Commands which cancel or re-arm a timer (`Stop`, `Restart`, `Reset`, ...) unlink its node in O(1), so a cancelled expiration is never delivered.
 
 The asynchronous control operations (`Start`, `Stop`, `Reset`, etc.) are issued as commands through a lock-free pipe to the tick task, keeping the caller non-blocking while the pipe has room (see [Command queue](#command-queue)). The synchronous variants queue the same commands together with a completion and block the caller until the result is known, see [Synchronous API](#synchronous-api).
@@ -199,7 +199,7 @@ The asynchronous commands check the preconditions against the state applied by t
 
 Commands of both APIs reach the tick task through a queue of `STK_TIMER_COMMAND_QUEUE_SIZE` entries. Size it for the burst of commands which can be issued before the tick task runs, not for the number of timers. When the queue is full:
 
-- a caller which **can wait** (task context, task mode, kernel running, not the tick task) **blocks** until the tick task has drained a slot. No command is lost and nothing is asserted, so an asynchronous call is non-blocking only while the queue has room;
+- a caller which **can wait** (task context, task mode, kernel running, not the tick task) **blocks** until the tick task has drained a slot. No command is lost and nothing is asserted, so an asynchronous call is non-blocking only while the queue has room. When several callers are blocked, a freed slot goes to the one selected by the command queue's [wait order](../sync/README.md#wait-order) (by default it follows the scheduling strategy: the highest-priority caller first with priority-based strategies, arrival order with round-robin), so a high-priority caller is not queued behind lower-priority ones;
 - a caller which **cannot wait** (ISR, kernel not started, polled mode, the tick task) gets `RES_QUEUE_FULL` and nothing is queued.
 
 A blocking call must not be made from a critical section or with interrupts disabled. The wait fails with `RES_CANCELLED` only if it is cancelled (`IKernel::CancelTaskWait()`).

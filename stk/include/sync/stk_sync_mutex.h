@@ -57,8 +57,15 @@ public:
     static const uint16_t RECURSION_MAX = 0xFFFEU; //!< maximum nesting depth
 
     /*! \brief     Constructor.
+        \param[in] order: Policy used to select which blocked task receives ownership in Unlock():
+                   WAIT_ORDER_FIFO (arrival order, fair) or WAIT_ORDER_PRIORITY (highest task weight first,
+                   arrival order among equal weights). The weight is read when the lock is handed over, so
+                   run-time weight changes of the waiting tasks are honored.
+        \note      WAIT_ORDER_PRIORITY is meaningful for strategies with WEIGHT_API (and
+                   PRIORITY_INHERITANCE_API for bounded priority inversion), see EWaitOrder.
     */
-    explicit Mutex() : m_owner_tid(TID_NONE), m_recursion_count(0U)
+    explicit Mutex(EWaitOrder order = STK_SYNC_WAIT_ORDER_DEFAULT)
+        : SyncObjectBase(order), m_owner_tid(TID_NONE), m_recursion_count(0U)
     {}
 
     /*! \brief     Destructor.
@@ -194,7 +201,8 @@ inline EWaitResult Mutex::TimedLockEx(Timeout timeout_ticks)
 
         // boost priority of the owner to avoid priority inversion (strategies with PRIORITY_INHERITANCE_API,
         // e.g. sched::SwitchStrategyFixedPriority), noop for strategies without it
-        svc->InheritWeight(owner_tid, GetUserTaskFromTid(current_tid)->GetWeight());
+        // (the effective weight of the caller is donated: honors SetWeight() and the caller's own inherited boost)
+        svc->InheritWeight(owner_tid, svc->GetWeight(current_tid));
 
         // mutex owned by another thread (slow path/blocking)
         result = svc->Wait(this, &cs_, timeout_ticks);
@@ -278,8 +286,10 @@ inline void Mutex::Unlock()
 
         if (!m_wait_list.IsEmpty())
         {
-            // pass ownership directly to the first waiter (FIFO order)
-            IWaitObject *const waiter = detail::DListCast::ListEntryToParent<IWaitObject>(m_wait_list.GetFirst());
+            // pass ownership directly to the next waiter: first in FIFO order, or the one with the highest
+            // current weight in priority order (never NULL here, the list is not empty)
+            IWaitObject *const waiter = GetNextWaitObject();
+            STK_ASSERT(waiter != nullptr);
 
             // transfer ownership to the waiter
             m_recursion_count = 1U;
@@ -294,7 +304,7 @@ inline void Mutex::Unlock()
             if (!m_wait_list.IsEmpty())
             {
                 svc->InheritWeight(m_owner_tid,
-                    FindWeightHigherThan(GetUserTaskFromTid(m_owner_tid)->GetWeight()));
+                    FindWeightHigherThan(waiter->GetKernelTask()->GetWeight())); // new owner's effective weight
             }
         }
         else

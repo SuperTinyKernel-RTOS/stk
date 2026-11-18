@@ -50,7 +50,9 @@ namespace memory {
     The pool uses an intrusive singly-linked free-list inside the storage array.
     When a block is free, its first \c sizeof(void*) bytes hold a pointer to the next
     free block; no separate metadata array is needed. Alloc and Free are therefore O(1)
-    with a minimal critical section.
+    with a minimal critical section. The only exception is Free() while tasks are blocked in
+    Alloc(): selecting the waiter to wake costs O(n) in the number of waiters inside the critical
+    section unless the wait order is WAIT_ORDER_FIFO (O(1)).
 
     Memory layout (pool storage, contiguous):
 
@@ -156,13 +158,17 @@ public:
         \param[in] storage_size:   Size of \a storage in bytes.
         \param[in] name:           Optional name forwarded to \c ITraceable::SetTraceName().
         \param[in] alignment:      Block alignment, a power of two not less than sizeof(void*).
+        \param[in] order:          Policy used to select which blocked allocator receives a freed block
+                                   (see \c EWaitOrder). Defaults to \c STK_SYNC_WAIT_ORDER_DEFAULT, i.e. follows the
+                                   scheduling strategy (priority order for priority-based strategies).
         \note      Mirrors the \c mp_mem / \c mp_size path in \c osMemoryPoolNew().
         \note      ISR-unsafe (must be called from task or init context).
         \note      Check \c IsStorageValid() if the arguments come from run-time data.
     */
     explicit BlockMemoryPool(size_t capacity, size_t raw_block_size, uint8_t *storage,
                              size_t storage_size, const char *name = nullptr,
-                             size_t alignment = ALIGN_DEFAULT);
+                             size_t alignment = ALIGN_DEFAULT,
+                             EWaitOrder order = STK_SYNC_WAIT_ORDER_DEFAULT);
 
     /*! \brief     Construct a pool with \b heap-allocated storage.
         \details   Allocates a flat byte buffer of
@@ -175,12 +181,16 @@ public:
         \param[in] raw_block_size: Requested per-block size in bytes.
         \param[in] name:           Optional name forwarded to \c ITraceable::SetTraceName().
         \param[in] alignment:      Block alignment, a power of two not less than sizeof(void*).
+        \param[in] order:          Policy used to select which blocked allocator receives a freed block
+                                   (see \c EWaitOrder). Defaults to \c STK_SYNC_WAIT_ORDER_DEFAULT, i.e. follows the
+                                   scheduling strategy (priority order for priority-based strategies).
         \note      Mirrors the heap-fallback path in \c osMemoryPoolNew().
         \note      ISR-unsafe. Not available if \c STK_MEMORY_NO_HEAP is 1.
     */
 #if STK_MEMORY_HAS_HEAP
     explicit BlockMemoryPool(size_t capacity, size_t raw_block_size, const char *name = nullptr,
-                             size_t alignment = ALIGN_DEFAULT);
+                             size_t alignment = ALIGN_DEFAULT,
+                             EWaitOrder order = STK_SYNC_WAIT_ORDER_DEFAULT);
 #endif
 
     /*! \brief     Destructor.
@@ -343,7 +353,9 @@ public:
 
     /*! \brief     Return a previously allocated block to the pool.
         \details   Pushes the block back onto the free-list head in O(1) and wakes
-                   exactly one task blocked inside \c Alloc() or \c TimedAlloc(), if any,
+                   exactly one task blocked inside \c Alloc() or \c TimedAlloc(), if any
+                   (the one selected by the wait order, see \c EWaitOrder: highest priority first with
+                   priority-based strategies, longest-waiting with \c WAIT_ORDER_FIFO),
                    so it can re-check for a free block. Under contention from \c TryAlloc()
                    (including from another task or an ISR racing in before the woken task
                    is scheduled), that task may find the block already taken and continue
@@ -449,17 +461,38 @@ public:
         return m_cv.GetWaitList();
     }
 
-    /*! \brief     Get id of the task which is first in the wait list (FIFO order), i.e. the one
-                   that WakeOne() would wake next.
-        \return    TId of the first waiter, or \a TID_NONE if no tasks are currently waiting.
+    /*! \brief     Get id of the blocked task which the next \c Free() would serve first, according
+                   to the wait order (see \c EWaitOrder and \c GetWaitOrder()).
+        \return    TId of the next waiter, or \a TID_NONE if no tasks are currently waiting.
         \note      Read-only introspection for diagnostics / telemetry.
-        \note      The result is a snapshot: call inside the critical section (see \a hw::CriticalSection,
-                   \a sync::ScopedCriticalSection) if the list may change concurrently.
+        \note      Enters a critical section (nestable, see \a hw::CriticalSection), so the wait list is walked safely
+                   while it is modified concurrently (tick handler, ISR, other cores). The result is still a snapshot:
+                   hold a critical section around this call and the others (e.g. GetWaitList) to read them consistently.
         \see       GetWaitList
     */
-    TId GetFirstWaiterTid() const
+    TId GetNextWaiter() const
     {
-        return m_cv.GetFirstWaiterTid();
+        return m_cv.GetNextWaiter();
+    }
+
+    /*! \brief     Get the policy used to select which blocked allocator receives a freed block.
+        \return    Wait order as configured, may be \c WAIT_ORDER_AUTO (resolved when a waiter is selected).
+        \see       EWaitOrder, SetWaitOrder
+    */
+    EWaitOrder GetWaitOrder() const
+    {
+        return m_cv.GetWaitOrder();
+    }
+
+    /*! \brief     Change the policy used to select which blocked allocator receives a freed block.
+        \param[in] order: Wait order.
+        \note      Safe at any time: the wait list is never pre-sorted, the policy is applied when
+                   a waiter is selected.
+        \see       EWaitOrder, GetWaitOrder
+    */
+    void SetWaitOrder(EWaitOrder order)
+    {
+        m_cv.SetWaitOrder(order);
     }
 
 private:
@@ -543,12 +576,13 @@ private:
 // ---------------------------------------------------------------------------
 
 inline BlockMemoryPool::BlockMemoryPool(size_t capacity, size_t raw_block_size, uint8_t *storage,
-                                        size_t storage_size, const char *name, size_t alignment)
+                                        size_t storage_size, const char *name, size_t alignment,
+                                        EWaitOrder order)
 : m_storage(storage),
   m_blocks(nullptr),
   m_bitmap(nullptr),
   m_free_list(nullptr),
-  m_cv(),
+  m_cv(order),
   m_storage_size(storage_size),
   m_block_size(AlignBlockSize(raw_block_size, alignment)),
   m_block_align(alignment),
@@ -570,12 +604,12 @@ inline BlockMemoryPool::BlockMemoryPool(size_t capacity, size_t raw_block_size, 
 
 #if STK_MEMORY_HAS_HEAP
 inline BlockMemoryPool::BlockMemoryPool(size_t capacity, size_t raw_block_size, const char *name,
-                                        size_t alignment)
+                                        size_t alignment, EWaitOrder order)
 : m_storage(nullptr),
   m_blocks(nullptr),
   m_bitmap(nullptr),
   m_free_list(nullptr),
-  m_cv(),
+  m_cv(order),
   m_storage_size(0U),
   m_block_size(AlignBlockSize(raw_block_size, alignment)),
   m_block_align(alignment),
@@ -1081,8 +1115,8 @@ class StaticBlockPool : private detail::BlockPoolStorage<TBlockSize, TCapacity, 
         "alignment must be a power of two not less than sizeof(void *)");
 
 public:
-    explicit StaticBlockPool(const char *name = nullptr)
-        : BlockMemoryPool(TCapacity, TBlockSize, this->m_buf, sizeof(this->m_buf), name, TAlign)
+    explicit StaticBlockPool(const char *name = nullptr, EWaitOrder order = STK_SYNC_WAIT_ORDER_DEFAULT)
+        : BlockMemoryPool(TCapacity, TBlockSize, this->m_buf, sizeof(this->m_buf), name, TAlign, order)
     {}
 };
 
