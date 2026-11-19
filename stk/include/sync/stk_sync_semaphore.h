@@ -37,8 +37,9 @@ namespace sync {
                as well so that the value can not be read torn.
 
     \note  This implementation uses a Direct Handover policy: when a task is waiting,
-           \c Signal() gives the resource "token" directly to the first task in the
-           wait list without incrementing the counter. The waking task is then
+           \c Signal() gives the resource "token" directly to the next task selected from the
+           wait list (the first one in arrival order for WAIT_ORDER_FIFO, the one with the highest
+           task weight for WAIT_ORDER_PRIORITY, see EWaitOrder) without incrementing the counter. The waking task is then
            guaranteed ownership of that token upon returning from \c Wait().
 
     \code
@@ -87,11 +88,16 @@ public:
                    resource acquisition.
         \param[in] initial_count: Starting value of the internal counter (available permits).
         \param[in] max_count: Maximum value the counter is allowed to reach.
+        \param[in] order: Policy used to select which waiting task receives the token in Signal(): WAIT_ORDER_FIFO (arrival order, fair)
+                   or WAIT_ORDER_PRIORITY (highest task weight first, arrival order among equal weights).
+                   The weight is read when the task is picked, so run-time weight changes of the waiting
+                   tasks are honored. Meaningful for strategies with WEIGHT_API, see EWaitOrder.
         \pre       \a initial_count <= \a max_count.
         \note      Triggers an assertion in a debug build if \a initial_count exceeds \a max_count.
     */
-    explicit SemaphoreT(T initial_count = 0U, T max_count = COUNT_MAX)
-        : m_count(initial_count), m_count_max(max_count)
+    explicit SemaphoreT(T initial_count = 0U, T max_count = COUNT_MAX,
+                        EWaitOrder order = STK_SYNC_WAIT_ORDER_DEFAULT)
+        : SyncObjectBase(order), m_count(initial_count), m_count_max(max_count)
     {
         STK_ASSERT(initial_count <= max_count); // API contract: initial count must not exceed maximum
     }
@@ -311,7 +317,7 @@ inline bool SemaphoreT<T>::TrySignalLimited(const T limit)
     }
     else
     {
-        // give signal directly to the first waiting task
+        // give signal directly to the next waiting task (selected by the wait order)
         WakeOne();
     }
 

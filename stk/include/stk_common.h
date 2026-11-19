@@ -536,6 +536,73 @@ protected:
     ~IStackMemory() = default;
 };
 
+/*! \enum  EWaitOrder
+    \brief Policy used by a synchronization object to select which blocked task is served next
+           (woken by WakeOne(), receives ownership from Mutex::Unlock() etc).
+    \note  Selection happens at wake time, the wait list itself is always kept in arrival order
+           (O(1) insertion). Because weights are sampled when a task is picked, run-time weight
+           changes (IKernelService::SetWeight(), priority inheritance) of a blocked task are honored.
+    \note  The policy is abstract: each value defines what "most urgent" means for the scheduling model in use.
+           Weights express urgency in priority/weighted strategies, the remaining deadline expresses it in
+           KERNEL_HRT mode, where weighted strategies are not supported.
+    \see   ISyncObject::FindNextWaiter, ISyncObject::GetNextWaiter
+*/
+enum EWaitOrder : uint8_t
+{
+    WAIT_ORDER_FIFO     = 0U,   //!< Arrival order: the task which started waiting first is served first (fair).
+    WAIT_ORDER_PRIORITY,        //!< Highest IKernelTask::GetWeight() is served first, arrival order among equal weights.
+    WAIT_ORDER_DEADLINE,        //!< Least IKernelTask::GetHrtRelativeDeadline() (earliest deadline first) is served first,
+                                //!< arrival order among equal deadlines. Dynamic: follows the remaining deadline (EDF).
+                                //!< KERNEL_HRT mode only (asserts otherwise).
+    WAIT_ORDER_PRIORITY_PACKED, //!< Highest priority is served first, where the priority is the high 16 bits of
+                                //!< IKernelTask::GetWeight(), i.e. a weight packed as (priority << 16 | threshold) as used by
+                                //!< SwitchStrategyPreemptionThreshold. The threshold is ignored: tasks of equal priority are
+                                //!< served in arrival order.
+    WAIT_ORDER_PERIOD,          //!< Shortest IKernelTask::GetHrtPeriodicity() is served first, arrival order among equal
+                                //!< periods. Static: the Rate-Monotonic rank. KERNEL_HRT mode only (asserts otherwise).
+    WAIT_ORDER_DEADLINE_FIXED,  //!< Shortest configured IKernelTask::GetHrtDeadline() is served first, arrival order among
+                                //!< equal deadlines. Static: the Deadline-Monotonic rank. KERNEL_HRT mode only (asserts otherwise).
+    WAIT_ORDER_AUTO             //!< Resolved when a waiter is selected to IKernelService::GetDefaultWaitOrder(): the order
+                                //!< natural for the kernel mode and the scheduling strategy in use. Lazy on purpose: a sync
+                                //!< object may be constructed (statically) before the kernel exists.
+};
+
+/*! \def   STK_SYNC_WAIT_ORDER_DEFAULT
+    \brief Default EWaitOrder of the synchronization objects (see SyncObjectBase): WAIT_ORDER_AUTO, i.e. the order
+           which the kernel recommends for its mode and scheduling strategy (see IKernelService::GetDefaultWaitOrder).
+           Can be overridden per object via the constructor or SyncObjectBase::SetWaitOrder(), or globally by
+           defining this macro (e.g. as stk::WAIT_ORDER_FIFO to keep arrival order everywhere).
+    \note  Priority ordering is meaningful only for scheduling strategies with WEIGHT_API, for others all
+           tasks have DEFAULT_WEIGHT and WAIT_ORDER_PRIORITY degenerates to WAIT_ORDER_FIFO.
+           WAIT_ORDER_DEADLINE requires KERNEL_HRT (weighted strategies are not supported there).
+           WAIT_ORDER_AUTO picks the suitable one, see IKernelService::GetDefaultWaitOrder.
+*/
+#ifndef STK_SYNC_WAIT_ORDER_DEFAULT
+    #define STK_SYNC_WAIT_ORDER_DEFAULT stk::WAIT_ORDER_AUTO
+#endif
+
+namespace detail {
+
+/*! \brief  Wait order declared by a scheduling strategy through the optional \c WAIT_ORDER_HINT constant of its EConfig
+            enum (see ITaskSwitchStrategy). Gives \c WAIT_ORDER_AUTO if the strategy declares none.
+    \note   Compile-time (C++11) detection, so strategies which predate the hint (e.g. user-defined) keep compiling.
+*/
+template <class TStrategy>
+struct StrategyWaitOrderHint
+{
+    //! Chosen when TStrategy::WAIT_ORDER_HINT exists (an exact match for int is preferred).
+    template <class T, int V = static_cast<int>(T::WAIT_ORDER_HINT)>
+    static constexpr EWaitOrder Select(int) { return static_cast<EWaitOrder>(V); }
+
+    //! Chosen otherwise: no hint.
+    template <class T>
+    static constexpr EWaitOrder Select(long) { return WAIT_ORDER_AUTO; }
+
+    static constexpr EWaitOrder Get() { return Select<TStrategy>(0); }
+};
+
+} // namespace detail
+
 /*! \class IWaitObject
     \brief Wait object.
 */
@@ -568,6 +635,14 @@ public:
         \return    Thread Id.
     */
     virtual TId GetTid() const = 0;
+
+    /*! \brief     Get kernel task that owns this wait object.
+        \return    Kernel task, never NULL for a wait object created by the kernel.
+        \note      Used by ISyncObject::FindNextWaiter to read the current (effective) weight of
+                   the waiting task for priority-ordered selection.
+        \see       IKernelTask::GetWeight, EWaitOrder
+    */
+    virtual IKernelTask *GetKernelTask() const = 0;
 
     /*! \brief     Wake task.
         \param[in] timeout: \c true if the task is waking due to timeout expiry;
@@ -726,16 +801,35 @@ public:
     */
     Weight FindWeightHigherThan(Weight comp) const;
 
-    /*! \brief     Wake the first task in the wait list (FIFO order).
+    /*! \brief     Select the waiter which is served next.
+        \param[in] wlist: Wait list (kept in arrival order).
+        \param[in] order: Selection policy, WAIT_ORDER_AUTO is resolved via IKernelService::GetDefaultWaitOrder()
+                   (only when there is more than one waiter to choose from).
+        \return    WAIT_ORDER_FIFO: the first waiter in the list. WAIT_ORDER_PRIORITY: the waiter with
+                   the highest current IKernelTask::GetWeight(), the earliest arrival among equal weights.
+                   WAIT_ORDER_DEADLINE: the waiter with the least IKernelTask::GetHrtRelativeDeadline(), the
+                   earliest arrival among equal deadlines. \c NULL if nobody is waiting.
+        \note      O(1) for WAIT_ORDER_FIFO, O(n) for the other orders (n = number of waiters).
+        \note      Must be called inside the critical section (see \a hw::CriticalSection, \a sync::ScopedCriticalSection).
+        \note      Defined in stk_helper.h (requires complete IKernelTask).
+    */
+    static IWaitObject *FindNextWaiter(IWaitObject::ListHeadType &wlist, EWaitOrder order);
+
+    /*! \copydoc FindNextWaiter(IWaitObject::ListHeadType &, EWaitOrder)
+    */
+    static const IWaitObject *FindNextWaiter(const IWaitObject::ListHeadType &wlist, EWaitOrder order);
+
+    /*! \brief     Wake the next task in the wait list (see FindNextWaiter).
         \param[in] wlist: Wait list.
+        \param[in] order: Selection policy, FIFO by default.
         \note      The woken task is notified with timeout=false, indicating a successful signal
                    (not a timeout expiry).
         \note      Does nothing if no tasks are currently waiting.
         \note      Utility for WakeOne and ARM TrustZone support.
     */
-    static inline void WakeOne(IWaitObject::ListHeadType &wlist)
+    static inline void WakeOne(IWaitObject::ListHeadType &wlist, EWaitOrder order = WAIT_ORDER_FIFO)
     {
-        IWaitObject *const obj = detail::DListCast::ListEntryToParent<IWaitObject>(wlist.GetFirst());
+        IWaitObject *const obj = FindNextWaiter(wlist, order);
         if (obj != nullptr)
         {
             obj->Wake(false);
@@ -766,21 +860,26 @@ public:
     */
     virtual const IWaitObject::ListHeadType &GetWaitList() const = 0;
 
-    /*! \brief     Get id of the task which is first in the wait list (FIFO order), i.e. the one
-                   that WakeOne() would wake next.
-        \return    TId of the first waiter, or \a TID_NONE if no tasks are currently waiting.
-        \note      Read-only introspection for diagnostics / telemetry.
-        \note      The result is a snapshot: call inside the critical section (see \a hw::CriticalSection,
-                   \a sync::ScopedCriticalSection) if the list may change concurrently.
-        \see       GetWaitList
+    /*! \brief     Get policy used to select the next waiter to serve.
+        \return    Wait order as configured, which may be WAIT_ORDER_AUTO: it is resolved to a concrete order
+                   by FindNextWaiter() when a waiter is selected.
+        \note      Not pure virtual on purpose: implementations which do not support ordering
+                   (e.g. a cross-domain wrapper) keep FIFO behaviour without any change.
+        \see       EWaitOrder, FindNextWaiter
     */
-    TId GetFirstWaiterTid() const
-    {
-        const IWaitObject *const obj = detail::DListCast::ListEntryToParent<const IWaitObject>(
-                GetWaitList().GetFirst());
+    virtual EWaitOrder GetWaitOrder() const = 0;
 
-        return ((obj != nullptr) ? obj->GetTid() : TID_NONE);
-    }
+    /*! \brief     Get id of the task which is served next, i.e. the one that WakeOne() would wake
+                   (see FindNextWaiter and GetWaitOrder).
+        \return    TId of the next waiter, or \a TID_NONE if no tasks are currently waiting.
+        \note      Read-only introspection for diagnostics / telemetry.
+        \note      Enters a critical section (nestable, see \a hw::CriticalSection), so the wait list is walked safely
+                   while it is modified concurrently (tick handler, ISR, other cores). The result is still a snapshot:
+                   hold a critical section around this call and the others (e.g. GetWaitList) to read them consistently.
+        \note      Defined in stk_helper.h (requires complete IKernelTask).
+        \see       GetWaitList, GetWaitOrder
+    */
+    TId GetNextWaiter() const;
 
 protected:
     /*! \brief Destructor.
@@ -788,7 +887,7 @@ protected:
     */
     ~ISyncObject() = default;
 
-    /*! \brief     Wake the first task in the wait list (FIFO order).
+    /*! \brief     Wake the next task in the wait list (see FindNextWaiter and GetWaitOrder).
         \note      The woken task is notified with timeout=false, indicating a successful signal
                    (not a timeout expiry).
         \note      Does nothing if no tasks are currently waiting.
@@ -1095,7 +1194,11 @@ public:
         \return    Ticks left before the deadline of the current activation expires
                    (GetHrtDeadline() minus the ticks the task has been active). Zero means this is the last
                    tick still within the deadline, a negative value means the deadline is missed.
-        \see       GetHrtDeadline, GetHrtPeriodicity
+        \note      Valid for a task which is blocked in a synchronization object wait (KERNEL_SYNC): its active
+                   time does not advance while it is blocked, so the value is the budget that was left when the
+                   wait began. This is what WAIT_ORDER_DEADLINE orders the waiters by. Not valid for a task
+                   which sleeps until its next period (asserts).
+        \see       GetHrtDeadline, GetHrtPeriodicity, EWaitOrder
     */
     virtual Timeout GetHrtRelativeDeadline() const = 0;
 
@@ -1398,9 +1501,14 @@ protected:
         DEADLINE_MISSED_API      = 0, // (1) if strategy implements OnTaskDeadlineMissed() and can absorb HRT deadline overruns, (0) otherwise (see \a ITaskSwitchStrategy::OnTaskDeadlineMissed)
         PRIORITY_INHERITANCE_API = 0, // (1) if strategy expects OnTaskWeightChange() events to support priority inheritance requests
         NOSLEEP_YIELD_API        = 0, // (1) if strategy implements OnTaskYield() and handles Yield() without putting the task to sleep, (0) otherwise (see \a ITaskSwitchStrategy::OnTaskYield)
-        TIMESLICE_API            = 0  // (1) if GetNext() is sticky (does not rotate same-priority peers by itself) and OnTaskTimeSlice() rotates them, (0) otherwise (see \a ITaskSwitchStrategy::OnTaskTimeSlice)
+        TIMESLICE_API            = 0, // (1) if GetNext() is sticky (does not rotate same-priority peers by itself) and OnTaskTimeSlice() rotates them, (0) otherwise (see \a ITaskSwitchStrategy::OnTaskTimeSlice)
+        WAIT_ORDER_HINT          = WAIT_ORDER_FIFO // (optional) wait order of the synchronization objects which use WAIT_ORDER_AUTO: what "most urgent" means for this strategy (see \a EWaitOrder, \a IKernelService::GetDefaultWaitOrder)
     };
     \endcode
+
+    WAIT_ORDER_HINT is optional: without it the kernel derives the order from its mode and the strategy capabilities.
+    Declare it if that guess would be wrong for the strategy (e.g. a rate-monotonic strategy ranks tasks by period, not
+    by the remaining deadline).
 */
 class ITaskSwitchStrategy
 {
@@ -1965,6 +2073,49 @@ public:
         \see       IKernel::EKernelState::KSTATE_SUSPENDED
     */
     virtual void Resume(Timeout elapsed_ticks) = 0;
+
+    /*! \brief     Get the effective weight of the task at run-time.
+        \param[in] tid: Task id.
+        \return    The inherited weight while the task is boosted by priority inheritance, otherwise its
+                   base weight (the value set by SetWeight(), or ITask::GetWeight() if it was never
+                   overridden). \a DEFAULT_WEIGHT for strategies without WEIGHT_API.
+        \note      This is the weight the scheduler currently uses for the task, therefore it is the one
+                   to pass on to InheritWeight() (donated by a waiter to the owner) and to order waiters
+                   by (see EWaitOrder). Do not use it as the floor when recomputing a boost, use the base
+                   weight there (see IKernelTask::GetBaseWeight).
+        \note      Snapshot: call inside the critical section if the weight may change concurrently.
+        \see       IKernelTask::GetWeight, SetWeight, InheritWeight
+    */
+    virtual Weight GetWeight(TId tid) const = 0;
+
+    /*! \brief     Get the wait order which suits the kernel mode and the scheduling strategy in use.
+        \return    Never WAIT_ORDER_AUTO. The order declared by the strategy itself is used (the optional
+                   \c WAIT_ORDER_HINT constant of its EConfig enum, see ITaskSwitchStrategy), because only the
+                   strategy knows what "urgent" means for it: e.g. WAIT_ORDER_PRIORITY for fixed priority,
+                   WAIT_ORDER_DEADLINE for EDF, WAIT_ORDER_PERIOD / WAIT_ORDER_DEADLINE_FIXED for rate- /
+                   deadline-monotonic, WAIT_ORDER_FIFO for round-robin strategies.
+                   A strategy without the hint (e.g. user-defined) is classified by the kernel mode and the
+                   strategy capabilities:
+                   - WAIT_ORDER_DEADLINE in KERNEL_HRT mode (urgency is the remaining deadline),
+                   - WAIT_ORDER_PRIORITY for strategies with WEIGHT_API and PRIORITY_INHERITANCE_API
+                     (weights are priorities there),
+                   - WAIT_ORDER_FIFO otherwise (e.g. weights are CPU shares in weighted round-robin).
+        \note      Resolved at compile time from the kernel's TMode and TStrategy::EConfig.
+        \note      ISR-safe.
+        \see       EWaitOrder, STK_SYNC_WAIT_ORDER_DEFAULT
+    */
+    virtual EWaitOrder GetDefaultWaitOrder() const = 0;
+
+    /*! \brief     Select the waiter which is served next (see ISyncObject::FindNextWaiter).
+        \param[in] wlist: Wait list (kept in arrival order).
+        \param[in] order: Selection policy, WAIT_ORDER_AUTO is resolved to GetDefaultWaitOrder().
+        \return    Waiter to serve, \c NULL if nobody is waiting.
+        \note      Implemented by the kernel, which compiles in only the orders that can differ from
+                   WAIT_ORDER_FIFO for its scheduling strategy and mode (e.g. none for round-robin).
+        \note      Must be called inside the critical section (see \a hw::CriticalSection).
+        \see       ISyncObject::FindNextWaiter, EWaitOrder
+    */
+    virtual IWaitObject *SelectWaiter(IWaitObject::ListHeadType &wlist, EWaitOrder order) = 0;
 
     /*! \brief     Inherit weight for the task.
         \param[in] tid: Task id.

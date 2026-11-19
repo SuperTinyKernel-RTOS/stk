@@ -5,9 +5,9 @@
 ## Features
 
 - **Zero Dynamic Allocation**: Objects are allocated statically or on stack. The C API uses opaque memory containers (`stk_xxx_mem_t`) to guarantee alignment and size without heap usage.
-- **Direct Resource Handover**: Resources are immediately assigned to the head of the wait list upon release. If the newly readied task is the highest-priority, an immediate context switch occurs.
+- **Direct Resource Handover**: Resources are immediately assigned to the next waiter (selected by the [wait order](#wait-order)) upon release. If the newly readied task is the highest-priority, an immediate context switch occurs.
 - **Low-Power Optimization**: Blocking `Wait` operations remove tasks from the ready list, allowing the CPU to enter low-power sleep (e.g., `WFI`).
-- **Strict FIFO Ordering**: Wait operations are processed chronologically. The kernel wakes the longest-waiting task first, ensuring absolute fairness.
+- **Configurable Wait Order**: Which blocked task is served next is an `EWaitOrder` policy, see [Wait Order](#wait-order). The default (`WAIT_ORDER_AUTO`) follows the kernel's scheduling strategy: arrival order (FIFO, fair) for round-robin strategies, highest priority first for priority-based ones, earliest deadline first in `KERNEL_HRT`. Ties are always broken by arrival order.
 - **Non-blocking Polling**: Supports `TryWait` and `TryLock` for checking status without yielding the CPU, ideal for zero-latency performance loops.
 - **Nesting Support**: Both `sync::Mutex` and `sync::SpinLock` support recursive acquisition from the same thread (`sync::FastMutex` is deliberately non-recursive).
 - **C compatible**: While implemented in C++, a comprehensive C API is provided to allow these primitives to be used in pure C projects.
@@ -26,6 +26,7 @@ An RAII-style low-level synchronization primitive that disables interrupts on th
 ### 2. Mutex (`sync::Mutex`)
 A recursive mutual exclusion primitive used to protect shared resources.
 - **Features**: Supports `Lock`, `TryLock`, `Unlock`, `TimedLock`, and `TimedLockEx` (returns the full `EWaitResult`). Also `GetOwner()`, `IsLocked()` and `GetRecursionCount()`; max recursion depth is `0xFFFE`.
+- **Wait Order**: `Mutex(EWaitOrder order = STK_SYNC_WAIT_ORDER_DEFAULT)` selects which waiter receives ownership on `Unlock()`, see [Wait Order](#wait-order).
 - **Priority Inheritance**: Temporarily boosts the priority of the lock owner when a higher-priority task blocks on `Lock()`/`TimedLock()`, mitigating priority inversion; the boost is restored automatically on `Unlock()` (no-op on switch strategies that don't support priority inheritance).
 - **Low-Power Aware**: Waiting tasks are suspended by the kernel.
 
@@ -34,7 +35,8 @@ A lightweight non-recursive (binary) mutex with ownership tracking.
 - **Features**: Supports `Lock`, `TryLock`, `Unlock`, `TimedLock`, and `TimedLockEx` (returns the full `EWaitResult`). Also `GetOwner()` and `IsLocked()`.
 - **Smaller and faster**: Keeps no recursion counter — the only state is the owner thread id — which shortens the lock/unlock paths and reduces the object size compared to `sync::Mutex`.
 - **Non-Recursive**: A thread that already owns the mutex must not lock it again. This is an unrecoverable contract violation: `Lock()`, `TryLock()`, `TimedLock()` and `TimedLockEx()` raise `KERNEL_PANIC_SYNC_DEADLOCK` in every build (debug and release) when the caller already owns the mutex.
-- **Direct Handover**: On `Unlock()` ownership is transferred directly to the first waiter (FIFO ordering).
+- **Direct Handover**: On `Unlock()` ownership is transferred directly to the next waiter per the [wait order](#wait-order).
+- **Wait Order**: `FastMutex(EWaitOrder order = STK_SYNC_WAIT_ORDER_DEFAULT)`, see [Wait Order](#wait-order).
 - **Priority Inheritance**: Supported in the same way as `sync::Mutex` (no-op on switch strategies that don't support priority inheritance).
 - **Low-Power Aware**: Waiting tasks are suspended by the kernel.
 
@@ -47,6 +49,7 @@ A high-performance recursive spinlock for very short critical sections.
 ### 5. Condition Variable (`sync::ConditionVariable`)
 Used in conjunction with a Mutex to wait for specific application states.
 - **Features**: `Wait`, `NotifyOne`, and `NotifyAll`.
+- **Wait Order**: `ConditionVariable(EWaitOrder order = ...)` selects the task woken by `NotifyOne()`, see [Wait Order](#wait-order). `NotifyAll()` wakes everybody.
 - **Cancellable Waits**: `WaitEx()` returns the full `EWaitResult` (`WAIT_RESULT_SIGNAL`, `WAIT_RESULT_TIMEOUT`, `WAIT_RESULT_CANCELED`), letting callers distinguish a timeout from a wait cancelled via `IKernel::CancelTaskWait()`.
 - **Critical-Section Variants**: `NotifyOne_CS()`/`NotifyAll_CS()` skip the internal critical-section entry/exit for callers that already hold one (e.g. other primitives built on top of `ConditionVariable`); ISR-safe under the same rules as `NotifyOne()`/`NotifyAll()`.
 - **Real-time**: Releases mutex and suspends task atomically, ensuring no "lost wake-up" signals.
@@ -55,7 +58,7 @@ Used in conjunction with a Mutex to wait for specific application states.
 ### 6. Event (`sync::Event`)
 A binary signaling primitive supporting Auto-reset and Manual-reset modes.
 - **Manual Reset**: Remains signaled until explicitly reset.
-- **Auto Reset**: Resets automatically after waking a single waiting task.
+- **Auto Reset**: Resets automatically after waking a single waiting task, selected by the [wait order](#wait-order) (`Event(manual_reset, initial_state, order)`).
 - **Pulse**: Wakes waiting tasks and immediately resets the event (similar to Win32 API).
 - **Low-Power Aware**: Waiting tasks are suspended by the kernel.
 
@@ -63,7 +66,8 @@ A binary signaling primitive supporting Auto-reset and Manual-reset modes.
 A counting signaling primitive used for resource tracking or producer-consumer patterns.
 - **Selectable Counter Type**: `sync::SemaphoreT<T>` is a template over an unsigned counter type `T` (`uint8_t`, `uint16_t`, `uint32_t`, `uint64_t`); signed types are rejected at compile time. `sync::Semaphore` is a `typedef` for `SemaphoreT<uint16_t>` (max count `0xFFFF`), so existing code keeps working unchanged. `SemaphoreT<T>::COUNT_MAX` is the maximum value of `T`, and `CounterValueType` exposes the counter type. Note that `uint8_t` does not necessarily reduce the object size because of alignment padding, verify with `sizeof()` on your target.
 - **Wide Counters**: A counter wider than a pointer (e.g. `uint64_t` on a 32-bit MCU) is supported: all updates are done under a critical section, and `GetCount()` takes it too, so the value can never be read torn. Counters up to the native word size are read with a single aligned load.
-- **Direct Handover**: When semaphore is signaled, kernel immediately transfers the resource to the first waiting task (FIFO ordering).
+- **Direct Handover**: When semaphore is signaled, kernel immediately transfers the resource to the next waiting task per the [wait order](#wait-order).
+- **Wait Order**: `SemaphoreT(initial_count, max_count, order)` selects which waiter receives the token in `Signal()`, see [Wait Order](#wait-order).
 - **Bounded Signal**: `TrySignal()` posts without exceeding `max_count`, returning `false` instead of asserting — safe for multiple concurrent signalers where a redundant post should be tolerated rather than treated as a caller error.
 - **Per-call Ceiling**: `TrySignal(ceiling)` additionally limits the counter by a caller-supplied ceiling (the effective limit is the smaller of `ceiling` and the `max_count` given at construction). The check and the increment (or hand-off to a waiter) are atomic — equivalent of ThreadX `tx_semaphore_ceiling_put()`.
 - **Cancellable Waits**: `WaitEx()` returns the full `EWaitResult` (`WAIT_RESULT_SIGNAL`, `WAIT_RESULT_TIMEOUT`, `WAIT_RESULT_CANCELED`, `WAIT_RESULT_FAIL`), letting callers distinguish a timeout from a wait cancelled via `IKernel::CancelTaskWait()`; a non-signal result never consumes a token.
@@ -75,6 +79,7 @@ A thread-safe FIFO communication channel for inter-task data passing, internally
 - **`sync::PipeT<T, Capacity>`**: Compile-time-sized, type-safe, owns its storage internally. Parameterized on a concrete type `T` with a fully typed `T&`-based API; uses direct typed assignment for scalar types and a per-element fallback for non-scalar types.
 - **Bulk Operations**: Optimized `ReadBulk`/`WriteBulk` for both variants.
 - **Triggered Bulk Read** (`sync::Pipe` only): `ReadBulkTriggered()` blocks until at least a threshold (`trigger`) number of elements are available, then drains up to `max_count` in a single pass — useful for batch processing without a busy-poll loop.
+- **Wait Order**: Optional `EWaitOrder` constructor argument (`Pipe`, `PipeT`) applies to waiting readers (pipe empty) and waiting writers (pipe full), see [Wait Order](#wait-order).
 - **Blocking semantics**: `Write()` blocks if the pipe is full; `Read()` blocks if the pipe is empty, until the timeout expires.
 - **Low-Power Aware**: Waiting tasks are suspended by the kernel.
 
@@ -84,6 +89,7 @@ A fixed-capacity, fixed-message-size FIFO queue for inter-task communication ove
 - **C-ABI friendly**: Message payload is always transferred via `memcpy`, so the message type does not need to be a C++ assignable type.
 - **FIFO and priority insertion**: `Put()`/`TryPut()` enqueue at the back of the queue (FIFO order); `PutFront()`/`TryPutFront()` enqueue at the front, making the message the next one `Get()` will return — useful for urgent/priority messages.
 - **Non-destructive peek**: `Peek()`/`TryPeek()` copy out the message `Get()` would return next without removing it; `PeekFront()`/`TryPeekFront()` behave identically (the read slot is also where `PutFront()` inserts, so a pending front-inserted message is seen first) and exist for symmetry with `PutFront()`. The `*Ex()` variants (`PutEx()`, `GetEx()`, `PeekEx()`, ...) return the full `EWaitResult`.
+- **Wait Order**: Optional `EWaitOrder` constructor argument (`MessageQueue`, `MessageQueueT`) applies to waiting consumers (queue empty) and waiting producers (queue full), see [Wait Order](#wait-order). It does not affect message order in the queue.
 - **Blocking semantics**: `Put()`/`PutFront()` block if the queue is full; `Get()`/`Peek()`/`PeekFront()` block if the queue is empty, until the timeout expires.
 - **Reset support**: `Reset()` discards all messages and wakes blocked producers.
 - **Low-Power Aware**: Waiting tasks are suspended by the kernel.
@@ -108,6 +114,7 @@ A synchronization primitive that allows multiple concurrent readers or one exclu
 - **Writer Preference Policy**: Prevents writer starvation by blocking new readers when writers are waiting.
 - **Shared Access**: Multiple tasks can acquire `ReadLock()` simultaneously for read-only operations.
 - **Exclusive Access**: `Lock()` provides exclusive write access; blocks all other readers and writers.
+- **Wait Order**: `RWMutex(EWaitOrder writer_order = ...)` applies to waiting writers only; waiting readers are released together, and writer preference is unchanged. See [Wait Order](#wait-order).
 - **Timeout Support**: `TimedReadLock()` and `TimedLock()` with configurable timeouts.
 - **RAII Guards**: `ScopedTimedReadMutex` and `ScopedTimedLock` acquire on construction and release automatically on scope exit.
 - **Non-Recursive**: Unlike `sync::Mutex` and `sync::SpinLock` (but like `sync::FastMutex`), a task must not call `ReadLock()` or `Lock()` again before releasing it — doing so will deadlock.
@@ -119,9 +126,41 @@ A cyclic rendezvous point that blocks a fixed-size group of tasks until all of t
 - **Generation Tracking**: An internal generation counter distinguishes successive rounds and guards against spurious wakeups.
 - **Last-Arriver Signal**: `Wait()` returns `true` for the single task that triggers release of the group, `false` for all others — useful for once-per-round bookkeeping.
 - **Cancellable Waits**: `WaitEx()` returns the full `EResult` (`BARRIER_RELEASED`, `BARRIER_LAST_ARRIVAL`, `BARRIER_CANCELED`, `BARRIER_FAILED`), distinguishing a wait cancelled via `IKernel::CancelTaskWait()` from a normal release, and a wait rejected by the kernel (e.g. the scheduler is locked) as `BARRIER_FAILED`; a cancelled or failed arrival is rolled back so it can't trip the barrier short-handed.
+- **Wait Order**: Not applicable, all waiting tasks are released together.
 - **Introspection**: `GetThreshold()` returns the configured party count.
 - **Built on Mutex/ConditionVariable**: Composed from `sync::Mutex` and `sync::ConditionVariable`.
 - **Low-Power Aware**: Waiting tasks are suspended by the kernel.
+
+---
+
+## Wait Order
+
+When a primitive wakes a single blocked task (mutex hand-over, `Signal()`, auto-reset `Set()`, `NotifyOne()`, a producer/consumer on a full/empty pipe or queue), the task is picked by an `EWaitOrder` policy. The wait list is always kept in arrival order (O(1) insertion) and the policy is applied at wake time, so run-time weight changes and priority inheritance of a blocked task are honored.
+
+| `EWaitOrder`                 | Serves first                                                                | Notes                                                   |
+|------------------------------|-----------------------------------------------------------------------------|---------------------------------------------------------|
+| `WAIT_ORDER_FIFO`            | Longest-waiting task                                                        | Fair, O(1)                                              |
+| `WAIT_ORDER_PRIORITY`        | Highest effective task weight (inherited weight included)                   | Needs `WEIGHT_API`, otherwise degenerates to FIFO       |
+| `WAIT_ORDER_PRIORITY_PACKED` | Highest priority = high 16 bits of the weight (threshold ignored)           | Preemption-Threshold strategies                         |
+| `WAIT_ORDER_DEADLINE`        | Least remaining HRT deadline (EDF)                                          | `KERNEL_HRT` only                                       |
+| `WAIT_ORDER_PERIOD`          | Shortest period (Rate-Monotonic)                                            | `KERNEL_HRT` only                                       |
+| `WAIT_ORDER_DEADLINE_FIXED`  | Shortest configured deadline (Deadline-Monotonic)                           | `KERNEL_HRT` only                                       |
+| `WAIT_ORDER_AUTO` (default)  | Resolved to `IKernelService::GetDefaultWaitOrder()` at wake time            | Lazy, safe for statically constructed objects           |
+
+Ties are broken by arrival order. Selection costs O(n) in the number of waiters, except FIFO (O(1)).
+
+- **Per object**: pass an `EWaitOrder` as the last constructor argument, or call `SetWaitOrder()` later (safe at any time). `GetWaitOrder()` returns the configured value (possibly `WAIT_ORDER_AUTO`) and `GetNextWaiter()` the id of the task that would be served next (`TID_NONE` if none), replacing the former `GetFirstWaiterTid()`.
+- **Globally**: define `STK_SYNC_WAIT_ORDER_DEFAULT` in `stk_config.h`, e.g. as `stk::WAIT_ORDER_FIFO` to keep arrival order everywhere.
+- **Not configurable**: `EventFlagsT` and `Barrier` wake all waiters at once, so the order does not apply.
+- **Strategy defaults**: each built-in strategy declares what "urgent" means through the optional `WAIT_ORDER_HINT` constant (RR/SWRR: FIFO, FP: priority, PT: packed priority, EDF: deadline, RM: period, DM: fixed deadline). See [`include/strategy/README.md`](../strategy/README.md).
+
+```cpp
+stk::sync::Mutex     g_Bus;                                  // WAIT_ORDER_AUTO: follows the scheduling strategy
+stk::sync::Mutex     g_Log(stk::WAIT_ORDER_FIFO);            // always fair
+stk::sync::Semaphore g_Pool(4, stk::sync::Semaphore::COUNT_MAX, stk::WAIT_ORDER_PRIORITY);
+```
+
+> With a priority-based strategy the default is now priority order instead of FIFO. Define `STK_SYNC_WAIT_ORDER_DEFAULT` as `stk::WAIT_ORDER_FIFO` to restore the old behaviour.
 
 ---
 

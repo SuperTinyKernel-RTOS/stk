@@ -31,6 +31,7 @@ It covers the layout and purpose of every header and source file under `stk/`, t
   - [x86 Win32 Port (Simulation)](#x86-win32-port-simulation)
 - [include/strategy — Scheduling Strategies](#includestrategy--scheduling-strategies)
 - [include/sync — Synchronization Primitives](#includesync--synchronization-primitives)
+  - [Wait order](#wait-order)
 - [include/memory — Memory Allocation](#includememory--memory-allocation)
 - [include/time — Time Utilities](#includetime--time-utilities)
 - [src/arch — Architecture Implementations](#srcarch--architecture-implementations)
@@ -197,18 +198,19 @@ Defines every kernel interface, type alias, and enumeration. Key contents:
 | `ELockResult`    | `LOCK_FAIL_ISR` (-2), `LOCK_FAIL` (-1), `LOCK_WAS_UNLOCKED` (0), `LOCK_WAS_LOCKED` (1) — result of the scheduler lock calls, see [Scheduler lock](#scheduler-lock)                                                                                                                 |
 | `EAddResult`     | `ADD_OK`, `ADD_FAIL_POOL_FULL`, `ADD_FAIL_DUPLICATE`, `ADD_FAIL_INVALID` — result of `IKernel::AddTask()` (both the soft real-time and the hard real-time overloads), see [Adding and removing tasks at runtime](#adding-and-removing-tasks-at-runtime-kernel_dynamic) |
 | `EConsts`        | `PERIODICITY_MAX` (99 000 µs), `PERIODICITY_DEFAULT` (1 000 µs), `STACK_SIZE_MIN`                                                                                                                                                                                      |
+| `EWaitOrder`     | Policy a synchronization object uses to pick which blocked task is served next: `WAIT_ORDER_FIFO` (arrival order), `WAIT_ORDER_PRIORITY` (highest `GetWeight()`), `WAIT_ORDER_DEADLINE` (least `GetHrtRelativeDeadline()`, EDF), `WAIT_ORDER_PRIORITY_PACKED` (high 16 bits of the weight, for Preemption-Threshold), `WAIT_ORDER_PERIOD` (shortest period, Rate-Monotonic), `WAIT_ORDER_DEADLINE_FIXED` (shortest configured deadline, Deadline-Monotonic), `WAIT_ORDER_AUTO` (resolved to `IKernelService::GetDefaultWaitOrder()` when a waiter is selected). The deadline/period orders are `KERNEL_HRT` only. See [Wait order](#wait-order) |
 
 **Interfaces defined here:**
 
 - `ITask` — user task contract (`Run`, `GetStack`, `GetStackSize`, `GetAccessMode`, `GetWeight`, `GetTimeSlice`, `OnDeadlineMissed`, `OnExit`, `GetTraceName`; `GetTimeSlice()` is the per-task time-slice quantum used with `KERNEL_TIMESLICE`, see [Time-slicing](#time-slicing-kernel_timeslice)), plus two optional hardware-isolation hooks: `GetSecureStackMemory()` (ARM TrustZone-only, defaults to `nullptr`) and `GetMpuRegions()` (returns a `const MpuRegionList *` of up to `STK_MPU_TASK_REGIONS - 1` application-defined MPU regions per task — e.g. 1 region in 2-region mode, 3 in 4-region mode, 5 in 6-region mode; `STK_MPU_TASK_REGIONS` may also be 8, 12 or 16 — consulted only when `STK_MPU_STACK_GUARD` is enabled; see [MPU Configuration API](#mpu-configuration-api)).
 - `IStackMemory` — stack buffer abstraction.
 - `IKernelTask` — kernel-side per-task descriptor (extends `ITask` with scheduling metadata).
-- `ITaskSwitchStrategy` — scheduling strategy interface (`AddTask`, `RemoveTask`, `GetNext`, `GetFirst`, `GetSize`, `OnTaskSleep`, `OnTaskWake`, `OnTaskYield`, `OnTaskTimeSlice`, `OnTaskDeadlineMissed`, `OnTaskWeightChange`).
+- `ITaskSwitchStrategy` — scheduling strategy interface (`AddTask`, `RemoveTask`, `GetNext`, `GetFirst`, `GetSize`, `OnTaskSleep`, `OnTaskWake`, `OnTaskYield`, `OnTaskTimeSlice`, `OnTaskDeadlineMissed`, `OnTaskWeightChange`); a strategy may also declare the optional `EConfig::WAIT_ORDER_HINT` constant, see [Wait order](#wait-order).
 - `IPlatform` — platform driver interface (`Initialize`, `Start`, `Stop`, `InitStack`, `GetTickResolution`, `GetSysTimerCount`, `GetSysTimerFrequency`, `ForceContextSwitch`, `ProcessTick`, `ProcessHardFault`, `SetEventOverrider`, `GetTid`, `Suspend`, `Resume`, `GetCallerSP`, `SetCpuFrequency(core_id, frequency)` (notifies the scheduler of a core's operating frequency for tick/tickless timing accuracy; pass `0xFF` as `core_id` to set the frequency for all cores at once — call it whenever a core's clock speed changes), etc.).
 - `IPlatform::IEventOverrider` — optional hook interface for extending the platform driver from user-space, registered via `IPlatform::SetEventOverrider(overrider, non_secure = false)` (the `non_secure` slot is TrustZone-only, for a separate Non-Secure-side overrider). Covers `OnSleep`, `OnHardFault`, `OnException` (per-exception fault reporting), and `OnConfigureMpu()` — returns a `const MpuConfig *` of global/background MPU regions applied underneath every task's own regions (see [MPU Configuration API](#mpu-configuration-api)).
 - `IKernel` — kernel control interface (`Initialize`, `AddTask` (two overloads, both returning `EAddResult`: plain, and with HRT periodicity/deadline/start-delay), `RemoveTask`, `ScheduleTaskRemoval`, `SuspendTask`, `ResumeTask`, `CancelTaskWait`, `GetTaskState` (`KERNEL_TELEMETRY`; fills a `TaskStateInfo` with an `ETaskState`), `EnumerateKernelTasks`, `EnumerateTasks`, `EnumerateTasksT<N>`, `SetSchedulerLock` (single entry point of the [scheduler lock](#scheduler-lock)), `Start`, `GetState` (`EKernelState`: `KSTATE_INACTIVE`, `KSTATE_READY`, `KSTATE_RUNNING`, `KSTATE_SUSPENDED`, `KSTATE_LOCKED`), `GetPlatform`, `GetSwitchStrategy`).
-- `IKernelService` — runtime service interface available to running tasks (`GetTid`, `GetTicks`, `GetTickResolution`, `GetSysTimerCount`, `GetSysTimerFrequency`, `Delay`, `Sleep`, `SleepUntil`, `SleepCancel`, `SwitchToNext`, `ExitTask`, `Wait`, `Wake`, `Suspend`, `Resume`, `InheritWeight`, `RestoreWeight`, `SetWeight`, `SetTimeSlice`, `LockScheduler`, `UnlockScheduler`, `RestoreSchedulerLock`, plus the `ScopedSchedulerLock` RAII guard, see [Scheduler lock](#scheduler-lock)).
-- `ISyncObject`, `IWaitObject`, `IMutex`, `ITraceable` — synchronization building blocks.
+- `IKernelService` — runtime service interface available to running tasks (`GetTid`, `GetTicks`, `GetTickResolution`, `GetSysTimerCount`, `GetSysTimerFrequency`, `Delay`, `Sleep`, `SleepUntil`, `SleepCancel`, `SwitchToNext`, `ExitTask`, `Wait`, `Wake`, `Suspend`, `Resume`, `InheritWeight`, `RestoreWeight`, `SetWeight`, `GetWeight` (effective run-time weight of a task: the inherited one while boosted by priority inheritance, otherwise the base weight), `GetDefaultWaitOrder` (the concrete `EWaitOrder` that suits the kernel mode and strategy, never `WAIT_ORDER_AUTO`), `SetTimeSlice`, `LockScheduler`, `UnlockScheduler`, `RestoreSchedulerLock`, plus the `ScopedSchedulerLock` RAII guard, see [Scheduler lock](#scheduler-lock)).
+- `ISyncObject`, `IWaitObject`, `IMutex`, `ITraceable` — synchronization building blocks. `ISyncObject` gained `GetWaitOrder()` (the configured `EWaitOrder`), `GetNextWaiter()` (id of the task `WakeOne()` would serve next, replaces `GetFirstWaiterTid()`) and the static `FindNextWaiter(wlist, order)`; `ISyncObject::WakeOne(wlist, order = WAIT_ORDER_FIFO)` takes the policy as an optional argument. `IWaitObject` gained `GetKernelTask()`, used to read the current weight/deadline of a waiter. The wait list itself is always kept in arrival order (O(1) insertion); the policy is applied when a waiter is selected (O(1) for FIFO, O(n) otherwise), so run-time weight changes and priority inheritance of blocked tasks are honored. `IKernelTask::GetHrtRelativeDeadline()` is now valid for a task blocked in a sync-object wait (the budget left when the wait began). See [Wait order](#wait-order).
 - `StackMemoryDef<N>` — stack memory array type helper.
 
 ---
@@ -277,7 +279,7 @@ class MyTask : public stk::Task<256, Mode>
 
 **`StackMemoryWrapper<StackSize>`** — Adapter that wraps an externally-owned stack array (e.g. placed in a specific linker section) as an `IStackMemory` for passing to the kernel.
 
-**`SyncObjectBase`** — Default, storage-owning base implementation of `ISyncObject` used by all built-in `stk::sync` primitives (`Mutex`, `FastMutex`, `Event`, `Semaphore`, `ConditionVariable`, ...). Owns the intrusive wait list and provides the standard add/remove/wake bookkeeping; a synchronization object with a different storage strategy (e.g. a cross-domain TrustZone wrapper) may implement `ISyncObject` directly instead.
+**`SyncObjectBase`** — Default, storage-owning base implementation of `ISyncObject` used by all built-in `stk::sync` primitives (`Mutex`, `FastMutex`, `Event`, `Semaphore`, `ConditionVariable`, ...). Owns the intrusive wait list and provides the standard add/remove/wake bookkeeping; a synchronization object with a different storage strategy (e.g. a cross-domain TrustZone wrapper) may implement `ISyncObject` directly instead. The constructor takes an `EWaitOrder` (default `STK_SYNC_WAIT_ORDER_DEFAULT`) and `SetWaitOrder(order)` changes it at any time (the wait list is never pre-sorted, so this is always safe); `GetWaitOrder()` returns the configured value, which may still be `WAIT_ORDER_AUTO`.
 
 **Free functions** (all delegate to `IKernelService::GetInstance()`):
 
@@ -301,6 +303,9 @@ class MyTask : public stk::Task<256, Mode>
 | `SetTimeSlice(tid, ticks)`     | No       | Change a task's time-slice quantum (`KERNEL_TIMESLICE` only); returns the previous quantum                |
 | `SetTimeSlice(ticks)`          | No       | Same for the calling task                                                                                 |
 | `GetTicksFromMsClampedToTimeout(ms)` | Yes | Convert ms → ticks (queries resolution), clamped to `Timeout` (`WAIT_INFINITE`)                          |
+| `GetWeight(tid)`               | Yes      | Effective weight of a task: inherited while boosted by priority inheritance, otherwise the base weight (`DEFAULT_WEIGHT` without `WEIGHT_API`). Snapshot |
+| `GetWeight()`                  | No       | Same for the calling task (ISR-unsafe)                                                                    |
+| `GetDefaultWaitOrder()`        | Yes      | Concrete `EWaitOrder` recommended for the kernel mode and strategy, never `WAIT_ORDER_AUTO`. Needs a running kernel: do not call from a constructor of a static object, pass `WAIT_ORDER_AUTO` instead, see [Wait order](#wait-order) |
 | `SetWeight(tid, weight)`       | No       | Change a task's base weight (needs `WEIGHT_API` + `PRIORITY_INHERITANCE_API`); returns the previous weight |
 | `SetWeight(weight)`            | No       | Same for the calling task (ISR-unsafe)                                                                    |
 | `LockScheduler()`              | No       | Disable task switching, returns the previous state (`ELockResult`), see [Scheduler lock](#scheduler-lock) |
@@ -651,7 +656,7 @@ This port simulates the RTOS on Windows for development and testing. Each task m
 
 > **Full reference:** [`include/strategy/README.md`](include/strategy/README.md)
 
-All strategies are **header-only** classes implementing `ITaskSwitchStrategy`. The `Kernel` is templated on the strategy type — selection happens at compile time with zero runtime overhead. Each strategy maintains two intrusive lists: `m_tasks` (runnable) and `m_sleep` (blocked), and reports six capability flags (`WEIGHT_API`, `SLEEP_EVENT_API`, `DEADLINE_MISSED_API`, `PRIORITY_INHERITANCE_API`, `NOSLEEP_YIELD_API`, `TIMESLICE_API`) as compile-time `enum EConfig` values. `DEADLINE_MISSED_API` gates whether the kernel calls `OnTaskDeadlineMissed()` to let a strategy absorb an HRT budget overrun instead of hard-faulting; `PRIORITY_INHERITANCE_API` gates `OnTaskWeightChange()` notifications used for priority-inheritance support; `NOSLEEP_YIELD_API` gates `OnTaskYield()` (the yielding task stays runnable); `TIMESLICE_API` gates `OnTaskTimeSlice()` and a sticky `GetNext()` for `KERNEL_TIMESLICE` (see [Time-slicing](#time-slicing-kernel_timeslice)).
+All strategies are **header-only** classes implementing `ITaskSwitchStrategy`. The `Kernel` is templated on the strategy type — selection happens at compile time with zero runtime overhead. Each strategy maintains two intrusive lists: `m_tasks` (runnable) and `m_sleep` (blocked), and reports six capability flags (`WEIGHT_API`, `SLEEP_EVENT_API`, `DEADLINE_MISSED_API`, `PRIORITY_INHERITANCE_API`, `NOSLEEP_YIELD_API`, `TIMESLICE_API`) as compile-time `enum EConfig` values. `DEADLINE_MISSED_API` gates whether the kernel calls `OnTaskDeadlineMissed()` to let a strategy absorb an HRT budget overrun instead of hard-faulting; `PRIORITY_INHERITANCE_API` gates `OnTaskWeightChange()` notifications used for priority-inheritance support; `NOSLEEP_YIELD_API` gates `OnTaskYield()` (the yielding task stays runnable); `TIMESLICE_API` gates `OnTaskTimeSlice()` and a sticky `GetNext()` for `KERNEL_TIMESLICE` (see [Time-slicing](#time-slicing-kernel_timeslice)). Each built-in strategy additionally declares an optional `WAIT_ORDER_HINT` constant in its `EConfig`: the `EWaitOrder` that sync objects with `WAIT_ORDER_AUTO` use, see [Wait order](#wait-order).
 
 **Available strategies at a glance:**
 
@@ -708,10 +713,10 @@ Requires `KERNEL_SYNC` in the kernel mode bitmask for most primitives. `ScopedCr
 |-------------------------------|-------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `sync::ScopedCriticalSection` | `stk_sync_cs.h`         | RAII interrupt-disable critical section. Always available, ISR-safe. For data shared with ISRs or other cores, see [Critical section vs. scheduler lock](#critical-section-vs-scheduler-lock)                                                                                                    |
 | `sync::ConditionVariable`     | `stk_sync_cv.h`         | Monitor-style wait/notify. Foundation for Pipe, MessageQueue, EventFlags, BlockMemoryPool, BytePool                                                                                                                                                                                              |
-| `sync::Mutex`                 | `stk_sync_mutex.h`      | Recursive mutex. `Lock`, `TryLock`, `TimedLock`, `Unlock`. FIFO direct handover on unlock                                                                                                                                                                                                        |
-| `sync::FastMutex`             | `stk_sync_fastmutex.h`  | Non-recursive (binary) mutex, smaller and faster than `Mutex`. Self-lock fails/asserts. FIFO handover                                                                                                                                                                                            |
+| `sync::Mutex`                 | `stk_sync_mutex.h`      | Recursive mutex. `Lock`, `TryLock`, `TimedLock`, `Unlock`. Direct handover on unlock to the next waiter per [wait order](#wait-order)                                                                                                                                                                                                        |
+| `sync::FastMutex`             | `stk_sync_fastmutex.h`  | Non-recursive (binary) mutex, smaller and faster than `Mutex`. Self-lock fails/asserts. Handover per [wait order](#wait-order)                                                                                                                                                                                            |
 | `sync::SpinLock`              | `stk_sync_spinlock.h`   | Recursive spinlock for ultra-short sections. ISR-unsafe                                                                                                                                                                                                                                          |
-| `sync::RWMutex`               | `stk_sync_rwmutex.h`    | Non-recursive reader-writer lock with writer-preference policy. RAII guards included                                                                                                                                                                                                             |
+| `sync::RWMutex`               | `stk_sync_rwmutex.h`    | Non-recursive reader-writer lock with writer-preference policy. Wait order is configurable for waiting writers only (`RWMutex(writer_order)`). RAII guards included                                                                                                                                                                                                             |
 | `sync::SemaphoreT<T>`         | `stk_sync_semaphore.h`  | Counting semaphore with a selectable unsigned counter type (`uint8_t`/`uint16_t`/`uint32_t`/`uint64_t`). Direct handover on `Signal()`, `TrySignal()` (optionally with a per-call ceiling)                                                                                                       |
 | `sync::Semaphore`             | `stk_sync_semaphore.h`  | `typedef SemaphoreT<uint16_t> Semaphore`: default counting semaphore with a 16-bit counter (max count 0xFFFF)                                                                                                                                                                                    |
 | `sync::Event`                 | `stk_sync_event.h`      | Binary signal. Auto-reset or manual-reset. `Set`, `Reset`, `Wait`, `TryWait`, `Pulse`                                                                                                                                                                                                            |
@@ -741,6 +746,53 @@ Requires `KERNEL_SYNC` in the kernel mode bitmask for most primitives. `ScopedCr
 > Calling a blocking method from an ISR is undefined behaviour. In debug builds `STK_ASSERT` halts execution if an ISR-unsafe method is called from interrupt context.
 
 > `EventFlagsT<T>::Get()` and `SemaphoreT<T>::GetCount()` are plain loads when `T` is not wider than a pointer; for wider types (e.g. `uint64_t` on a 32-bit MCU) they are read inside a critical section so the value cannot be torn. All flag/counter mutators always run inside the critical section.
+
+### Wait order
+
+When a synchronization object wakes a blocked task (`Mutex::Unlock()` handing over ownership, `Semaphore::Signal()`, `Event::Set()`, `ConditionVariable::NotifyOne()`, `Pipe` / `MessageQueue` producers and consumers, ...), the task is chosen by an `EWaitOrder` policy. Previously this was always FIFO.
+
+| `EWaitOrder`                 | Serves first                                                                 | Notes                                                                 |
+|------------------------------|------------------------------------------------------------------------------|-----------------------------------------------------------------------|
+| `WAIT_ORDER_FIFO`            | Task that started waiting first                                              | Fair, O(1)                                                            |
+| `WAIT_ORDER_PRIORITY`        | Highest `IKernelTask::GetWeight()` (effective weight, inherited one included) | Meaningful for strategies with `WEIGHT_API`; degenerates to FIFO otherwise |
+| `WAIT_ORDER_PRIORITY_PACKED` | Highest priority = high 16 bits of the weight                                | Preemption-Threshold weights (`priority << 16 \| threshold`); the threshold is ignored |
+| `WAIT_ORDER_DEADLINE`        | Least `GetHrtRelativeDeadline()` (EDF, dynamic)                              | `KERNEL_HRT` only (asserts otherwise)                                 |
+| `WAIT_ORDER_PERIOD`          | Shortest `GetHrtPeriodicity()` (Rate-Monotonic, static)                      | `KERNEL_HRT` only                                                     |
+| `WAIT_ORDER_DEADLINE_FIXED`  | Shortest configured `GetHrtDeadline()` (Deadline-Monotonic, static)          | `KERNEL_HRT` only                                                     |
+| `WAIT_ORDER_AUTO` (default)  | Resolved to `IKernelService::GetDefaultWaitOrder()` when a waiter is selected | Lazy, so static objects may be constructed before the kernel exists   |
+
+Ties are always broken by arrival order. The wait list is kept in arrival order and the policy is evaluated at wake time (O(1) for FIFO, O(n) in the number of waiters otherwise), so a weight change or priority inheritance that happens while a task is blocked is honored.
+
+**What `WAIT_ORDER_AUTO` resolves to.** The kernel uses the `WAIT_ORDER_HINT` constant of the strategy's `EConfig` when present; a strategy without it (e.g. user-defined) is classified by capabilities: `KERNEL_HRT` → `WAIT_ORDER_DEADLINE`; `WEIGHT_API` + `PRIORITY_INHERITANCE_API` → `WAIT_ORDER_PRIORITY`; otherwise `WAIT_ORDER_FIFO`.
+
+| Strategy                                   | `WAIT_ORDER_HINT`            |
+|--------------------------------------------|------------------------------|
+| `SwitchStrategyRR`                         | `WAIT_ORDER_FIFO`            |
+| `SwitchStrategySWRR` (weight is a CPU share, not urgency) | `WAIT_ORDER_FIFO` |
+| `SwitchStrategyFixedPriority` (`FP32`/`FP64`) | `WAIT_ORDER_PRIORITY`     |
+| `SwitchStrategyPreemptionThreshold` (`PT32`/`PT64`, `_TS`) | `WAIT_ORDER_PRIORITY_PACKED` |
+| `SwitchStrategyEDF`                        | `WAIT_ORDER_DEADLINE`        |
+| `SwitchStrategyRM`                         | `WAIT_ORDER_PERIOD`          |
+| `SwitchStrategyDM`                         | `WAIT_ORDER_DEADLINE_FIXED`  |
+
+**Configuring it.** Every primitive accepts an `EWaitOrder` as its last constructor argument (default `STK_SYNC_WAIT_ORDER_DEFAULT`): `Mutex`, `FastMutex`, `ConditionVariable`, `Event(manual_reset, initial_state, order)`, `SemaphoreT(initial, max, order)`, `Pipe`, `PipeT`, `MessageQueue`, `MessageQueueT`. `RWMutex(writer_order)` applies it to waiting writers only (readers are released together with `NotifyAll`, writer preference is unchanged). `EventFlagsT` and `Barrier` wake all waiters at once, so the order does not apply. Any object derived from `SyncObjectBase` can be changed later with `SetWaitOrder()`.
+
+```cpp
+stk::sync::Mutex      g_Bus;                                   // WAIT_ORDER_AUTO: follows the kernel strategy
+stk::sync::Mutex      g_Log(stk::WAIT_ORDER_FIFO);             // always fair
+stk::sync::Semaphore  g_Pool(4, stk::sync::Semaphore::COUNT_MAX, stk::WAIT_ORDER_PRIORITY);
+
+stk::TId next = g_Bus.GetNextWaiter();                         // who would be served next (TID_NONE if nobody)
+```
+
+To keep the old behaviour everywhere, define `STK_SYNC_WAIT_ORDER_DEFAULT` as `stk::WAIT_ORDER_FIFO` in `stk_config.h`.
+
+**Migration notes.**
+
+- `ISyncObject::GetFirstWaiterTid()` was replaced by `GetNextWaiter()`: it reports the task that `WakeOne()` would serve under the configured order (identical to the old result for FIFO). It is also exposed by `EventFlagsT`, `BlockMemoryPool` and `BytePool`.
+- A user-defined `ISyncObject` must implement `GetWaitOrder()` (pure virtual; return `WAIT_ORDER_FIFO` to keep the old behaviour), and a user-defined `IWaitObject` must implement `GetKernelTask()`. A user-defined `IKernelService` must implement `GetWeight()` and `GetDefaultWaitOrder()`.
+- Strategies written before this change keep compiling; `WAIT_ORDER_HINT` is optional and detected at compile time. Declare it when the capability-based guess would be wrong (e.g. a custom rate-monotonic strategy should use `WAIT_ORDER_PERIOD`).
+- With a priority-based strategy the default is now `WAIT_ORDER_PRIORITY` instead of FIFO. Define `STK_SYNC_WAIT_ORDER_DEFAULT` as `stk::WAIT_ORDER_FIFO` if you rely on arrival order.
 
 **`sync::EventFlagsT<T>` usage:**
 
@@ -1071,6 +1123,7 @@ All macros below can be defined in `stk_config.h`. Macros marked **required** mu
 | `STK_MPU_TASK_REGIONS`         | `2`                  | Dynamic MPU regions per task when `STK_MPU_STACK_GUARD=1`: `2`, `4`, `6`, `8`, `12` or `16`. Region 0 is always the automatic stack guard; the rest are supplied via `ITask::GetMpuRegions()`                                    |
 | `STK_SEGGER_SYSVIEW`           | `0`                  | `1` = enable SEGGER SystemView tracing                                                                                                                                                                           |
 | `STK_SYNC_DEBUG_NAMES`         | `0`                  | `1` = enable debug names for sync objects                                                                                                                                                                        |
+| `STK_SYNC_WAIT_ORDER_DEFAULT`  | `stk::WAIT_ORDER_AUTO` | Default `EWaitOrder` of all sync objects (`SyncObjectBase`). `WAIT_ORDER_AUTO` defers to the order the kernel recommends for its mode and strategy; define as `stk::WAIT_ORDER_FIFO` to keep arrival order everywhere. Overridable per object, see [Wait order](#wait-order) |
 | `STK_SYSTICK_HANDLER`          | `SysTick_Handler`    | ARM: SysTick ISR symbol name                                                                                                                                                                                     |
 | `STK_PENDSV_HANDLER`           | `PendSV_Handler`     | ARM: PendSV ISR symbol name                                                                                                                                                                                      |
 | `STK_SVC_HANDLER`              | `SVC_Handler`        | ARM/RISC-V: SVC/exception handler symbol name                                                                                                                                                                    |

@@ -354,14 +354,20 @@ stk_blockpool_t *stk_blockpool_create(size_t      capacity,
     \param[in] raw_block_size: Requested per-block size in bytes.
     \param[in] name: Optional human-readable name (may be \c NULL).
     \param[in] alignment: Block alignment in bytes, a power of two not less than \c sizeof(void *).
+    \param[in] order: Policy used to select which task blocked in \c stk_blockpool_alloc() /
+               \c stk_blockpool_timed_alloc() receives the next freed block: STK_WAIT_ORDER_FIFO (arrival order),
+               STK_WAIT_ORDER_PRIORITY (highest task weight first, arrival order among equals) or
+               STK_WAIT_ORDER_AUTO. \c stk_blockpool_create() / \c stk_blockpool_create_static() use
+               STK_SYNC_WAIT_ORDER_DEFAULT. Can be changed later with \c stk_blockpool_set_wait_order().
     \return    See \c stk_blockpool_create(). An invalid alignment results in an invalid pool
                (check \c stk_blockpool_is_storage_valid()).
     \note      Not ISR-safe.
 */
-stk_blockpool_t *stk_blockpool_create_ex(size_t      capacity,
-                                         size_t      raw_block_size,
-                                         const char *name,
-                                         size_t      alignment);
+stk_blockpool_t *stk_blockpool_create_ex(size_t           capacity,
+                                         size_t           raw_block_size,
+                                         const char      *name,
+                                         size_t           alignment,
+                                         stk_wait_order_t order);
 
 /*! \brief     Create a block pool backed by \b caller-supplied (external) storage (default alignment).
     \details   The pool references \a storage directly without taking ownership.
@@ -396,15 +402,21 @@ stk_blockpool_t *stk_blockpool_create_static(size_t      capacity,
     \param[in] storage_size: Size of \a storage in bytes.
     \param[in] name: Optional human-readable name (may be \c NULL).
     \param[in] alignment: Block alignment in bytes, a power of two not less than \c sizeof(void *).
+    \param[in] order: Policy used to select which task blocked in \c stk_blockpool_alloc() /
+               \c stk_blockpool_timed_alloc() receives the next freed block: STK_WAIT_ORDER_FIFO (arrival order),
+               STK_WAIT_ORDER_PRIORITY (highest task weight first, arrival order among equals) or
+               STK_WAIT_ORDER_AUTO. \c stk_blockpool_create() / \c stk_blockpool_create_static() use
+               STK_SYNC_WAIT_ORDER_DEFAULT. Can be changed later with \c stk_blockpool_set_wait_order().
     \return    Pool handle, or \c NULL if the static slot pool is exhausted.
     \note      Not ISR-safe.
 */
-stk_blockpool_t *stk_blockpool_create_static_ex(size_t      capacity,
-                                                size_t      raw_block_size,
-                                                uint8_t    *storage,
-                                                size_t      storage_size,
-                                                const char *name,
-                                                size_t      alignment);
+stk_blockpool_t *stk_blockpool_create_static_ex(size_t           capacity,
+                                                size_t           raw_block_size,
+                                                uint8_t         *storage,
+                                                size_t           storage_size,
+                                                const char      *name,
+                                                size_t           alignment,
+                                                stk_wait_order_t order);
 
 /*! \brief     Destroy a pool and return its slot to the static pool.
     \details   If the pool owns heap storage, it is freed. External storage is
@@ -579,6 +591,34 @@ bool stk_blockpool_is_full(const stk_blockpool_t *pool);
     \note      ISR-safe.
 */
 bool stk_blockpool_is_empty(const stk_blockpool_t *pool);
+
+// =============================================================================
+// BlockPool - wait order
+// =============================================================================
+
+/*! \brief     Change the policy used by the pool to select which blocked allocator receives the next freed block.
+    \param[in] pool: Pool handle.
+    \param[in] order: Wait order, see \a stk_wait_order_t. Default is STK_SYNC_WAIT_ORDER_DEFAULT.
+    \note      Safe at any time: the wait list is never pre-sorted, the policy is applied at wake time.
+    \see       stk_get_default_wait_order
+*/
+void stk_blockpool_set_wait_order(stk_blockpool_t *pool, stk_wait_order_t order);
+
+/*! \brief     Get the wait order configured for the pool.
+    \param[in] pool: Pool handle.
+    \return    Wait order as configured, which may be STK_WAIT_ORDER_AUTO (resolved when a waiter is selected).
+*/
+stk_wait_order_t stk_blockpool_get_wait_order(const stk_blockpool_t *pool);
+
+/*! \brief     Get id of the task which is served next, i.e. the one that would receive the next freed block
+               (see stk_blockpool_get_wait_order()).
+    \param[in] pool: Pool handle.
+    \return    Task id of the next waiter, or 0 (no task) if nobody is waiting.
+    \note      Read-only introspection. The call runs inside a critical section, but the result is a
+               snapshot and may be stale by the time the caller acts on it.
+    \warning   Requires a running kernel if the wait order is STK_WAIT_ORDER_AUTO and more than one task is waiting.
+*/
+stk_tid_t stk_blockpool_get_next_waiter(const stk_blockpool_t *pool);
 
 // =============================================================================
 // BytePool - lifecycle
@@ -814,6 +854,16 @@ void *stk_mem_allocate_aligned(size_t size, size_t alignment);
     \param[in] ptr: Pointer returned by \c stk_mem_allocate_aligned(). \c NULL is allowed and results in noop.
 */
 void stk_mem_free_aligned(void *ptr);
+
+/*! \brief     Get id of the first task blocked in \c stk_bytepool_alloc() / \c stk_bytepool_timed_alloc() (arrival order).
+    \param[in] pool: Pool handle.
+    \return    Task id of the first waiter, or 0 (no task) if nobody is waiting.
+    \note      A byte pool has no configurable wait order: stk_bytepool_free() wakes all waiters, so this is
+               not necessarily the task which obtains the freed memory.
+    \note      Read-only introspection. The call runs inside a critical section, but the result is a
+               snapshot and may be stale by the time the caller acts on it.
+*/
+stk_tid_t stk_bytepool_get_next_waiter(const stk_bytepool_t *pool);
 
 /*! \brief     Get statistics of the general-purpose allocator.
     \param[out] stats: Receives the snapshot. Must not be \c NULL. All zero if the implementation

@@ -91,7 +91,8 @@ public:
         DEADLINE_MISSED_API      = 0, //!< This strategy does not use OnTaskDeadlineMissed() events.
         PRIORITY_INHERITANCE_API = 1, //!< This strategy handles OnTaskWeightChange() events to support priority inheritance.
         NOSLEEP_YIELD_API        = NoSleepYield, //!< (1) enables OnTaskYield(): yielding task stays runnable and hands the CPU to same-priority peers.
-        TIMESLICE_API            = 0  //!< This strategy does not support KERNEL_TIMESLICE mode.
+        TIMESLICE_API            = 0, //!< This strategy does not support KERNEL_TIMESLICE mode.
+        WAIT_ORDER_HINT          = WAIT_ORDER_PRIORITY //!< Weight is the priority: the highest priority (effective weight, inherited one included) is served first (see EWaitOrder).
     };
 
     /*! \enum  EPriority

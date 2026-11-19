@@ -24,9 +24,13 @@ STK_TEST_DECL_ASSERT;
 #define _STK_SEM_TEST_TIMEOUT     1000
 #define _STK_SEM_TEST_SHORT_SLEEP 10
 #define _STK_SEM_TEST_LONG_SLEEP  100
-#ifdef __ARM_ARCH_6M__
-#define _STK_SEM_STACK_SIZE       128 // ARM Cortex-M0
+
+#if defined(__ARM_ARCH_6M__) // ARM Cortex-M0
+#define _STK_SEM_STACK_SIZE       128
 #define STK_TASK
+#elif defined(_STK_ARCH_RISC_V)
+#define _STK_SEM_STACK_SIZE       384
+#define STK_TASK                  static
 #else
 #define _STK_SEM_STACK_SIZE       256
 #define STK_TASK                  static

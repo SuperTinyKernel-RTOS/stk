@@ -379,6 +379,13 @@ public:
         return weight;
     }
 
+    Weight GetWeight(TId tid) const
+    {
+        (void)tid;
+
+        return NO_WEIGHT;
+    }
+
     Timeout SetTimeSlice(TId tid, Timeout ticks) override
     {
         (void)tid;
@@ -393,6 +400,16 @@ public:
     {
         STK_UNUSED(locked);
         return LOCK_FAIL;
+    }
+
+    EWaitOrder GetDefaultWaitOrder() const override
+    {
+        return WAIT_ORDER_FIFO;
+    }
+
+    IWaitObject *SelectWaiter(IWaitObject::ListHeadType &wlist, EWaitOrder order) override
+    {
+        return nullptr;
     }
 
     bool     m_inc_ticks;

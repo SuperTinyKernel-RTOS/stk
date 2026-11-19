@@ -188,6 +188,21 @@ protected:
         */
         __stk_forceinline bool IsSleepInfinite() const { return (m_time_sleep == -WAIT_INFINITE); }
 
+        /*! \brief  Check whether this task is blocked in a synchronization object wait.
+            \return \c true if the task is registered in a sync object's wait list (always \c false without KERNEL_SYNC).
+        */
+        bool IsSyncWaiting() const
+        {
+            bool waiting = false;
+
+            if __stk_constexpr_cpp17 (IsSyncMode())
+            {
+                waiting = m_wait_obj[0].IsWaiting();
+            }
+
+            return waiting;
+        }
+
         /*! \brief  Get task identifier.
             \return TId derived from the bound ITask pointer address (unique per task instance).
         */
@@ -369,12 +384,15 @@ protected:
                     Zero means this is the last tick still within the deadline; a negative value
                     means the deadline has already been missed (see HrtIsDeadlineMissed(), which
                     uses a strict duration > deadline comparison).
-            \note   KERNEL_HRT mode only. Asserts if called outside HRT mode or while sleeping.
+            \note   KERNEL_HRT mode only. Asserts if called outside HRT mode or while sleeping until the next
+                    period. A task blocked in a synchronization object wait is sleeping as well, but it is
+                    in the middle of its job: its active time (duration) does not advance while it is blocked,
+                    the returned value is the budget left when the wait began and is valid.
         */
         Timeout GetHrtRelativeDeadline() const override
         {
             STK_ASSERT(IsHrtMode());
-            STK_ASSERT(!IsSleeping());
+            STK_ASSERT(!IsSleeping() || IsSyncWaiting());
             
             Timeout relative_deadline;
 
@@ -523,6 +541,11 @@ protected:
                 \return TId of m_task.
             */
             TId GetTid() const override { return m_task->GetTid(); }
+
+            /*! \brief  Get kernel task that owns this wait object.
+                \return Pointer to the owning KernelTask (m_task).
+            */
+            IKernelTask *GetKernelTask() const override { return m_task; }
 
             /*! \brief  Get current state.
                 \return State value.
@@ -1204,7 +1227,12 @@ protected:
                 }
                 else
                 {
-                    ISyncObject::WakeOne(GetMutableWaitList(sobj));
+                    // direct (non-virtual) call: the selection is compiled for this kernel's strategy and mode
+                    IWaitObject *const obj = SelectWaiter(GetMutableWaitList(sobj), sobj->GetWaitOrder());
+                    if (obj != nullptr)
+                    {
+                        obj->Wake(false);
+                    }
                 }
             }
             else
@@ -1236,6 +1264,110 @@ protected:
             {
                 STK_ASSERT(false);
             }
+        }
+
+        EWaitOrder GetDefaultWaitOrder() const override
+        {
+            // the strategy knows best what "urgent" means for it: use the order it declares (WAIT_ORDER_HINT)
+            EWaitOrder order = detail::StrategyWaitOrderHint<TStrategy>::Get();
+
+            if (order == WAIT_ORDER_AUTO)
+            {
+                // the strategy declares no hint (e.g. user-defined), derive the order from the mode and capabilities
+                order = WAIT_ORDER_FIFO;
+
+                if __stk_constexpr_cpp17 (IsHrtMode())
+                {
+                    // urgency is the remaining deadline (weighted strategies are not supported in HRT mode)
+                    order = WAIT_ORDER_DEADLINE;
+                }
+                else if __stk_constexpr_cpp17 (TStrategy::WEIGHT_API && TStrategy::PRIORITY_INHERITANCE_API)
+                {
+                    // weights are priorities (inheritance needs them to be), unlike weighted round-robin
+                    // where a weight is a CPU share and says nothing about urgency
+                    order = WAIT_ORDER_PRIORITY;
+                }
+                else
+                {
+                    // arrival order (fair)
+                }
+            }
+
+            return order;
+        }
+
+        IWaitObject *SelectWaiter(IWaitObject::ListHeadType &wlist, EWaitOrder order) override
+        {
+            IWaitObject *result = detail::DListCast::ListEntryToParent<IWaitObject>(wlist.GetFirst()); // WAIT_ORDER_FIFO
+
+            // nothing to choose from with 0 or 1 waiter
+            if ((result != nullptr) && (result->GetNext() != nullptr))
+            {
+                if (order == WAIT_ORDER_AUTO)
+                {
+                    order = GetDefaultWaitOrder();
+                }
+
+                // orders which can not differ from FIFO for this strategy/mode are dropped at compile time:
+                // without WEIGHT_API all weights are equal, outside KERNEL_HRT all HRT keys are zero, so a
+                // strictly better waiter never exists and the first one (FIFO) is the result
+                switch (order)
+                {
+                case WAIT_ORDER_PRIORITY:
+                    if __stk_constexpr_cpp17 (TStrategy::WEIGHT_API)
+                    {
+                        result = detail::SelectBestWaiter<detail::WaiterKeyWeight, IWaitObject>(wlist);
+                    }
+                    break;
+                case WAIT_ORDER_PRIORITY_PACKED:
+                    if __stk_constexpr_cpp17 (TStrategy::WEIGHT_API)
+                    {
+                        result = detail::SelectBestWaiter<detail::WaiterKeyPackedPriority, IWaitObject>(wlist);
+                    }
+                    break;
+                case WAIT_ORDER_DEADLINE:
+                    if __stk_constexpr_cpp17 (IsHrtMode())
+                    {
+                        result = detail::SelectBestWaiter<detail::WaiterKeyDeadline, IWaitObject>(wlist);
+                    }
+                    break;
+                case WAIT_ORDER_PERIOD:
+                    if __stk_constexpr_cpp17 (IsHrtMode())
+                    {
+                        result = detail::SelectBestWaiter<detail::WaiterKeyPeriod, IWaitObject>(wlist);
+                    }
+                    break;
+                case WAIT_ORDER_DEADLINE_FIXED:
+                    if __stk_constexpr_cpp17 (IsHrtMode())
+                    {
+                        result = detail::SelectBestWaiter<detail::WaiterKeyDeadlineFixed, IWaitObject>(wlist);
+                    }
+                    break;
+                default:
+                    break; // WAIT_ORDER_FIFO: the first waiter
+                }
+            }
+
+            return result;
+        }
+
+        Weight GetWeight(TId tid) const override
+        {
+            Weight result;
+
+            if __stk_constexpr_cpp17 (TStrategy::WEIGHT_API)
+            {
+                result = m_kernel->OnGetWeight(tid);
+            }
+            else
+            {
+                // all tasks have the same weight, skip the task lookup
+                STK_UNUSED(tid);
+
+                result = DEFAULT_WEIGHT;
+            }
+
+            return result;
         }
 
         void InheritWeight(TId tid, Weight weight) override
@@ -2790,6 +2922,16 @@ protected:
         }
     }
 
+    Weight OnGetWeight(TId tid) const
+    {
+        STK_ASSERT(tid != TID_NONE);
+
+        const KernelTask *const task = FindTaskByUserTask(GetUserTaskFromTid(tid));
+        STK_ASSERT(task != nullptr);
+
+        return task->GetWeight(); // effective: inherited weight while boosted, otherwise base
+    }
+
     void OnInheritWeight(TId tid, Weight weight)
     {
         STK_ASSERT(tid != TID_NONE);
@@ -2900,8 +3042,10 @@ protected:
 
         const Weight prev_weight = task->GetWeight();
 
-        // restore to original or boost from wait objects
-        task->SetCurrentWeight(sobj != nullptr ? sobj->FindWeightHigherThan(task->GetWeight()) : NO_WEIGHT);
+        // restore to original or boost from wait objects: the floor is the BASE weight (what the task has
+        // without any boost), the effective weight would still include the boost of the waiter that has just
+        // left the wait list and would hide the remaining waiters whose weight does not exceed it
+        task->SetCurrentWeight(sobj != nullptr ? sobj->FindWeightHigherThan(task->GetBaseWeight()) : NO_WEIGHT);
 
         m_strategy.OnTaskWeightChange(task, prev_weight);
     }

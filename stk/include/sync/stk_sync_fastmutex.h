@@ -31,8 +31,9 @@ namespace sync {
     configurations, from \c Lock(), \c TryLock() and \c TimedLock()) instead of dead-locking
     on itself or failing silently.
 
-    Ownership is handed over directly to the first waiter (FIFO) on \c Unlock(), and priority
-    inheritance is supported in the same way as in stk::sync::Mutex.
+    Ownership is handed over directly to the next waiter on \c Unlock(): the first one in arrival
+    order (WAIT_ORDER_FIFO, default) or the one with the highest task weight (WAIT_ORDER_PRIORITY),
+    see EWaitOrder. Priority inheritance is supported in the same way as in stk::sync::Mutex.
 
     \code
     stk::sync::FastMutex g_ResourceMtx;
@@ -52,8 +53,15 @@ class FastMutex final : public SyncObjectBase, public IMutex, public ITraceable
 {
 public:
     /*! \brief     Constructor.
+        \param[in] order: Policy used to select which blocked task receives ownership in Unlock():
+                   WAIT_ORDER_FIFO (arrival order, fair) or WAIT_ORDER_PRIORITY (highest task weight first,
+                   arrival order among equal weights). The weight is read when the lock is handed over, so
+                   run-time weight changes of the waiting tasks are honored.
+        \note      WAIT_ORDER_PRIORITY is meaningful for strategies with WEIGHT_API (and
+                   PRIORITY_INHERITANCE_API for bounded priority inversion), see EWaitOrder.
     */
-    explicit FastMutex() : m_owner_tid(TID_NONE)
+    explicit FastMutex(EWaitOrder order = STK_SYNC_WAIT_ORDER_DEFAULT)
+        : SyncObjectBase(order), m_owner_tid(TID_NONE)
     {}
 
     /*! \brief     Destructor.
@@ -170,7 +178,8 @@ inline EWaitResult FastMutex::TimedLockEx(Timeout timeout_ticks)
 
         // boost priority of the owner to avoid priority inversion (strategies with PRIORITY_INHERITANCE_API,
         // e.g. sched::SwitchStrategyFixedPriority), noop for strategies without it
-        svc->InheritWeight(owner_tid, GetUserTaskFromTid(current_tid)->GetWeight());
+        // (the effective weight of the caller is donated: honors SetWeight() and the caller's own inherited boost)
+        svc->InheritWeight(owner_tid, svc->GetWeight(current_tid));
 
         // mutex owned by another thread (slow path/blocking)
         result = svc->Wait(this, &cs_, timeout_ticks);
@@ -241,7 +250,7 @@ inline void FastMutex::Unlock()
 
     if (!m_wait_list.IsEmpty())
     {
-        // slow path: contended unlock, hand over to the first waiter
+        // slow path: contended unlock, hand over to the next waiter
         IKernelService *const svc = IKernelService::GetInstance();
 
         // restore priority of the owner (it could have been boosted by waiters of this mutex),
@@ -252,8 +261,10 @@ inline void FastMutex::Unlock()
             svc->RestoreWeight(m_owner_tid);
         }
 
-        // pass ownership directly to the first waiter (FIFO order)
-        IWaitObject *const waiter = detail::DListCast::ListEntryToParent<IWaitObject>(m_wait_list.GetFirst());
+        // pass ownership directly to the next waiter: first in FIFO order, or the one with the highest
+        // current weight in priority order (never NULL here, the list is not empty)
+        IWaitObject *const waiter = GetNextWaitObject();
+        STK_ASSERT(waiter != nullptr);
 
         // transfer ownership to the waiter
         m_owner_tid = waiter->GetTid();
@@ -267,7 +278,7 @@ inline void FastMutex::Unlock()
         if (!m_wait_list.IsEmpty())
         {
             svc->InheritWeight(m_owner_tid,
-                FindWeightHigherThan(GetUserTaskFromTid(m_owner_tid)->GetWeight()));
+                FindWeightHigherThan(waiter->GetKernelTask()->GetWeight())); // new owner's effective weight
         }
     }
     else

@@ -50,20 +50,28 @@ extern "C" {
 // -----------------------------------------------------------------------------
 struct stk_mutex_t
 {
+    explicit stk_mutex_t(EWaitOrder order) : handle(order)
+    {}
+
     Mutex handle;
 };
 
-stk_mutex_t *stk_mutex_create(stk_mutex_mem_t *const membuf)
+stk_mutex_t *stk_mutex_create_ex(stk_mutex_mem_t *const membuf, stk_wait_order_t order)
 {
     STK_ASSERT(membuf != nullptr);
 
     stk_mutex_t *result = nullptr;
     if (membuf != nullptr)
     {
-        result = ConstructIn<stk_mutex_t>(*membuf);
+        result = ConstructIn<stk_mutex_t>(*membuf, static_cast<EWaitOrder>(order));
     }
 
     return result;
+}
+
+stk_mutex_t *stk_mutex_create(stk_mutex_mem_t *const membuf)
+{
+    return stk_mutex_create_ex(membuf, static_cast<stk_wait_order_t>(STK_SYNC_WAIT_ORDER_DEFAULT));
 }
 
 void stk_mutex_destroy(stk_mutex_t *mtx)
@@ -95,6 +103,27 @@ void stk_mutex_unlock(stk_mutex_t *mtx)
     mtx->handle.Unlock();
 }
 
+stk_tid_t stk_mutex_get_owner(const stk_mutex_t *mtx)
+{
+    STK_ASSERT(mtx != nullptr);
+
+    return static_cast<stk_tid_t>(mtx->handle.GetOwner());
+}
+
+bool stk_mutex_is_locked(const stk_mutex_t *mtx)
+{
+    STK_ASSERT(mtx != nullptr);
+
+    return mtx->handle.IsLocked();
+}
+
+uint16_t stk_mutex_get_recursion_count(const stk_mutex_t *mtx)
+{
+    STK_ASSERT(mtx != nullptr);
+
+    return mtx->handle.GetRecursionCount();
+}
+
 bool stk_mutex_timed_lock(stk_mutex_t *mtx, stk_timeout_t timeout)
 {
     STK_ASSERT(mtx != nullptr);
@@ -109,6 +138,27 @@ stk_wait_result_t stk_mutex_timed_lock_ex(stk_mutex_t *mtx, stk_timeout_t timeou
     return ToCWaitResult(mtx->handle.TimedLockEx(timeout));
 }
 
+void stk_mutex_set_wait_order(stk_mutex_t *mtx, stk_wait_order_t order)
+{
+    STK_ASSERT(mtx != nullptr);
+
+    mtx->handle.SetWaitOrder(static_cast<EWaitOrder>(order));
+}
+
+stk_wait_order_t stk_mutex_get_wait_order(const stk_mutex_t *mtx)
+{
+    STK_ASSERT(mtx != nullptr);
+
+    return static_cast<stk_wait_order_t>(mtx->handle.GetWaitOrder());
+}
+
+stk_tid_t stk_mutex_get_next_waiter(const stk_mutex_t *mtx)
+{
+    STK_ASSERT(mtx != nullptr);
+
+    return static_cast<stk_tid_t>(mtx->handle.GetNextWaiter());
+}
+
 Mutex *stk_mutex_get_instance(stk_mutex_t *mtx)
 {
     STK_ASSERT(mtx != nullptr);
@@ -121,20 +171,28 @@ Mutex *stk_mutex_get_instance(stk_mutex_t *mtx)
 // -----------------------------------------------------------------------------
 struct stk_fastmutex_t
 {
+    explicit stk_fastmutex_t(EWaitOrder order) : handle(order)
+    {}
+
     FastMutex handle;
 };
 
-stk_fastmutex_t *stk_fastmutex_create(stk_fastmutex_mem_t *const membuf)
+stk_fastmutex_t *stk_fastmutex_create_ex(stk_fastmutex_mem_t *const membuf, stk_wait_order_t order)
 {
     STK_ASSERT(membuf != nullptr);
 
     stk_fastmutex_t *result = nullptr;
     if (membuf != nullptr)
     {
-        result = ConstructIn<stk_fastmutex_t>(*membuf);
+        result = ConstructIn<stk_fastmutex_t>(*membuf, static_cast<EWaitOrder>(order));
     }
 
     return result;
+}
+
+stk_fastmutex_t *stk_fastmutex_create(stk_fastmutex_mem_t *const membuf)
+{
+    return stk_fastmutex_create_ex(membuf, static_cast<stk_wait_order_t>(STK_SYNC_WAIT_ORDER_DEFAULT));
 }
 
 void stk_fastmutex_destroy(stk_fastmutex_t *mtx)
@@ -166,6 +224,20 @@ void stk_fastmutex_unlock(stk_fastmutex_t *mtx)
     mtx->handle.Unlock();
 }
 
+stk_tid_t stk_fastmutex_get_owner(const stk_fastmutex_t *mtx)
+{
+    STK_ASSERT(mtx != nullptr);
+
+    return static_cast<stk_tid_t>(mtx->handle.GetOwner());
+}
+
+bool stk_fastmutex_is_locked(const stk_fastmutex_t *mtx)
+{
+    STK_ASSERT(mtx != nullptr);
+
+    return mtx->handle.IsLocked();
+}
+
 bool stk_fastmutex_timed_lock(stk_fastmutex_t *mtx, stk_timeout_t timeout)
 {
     STK_ASSERT(mtx != nullptr);
@@ -178,6 +250,27 @@ stk_wait_result_t stk_fastmutex_timed_lock_ex(stk_fastmutex_t *mtx, stk_timeout_
     STK_ASSERT(mtx != nullptr);
 
     return ToCWaitResult(mtx->handle.TimedLockEx(timeout));
+}
+
+void stk_fastmutex_set_wait_order(stk_fastmutex_t *mtx, stk_wait_order_t order)
+{
+    STK_ASSERT(mtx != nullptr);
+
+    mtx->handle.SetWaitOrder(static_cast<EWaitOrder>(order));
+}
+
+stk_wait_order_t stk_fastmutex_get_wait_order(const stk_fastmutex_t *mtx)
+{
+    STK_ASSERT(mtx != nullptr);
+
+    return static_cast<stk_wait_order_t>(mtx->handle.GetWaitOrder());
+}
+
+stk_tid_t stk_fastmutex_get_next_waiter(const stk_fastmutex_t *mtx)
+{
+    STK_ASSERT(mtx != nullptr);
+
+    return static_cast<stk_tid_t>(mtx->handle.GetNextWaiter());
 }
 
 FastMutex *stk_fastmutex_get_instance(stk_fastmutex_t *mtx)
@@ -246,20 +339,28 @@ sync::SpinLock *stk_spinlock_get_instance(stk_spinlock_t *slock)
 // -----------------------------------------------------------------------------
 struct stk_cv_t
 {
+    explicit stk_cv_t(EWaitOrder order) : handle(order)
+    {}
+
     ConditionVariable handle;
 };
 
-stk_cv_t *stk_cv_create(stk_cv_mem_t *const membuf)
+stk_cv_t *stk_cv_create_ex(stk_cv_mem_t *const membuf, stk_wait_order_t order)
 {
     STK_ASSERT(membuf != nullptr);
 
     stk_cv_t *result = nullptr;
     if (membuf != nullptr)
     {
-        result = ConstructIn<stk_cv_t>(*membuf);
+        result = ConstructIn<stk_cv_t>(*membuf, static_cast<EWaitOrder>(order));
     }
 
     return result;
+}
+
+stk_cv_t *stk_cv_create(stk_cv_mem_t *const membuf)
+{
+    return stk_cv_create_ex(membuf, static_cast<stk_wait_order_t>(STK_SYNC_WAIT_ORDER_DEFAULT));
 }
 
 void stk_cv_destroy(stk_cv_t *cv)
@@ -316,6 +417,27 @@ void stk_cv_notify_all(stk_cv_t *cv)
     cv->handle.NotifyAll();
 }
 
+void stk_cv_set_wait_order(stk_cv_t *cv, stk_wait_order_t order)
+{
+    STK_ASSERT(cv != nullptr);
+
+    cv->handle.SetWaitOrder(static_cast<EWaitOrder>(order));
+}
+
+stk_wait_order_t stk_cv_get_wait_order(const stk_cv_t *cv)
+{
+    STK_ASSERT(cv != nullptr);
+
+    return static_cast<stk_wait_order_t>(cv->handle.GetWaitOrder());
+}
+
+stk_tid_t stk_cv_get_next_waiter(const stk_cv_t *cv)
+{
+    STK_ASSERT(cv != nullptr);
+
+    return static_cast<stk_tid_t>(cv->handle.GetNextWaiter());
+}
+
 ConditionVariable *stk_cv_get_instance(stk_cv_t *cv)
 {
     STK_ASSERT(cv != nullptr);
@@ -328,24 +450,34 @@ ConditionVariable *stk_cv_get_instance(stk_cv_t *cv)
 // -----------------------------------------------------------------------------
 struct stk_event_t
 {
-    stk_event_t(bool manual_reset) : handle(manual_reset)
+    stk_event_t(bool manual_reset, bool initial_state, EWaitOrder order) : handle(manual_reset, initial_state, order)
     {}
 
     Event handle;
 };
 
-stk_event_t *stk_event_create(stk_event_mem_t *const membuf,
-                              bool manual_reset)
+stk_event_t *stk_event_create_ex(stk_event_mem_t *const membuf,
+                                 bool manual_reset,
+                                 bool initial_state,
+                                 stk_wait_order_t order)
 {
     STK_ASSERT(membuf != nullptr);
 
     stk_event_t *result = nullptr;
     if (membuf != nullptr)
     {
-        result = ConstructIn<stk_event_t>(*membuf, manual_reset);
+        result = ConstructIn<stk_event_t>(*membuf, manual_reset, initial_state, static_cast<EWaitOrder>(order));
     }
 
     return result;
+}
+
+stk_event_t *stk_event_create(stk_event_mem_t *const membuf,
+                              bool manual_reset,
+                              bool initial_state)
+{
+    return stk_event_create_ex(membuf, manual_reset, initial_state,
+        static_cast<stk_wait_order_t>(STK_SYNC_WAIT_ORDER_DEFAULT));
 }
 
 void stk_event_destroy(stk_event_t *ev)
@@ -398,6 +530,27 @@ void stk_event_pulse(stk_event_t *ev)
     ev->handle.Pulse();
 }
 
+void stk_event_set_wait_order(stk_event_t *ev, stk_wait_order_t order)
+{
+    STK_ASSERT(ev != nullptr);
+
+    ev->handle.SetWaitOrder(static_cast<EWaitOrder>(order));
+}
+
+stk_wait_order_t stk_event_get_wait_order(const stk_event_t *ev)
+{
+    STK_ASSERT(ev != nullptr);
+
+    return static_cast<stk_wait_order_t>(ev->handle.GetWaitOrder());
+}
+
+stk_tid_t stk_event_get_next_waiter(const stk_event_t *ev)
+{
+    STK_ASSERT(ev != nullptr);
+
+    return static_cast<stk_tid_t>(ev->handle.GetNextWaiter());
+}
+
 Event *stk_event_get_instance(stk_event_t *ev)
 {
     STK_ASSERT(ev != nullptr);
@@ -410,16 +563,17 @@ Event *stk_event_get_instance(stk_event_t *ev)
 // -----------------------------------------------------------------------------
 struct stk_sem_t
 {
-    stk_sem_t(stk_sem_val_t initial_count, stk_sem_val_t max_count)
-        : handle(initial_count, max_count)
+    stk_sem_t(stk_sem_val_t initial_count, stk_sem_val_t max_count, EWaitOrder order)
+        : handle(initial_count, max_count, order)
     {}
 
     SemaphoreT<stk_sem_val_t> handle;
 };
 
-stk_sem_t *stk_sem_create(stk_sem_mem_t *const membuf,
-                          stk_sem_val_t initial_count,
-                          stk_sem_val_t max_count)
+stk_sem_t *stk_sem_create_ex(stk_sem_mem_t *const membuf,
+                             stk_sem_val_t initial_count,
+                             stk_sem_val_t max_count,
+                             stk_wait_order_t order)
 {
     STK_ASSERT(membuf != nullptr);
 
@@ -428,10 +582,18 @@ stk_sem_t *stk_sem_create(stk_sem_mem_t *const membuf,
     stk_sem_t *result = nullptr;
     if (membuf != nullptr)
     {
-        result = ConstructIn<stk_sem_t>(*membuf, initial_count, effective_max);
+        result = ConstructIn<stk_sem_t>(*membuf, initial_count, effective_max, static_cast<EWaitOrder>(order));
     }
 
     return result;
+}
+
+stk_sem_t *stk_sem_create(stk_sem_mem_t *const membuf,
+                          stk_sem_val_t initial_count,
+                          stk_sem_val_t max_count)
+{
+    return stk_sem_create_ex(membuf, initial_count, max_count,
+        static_cast<stk_wait_order_t>(STK_SYNC_WAIT_ORDER_DEFAULT));
 }
 
 void stk_sem_destroy(stk_sem_t *sem)
@@ -489,6 +651,27 @@ stk_sem_val_t stk_sem_get_count(const stk_sem_t *sem)
     STK_ASSERT(sem != nullptr);
 
     return sem->handle.GetCount();
+}
+
+void stk_sem_set_wait_order(stk_sem_t *sem, stk_wait_order_t order)
+{
+    STK_ASSERT(sem != nullptr);
+
+    sem->handle.SetWaitOrder(static_cast<EWaitOrder>(order));
+}
+
+stk_wait_order_t stk_sem_get_wait_order(const stk_sem_t *sem)
+{
+    STK_ASSERT(sem != nullptr);
+
+    return static_cast<stk_wait_order_t>(sem->handle.GetWaitOrder());
+}
+
+stk_tid_t stk_sem_get_next_waiter(const stk_sem_t *sem)
+{
+    STK_ASSERT(sem != nullptr);
+
+    return static_cast<stk_tid_t>(sem->handle.GetNextWaiter());
 }
 
 SemaphoreT<stk_sem_val_t> *stk_sem_get_instance(stk_sem_t *sem)
@@ -637,6 +820,13 @@ stk_wait_result_t stk_ef_sync(stk_ef_t *ef, stk_ef_sync_ctx_t *ctx, stk_ef_val_t
     return result;
 }
 
+stk_tid_t stk_ef_get_next_waiter(const stk_ef_t *ef)
+{
+    STK_ASSERT(ef != nullptr);
+
+    return static_cast<stk_tid_t>(ef->handle.GetNextWaiter());
+}
+
 EventFlagsT<stk_ef_val_t> *stk_ef_get_instance(stk_ef_t *ef)
 {
     STK_ASSERT(ef != nullptr);
@@ -651,16 +841,17 @@ struct stk_pipe_t
 {
     Pipe handle;
 
-    stk_pipe_t(uint8_t *buf, size_t capacity, size_t element_size)
-        : handle(buf, capacity, element_size)
+    stk_pipe_t(uint8_t *buf, size_t capacity, size_t element_size, EWaitOrder order)
+        : handle(buf, capacity, element_size, order)
     {}
 };
 
-stk_pipe_t *stk_pipe_create(stk_pipe_mem_t *const membuf,
-                            uint8_t *buf,
-                            uint32_t buf_size,
-                            size_t capacity,
-                            size_t element_size)
+stk_pipe_t *stk_pipe_create_ex(stk_pipe_mem_t *const membuf,
+                               uint8_t *buf,
+                               uint32_t buf_size,
+                               size_t capacity,
+                               size_t element_size,
+                               stk_wait_order_t order)
 {
     STK_ASSERT(membuf       != nullptr);
     STK_ASSERT(buf          != nullptr);
@@ -671,10 +862,20 @@ stk_pipe_t *stk_pipe_create(stk_pipe_mem_t *const membuf,
     stk_pipe_t *result = nullptr;
     if ((membuf != nullptr) && (buf_size >= (capacity * element_size)))
     {
-        result = ConstructIn<stk_pipe_t>(*membuf, buf, capacity, element_size);
+        result = ConstructIn<stk_pipe_t>(*membuf, buf, capacity, element_size, static_cast<EWaitOrder>(order));
     }
 
     return result;
+}
+
+stk_pipe_t *stk_pipe_create(stk_pipe_mem_t *const membuf,
+                            uint8_t *buf,
+                            uint32_t buf_size,
+                            size_t capacity,
+                            size_t element_size)
+{
+    return stk_pipe_create_ex(membuf, buf, buf_size, capacity, element_size,
+        static_cast<stk_wait_order_t>(STK_SYNC_WAIT_ORDER_DEFAULT));
 }
 
 void stk_pipe_destroy(stk_pipe_t *pipe)
@@ -887,6 +1088,13 @@ bool stk_pipe_is_storage_valid(const stk_pipe_t *pipe)
     return pipe->handle.IsStorageValid();
 }
 
+uint8_t *stk_pipe_get_buffer(stk_pipe_t *pipe)
+{
+    STK_ASSERT(pipe != nullptr);
+
+    return pipe->handle.GetBuffer();
+}
+
 Pipe *stk_pipe_get_instance(stk_pipe_t *pipe)
 {
     STK_ASSERT(pipe != nullptr);
@@ -899,18 +1107,19 @@ Pipe *stk_pipe_get_instance(stk_pipe_t *pipe)
 // -----------------------------------------------------------------------------
 struct stk_msgq_t
 {
-    stk_msgq_t(uint8_t *buf, size_t capacity, size_t msg_size)
-        : handle(buf, capacity, msg_size)
+    stk_msgq_t(uint8_t *buf, size_t capacity, size_t msg_size, EWaitOrder order)
+        : handle(buf, capacity, msg_size, order)
     {}
 
     MessageQueue handle;
 };
 
-stk_msgq_t *stk_msgq_create(stk_msgq_mem_t *const membuf,
-                            uint8_t *buf,
-                            uint32_t buf_size,
-                            size_t capacity,
-                            size_t msg_size)
+stk_msgq_t *stk_msgq_create_ex(stk_msgq_mem_t *const membuf,
+                               uint8_t *buf,
+                               uint32_t buf_size,
+                               size_t capacity,
+                               size_t msg_size,
+                               stk_wait_order_t order)
 {
     STK_ASSERT(membuf != nullptr);
     STK_ASSERT(buf != nullptr);
@@ -921,10 +1130,20 @@ stk_msgq_t *stk_msgq_create(stk_msgq_mem_t *const membuf,
     stk_msgq_t *result = nullptr;
     if ((membuf != nullptr) && (buf_size >= (capacity * msg_size)))
     {
-        result = ConstructIn<stk_msgq_t>(*membuf, buf, capacity, msg_size);
+        result = ConstructIn<stk_msgq_t>(*membuf, buf, capacity, msg_size, static_cast<EWaitOrder>(order));
     }
 
     return result;
+}
+
+stk_msgq_t *stk_msgq_create(stk_msgq_mem_t *const membuf,
+                            uint8_t *buf,
+                            uint32_t buf_size,
+                            size_t capacity,
+                            size_t msg_size)
+{
+    return stk_msgq_create_ex(membuf, buf, buf_size, capacity, msg_size,
+        static_cast<stk_wait_order_t>(STK_SYNC_WAIT_ORDER_DEFAULT));
 }
 
 void stk_msgq_destroy(stk_msgq_t *mq)
@@ -1118,6 +1337,27 @@ bool stk_msgq_is_storage_valid(const stk_msgq_t *mq)
     return mq->handle.IsStorageValid();
 }
 
+void stk_msgq_set_wait_order(stk_msgq_t *mq, stk_wait_order_t order)
+{
+    STK_ASSERT(mq != nullptr);
+
+    mq->handle.SetWaitOrder(static_cast<EWaitOrder>(order));
+}
+
+stk_wait_order_t stk_msgq_get_wait_order(const stk_msgq_t *mq)
+{
+    STK_ASSERT(mq != nullptr);
+
+    return static_cast<stk_wait_order_t>(mq->handle.GetWaitOrder());
+}
+
+stk_tid_t stk_msgq_get_next_waiter(const stk_msgq_t *mq)
+{
+    STK_ASSERT(mq != nullptr);
+
+    return static_cast<stk_tid_t>(mq->handle.GetNextWaiter());
+}
+
 MessageQueue *stk_msgq_get_instance(stk_msgq_t *mq)
 {
     STK_ASSERT(mq != nullptr);
@@ -1130,20 +1370,28 @@ MessageQueue *stk_msgq_get_instance(stk_msgq_t *mq)
 // -----------------------------------------------------------------------------
 struct stk_rwmutex_t
 {
+    explicit stk_rwmutex_t(EWaitOrder writer_order) : handle(writer_order)
+    {}
+
     sync::RWMutex handle;
 };
 
-stk_rwmutex_t *stk_rwmutex_create(stk_rwmutex_mem_t *const membuf)
+stk_rwmutex_t *stk_rwmutex_create_ex(stk_rwmutex_mem_t *const membuf, stk_wait_order_t order)
 {
     STK_ASSERT(membuf != nullptr);
 
     stk_rwmutex_t *result = nullptr;
     if (membuf != nullptr)
     {
-        result = ConstructIn<stk_rwmutex_t>(*membuf);
+        result = ConstructIn<stk_rwmutex_t>(*membuf, static_cast<EWaitOrder>(order));
     }
 
     return result;
+}
+
+stk_rwmutex_t *stk_rwmutex_create(stk_rwmutex_mem_t *const membuf)
+{
+    return stk_rwmutex_create_ex(membuf, static_cast<stk_wait_order_t>(STK_SYNC_WAIT_ORDER_DEFAULT));
 }
 
 void stk_rwmutex_destroy(stk_rwmutex_t *rw)

@@ -57,7 +57,8 @@ public:
         DEADLINE_MISSED_API      = 0, //!< This strategy does not use OnTaskDeadlineMissed() events.
         PRIORITY_INHERITANCE_API = 0, //!< This strategy does not require Priority Inheritance and OnTaskWeightChange() events.
         NOSLEEP_YIELD_API        = NoSleepYield, //!< (1) enables OnTaskYield(): yielding task stays runnable instead of sleeping.
-        TIMESLICE_API            = 0  //!< This strategy does not support KERNEL_TIMESLICE mode.
+        TIMESLICE_API            = 0, //!< This strategy does not support KERNEL_TIMESLICE mode.
+        WAIT_ORDER_HINT          = WAIT_ORDER_FIFO //!< Round-robin has no notion of urgency: blocked tasks are served in arrival order (see EWaitOrder).
     };
 
     /*! \brief Construct an empty strategy with no tasks and a null cursor.

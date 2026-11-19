@@ -108,6 +108,29 @@ __stk_forceinline stk_timer_result_t ToCTimerResult(TimerHost::EResult r)
 } // namespace
 // +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
+STK_STATIC_ASSERT_DESC(sizeof(stk_cycle_t) == sizeof(Cycles), "stk_cycle_t mismatch");
+
+namespace {
+
+// Adapts a C time source (function pointer + context) to the callable expected by Stopwatch.
+struct StopwatchNow
+{
+    stk_stopwatch_now_func_t func;
+    void                    *ctx;
+
+    Cycles operator()() const { return static_cast<Cycles>(func(ctx)); }
+};
+
+// Time source of the high-resolution clock.
+struct StopwatchHiresNow
+{
+    stk_hires_clock_t *clk;
+
+    Cycles operator()() const { return static_cast<Cycles>(stk_hires_cycles(clk)); }
+};
+
+} // namespace
+
 // =============================================================================
 // C-interface
 // =============================================================================
@@ -528,6 +551,72 @@ uint32_t stk_periodic_trigger_get_period(const stk_periodic_trigger_t *trig)
 }
 
 // -----------------------------------------------------------------------------
+// Stopwatch
+// -----------------------------------------------------------------------------
+
+struct stk_stopwatch_t
+{
+    Stopwatch handle;
+};
+
+stk_stopwatch_t *stk_stopwatch_create(stk_stopwatch_mem_t *const membuf)
+{
+    STK_ASSERT(membuf != nullptr);
+
+    stk_stopwatch_t *result = nullptr;
+    if (membuf != nullptr)
+    {
+        result = ConstructIn<stk_stopwatch_t>(*membuf);
+    }
+
+    return result;
+}
+
+void stk_stopwatch_destroy(stk_stopwatch_t *const sw)
+{
+    if (sw != nullptr)
+    {
+        sw->~stk_stopwatch_t();
+    }
+}
+
+void stk_stopwatch_start(stk_stopwatch_t *sw, stk_stopwatch_now_func_t now, void *ctx)
+{
+    STK_ASSERT(sw != nullptr);
+    STK_ASSERT(now != nullptr);
+
+    const StopwatchNow src = { now, ctx };
+    sw->handle.Start(src);
+}
+
+stk_cycle_t stk_stopwatch_update(stk_stopwatch_t *sw, stk_stopwatch_now_func_t now, void *ctx)
+{
+    STK_ASSERT(sw != nullptr);
+    STK_ASSERT(now != nullptr);
+
+    const StopwatchNow src = { now, ctx };
+    return static_cast<stk_cycle_t>(sw->handle.Update(src));
+}
+
+void stk_stopwatch_start_hires(stk_stopwatch_t *sw, stk_hires_clock_t *clk)
+{
+    STK_ASSERT(sw != nullptr);
+    STK_ASSERT(clk != nullptr);
+
+    const StopwatchHiresNow src = { clk };
+    sw->handle.Start(src);
+}
+
+stk_cycle_t stk_stopwatch_update_hires(stk_stopwatch_t *sw, stk_hires_clock_t *clk)
+{
+    STK_ASSERT(sw != nullptr);
+    STK_ASSERT(clk != nullptr);
+
+    const StopwatchHiresNow src = { clk };
+    return static_cast<stk_cycle_t>(sw->handle.Update(src));
+}
+
+// -----------------------------------------------------------------------------
 // C++ instance access
 // -----------------------------------------------------------------------------
 
@@ -550,6 +639,13 @@ PeriodicTrigger *stk_periodic_trigger_get_instance(stk_periodic_trigger_t *trig)
     STK_ASSERT(trig != nullptr);
 
     return &trig->handle;
+}
+
+Stopwatch *stk_stopwatch_get_instance(stk_stopwatch_t *sw)
+{
+    STK_ASSERT(sw != nullptr);
+
+    return &sw->handle;
 }
 
 // =============================================================================

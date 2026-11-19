@@ -71,8 +71,15 @@ public:
                              Must be at least \a capacity * \a msg_size bytes.
         \param[in] capacity  Maximum number of messages [1, CAPACITY_MAX].
         \param[in] msg_size  Size of each message in bytes (>= 1).
+        \param[in] order     Policy used to select which blocked task is woken next, both for waiting
+                             consumers (queue empty) and waiting producers (queue full): WAIT_ORDER_FIFO
+                             (arrival order, fair) or WAIT_ORDER_PRIORITY (highest task weight first,
+                             arrival order among equal weights). The weight is read when the task is
+                             picked, so run-time weight changes of the waiting tasks are honored.
+                             Meaningful for strategies with WEIGHT_API, see EWaitOrder.
     */
-    explicit MessageQueue(uint8_t *buf, size_t capacity, size_t msg_size);
+    explicit MessageQueue(uint8_t *buf, size_t capacity, size_t msg_size,
+                          EWaitOrder order = STK_SYNC_WAIT_ORDER_DEFAULT);
 
     /*! \brief     Destructor.
         \note      If tasks are still waiting at destruction time it is considered a logical error
@@ -373,6 +380,51 @@ public:
     */
     bool IsStorageValid() const { return (m_buffer != nullptr); }
 
+    /*! \brief     Get the policy used to select the next waiting task to serve.
+        \return    Wait order as configured (may be WAIT_ORDER_AUTO, resolved when a waiter is selected).
+        \note      Consumers (queue empty) and producers (queue full) always share the same order.
+        \see       EWaitOrder, SetWaitOrder
+    */
+    EWaitOrder GetWaitOrder() const
+    {
+        return m_cv_not_empty.GetWaitOrder();
+    }
+
+    /*! \brief     Change the policy used to select the next waiting task to serve.
+        \param[in] order: Wait order, applied to both waiting consumers and waiting producers.
+        \note      Safe at any time: the wait lists are never pre-sorted, the policy is applied at wake time.
+        \note      Does not affect the order of the messages in the queue.
+        \see       EWaitOrder, GetWaitOrder
+    */
+    void SetWaitOrder(EWaitOrder order);
+
+    /*! \brief     Get list of tasks blocked on this queue.
+        \details   Consumers wait only while the queue is empty and producers only while it is full, so tasks
+                   of one kind are blocked at a time: the list of consumers (blocked in Get()/Peek()) is returned
+                   if there are any, otherwise the list of producers (blocked in Put()/PutFront()).
+        \note      Read-only access for diagnostics / telemetry.
+        \note      The result is a snapshot: call inside the critical section (see \a hw::CriticalSection,
+                   \a sync::ScopedCriticalSection) if the list may change concurrently.
+        \see       GetNextWaiter
+    */
+    const IWaitObject::ListHeadType &GetWaitList() const
+    {
+        const IWaitObject::ListHeadType &consumers = m_cv_not_empty.GetWaitList();
+
+        return (consumers.IsEmpty() ? m_cv_not_full.GetWaitList() : consumers);
+    }
+
+    /*! \brief     Get id of the blocked task which is served next according to the wait order (see EWaitOrder).
+        \return    TId of the next waiter in the list returned by GetWaitList(), or \a TID_NONE if no tasks are
+                   currently waiting.
+        \note      Read-only introspection for diagnostics / telemetry.
+        \note      Enters a critical section (nestable, see \a hw::CriticalSection), so the wait list is walked safely
+                   while it is modified concurrently (tick handler, ISR, other cores). The result is still a snapshot:
+                   hold a critical section around this call and the others (e.g. GetWaitList) to read them consistently.
+        \see       GetWaitList, GetWaitOrder
+    */
+    TId GetNextWaiter() const;
+
 private:
     STK_NONCOPYABLE_CLASS(MessageQueue);
 
@@ -410,13 +462,15 @@ private:
 // Constructor
 // ---------------------------------------------------------------------------
 
-inline MessageQueue::MessageQueue(uint8_t *buf, size_t capacity, size_t msg_size)
+inline MessageQueue::MessageQueue(uint8_t *buf, size_t capacity, size_t msg_size, EWaitOrder order)
 : m_buffer(buf),
   m_capacity(capacity),
   m_msg_size(msg_size),
   m_count(0U),
   m_head(0U),
-  m_tail(0U)
+  m_tail(0U),
+  m_cv_not_empty(order),
+  m_cv_not_full(order)
 {
     STK_ASSERT(buf      != nullptr);
     STK_ASSERT(capacity >= 1U);
@@ -639,7 +693,7 @@ inline EWaitResult MessageQueue::PeekFrontEx(void *msg_ptr, Timeout timeout_tick
 
 inline void MessageQueue::Reset()
 {
-    const ScopedCriticalSection cs_;
+    const hw::CriticalSection::ScopedLock cs_;
 
     m_count = 0U;
     m_head  = 0U;
@@ -647,6 +701,31 @@ inline void MessageQueue::Reset()
 
     // wake all blocked producers: the queue is now entirely empty
     m_cv_not_full.NotifyAll_CS();
+}
+
+// ---------------------------------------------------------------------------
+// SetWaitOrder
+// ---------------------------------------------------------------------------
+
+inline void MessageQueue::SetWaitOrder(EWaitOrder order)
+{
+    const hw::CriticalSection::ScopedLock cs_;
+
+    m_cv_not_empty.SetWaitOrder(order);
+    m_cv_not_full.SetWaitOrder(order);
+}
+
+// ---------------------------------------------------------------------------
+// GetNextWaiter
+// ---------------------------------------------------------------------------
+
+inline TId MessageQueue::GetNextWaiter() const
+{
+    const hw::CriticalSection::ScopedLock cs_; // both lists are read at one moment
+
+    const TId consumer = m_cv_not_empty.GetNextWaiter();
+
+    return ((consumer != TID_NONE) ? consumer : m_cv_not_full.GetNextWaiter());
 }
 
 // ---------------------------------------------------------------------------
@@ -696,8 +775,10 @@ public:
     STK_STATIC_ASSERT_DESC(MSG >= 1U,           "MessageQueueT: message size MSG must be at least 1");
 
     /*! \brief     Constructor.
+        \param[in] order: Policy used to select which blocked consumer/producer is woken next,
+                   see MessageQueue::MessageQueue() and EWaitOrder.
     */
-    MessageQueueT() : MessageQueue(m_storage, N, MSG)
+    explicit MessageQueueT(EWaitOrder order = STK_SYNC_WAIT_ORDER_DEFAULT) : MessageQueue(m_storage, N, MSG, order)
     {}
 
     /*! \brief     Destructor.

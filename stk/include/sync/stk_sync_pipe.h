@@ -85,8 +85,14 @@ public:
         \param[in] buf: Pointer to externally-allocated storage. Must be at least \a capacity * \a element_size bytes.
         \param[in] capacity: Maximum number of elements [1, CAPACITY_MAX].
         \param[in] element_size: Size of each element in bytes (>= 1).
+        \param[in] order: Policy used to select which blocked task is woken next, both for waiting readers
+                   (pipe empty) and waiting writers (pipe full): WAIT_ORDER_FIFO (arrival order, fair) or
+                   WAIT_ORDER_PRIORITY (highest task weight first, arrival order among equal weights).
+                   The weight is read when the task is picked, so run-time weight changes of the waiting
+                   tasks are honored. Meaningful for strategies with WEIGHT_API, see EWaitOrder.
     */
-    explicit Pipe(uint8_t *buf, size_t capacity, size_t element_size);
+    explicit Pipe(uint8_t *buf, size_t capacity, size_t element_size,
+                  EWaitOrder order = STK_SYNC_WAIT_ORDER_DEFAULT);
 
     /*! \brief     Destructor.
         \note      If tasks are still waiting at destruction time it is considered a logical error
@@ -450,13 +456,15 @@ private:
 // Pipe: Constructor
 // ---------------------------------------------------------------------------
 
-inline Pipe::Pipe(uint8_t *buf, size_t capacity, size_t element_size)
+inline Pipe::Pipe(uint8_t *buf, size_t capacity, size_t element_size, EWaitOrder order)
 : m_buffer(buf),
   m_capacity(capacity),
   m_element_size(element_size),
   m_count(0U),
   m_head(0U),
-  m_tail(0U)
+  m_tail(0U),
+  m_cv_not_empty(order),
+  m_cv_not_full(order)
 {
     STK_ASSERT(buf          != nullptr);
     STK_ASSERT(capacity     >= 1U);
@@ -852,8 +860,11 @@ class PipeT
 {
 public:
     /*! \brief     Constructor.
+        \param[in] order: Policy used to select which blocked reader/writer is woken next,
+                   see Pipe::Pipe() and EWaitOrder.
     */
-    explicit PipeT() : m_buffer(), m_head(0U), m_tail(0U), m_count(0U), m_cv_not_empty(), m_cv_not_full()
+    explicit PipeT(EWaitOrder order = STK_SYNC_WAIT_ORDER_DEFAULT)
+        : m_buffer(), m_head(0U), m_tail(0U), m_count(0U), m_cv_not_empty(order), m_cv_not_full(order)
     {}
 
     /*! \brief     Write data to the pipe, preserving the full wait outcome.

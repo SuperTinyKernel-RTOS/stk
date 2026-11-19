@@ -23,7 +23,7 @@ namespace sync {
     \brief Binary synchronization event (signaled / non-signaled) primitive.
 
     Supports two operation modes:
-    - Auto-reset (default): Set() wakes one waiting task, which consumes the signal (the event resets).
+    - Auto-reset (default): Set() wakes one waiting task (selected by EWaitOrder), which consumes the signal (the event resets).
                             If nobody is waiting the event stays signaled until a task consumes it.
     - Manual-reset:         Set() wakes all waiting tasks; state remains signaled until Reset().
 
@@ -66,9 +66,15 @@ public:
         \param[in] manual_reset:  If \c true creates a manual-reset event (stays signaled until explicitly reset).
                                   If \c false (default) creates an auto-reset event.
         \param[in] initial_state: Initial state of the event: \c true = signaled, \c false = non-signaled.
+        \param[in] order: Policy used to select which waiting task is woken by an auto-reset Set()/Pulse(): WAIT_ORDER_FIFO (arrival order, fair)
+                   or WAIT_ORDER_PRIORITY (highest task weight first, arrival order among equal weights).
+                   The weight is read when the task is picked, so run-time weight changes of the waiting
+                   tasks are honored. Meaningful for strategies with WEIGHT_API, see EWaitOrder.
+        \note      Manual-reset events wake all waiting tasks, so the order has no effect on them.
     */
-    explicit Event(bool manual_reset = false, bool initial_state = false)
-        : m_manual_reset(manual_reset), m_signaled(initial_state)
+    explicit Event(bool manual_reset = false, bool initial_state = false,
+                   EWaitOrder order = STK_SYNC_WAIT_ORDER_DEFAULT)
+        : SyncObjectBase(order), m_manual_reset(manual_reset), m_signaled(initial_state)
     {}
 
     /*! \brief     Destructor.

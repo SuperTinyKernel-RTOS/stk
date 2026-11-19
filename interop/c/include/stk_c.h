@@ -257,6 +257,53 @@ typedef enum stk_resume_result_t {
     STK_RESUME_LIFTED        = 2   //!< Deferred suspension was cancelled before it took effect.
 } stk_resume_result_t;
 
+/*! \brief     Policy used by a synchronization object to select which blocked task is served next.
+    \note      It is a direct match for stk::EWaitOrder.
+    \see       stk_get_default_wait_order()
+*/
+typedef enum stk_wait_order_t {
+    STK_WAIT_ORDER_FIFO            = 0, //!< Arrival order: the task which started waiting first is served first.
+    STK_WAIT_ORDER_PRIORITY        = 1, //!< Highest task weight (priority) is served first, arrival order among equals.
+    STK_WAIT_ORDER_DEADLINE        = 2, //!< Least remaining HRT deadline (EDF) is served first. KERNEL_HRT only.
+    STK_WAIT_ORDER_PRIORITY_PACKED = 3, //!< Highest priority (high 16 bits of a packed weight, threshold ignored) is served first.
+    STK_WAIT_ORDER_PERIOD          = 4, //!< Shortest HRT periodicity (Rate-Monotonic rank) is served first. KERNEL_HRT only.
+    STK_WAIT_ORDER_DEADLINE_FIXED  = 5, //!< Shortest configured HRT deadline (Deadline-Monotonic rank) is served first. KERNEL_HRT only.
+    STK_WAIT_ORDER_AUTO            = 6  //!< Resolved at wake time to stk_get_default_wait_order().
+} stk_wait_order_t;
+
+/*! \brief     Scheduler lock state / result of stk_lock_scheduler() and related calls.
+    \note      It is a direct match for stk::ELockResult.
+*/
+typedef enum stk_lock_result_t {
+    STK_LOCK_FAIL_ISR     = -2, //!< Called from an ISR.
+    STK_LOCK_FAIL         = -1, //!< Kernel is not running, is suspended, or is in KERNEL_HRT mode.
+    STK_LOCK_WAS_UNLOCKED = 0,  //!< stk_lock_scheduler/stk_unlock_scheduler: previous state was unlocked. stk_restore_scheduler_lock: now unlocked.
+    STK_LOCK_WAS_LOCKED   = 1   //!< stk_lock_scheduler/stk_unlock_scheduler: previous state was locked. stk_restore_scheduler_lock: now locked.
+} stk_lock_result_t;
+
+/*! \brief     Kernel-side state of a task, see stk_kernel_get_task_state().
+    \note      It is a direct match for stk::ETaskState.
+*/
+typedef enum stk_task_state_t {
+    STK_TASK_STATE_REMOVED   = 0, //!< The task is not bound to a kernel slot (never added, or already removed).
+    STK_TASK_STATE_READY     = 1, //!< Runnable: running, or waiting for the CPU.
+    STK_TASK_STATE_SLEEPING  = 2, //!< Sleeping via stk_sleep()/stk_sleep_until(), with a finite or an infinite timeout.
+    STK_TASK_STATE_WAITING   = 3, //!< Blocked on a synchronization object. KERNEL_SYNC mode only.
+    STK_TASK_STATE_SUSPENDED = 4, //!< Suspended by stk_kernel_suspend_task().
+    STK_TASK_STATE_EXITING   = 5  //!< Entry function has returned, the slot is released on the next tick (KERNEL_DYNAMIC only).
+} stk_task_state_t;
+
+/*! \brief     Snapshot of the kernel-side state of a task, filled in by stk_kernel_get_task_state().
+    \note      Mirrors stk::TaskStateInfo.
+*/
+typedef struct stk_task_state_info_t {
+    stk_task_state_t state;    //!< Task state.
+    const void      *wait_obj; //!< Object the task is blocked on for STK_TASK_STATE_WAITING, NULL otherwise.
+                               //!< Identity only: the pointer is not guaranteed to stay valid after the call.
+    stk_timeout_t    remaining;//!< Ticks left until the sleep/wait expires for STK_TASK_STATE_SLEEPING and
+                               //!< STK_TASK_STATE_WAITING, STK_WAIT_INFINITE if unbounded or not applicable.
+} stk_task_state_info_t;
+
 /*! \brief     Infinite timeout constant.
 */
 #define STK_WAIT_INFINITE (STK_STATIC_CAST(stk_timeout_t, INT32_MAX))
@@ -689,6 +736,32 @@ stk_suspend_result_t stk_kernel_suspend_task(stk_kernel_t *k, stk_task_t *task);
 */
 stk_resume_result_t stk_kernel_resume_task(stk_kernel_t *k, stk_task_t *task);
 
+/*! \brief      Get a snapshot of the kernel-side state of a task.
+    \param[in]  k: Kernel handle.
+    \param[in]  task: Task to query.
+    \param[out] info: Receives the snapshot. Written only if the function returns true.
+    \return     True if the query succeeded and \a info is valid (state is STK_TASK_STATE_REMOVED if the
+                task is not bound to a kernel slot), False if the kernel is built without KERNEL_TELEMETRY.
+    \note       A task suspended by stk_kernel_suspend_task() or blocked on a synchronization object is
+                reported as STK_TASK_STATE_SUSPENDED / STK_TASK_STATE_WAITING, never as STK_TASK_STATE_SLEEPING.
+    \note       The result is a snapshot, the task can change state immediately after the call.
+    \note       KERNEL_TELEMETRY mode only.
+    \warning    ISR-safe. Execution time is proportional to the number of task slots.
+*/
+bool stk_kernel_get_task_state(const stk_kernel_t *k, stk_task_t *task, stk_task_state_info_t *info);
+
+/*! \brief     Cancel a task's in-progress wait or sleep, waking it early.
+    \param[in] k: Kernel handle.
+    \param[in] task: Task whose wait should be cancelled.
+    \note      Applies to a task blocked on a synchronization object (KERNEL_SYNC mode) and to a task
+               sleeping via stk_sleep()/stk_sleep_until(). No-op if the task is running or suspended.
+    \note      The cancelled wait returns STK_WAIT_RESULT_CANCELED (resource NOT acquired/signalled, timeout
+               not expired). Bool-returning wrappers collapse it into their failure result, use the *_ex
+               variants to tell it apart from a timeout.
+    \see       stk_sleep_cancel (same effect, addressed by task id and ISR-safe).
+*/
+void stk_kernel_cancel_task_wait(stk_kernel_t *k, stk_task_t *task);
+
 /*! \brief     Suspend scheduling (tickless idle entry point).
     \param[in] k: Kernel handle.
     \return    Number of ticks available for the suspension period, determined by the
@@ -709,6 +782,17 @@ stk_timeout_t stk_kernel_suspend(stk_kernel_t *k);
     \see       stk_kernel_suspend
 */
 void stk_kernel_resume(stk_kernel_t *k, stk_timeout_t elapsed_ticks);
+
+/*! \brief     Notify the scheduler of the operating frequency of a CPU core.
+    \param[in] k: Kernel handle.
+    \param[in] core_id: Target CPU core id, or 0xFF to set the frequency for all cores.
+    \param[in] frequency: CPU core frequency in Hz.
+    \note      ISR-safe.
+    \warning   Specifying an incorrect frequency degrades system timing accuracy. Always call this function
+               whenever the core clock speed changes (e.g. after a PLL or clock-tree reconfiguration).
+    \note      Equivalent to stk::IPlatform::SetCpuFrequency().
+*/
+void stk_kernel_set_cpu_frequency(stk_kernel_t *k, uint8_t core_id, uint32_t frequency);
 
 /*! \brief     Enumerate all currently active tasks.
     \param[in]  k: Kernel handle.
@@ -840,6 +924,8 @@ void stk_task_set_weight(stk_task_t *tsk, stk_weight_t weight);
     \param[in] tsk: Task handle.
     \param[in] priority: Priority level [0 = lowest … 31 = highest].
     \note      Must be called before adding task to kernel.
+    \note      With a priority-based kernel strategy the priority also decides which blocked task a
+               synchronization object serves first (highest priority first, see \c stk::EWaitOrder).
 */
 void stk_task_set_priority(stk_task_t *tsk, uint8_t priority);
 
@@ -864,6 +950,22 @@ const char *stk_task_get_name(const stk_task_t *tsk);
     \see       stk_tid
 */
 stk_tid_t stk_task_get_id(const stk_task_t *tsk);
+
+/*! \brief     Get the amount of stack space of a task which has never been used (stack high-water mark).
+    \param[in] tsk: Task handle.
+    \return    Number of stack words (\a stk_word_t elements, not bytes) of the task stack which are still
+               untouched, computed via the stack watermark pattern. Returns 0 if the stack has been fully
+               used or if the watermark has been overwritten.
+    \note      Use it to size stacks: the smaller the value seen under the worst-case load, the closer the
+               task is to a stack overflow.
+    \note      Read-only scan of the stack memory, takes time proportional to the stack size and no kernel
+               locks. For a task which is running or can be preempted the result is a snapshot which may be
+               stale by the time it is used. ISR-safe.
+    \warning   Applies to a stack which grows from the end of the array towards its beginning (index[0]
+               is the stack bottom), as used by all supported architectures.
+    \see       stk_task_create_privileged, stk_task_create_user
+*/
+size_t stk_task_get_stack_space(const stk_task_t *tsk);
 
 #ifdef __cplusplus
 /*! \brief     Get the underlying C++ \c stk::ITask object wrapped by a \c stk_task_t handle.
@@ -1129,6 +1231,98 @@ void stk_exit_task(void);
 */
 void stk_sleep_cancel(stk_tid_t tid);
 
+/*! \brief     Get the wait order which suits the kernel mode and the scheduling strategy in use.
+    \return    See \a stk_wait_order_t. Never STK_WAIT_ORDER_AUTO.
+    \note      Equivalent to stk::GetDefaultWaitOrder().
+    \note      ISR-safe.
+    \warning   Requires a running kernel. Do not call it before stk_kernel_start().
+*/
+stk_wait_order_t stk_get_default_wait_order(void);
+
+/*! \brief     Get the effective scheduling weight (priority) of a task at run-time.
+    \param[in] tid: Task identifier (obtained from stk_tid() or stk_task_get_id()).
+    \return    Inherited weight while the task is boosted by priority inheritance, otherwise its
+               base weight. Default weight (1) for strategies without weight support.
+    \note      Equivalent to stk::GetWeight(TId). Snapshot: may be stale by the time it is used.
+    \see       stk_get_weight_self, stk_task_set_weight, stk_task_set_priority
+*/
+stk_weight_t stk_get_weight(stk_tid_t tid);
+
+/*! \brief     Get the effective scheduling weight (priority) of the calling task.
+    \return    See stk_get_weight().
+    \note      Equivalent to stk::GetWeight().
+    \warning   ISR-unsafe (resolves the calling task via stk_tid()).
+*/
+stk_weight_t stk_get_weight_self(void);
+
+/*! \brief     Change the base scheduling weight (priority) of a task at run-time.
+    \param[in] tid: Task identifier (obtained from stk_tid() or stk_task_get_id()).
+    \param[in] weight: New base weight. Must be valid for the active strategy.
+    \return    Previous base weight (pass it back to restore).
+    \note      Equivalent to stk::SetWeight(TId, Weight). Requires a strategy with weight and priority
+               inheritance support, asserts otherwise.
+    \note      Intended for task context.
+*/
+stk_weight_t stk_set_weight(stk_tid_t tid, stk_weight_t weight);
+
+/*! \brief     Change the base scheduling weight (priority) of the calling task at run-time.
+    \param[in] weight: New base weight, see stk_set_weight().
+    \return    Previous base weight.
+    \warning   ISR-unsafe (resolves the calling task via stk_tid()).
+*/
+stk_weight_t stk_set_weight_self(stk_weight_t weight);
+
+/*! \brief     Change the time-slice quantum of a task at run-time and reload its slice.
+    \param[in] tid: Task identifier.
+    \param[in] ticks: New quantum (ticks), 0 disables time-slicing for the task.
+    \return    Previous quantum (pass it back to restore).
+    \note      Equivalent to stk::SetTimeSlice(TId, Timeout). Requires KERNEL_TIMESLICE, asserts otherwise.
+*/
+stk_timeout_t stk_set_time_slice(stk_tid_t tid, stk_timeout_t ticks);
+
+/*! \brief     Change the time-slice quantum of the calling task at run-time and reload its slice.
+    \param[in] ticks: New quantum (ticks), see stk_set_time_slice().
+    \return    Previous quantum.
+    \warning   ISR-unsafe (resolves the calling task via stk_tid()).
+*/
+stk_timeout_t stk_set_time_slice_self(stk_timeout_t ticks);
+
+/*! \brief     Disable task switching (equivalent of CMSIS-RTOS2 osKernelLock). Ticks, timeouts and ISRs keep running.
+    \return    Previous lock state (STK_LOCK_WAS_UNLOCKED / STK_LOCK_WAS_LOCKED), or STK_LOCK_FAIL / STK_LOCK_FAIL_ISR.
+    \note      Not nested: pass the result to stk_restore_scheduler_lock() to emulate nesting.
+    \note      Task context only. Not available in KERNEL_HRT mode (STK_LOCK_FAIL).
+    \warning   The lock holder must keep the CPU: no stk_sleep(), stk_sleep_until(), stk_yield(), blocking waits
+               on synchronization objects or self-suspension while locked (asserts in debug builds). Only
+               non-blocking use of synchronization primitives is valid (STK_NO_WAIT / try* variants).
+               See stk::IKernelService::LockScheduler for the full list of restrictions.
+    \see       stk_unlock_scheduler, stk_restore_scheduler_lock
+*/
+stk_lock_result_t stk_lock_scheduler(void);
+
+/*! \brief     Enable task switching (equivalent of CMSIS-RTOS2 osKernelUnlock).
+    \return    Previous lock state (STK_LOCK_WAS_UNLOCKED / STK_LOCK_WAS_LOCKED), or STK_LOCK_FAIL / STK_LOCK_FAIL_ISR.
+    \note      A ready task is switched in on the next tick (not immediately).
+    \note      Task context only. Not available in KERNEL_HRT mode (STK_LOCK_FAIL).
+    \see       stk_lock_scheduler, stk_restore_scheduler_lock
+*/
+stk_lock_result_t stk_unlock_scheduler(void);
+
+/*! \brief     Set the scheduler lock state (equivalent of CMSIS-RTOS2 osKernelRestoreLock).
+    \param[in] locked: True to lock, False to unlock.
+    \return    New lock state (STK_LOCK_WAS_LOCKED if now locked, STK_LOCK_WAS_UNLOCKED if now unlocked),
+               or STK_LOCK_FAIL / STK_LOCK_FAIL_ISR.
+    \note      Unlike stk_lock_scheduler() and stk_unlock_scheduler() it reports the NEW state.
+    \note      Use with the value returned by stk_lock_scheduler() to emulate nesting:
+               \code
+               const stk_lock_result_t prev = stk_lock_scheduler();
+               // ... touch shared state without being preempted ...
+               stk_restore_scheduler_lock(prev == STK_LOCK_WAS_LOCKED);
+               \endcode
+    \note      Task context only. Not available in KERNEL_HRT mode (STK_LOCK_FAIL).
+    \see       stk_lock_scheduler, stk_unlock_scheduler
+*/
+stk_lock_result_t stk_restore_scheduler_lock(bool locked);
+
 // =============================================================================
 // Dynamic cleanup
 // =============================================================================
@@ -1259,8 +1453,10 @@ void stk_critical_section_exit();
 // ----- Mutex -----------------------------------------------------------------
 
 /*! \brief     A memory size (multiples of stk_word_t) required for Mutex instance.
+    \note      The size of every synchronization object includes the wait order field of
+               stk::SyncObjectBase. ConstructIn() verifies at compile time that a container is large enough.
 */
-#define STK_MUTEX_IMPL_SIZE (10U + (STK_SYNC_DEBUG_NAMES ? 1U : 0U))
+#define STK_MUTEX_IMPL_SIZE (11U + (STK_SYNC_DEBUG_NAMES ? 1U : 0U))
 
 /*! \brief     Opaque memory container for a Mutex instance.
 */
@@ -1277,6 +1473,18 @@ typedef struct stk_mutex_t stk_mutex_t;
     \return    Mutex handle.
 */
 stk_mutex_t *stk_mutex_create(stk_mutex_mem_t *const membuf);
+
+/*! \brief     Create a Mutex with an explicit wait order (using provided memory).
+    \details   Identical to stk_mutex_create(), except the policy used to select which blocked task receives
+               ownership on unlock is given by \a order.
+    \param[in] membuf: Pointer to static memory container.
+    \param[in] order: Wait order, STK_WAIT_ORDER_FIFO (arrival order) or STK_WAIT_ORDER_PRIORITY (highest task
+               weight first, arrival order among equals). stk_mutex_create() uses STK_SYNC_WAIT_ORDER_DEFAULT
+               (STK_WAIT_ORDER_AUTO unless overridden). Can be changed later with stk_mutex_set_wait_order().
+    \return    Mutex handle.
+    \see       stk_mutex_create, stk_wait_order_t
+*/
+stk_mutex_t *stk_mutex_create_ex(stk_mutex_mem_t *const membuf, stk_wait_order_t order);
 
 /*! \brief     Destroy a Mutex.
     \param[in] mtx: Mutex handle.
@@ -1296,8 +1504,33 @@ bool stk_mutex_trylock(stk_mutex_t *mtx);
 
 /*! \brief     Unlock the mutex.
     \param[in] mtx: Mutex handle.
+    \note      Ownership is passed directly to the next waiter selected by the wait order (see \c stk::EWaitOrder):
+               with the default order that is the highest-priority waiter if the kernel strategy is priority-based
+               (e.g. Fixed-Priority, the default of core 0) and the longest-waiting one (FIFO) otherwise.
 */
 void stk_mutex_unlock(stk_mutex_t *mtx);
+
+/*! \brief     Get the owner of the mutex.
+    \param[in] mtx: Mutex handle.
+    \return    Task id of the owner, or 0 (no task) if the mutex is free.
+    \note      ISR-safe.
+*/
+stk_tid_t stk_mutex_get_owner(const stk_mutex_t *mtx);
+
+/*! \brief     Check whether the mutex is currently locked.
+    \param[in] mtx: Mutex handle.
+    \return    True if the mutex is owned by a task.
+    \note      Snapshot only, may be stale immediately for a non-owner. ISR-safe.
+*/
+bool stk_mutex_is_locked(const stk_mutex_t *mtx);
+
+/*! \brief     Get the current recursion depth of the mutex.
+    \param[in] mtx: Mutex handle.
+    \return    0 if the mutex is free, otherwise the number of nested lock calls made by the owner.
+    \note      Reads the counter without a critical section: stable only for the owner, a snapshot that may
+               be stale immediately for any other caller. ISR-safe.
+*/
+uint16_t stk_mutex_get_recursion_count(const stk_mutex_t *mtx);
 
 /*! \brief     Try to lock the mutex with a timeout.
     \param[in] mtx: Mutex handle.
@@ -1325,6 +1558,29 @@ bool stk_mutex_timed_lock(stk_mutex_t *mtx, stk_timeout_t timeout);
 */
 stk_wait_result_t stk_mutex_timed_lock_ex(stk_mutex_t *mtx, stk_timeout_t timeout);
 
+/*! \brief     Change the policy used by the Mutex to select which blocked task is served next.
+    \param[in] mtx: Mutex handle.
+    \param[in] order: Wait order, see \a stk_wait_order_t. Default is STK_WAIT_ORDER_AUTO.
+    \note      Safe at any time: the wait list is never pre-sorted, the policy is applied at wake time.
+    \see       stk_get_default_wait_order
+*/
+void stk_mutex_set_wait_order(stk_mutex_t *mtx, stk_wait_order_t order);
+
+/*! \brief     Get the wait order configured for the Mutex.
+    \param[in] mtx: Mutex handle.
+    \return    Wait order as configured, which may be STK_WAIT_ORDER_AUTO (resolved when a waiter is selected).
+*/
+stk_wait_order_t stk_mutex_get_wait_order(const stk_mutex_t *mtx);
+
+/*! \brief     Get id of the task which is served next, i.e. the one that would be woken (see stk_mutex_get_wait_order()).
+    \param[in] mtx: Mutex handle.
+    \return    Task id of the next waiter, or 0 (no task) if nobody is waiting.
+    \note      Read-only introspection. The call runs inside a critical section, but the result is a
+               snapshot and may be stale by the time the caller acts on it.
+    \warning   Requires a running kernel if the wait order is STK_WAIT_ORDER_AUTO and more than one task is waiting.
+*/
+stk_tid_t stk_mutex_get_next_waiter(const stk_mutex_t *mtx);
+
 #ifdef __cplusplus
 /*! \brief     Get the underlying C++ \c stk::sync::Mutex object wrapped by a \c stk_mutex_t handle.
     \param[in] mtx: Mutex handle obtained via \c stk_mutex_create().
@@ -1338,7 +1594,7 @@ extern "C" stk::sync::Mutex *stk_mutex_get_instance(stk_mutex_t *mtx);
 
 /*! \brief     A memory size (multiples of stk_word_t) required for FastMutex instance.
 */
-#define STK_FASTMUTEX_IMPL_SIZE (9U + (STK_SYNC_DEBUG_NAMES ? 1U : 0U))
+#define STK_FASTMUTEX_IMPL_SIZE (10U + (STK_SYNC_DEBUG_NAMES ? 1U : 0U))
 
 /*! \brief     Opaque memory container for a FastMutex instance.
 */
@@ -1359,6 +1615,18 @@ typedef struct stk_fastmutex_t stk_fastmutex_t;
     \return    FastMutex handle.
 */
 stk_fastmutex_t *stk_fastmutex_create(stk_fastmutex_mem_t *const membuf);
+
+/*! \brief     Create a FastMutex with an explicit wait order (using provided memory).
+    \details   Identical to stk_fastmutex_create(), except the policy used to select which blocked task receives
+               ownership on unlock is given by \a order.
+    \param[in] membuf: Pointer to static memory container.
+    \param[in] order: Wait order, STK_WAIT_ORDER_FIFO (arrival order) or STK_WAIT_ORDER_PRIORITY (highest task
+               weight first, arrival order among equals). stk_fastmutex_create() uses STK_SYNC_WAIT_ORDER_DEFAULT
+               (STK_WAIT_ORDER_AUTO unless overridden). Can be changed later with stk_fastmutex_set_wait_order().
+    \return    FastMutex handle.
+    \see       stk_fastmutex_create, stk_wait_order_t
+*/
+stk_fastmutex_t *stk_fastmutex_create_ex(stk_fastmutex_mem_t *const membuf, stk_wait_order_t order);
 
 /*! \brief     Destroy a FastMutex.
     \param[in] mtx: FastMutex handle.
@@ -1381,9 +1649,24 @@ bool stk_fastmutex_trylock(stk_fastmutex_t *mtx);
 
 /*! \brief     Unlock the mutex.
     \param[in] mtx: FastMutex handle.
-    \note      Must be called by the owner. Ownership is passed directly to the first waiter (FIFO).
+    \note      Must be called by the owner. Ownership is passed directly to the next waiter selected by the wait order (see \c stk::EWaitOrder):
+               the highest-priority waiter with a priority-based kernel strategy, the longest-waiting one (FIFO) otherwise.
 */
 void stk_fastmutex_unlock(stk_fastmutex_t *mtx);
+
+/*! \brief     Get the owner of the FastMutex.
+    \param[in] mtx: FastMutex handle.
+    \return    Task id of the owner, or 0 (no task) if the mutex is free.
+    \note      ISR-safe.
+*/
+stk_tid_t stk_fastmutex_get_owner(const stk_fastmutex_t *mtx);
+
+/*! \brief     Check whether the FastMutex is currently locked.
+    \param[in] mtx: FastMutex handle.
+    \return    True if the mutex is owned by a task.
+    \note      Snapshot only, may be stale immediately for a non-owner. ISR-safe.
+*/
+bool stk_fastmutex_is_locked(const stk_fastmutex_t *mtx);
 
 /*! \brief     Try to lock the mutex with a timeout.
     \param[in] mtx: FastMutex handle.
@@ -1412,6 +1695,29 @@ bool stk_fastmutex_timed_lock(stk_fastmutex_t *mtx, stk_timeout_t timeout);
     \warning   ISR-safe only with timeout = \c STK_NO_WAIT, ISR-unsafe otherwise.
 */
 stk_wait_result_t stk_fastmutex_timed_lock_ex(stk_fastmutex_t *mtx, stk_timeout_t timeout);
+
+/*! \brief     Change the policy used by the FastMutex to select which blocked task is served next.
+    \param[in] mtx: FastMutex handle.
+    \param[in] order: Wait order, see \a stk_wait_order_t. Default is STK_WAIT_ORDER_AUTO.
+    \note      Safe at any time: the wait list is never pre-sorted, the policy is applied at wake time.
+    \see       stk_get_default_wait_order
+*/
+void stk_fastmutex_set_wait_order(stk_fastmutex_t *mtx, stk_wait_order_t order);
+
+/*! \brief     Get the wait order configured for the FastMutex.
+    \param[in] mtx: FastMutex handle.
+    \return    Wait order as configured, which may be STK_WAIT_ORDER_AUTO (resolved when a waiter is selected).
+*/
+stk_wait_order_t stk_fastmutex_get_wait_order(const stk_fastmutex_t *mtx);
+
+/*! \brief     Get id of the task which is served next, i.e. the one that would be woken (see stk_fastmutex_get_wait_order()).
+    \param[in] mtx: FastMutex handle.
+    \return    Task id of the next waiter, or 0 (no task) if nobody is waiting.
+    \note      Read-only introspection. The call runs inside a critical section, but the result is a
+               snapshot and may be stale by the time the caller acts on it.
+    \warning   Requires a running kernel if the wait order is STK_WAIT_ORDER_AUTO and more than one task is waiting.
+*/
+stk_tid_t stk_fastmutex_get_next_waiter(const stk_fastmutex_t *mtx);
 
 #ifdef __cplusplus
 /*! \brief     Get the underlying C++ \c stk::sync::FastMutex object wrapped by a \c stk_fastmutex_t handle.
@@ -1475,7 +1781,7 @@ extern "C" stk::sync::SpinLock *stk_spinlock_get_instance(stk_spinlock_t *slock)
 
 /*! \brief     A memory size (multiples of stk_word_t) required for ConditionVariable instance.
 */
-#define STK_CV_IMPL_SIZE (7U + (STK_SYNC_DEBUG_NAMES ? 1U : 0U))
+#define STK_CV_IMPL_SIZE (8U + (STK_SYNC_DEBUG_NAMES ? 1U : 0U))
 
 /*! \brief     Opaque memory container for a ConditionVariable instance.
 */
@@ -1492,6 +1798,19 @@ typedef struct stk_cv_t stk_cv_t;
     \return    CV handle.
 */
 stk_cv_t *stk_cv_create(stk_cv_mem_t *const membuf);
+
+/*! \brief     Create a Condition Variable with an explicit wait order (using provided memory).
+    \details   Identical to stk_cv_create(), except the policy used to select which waiting task is woken by
+               stk_cv_notify_one() is given by \a order.
+    \param[in] membuf: Pointer to static memory container.
+    \param[in] order: Wait order, STK_WAIT_ORDER_FIFO (arrival order) or STK_WAIT_ORDER_PRIORITY (highest task
+               weight first, arrival order among equals). stk_cv_create() uses STK_SYNC_WAIT_ORDER_DEFAULT
+               (STK_WAIT_ORDER_AUTO unless overridden). Can be changed later with stk_cv_set_wait_order().
+    \return    CV handle.
+    \note      stk_cv_notify_all() wakes all waiters, so the order has no effect on it.
+    \see       stk_cv_create, stk_wait_order_t
+*/
+stk_cv_t *stk_cv_create_ex(stk_cv_mem_t *const membuf, stk_wait_order_t order);
 
 /*! \brief     Destroy a Condition Variable.
     \param[in] cv: CV handle.
@@ -1571,6 +1890,29 @@ void stk_cv_notify_one(stk_cv_t *cv);
 */
 void stk_cv_notify_all(stk_cv_t *cv);
 
+/*! \brief     Change the policy used by the Condition Variable to select which blocked task is served next.
+    \param[in] cv: Condition Variable handle.
+    \param[in] order: Wait order, see \a stk_wait_order_t. Default is STK_WAIT_ORDER_AUTO.
+    \note      Safe at any time: the wait list is never pre-sorted, the policy is applied at wake time.
+    \see       stk_get_default_wait_order
+*/
+void stk_cv_set_wait_order(stk_cv_t *cv, stk_wait_order_t order);
+
+/*! \brief     Get the wait order configured for the Condition Variable.
+    \param[in] cv: Condition Variable handle.
+    \return    Wait order as configured, which may be STK_WAIT_ORDER_AUTO (resolved when a waiter is selected).
+*/
+stk_wait_order_t stk_cv_get_wait_order(const stk_cv_t *cv);
+
+/*! \brief     Get id of the task which is served next, i.e. the one that would be woken (see stk_cv_get_wait_order()).
+    \param[in] cv: Condition Variable handle.
+    \return    Task id of the next waiter, or 0 (no task) if nobody is waiting.
+    \note      Read-only introspection. The call runs inside a critical section, but the result is a
+               snapshot and may be stale by the time the caller acts on it.
+    \warning   Requires a running kernel if the wait order is STK_WAIT_ORDER_AUTO and more than one task is waiting.
+*/
+stk_tid_t stk_cv_get_next_waiter(const stk_cv_t *cv);
+
 #ifdef __cplusplus
 /*! \brief     Get the underlying C++ \c stk::sync::ConditionVariable object wrapped by a \c stk_cv_t handle.
     \param[in] cv: CV handle obtained via \c stk_cv_create().
@@ -1584,7 +1926,7 @@ extern "C" stk::sync::ConditionVariable *stk_cv_get_instance(stk_cv_t *cv);
 
 /*! \brief     A memory size (multiples of stk_word_t) required for Event instance.
 */
-#define STK_EVENT_IMPL_SIZE (8U + (STK_SYNC_DEBUG_NAMES ? 1U : 0U))
+#define STK_EVENT_IMPL_SIZE (8U + (STK_SYNC_DEBUG_NAMES ? 2U : 0U))
 
 /*! \brief     Opaque memory container for an Event instance.
 */
@@ -1599,10 +1941,30 @@ typedef struct stk_event_t stk_event_t;
 /*! \brief     Create an Event (using provided memory).
     \param[in] membuf: Pointer to static memory container.
     \param[in] manual_reset: True for manual-reset, False for auto-reset.
+    \param[in] initial_state: Initial state of the event: True = signaled, False = non-signaled.
     \return    Event handle.
 */
 stk_event_t *stk_event_create(stk_event_mem_t *const membuf,
-                              bool             manual_reset);
+                              bool             manual_reset,
+                              bool             initial_state);
+
+/*! \brief     Create an Event with an explicit wait order (using provided memory).
+    \details   Identical to stk_event_create(), except the policy used to select which waiting task is woken by
+               an auto-reset Set()/Pulse() is given by \a order.
+    \param[in] membuf: Pointer to static memory container.
+    \param[in] manual_reset: True for manual-reset, False for auto-reset.
+    \param[in] initial_state: Initial state of the event: True = signaled, False = non-signaled.
+    \param[in] order: Wait order, STK_WAIT_ORDER_FIFO (arrival order) or STK_WAIT_ORDER_PRIORITY (highest task
+               weight first, arrival order among equals). stk_event_create() uses STK_SYNC_WAIT_ORDER_DEFAULT
+               (STK_WAIT_ORDER_AUTO unless overridden). Can be changed later with stk_event_set_wait_order().
+    \return    Event handle.
+    \note      Manual-reset events wake all waiting tasks, so the order has no effect on them.
+    \see       stk_event_create, stk_wait_order_t
+*/
+stk_event_t *stk_event_create_ex(stk_event_mem_t *const membuf,
+                                 bool             manual_reset,
+                                 bool             initial_state,
+                                 stk_wait_order_t order);
 
 /*! \brief     Destroy an Event.
     \param[in] ev: Event handle.
@@ -1660,6 +2022,29 @@ bool stk_event_reset(stk_event_t *ev);
 */
 void stk_event_pulse(stk_event_t *ev);
 
+/*! \brief     Change the policy used by the Event to select which blocked task is served next.
+    \param[in] ev: Event handle.
+    \param[in] order: Wait order, see \a stk_wait_order_t. Default is STK_WAIT_ORDER_AUTO.
+    \note      Safe at any time: the wait list is never pre-sorted, the policy is applied at wake time.
+    \see       stk_get_default_wait_order
+*/
+void stk_event_set_wait_order(stk_event_t *ev, stk_wait_order_t order);
+
+/*! \brief     Get the wait order configured for the Event.
+    \param[in] ev: Event handle.
+    \return    Wait order as configured, which may be STK_WAIT_ORDER_AUTO (resolved when a waiter is selected).
+*/
+stk_wait_order_t stk_event_get_wait_order(const stk_event_t *ev);
+
+/*! \brief     Get id of the task which is served next, i.e. the one that would be woken (see stk_event_get_wait_order()).
+    \param[in] ev: Event handle.
+    \return    Task id of the next waiter, or 0 (no task) if nobody is waiting.
+    \note      Read-only introspection. The call runs inside a critical section, but the result is a
+               snapshot and may be stale by the time the caller acts on it.
+    \warning   Requires a running kernel if the wait order is STK_WAIT_ORDER_AUTO and more than one task is waiting.
+*/
+stk_tid_t stk_event_get_next_waiter(const stk_event_t *ev);
+
 #ifdef __cplusplus
 /*! \brief     Get the underlying C++ \c stk::sync::Event object wrapped by a \c stk_event_t handle.
     \param[in] ev: Event handle obtained via \c stk_event_create().
@@ -1687,7 +2072,7 @@ typedef STK_C_SEM_VALUE_TYPE stk_sem_val_t;
                alignment padding in front of the counters and at the tail of the object, which
                matters when stk_sem_val_t is wider than stk_word_t (e.g. uint64_t on a 32-bit MCU).
 */
-#define STK_SEM_BASE_BYTES ((7U + (STK_SYNC_DEBUG_NAMES ? 1U : 0U)) * sizeof(stk_word_t))
+#define STK_SEM_BASE_BYTES ((8U + (STK_SYNC_DEBUG_NAMES ? 1U : 0U)) * sizeof(stk_word_t))
 #define STK_SEM_IMPL_SIZE STK_CALC_ALIGNED_BLOCKS(STK_SEM_BASE_BYTES, sizeof(stk_sem_val_t), 2U)
 
 /*! \brief     Opaque memory container for a Semaphore instance.
@@ -1712,6 +2097,25 @@ typedef struct stk_sem_t stk_sem_t;
 stk_sem_t *stk_sem_create(stk_sem_mem_t *const membuf,
                           stk_sem_val_t  initial_count,
                           stk_sem_val_t  max_count);
+
+/*! \brief     Create a Semaphore with an explicit wait order (using provided memory).
+    \details   Identical to stk_sem_create(), except the policy used to select which blocked task receives
+               the token in stk_sem_signal() is given by \a order.
+    \param[in] membuf: Pointer to static memory container.
+    \param[in] initial_count: Starting value of the resource counter.
+    \param[in] max_count: Maximum value the counter is allowed to reach.
+               Pass 0 to use the default maximum: the maximum value of \a stk_sem_val_t
+               (65535 for the default uint16_t). Must be >= initial_count.
+    \param[in] order: Wait order, STK_WAIT_ORDER_FIFO (arrival order) or STK_WAIT_ORDER_PRIORITY (highest task
+               weight first, arrival order among equals). stk_sem_create() uses STK_SYNC_WAIT_ORDER_DEFAULT
+               (STK_WAIT_ORDER_AUTO unless overridden). Can be changed later with stk_sem_set_wait_order().
+    \return    Semaphore handle.
+    \see       stk_sem_create, stk_wait_order_t
+*/
+stk_sem_t *stk_sem_create_ex(stk_sem_mem_t *const membuf,
+                             stk_sem_val_t  initial_count,
+                             stk_sem_val_t  max_count,
+                             stk_wait_order_t order);
 
 /*! \brief     Destroy a Semaphore.
     \param[in] sem: Semaphore handle.
@@ -1754,6 +2158,9 @@ bool stk_sem_trywait(stk_sem_t *sem);
 
 /*! \brief     Signal/Release a semaphore resource.
     \param[in] sem: Semaphore handle.
+    \note      If tasks are waiting, the token goes directly to the one selected by the wait order (see
+               \c stk::EWaitOrder): the highest-priority waiter with a priority-based kernel strategy,
+               the longest-waiting one otherwise.
     \warning   API contract: the counter must not already be at \a max_count with no task
                waiting. Violating this triggers an assertion in a debug build. Use
                \c stk_sem_trysignal() instead if a signal that would exceed \a max_count
@@ -1800,6 +2207,29 @@ bool stk_sem_trysignal_ceiling(stk_sem_t *sem, stk_sem_val_t ceiling);
                critical section so it can not be torn by a concurrent update.
 */
 stk_sem_val_t stk_sem_get_count(const stk_sem_t *sem);
+
+/*! \brief     Change the policy used by the Semaphore to select which blocked task is served next.
+    \param[in] sem: Semaphore handle.
+    \param[in] order: Wait order, see \a stk_wait_order_t. Default is STK_WAIT_ORDER_AUTO.
+    \note      Safe at any time: the wait list is never pre-sorted, the policy is applied at wake time.
+    \see       stk_get_default_wait_order
+*/
+void stk_sem_set_wait_order(stk_sem_t *sem, stk_wait_order_t order);
+
+/*! \brief     Get the wait order configured for the Semaphore.
+    \param[in] sem: Semaphore handle.
+    \return    Wait order as configured, which may be STK_WAIT_ORDER_AUTO (resolved when a waiter is selected).
+*/
+stk_wait_order_t stk_sem_get_wait_order(const stk_sem_t *sem);
+
+/*! \brief     Get id of the task which is served next, i.e. the one that would be woken (see stk_sem_get_wait_order()).
+    \param[in] sem: Semaphore handle.
+    \return    Task id of the next waiter, or 0 (no task) if nobody is waiting.
+    \note      Read-only introspection. The call runs inside a critical section, but the result is a
+               snapshot and may be stale by the time the caller acts on it.
+    \warning   Requires a running kernel if the wait order is STK_WAIT_ORDER_AUTO and more than one task is waiting.
+*/
+stk_tid_t stk_sem_get_next_waiter(const stk_sem_t *sem);
 
 #ifdef __cplusplus
 /*! \brief     Get the underlying C++ \c stk::sync::SemaphoreT<stk_sem_val_t> object wrapped by a \c stk_sem_t handle.
@@ -2063,6 +2493,16 @@ void stk_ef_sync_ctx_destroy(stk_ef_sync_ctx_t *ctx);
 stk_wait_result_t stk_ef_sync(stk_ef_t *ef, stk_ef_sync_ctx_t *ctx, stk_ef_val_t set_flags, stk_ef_val_t wait_flags,
                               stk_timeout_t timeout, stk_ef_val_t *actual_flags);
 
+/*! \brief     Get id of the task which is first in the EventFlags wait list (arrival order).
+    \param[in] ef: EventFlags handle.
+    \return    Task id of the first waiter, or 0 (no task) if nobody is waiting.
+    \note      EventFlags has no configurable wait order: waiters are always woken with NotifyAll() and the
+               list is kept in FIFO (arrival) order, so there is no stk_ef_set_wait_order() / stk_ef_get_wait_order().
+    \note      Read-only introspection. The call runs inside a critical section, but the result is a
+               snapshot and may be stale by the time the caller acts on it.
+*/
+stk_tid_t stk_ef_get_next_waiter(const stk_ef_t *ef);
+
 #ifdef __cplusplus
 /*! \brief     Get the underlying C++ \c stk::sync::EventFlagsT<stk_ef_val_t> object wrapped by a \c stk_ef_t handle.
     \param[in] ef: EventFlags handle obtained via \c stk_ef_create().
@@ -2135,6 +2575,29 @@ stk_pipe_t *stk_pipe_create(stk_pipe_mem_t *const membuf,
                             uint32_t        buf_size,
                             size_t          capacity,
                             size_t          element_size);
+
+/*! \brief     Create a Pipe with an explicit wait order (using provided memory).
+    \details   Identical to stk_pipe_create(), except the policy used to select which blocked task is woken
+               next is given by \a order. It applies to both waiting readers (pipe empty) and waiting
+               writers (pipe full).
+    \param[in] membuf: Pointer to static memory container for the Pipe control-block.
+    \param[in] buf: Pointer to the element data buffer.
+               Must be at least \a capacity * \a element_size bytes.
+    \param[in] buf_size: Size of \a buf in bytes (must be >= \a capacity * \a element_size).
+    \param[in] capacity: Maximum number of elements [1, 65534].
+    \param[in] element_size: Size of each individual element in bytes (>= 1).
+    \param[in] order: Wait order, STK_WAIT_ORDER_FIFO (arrival order) or STK_WAIT_ORDER_PRIORITY (highest task
+               weight first, arrival order among equals). stk_pipe_create() uses STK_SYNC_WAIT_ORDER_DEFAULT (STK_WAIT_ORDER_AUTO unless overridden).
+               The wait order can not be changed after the pipe is created.
+    \return    Pipe handle, or NULL if any size assertion fails.
+    \see       stk_pipe_create, stk_wait_order_t
+*/
+stk_pipe_t *stk_pipe_create_ex(stk_pipe_mem_t *const membuf,
+                               uint8_t        *buf,
+                               uint32_t        buf_size,
+                               size_t          capacity,
+                               size_t          element_size,
+                               stk_wait_order_t order);
 
 /*! \brief     Destroy a Pipe.
     \param[in] pipe: Pipe handle.
@@ -2439,6 +2902,13 @@ bool stk_pipe_is_full(const stk_pipe_t *pipe);
 */
 bool stk_pipe_is_storage_valid(const stk_pipe_t *pipe);
 
+/*! \brief     Get a pointer to the raw element data buffer.
+    \param[in] pipe: Pipe handle.
+    \return    Pointer to the beginning of the backing byte buffer supplied at construction time.
+    \note      ISR-safe.
+*/
+uint8_t *stk_pipe_get_buffer(stk_pipe_t *pipe);
+
 #ifdef __cplusplus
 /*! \brief     Get the underlying C++ \c stk::sync::Pipe object wrapped by a \c stk_pipe_t handle.
     \param[in] pipe: Pipe handle obtained via \c stk_pipe_create().
@@ -2513,6 +2983,30 @@ stk_msgq_t *stk_msgq_create(stk_msgq_mem_t *const membuf,
                             uint32_t        buf_size,
                             size_t          capacity,
                             size_t          msg_size);
+
+/*! \brief     Create a MessageQueue with an explicit wait order (using provided memory).
+    \details   Identical to stk_msgq_create(), except the policy used to select which blocked task is woken
+               next is given by \a order. It applies to both waiting consumers (queue empty) and waiting
+               producers (queue full).
+    \param[in] membuf: Pointer to static memory container for the queue object.
+    \param[in] buf: Pointer to the message data buffer.
+               Must be at least \a capacity * \a msg_size bytes.
+    \param[in] buf_size: Size of \a buf in bytes (must be >= \a capacity * \a msg_size).
+    \param[in] capacity: Maximum number of messages [1, 65534].
+    \param[in] msg_size: Size of each individual message in bytes (>= 1).
+    \param[in] order: Wait order, STK_WAIT_ORDER_FIFO (arrival order) or STK_WAIT_ORDER_PRIORITY (highest task
+               weight first, arrival order among equals). stk_msgq_create() uses STK_SYNC_WAIT_ORDER_DEFAULT
+               (STK_WAIT_ORDER_AUTO unless overridden).
+               The wait order can not be changed after the queue is created.
+    \return    MessageQueue handle, or NULL if any size assertion fails.
+    \see       stk_msgq_create, stk_wait_order_t
+*/
+stk_msgq_t *stk_msgq_create_ex(stk_msgq_mem_t *const membuf,
+                               uint8_t        *buf,
+                               uint32_t        buf_size,
+                               size_t          capacity,
+                               size_t          msg_size,
+                               stk_wait_order_t order);
 
 /*! \brief     Destroy a MessageQueue.
     \param[in] mq: MessageQueue handle.
@@ -2799,6 +3293,33 @@ bool stk_msgq_is_full(const stk_msgq_t *mq);
 */
 bool stk_msgq_is_storage_valid(const stk_msgq_t *mq);
 
+/*! \brief     Change the policy used by the MessageQueue to select which blocked task is served next.
+    \param[in] mq: MessageQueue handle.
+    \param[in] order: Wait order, see \a stk_wait_order_t. Default is STK_WAIT_ORDER_AUTO.
+    \note      Applies to both waiting receivers (queue empty) and waiting senders (queue full).
+    \note      Safe at any time: the wait lists are never pre-sorted, the policy is applied at wake time.
+    \note      Does not affect the order of the messages in the queue.
+    \see       stk_get_default_wait_order
+*/
+void stk_msgq_set_wait_order(stk_msgq_t *mq, stk_wait_order_t order);
+
+/*! \brief     Get the wait order configured for the MessageQueue.
+    \param[in] mq: MessageQueue handle.
+    \return    Wait order as configured, which may be STK_WAIT_ORDER_AUTO (resolved when a waiter is selected).
+*/
+stk_wait_order_t stk_msgq_get_wait_order(const stk_msgq_t *mq);
+
+/*! \brief     Get id of the task which is served next, i.e. the one that would be woken (see stk_msgq_get_wait_order()).
+    \param[in] mq: MessageQueue handle.
+    \return    Task id of the next waiter, or 0 (no task) if nobody is waiting. Receivers (blocked in
+               stk_msgq_get() / stk_msgq_peek()) are reported first, otherwise senders (blocked in
+               stk_msgq_put() / stk_msgq_putfront()): only one kind of task can be blocked at a time.
+    \note      Read-only introspection. The call runs inside a critical section, but the result is a
+               snapshot and may be stale by the time the caller acts on it.
+    \warning   Requires a running kernel if the wait order is STK_WAIT_ORDER_AUTO and more than one task is waiting.
+*/
+stk_tid_t stk_msgq_get_next_waiter(const stk_msgq_t *mq);
+
 #ifdef __cplusplus
 /*! \brief     Get the underlying C++ \c stk::sync::MessageQueue object wrapped by a \c stk_msgq_t handle.
     \param[in] mq: MessageQueue handle obtained via \c stk_msgq_create().
@@ -2812,7 +3333,7 @@ extern "C" stk::sync::MessageQueue *stk_msgq_get_instance(stk_msgq_t *mq);
 
 /*! \brief     A memory size (multiples of stk_word_t) required for RWMutex instance.
 */
-#define STK_RWMUTEX_IMPL_SIZE (17U + (STK_SYNC_DEBUG_NAMES ? 3U : 0U))
+#define STK_RWMUTEX_IMPL_SIZE (19U + (STK_SYNC_DEBUG_NAMES ? 3U : 0U))
 
 /*! \brief     Opaque memory container for an RWMutex instance.
 */
@@ -2829,6 +3350,20 @@ typedef struct stk_rwmutex_t stk_rwmutex_t;
     \return    RWMutex handle.
 */
 stk_rwmutex_t *stk_rwmutex_create(stk_rwmutex_mem_t *const membuf);
+
+/*! \brief     Create an RWMutex with an explicit writer wait order (using provided memory).
+    \details   Identical to stk_rwmutex_create(), except the policy used to select which waiting writer is
+               served next when the lock becomes free is given by \a order. Waiting readers are always
+               released together, so the order applies to writers only. Writer preference over readers
+               is the same for every order.
+    \param[in] membuf: Pointer to static memory container.
+    \param[in] order: Writer wait order, STK_WAIT_ORDER_FIFO (arrival order) or STK_WAIT_ORDER_PRIORITY (highest task
+               weight first, arrival order among equals). stk_rwmutex_create() uses STK_SYNC_WAIT_ORDER_DEFAULT
+               (STK_WAIT_ORDER_AUTO unless overridden). The wait order can not be changed after the RWMutex is created.
+    \return    RWMutex handle.
+    \see       stk_rwmutex_create, stk_wait_order_t
+*/
+stk_rwmutex_t *stk_rwmutex_create_ex(stk_rwmutex_mem_t *const membuf, stk_wait_order_t order);
 
 /*! \brief     Destroy an RWMutex.
     \param[in] rw: RWMutex handle.
