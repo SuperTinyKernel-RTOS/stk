@@ -102,17 +102,25 @@ static constexpr size_t TASK_MEMORY_SIZE = stk::Align<size_t>(10U, 32U);
 static stk::Word s_LedTaskMem[4][TASK_MEMORY_SIZE] __stk_aligned(32U);
 
 // Start with the RED task's flag set so it runs first
-STK_MPU_SHARED_DATA_SECTION static stk::sync::EventFlags g_TaskFlags(FLAGS_ALL[LED_RED]);
+STK_MPU_SHARED_DATA_SECTION
+static stk::sync::EventFlags g_TaskFlags(FLAGS_ALL[LED_RED]);
 
 // Timeline for a precise LED switching
-STK_MPU_SHARED_DATA_SECTION static stk::Ticks g_Timeline = 0;
+STK_MPU_SHARED_DATA_SECTION
+static stk::Ticks g_Timeline = 0;
 
 // Task breakout example.
-STK_MPU_SHARED_DATA_SECTION static stk::ITask *g_BreakoutTask = nullptr;
-STK_MPU_SHARED_CODE_SECTION void SetBreakoutTask(stk::ITask *tsk)
+STK_MPU_SHARED_DATA_SECTION
+static stk::ITask *g_BreakoutTask = nullptr;
+STK_MPU_SHARED_CODE_SECTION
+static void SetBreakoutTask(stk::ITask *tsk)
 {
     g_BreakoutTask = tsk;
 }
+
+// Device access mutex.
+STK_MPU_SHARED_DATA_SECTION
+static stk::sync::FastMutex g_HwMutex;
 
 // Init mpu_shared_data: the Pico SDK's default linker script/runtime does not know
 // about STK's custom .stk_mpu_shared_data/.stk_mpu_shared_bss sections, so their
@@ -141,14 +149,14 @@ static void InitMpuSharedData()
     const size_t data_size = __stk_mpu_shared_data_end - __stk_mpu_shared_data_start;
     if (data_size > 0)
     {
-        STK_MEMCPY(__stk_mpu_shared_data_start, __stk_mpu_shared_data_source__, data_size);
+        stk::STK_MEMCPY(__stk_mpu_shared_data_start, __stk_mpu_shared_data_source__, data_size);
     }
 
     // zero-fill the BSS region
     const size_t bss_size = __stk_mpu_shared_bss_end - __stk_mpu_shared_bss_start;
     if (bss_size > 0)
     {
-        STK_MEMSET(__stk_mpu_shared_bss_start, 0, bss_size);
+        stk::STK_MEMSET(__stk_mpu_shared_bss_start, 0, bss_size);
     }
 }
 PICO_RUNTIME_INIT_FUNC(InitMpuSharedData, "00100");
@@ -404,6 +412,8 @@ private:
         // Not part of this task's MPU regions -> MemManage fault on the very first access.
     #if 0
         other_task->m_private.handoff_count = 0xBADBADBAU;
+    #else
+        STK_UNUSED(other_task);
     #endif
     }
 
@@ -424,7 +434,8 @@ private:
 
             // change active LED
             {
-                const stk::hw::CriticalSection::ScopedLock __guard;
+                stk::sync::FastMutex::ScopedLock guard(g_HwMutex);
+
                 NSC_bsp_Led_SwitchOnExclusive(static_cast<LedId>(m_task_id));
             }
 

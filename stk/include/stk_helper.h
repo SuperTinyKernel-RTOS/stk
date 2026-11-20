@@ -327,16 +327,6 @@ protected:
         return m_wait_list;
     }
 
-    /*! \brief     Get the waiter which is served next according to the wait order.
-        \return    Wait object, or \c NULL if nobody is waiting.
-        \note      Must be called inside the critical section (see \a hw::CriticalSection, \a sync::ScopedCriticalSection).
-        \see       ISyncObject::FindNextWaiter
-    */
-    IWaitObject *GetNextWaitObject()
-    {
-        return ISyncObject::FindNextWaiter(m_wait_list, m_wait_order);
-    }
-
     IWaitObject::ListHeadType m_wait_list;  //!< Tasks blocked on this object (arrival order).
     EWaitOrder                m_wait_order; //!< Policy used to select the next waiter to serve.
 };

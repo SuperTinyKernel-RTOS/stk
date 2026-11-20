@@ -305,7 +305,7 @@ public:
     explicit SelSyncObject(EWaitOrder order) : SyncObjectBase(order)
     {}
 
-    IWaitObject *Next() { return GetNextWaitObject(); }
+    IWaitObject *Next() { return ISyncObject::FindNextWaiter(m_wait_list, GetWaitOrder()); }
 
     // wake the waiter selected by the order of this object (what WakeOne() does for the built-in primitives)
     void WakeNext() { ISyncObject::WakeOne(m_wait_list, GetWaitOrder()); }

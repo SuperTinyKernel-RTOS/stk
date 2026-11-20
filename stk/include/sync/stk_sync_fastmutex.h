@@ -179,7 +179,7 @@ inline EWaitResult FastMutex::TimedLockEx(Timeout timeout_ticks)
         // boost priority of the owner to avoid priority inversion (strategies with PRIORITY_INHERITANCE_API,
         // e.g. sched::SwitchStrategyFixedPriority), noop for strategies without it
         // (the effective weight of the caller is donated: honors SetWeight() and the caller's own inherited boost)
-        svc->InheritWeight(owner_tid, svc->GetWeight(current_tid));
+        svc->InheritWeight(owner_tid, current_tid);
 
         // mutex owned by another thread (slow path/blocking)
         result = svc->Wait(this, &cs_, timeout_ticks);
@@ -261,24 +261,22 @@ inline void FastMutex::Unlock()
             svc->RestoreWeight(m_owner_tid);
         }
 
-        // pass ownership directly to the next waiter: first in FIFO order, or the one with the highest
-        // current weight in priority order (never NULL here, the list is not empty)
-        IWaitObject *const waiter = GetNextWaitObject();
-        STK_ASSERT(waiter != nullptr);
+        // wake up the next waiter: first in FIFO order, or the one with the highest current weight in priority
+        // order (the list is not empty, so never TID_NONE), the kernel selects it once and returns its TId:
+        // wait objects belong to the kernel (not accessible from the Non-Secure side of TrustZone)
+        const TId next_tid = svc->Wake(this, false);
+        STK_ASSERT(next_tid != TID_NONE);
 
-        // transfer ownership to the waiter
-        m_owner_tid = waiter->GetTid();
+        // transfer ownership to the waiter: still inside the critical section, so the woken task can not
+        // run (and observe the mutex) before the owner is set
+        m_owner_tid = next_tid;
         __stk_full_memfence();
 
-        // wake up
-        waiter->Wake(false);
-
         // boost priority from the highest-priority task still in wait list, skip the lookup if none left,
-        // noop for strategies without PRIORITY_INHERITANCE_API
+        // noop for strategies without PRIORITY_INHERITANCE_API (the lookup is done by the kernel)
         if (!m_wait_list.IsEmpty())
         {
-            svc->InheritWeight(m_owner_tid,
-                FindWeightHigherThan(waiter->GetKernelTask()->GetWeight())); // new owner's effective weight
+            svc->InheritWeight(m_owner_tid, this);
         }
     }
     else

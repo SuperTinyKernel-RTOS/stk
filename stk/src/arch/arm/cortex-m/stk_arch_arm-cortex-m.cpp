@@ -3942,10 +3942,14 @@ public:
     void SleepCancel(stk::TId task_id) override;
     void SwitchToNext() override;
     stk::EWaitResult Wait(stk::ISyncObject *sobj, stk::IMutex *mutex, stk::Timeout timeout) override;
-    void Wake(stk::ISyncObject *sobj, bool all);
+    stk::TId Wake(stk::ISyncObject *sobj, bool all) override;
     stk::Timeout Suspend() override;
     void Resume(stk::Timeout elapsed_ticks) override;
-    void InheritWeight(stk::TId tid, stk::Weight weight) override;
+    stk::Weight GetWeight(stk::TId tid) const override;
+    stk::EWaitOrder GetDefaultWaitOrder() const override;
+    stk::IWaitObject *SelectWaiter(stk::IWaitObject::ListHeadType &wlist, stk::EWaitOrder order) override;
+    void InheritWeight(stk::TId tid, stk::TId donor_tid) override;
+    void InheritWeight(stk::TId tid, const stk::ISyncObject *sobj) override;
     void RestoreWeight(stk::TId tid, stk::ISyncObject *sobj) override;
     stk::Weight SetWeight(stk::TId tid, stk::Weight weight) override;
     stk::Timeout SetTimeSlice(stk::TId tid, stk::Timeout ticks) override;
@@ -4071,10 +4075,10 @@ stk::EWaitResult KernelServiceSvcProxy::Wait(stk::ISyncObject *sobj, stk::IMutex
 }
 
 STK_MPU_SHARED_CODE_SECTION
-void KernelServiceSvcProxy::Wake(stk::ISyncObject *sobj, bool all)
+stk::TId KernelServiceSvcProxy::Wake(stk::ISyncObject *sobj, bool all)
 {
     const mpu::ScopedPrivilegeBoost pb;
-    GetContext().m_service->Wake(sobj, all);
+    return GetContext().m_service->Wake(sobj, all);
 }
 
 STK_MPU_SHARED_CODE_SECTION
@@ -4091,10 +4095,38 @@ void KernelServiceSvcProxy::Resume(stk::Timeout elapsed_ticks)
 }
 
 STK_MPU_SHARED_CODE_SECTION
-void KernelServiceSvcProxy::InheritWeight(stk::TId tid, stk::Weight weight)
+stk::Weight KernelServiceSvcProxy::GetWeight(stk::TId tid) const
 {
     const mpu::ScopedPrivilegeBoost pb;
-    GetContext().m_service->InheritWeight(tid, weight);
+    return GetContext().m_service->GetWeight(tid);
+}
+
+STK_MPU_SHARED_CODE_SECTION
+stk::EWaitOrder KernelServiceSvcProxy::GetDefaultWaitOrder() const
+{
+    const mpu::ScopedPrivilegeBoost pb;
+    return GetContext().m_service->GetDefaultWaitOrder();
+}
+
+STK_MPU_SHARED_CODE_SECTION
+stk::IWaitObject *KernelServiceSvcProxy::SelectWaiter(stk::IWaitObject::ListHeadType &wlist, stk::EWaitOrder order)
+{
+    const mpu::ScopedPrivilegeBoost pb;
+    return GetContext().m_service->SelectWaiter(wlist, order);
+}
+
+STK_MPU_SHARED_CODE_SECTION
+void KernelServiceSvcProxy::InheritWeight(stk::TId tid, stk::TId donor_tid)
+{
+    const mpu::ScopedPrivilegeBoost pb;
+    GetContext().m_service->InheritWeight(tid, donor_tid);
+}
+
+STK_MPU_SHARED_CODE_SECTION
+void KernelServiceSvcProxy::InheritWeight(stk::TId tid, const stk::ISyncObject *sobj)
+{
+    const mpu::ScopedPrivilegeBoost pb;
+    GetContext().m_service->InheritWeight(tid, sobj);
 }
 
 STK_MPU_SHARED_CODE_SECTION

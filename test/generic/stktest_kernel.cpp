@@ -3977,8 +3977,10 @@ TEST(Kernel, SyncInheritWeight)
     CHECK_EQUAL(1, ktasks[0]->GetWeight());
 
     const TId task1_id = task1.GetTid();
+    const TId task2_id = task2.GetTid();
 
-    IKernelService::GetInstance()->InheritWeight(task1_id, 2);
+    // task1 inherits the effective weight of the donor task2 (2)
+    IKernelService::GetInstance()->InheritWeight(task1_id, task2_id);
 
     // boosted weight
     CHECK_EQUAL(2, ktasks[0]->GetCurrentWeight());
@@ -3990,6 +3992,55 @@ TEST(Kernel, SyncInheritWeight)
     CHECK_EQUAL(NO_WEIGHT, ktasks[0]->GetCurrentWeight());
 
     // back to own weight
+    CHECK_EQUAL(1, ktasks[0]->GetWeight());
+}
+
+TEST(Kernel, SyncInheritWeightLowerDonorIgnored)
+{
+    Kernel<KERNEL_STATIC | KERNEL_SYNC, 2, sched::SwitchStrategyFP32, PlatformTestMock> kernel;
+    TaskMockW<1, ACCESS_USER> task1;
+    TaskMockW<2, ACCESS_USER> task2;
+
+    kernel.Initialize();
+    kernel.AddTask(&task1);
+    kernel.AddTask(&task2);
+    kernel.Start();
+
+    IKernelTask *ktasks[2];
+    ArrayView<IKernelTask *> ktasks_view(ktasks, 2);
+    kernel.EnumerateKernelTasks(ktasks_view);
+
+    const TId task1_id = task1.GetTid();
+    const TId task2_id = task2.GetTid();
+
+    // task2 (weight 2) inherits from task1 (weight 1): the donor is not higher, nothing changes
+    IKernelService::GetInstance()->InheritWeight(task2_id, task1_id);
+
+    CHECK_EQUAL(NO_WEIGHT, ktasks[1]->GetCurrentWeight());
+    CHECK_EQUAL(2, ktasks[1]->GetWeight());
+}
+
+TEST(Kernel, SyncInheritWeightFromSyncObjectNoWaiters)
+{
+    Kernel<KERNEL_STATIC | KERNEL_SYNC, 2, sched::SwitchStrategyFP32, PlatformTestMock> kernel;
+    TaskMockW<1, ACCESS_USER> task1;
+    TaskMockW<2, ACCESS_USER> task2;
+
+    SyncObjectMock sobj;
+
+    kernel.Initialize();
+    kernel.AddTask(&task1);
+    kernel.AddTask(&task2);
+    kernel.Start();
+
+    IKernelTask *ktasks[2];
+    ArrayView<IKernelTask *> ktasks_view(ktasks, 2);
+    kernel.EnumerateKernelTasks(ktasks_view);
+
+    // nobody waits for the object: there is nothing to inherit
+    IKernelService::GetInstance()->InheritWeight(task1.GetTid(), &sobj);
+
+    CHECK_EQUAL(NO_WEIGHT, ktasks[0]->GetCurrentWeight());
     CHECK_EQUAL(1, ktasks[0]->GetWeight());
 }
 
@@ -4010,8 +4061,8 @@ TEST(Kernel, SetWeightClearsInheritedWeight)
 
     const TId task1_id = task1.GetTid();
 
-    // task1 inherits a higher weight (priority inheritance boost)
-    IKernelService::GetInstance()->InheritWeight(task1_id, 2);
+    // task1 inherits a higher weight (priority inheritance boost) from task2 (weight 2)
+    IKernelService::GetInstance()->InheritWeight(task1_id, task2.GetTid());
     CHECK_EQUAL(2, ktasks[0]->GetCurrentWeight());
     CHECK_EQUAL(2, ktasks[0]->GetWeight());
 
@@ -4041,7 +4092,7 @@ TEST(Kernel, SetWeightClearsInheritedWeightEqual)
 
     const TId task1_id = task1.GetTid();
 
-    IKernelService::GetInstance()->InheritWeight(task1_id, 2);
+    IKernelService::GetInstance()->InheritWeight(task1_id, task2.GetTid());
     CHECK_EQUAL(2, ktasks[0]->GetCurrentWeight());
 
     // new base weight equals the inherited weight: the boost is dropped too (<=)
@@ -4055,7 +4106,7 @@ TEST(Kernel, SetWeightKeepsHigherInheritedWeight)
 {
     Kernel<KERNEL_STATIC | KERNEL_SYNC, 2, sched::SwitchStrategyFP32, PlatformTestMock> kernel;
     TaskMockW<1, ACCESS_USER> task1;
-    TaskMockW<2, ACCESS_USER> task2;
+    TaskMockW<5, ACCESS_USER> task2;
 
     kernel.Initialize();
     kernel.AddTask(&task1);
@@ -4068,7 +4119,8 @@ TEST(Kernel, SetWeightKeepsHigherInheritedWeight)
 
     const TId task1_id = task1.GetTid();
 
-    IKernelService::GetInstance()->InheritWeight(task1_id, 5);
+    // task1 inherits the weight of the donor task2 (5)
+    IKernelService::GetInstance()->InheritWeight(task1_id, task2.GetTid());
     CHECK_EQUAL(5, ktasks[0]->GetCurrentWeight());
 
     // new base weight (3) is below the inherited weight (5): the boost stays active

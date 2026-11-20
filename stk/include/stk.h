@@ -1217,8 +1217,10 @@ protected:
             return result;
         }
 
-        void Wake(ISyncObject *sobj, bool all) override
+        TId Wake(ISyncObject *sobj, bool all) override
         {
+            TId result = TID_NONE;
+
             if __stk_constexpr_cpp17 (IsSyncMode())
             {
                 if (all)
@@ -1231,6 +1233,9 @@ protected:
                     IWaitObject *const obj = SelectWaiter(GetMutableWaitList(sobj), sobj->GetWaitOrder());
                     if (obj != nullptr)
                     {
+                        // read before waking: the wait object is released by the woken task
+                        result = obj->GetTid();
+
                         obj->Wake(false);
                     }
                 }
@@ -1239,6 +1244,8 @@ protected:
             {
                 STK_ASSERT(false);
             }
+
+            return result;
         }
 
         Timeout Suspend() override
@@ -1370,11 +1377,22 @@ protected:
             return result;
         }
 
-        void InheritWeight(TId tid, Weight weight) override
+        void InheritWeight(TId tid, TId donor_tid) override
         {
             if __stk_constexpr_cpp17 (TStrategy::WEIGHT_API && TStrategy::PRIORITY_INHERITANCE_API)
             {
-                m_kernel->OnInheritWeight(tid, weight);
+                // effective weight of the donor: honors SetWeight() and the donor's own inherited boost
+                m_kernel->OnInheritWeight(tid, m_kernel->OnGetWeight(donor_tid));
+            }
+        }
+
+        void InheritWeight(TId tid, const ISyncObject *sobj) override
+        {
+            if __stk_constexpr_cpp17 (TStrategy::WEIGHT_API && TStrategy::PRIORITY_INHERITANCE_API)
+            {
+                // the highest weight of the remaining waiters if it is higher than the effective weight of the
+                // inheriting task (NO_WEIGHT otherwise, which is ignored)
+                m_kernel->OnInheritWeight(tid, sobj->FindWeightHigherThan(m_kernel->OnGetWeight(tid)));
             }
         }
 
