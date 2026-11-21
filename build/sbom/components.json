@@ -160,13 +160,13 @@
     },
     {
       "id": "sifive-metal-ld",
-      "name": "SiFive linker script (metal.ld)",
+      "name": "SiFive linker script (stk.ld)",
       "supplier": "Organization: SiFive Inc.",
       "license": "Apache-2.0",
       "copyright": "Copyright (c) 2020 SiFive Inc.",
       "relationship": "DEPENDS_ON",
       "comment": "Default linker script of the risc-v target support library.",
-      "paths": ["deps/target/risc-v/src/ld/metal.ld"],
+      "paths": ["deps/target/risc-v/src/ld/stk.ld"],
       "when": { "all": ["RISCV"], "none": ["VENDOR_RPI"] }
     },
 

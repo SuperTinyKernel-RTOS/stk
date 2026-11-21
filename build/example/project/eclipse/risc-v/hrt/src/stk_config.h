@@ -24,6 +24,8 @@
     #endif
 #endif
 
+#define STK_RISCV_USER_MODE 1
+
 #ifdef _STK_ARCH_RISC_V
     // Redefine if SysTick handler name is different from SysTick_Handler
     //#define STK_SYSTICK_HANDLER SysTick_Handler

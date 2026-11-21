@@ -410,7 +410,7 @@
            still the correct lightweight barrier for this purpose.
 */
 #if defined(__GNUC__) || defined(__clang__) || defined(__ICCARM__)
-    static __stk_forceinline void __stk_compiler_barrier() { __asm volatile("" ::: "memory"); }
+    static __stk_forceinline void __stk_compiler_barrier() { __asm__ __volatile__("" ::: "memory"); }
 #elif defined(_MSC_VER)
     static __stk_forceinline void __stk_compiler_barrier() { _ReadWriteBarrier(); }
 #else
@@ -440,15 +440,15 @@
         #ifdef __riscv_zihintpause
             static __stk_forceinline void __stk_relax_cpu() { __builtin_riscv_pause(); }
         #else
-            static __stk_forceinline void __stk_relax_cpu() { __asm volatile("nop" ::: "memory"); }
+            static __stk_forceinline void __stk_relax_cpu() { __asm__ __volatile__("nop" ::: "memory"); }
         #endif
     #elif defined(__ARM_ARCH) || defined(_STK_ARCH_ARM_CORTEX_M)
-            static __stk_forceinline void __stk_relax_cpu() { __asm volatile("yield" ::: "memory"); }
+            static __stk_forceinline void __stk_relax_cpu() { __asm__ __volatile__("yield" ::: "memory"); }
     #else
-            static __stk_forceinline void __stk_relax_cpu() { __asm volatile("" ::: "memory"); }
+            static __stk_forceinline void __stk_relax_cpu() { __asm__ __volatile__("" ::: "memory"); }
     #endif
 #elif defined(__ICCARM__)
-    static __stk_forceinline void __stk_relax_cpu() { __asm volatile("YIELD"); }
+    static __stk_forceinline void __stk_relax_cpu() { __asm__ __volatile__("YIELD"); }
 #elif defined(_MSC_VER)
     #include <intrin.h>
     #if defined(_M_IX86) || defined(_M_X64)
@@ -479,9 +479,9 @@
 */
 #if defined(DEBUG) || defined(_DEBUG)
     #if defined(_STK_ARCH_ARM_CORTEX_M)
-        static __stk_forceinline void __stk_debug_break() { __asm volatile("bkpt 0"); }
+        static __stk_forceinline void __stk_debug_break() { __asm__ __volatile__("bkpt 0"); }
     #elif defined(_STK_ARCH_RISC_V)
-        static __stk_forceinline void __stk_debug_break() { __asm volatile("ebreak"); }
+        static __stk_forceinline void __stk_debug_break() { __asm__ __volatile__("ebreak"); }
     #elif defined(_STK_ARCH_X86_WIN32)
         #ifdef _MSC_VER
             static __stk_forceinline void __stk_debug_break() { __debugbreak(); }

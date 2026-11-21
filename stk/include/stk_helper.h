@@ -36,7 +36,8 @@ template <size_t TStackSize> struct StackMemoryDef
 {
     enum EConsts : size_t
     {
-        SIZE = TStackSize
+        SIZE       = TStackSize,
+        SIZE_BYTES = TStackSize * sizeof(Word)
     };
 
     /*! \typedef Type
@@ -46,6 +47,9 @@ template <size_t TStackSize> struct StackMemoryDef
     #if STK_ARCH_ARMV8_M
         // ARMv8-M alignment is 32 bytes.
         typedef __stk_aligned(32U) Word Type[SIZE];
+    #elif defined(_STK_ARCH_RISC_V)
+        // RISC-V NAPOT alignment requires alignment to the total size of the memory region in bytes.
+        typedef __stk_aligned(TStackSize * sizeof(Word)) Word Type[SIZE];
     #else
         // ARMv7-M alignment is a size of the memory region.
         typedef __stk_aligned(TStackSize * sizeof(Word)) Word Type[SIZE];

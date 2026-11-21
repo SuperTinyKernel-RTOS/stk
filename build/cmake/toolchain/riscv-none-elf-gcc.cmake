@@ -158,9 +158,9 @@ set(TOOLCHAIN_LINKER_FLAGS "-nostartfiles -Wl,--gc-sections -Wl,--print-memory-u
 
 # Enable 128K RAM
 if (ENABLE_256K_RAM)
-    set(TOOLCHAIN_LINKER_FLAGS "${TOOLCHAIN_LINKER_FLAGS} -Wl,--defsym=__METAL_RAM_SIZE__=0x40000 -Wl,--defsym=__heap_size=0x4000 -Wl,--defsym=__stack_size=0x2000")
+    set(TOOLCHAIN_LINKER_FLAGS "${TOOLCHAIN_LINKER_FLAGS} -Wl,--defsym=STK_RAM_SIZE=0x40000 -Wl,--defsym=__heap_size=0x4000 -Wl,--defsym=__stack_size=0x2000")
 elseif (ENABLE_128K_RAM)
-    set(TOOLCHAIN_LINKER_FLAGS "${TOOLCHAIN_LINKER_FLAGS} -Wl,--defsym=__METAL_RAM_SIZE__=0x20000")
+    set(TOOLCHAIN_LINKER_FLAGS "${TOOLCHAIN_LINKER_FLAGS} -Wl,--defsym=STK_RAM_SIZE=0x40000")
 endif()
 
 # Use NewLib-nano for small builds

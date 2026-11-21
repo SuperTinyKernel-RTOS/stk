@@ -501,7 +501,6 @@
 								</option>
 								<option IS_BUILTIN_EMPTY="false" IS_VALUE_EMPTY="false" id="ilg.gnumcueclipse.managedbuild.cross.riscv.option.c.linker.flags.2045897090" name="Linker flags (-Xlinker [option])" superClass="ilg.gnumcueclipse.managedbuild.cross.riscv.option.c.linker.flags" valueType="stringList">
 									<listOptionValue builtIn="false" value="-print-memory-usage"/>
-									<listOptionValue builtIn="false" value="--defsym=__METAL_RAM_SIZE__=0x1F400"/>
 								</option>
 								<option id="ilg.gnumcueclipse.managedbuild.cross.riscv.option.c.linker.nostart.1156745762" name="Do not use standard start files (-nostartfiles)" superClass="ilg.gnumcueclipse.managedbuild.cross.riscv.option.c.linker.nostart" value="true" valueType="boolean"/>
 								<option id="ilg.gnumcueclipse.managedbuild.cross.riscv.option.c.linker.cref.942747997" name="Cross reference (-Xlinker --cref)" superClass="ilg.gnumcueclipse.managedbuild.cross.riscv.option.c.linker.cref" value="true" valueType="boolean"/>
@@ -526,7 +525,6 @@
 								<option id="ilg.gnumcueclipse.managedbuild.cross.riscv.option.cpp.linker.usenewlibnosys.1421095384" name="Do not use syscalls (--specs=nosys.specs)" superClass="ilg.gnumcueclipse.managedbuild.cross.riscv.option.cpp.linker.usenewlibnosys" value="true" valueType="boolean"/>
 								<option IS_BUILTIN_EMPTY="false" IS_VALUE_EMPTY="false" id="ilg.gnumcueclipse.managedbuild.cross.riscv.option.cpp.linker.flags.1321774840" name="Linker flags (-Xlinker [option])" superClass="ilg.gnumcueclipse.managedbuild.cross.riscv.option.cpp.linker.flags" valueType="stringList">
 									<listOptionValue builtIn="false" value="-print-memory-usage"/>
-									<listOptionValue builtIn="false" value="--defsym=__METAL_RAM_SIZE__=0x1F400"/>
 								</option>
 								<option id="ilg.gnumcueclipse.managedbuild.cross.riscv.option.cpp.linker.other.644944564" name="Other linker flags" superClass="ilg.gnumcueclipse.managedbuild.cross.riscv.option.cpp.linker.other" value="-Wl,-z,max-page-size=4096 -Wl,--wrap=__ctzdi2 -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=realloc -Wl,--wrap=free -Wl,--no-warn-rwx-segments -Wl,--wrap=sprintf -Wl,--wrap=snprintf -Wl,--wrap=vsnprintf -Wl,--wrap=printf -Wl,--wrap=vprintf -Wl,--wrap=puts -Wl,--wrap=putchar -Wl,--wrap=getchar" valueType="string"/>
 								<inputType id="ilg.gnumcueclipse.managedbuild.cross.riscv.tool.cpp.linker.input.216617556" superClass="ilg.gnumcueclipse.managedbuild.cross.riscv.tool.cpp.linker.input">
@@ -1058,7 +1056,6 @@
 								</option>
 								<option IS_BUILTIN_EMPTY="false" IS_VALUE_EMPTY="false" id="ilg.gnumcueclipse.managedbuild.cross.riscv.option.c.linker.flags.1034272579" name="Linker flags (-Xlinker [option])" superClass="ilg.gnumcueclipse.managedbuild.cross.riscv.option.c.linker.flags" valueType="stringList">
 									<listOptionValue builtIn="false" value="-print-memory-usage"/>
-									<listOptionValue builtIn="false" value="--defsym=__METAL_RAM_SIZE__=0x1F400"/>
 								</option>
 								<option id="ilg.gnumcueclipse.managedbuild.cross.riscv.option.c.linker.nostart.1741633598" name="Do not use standard start files (-nostartfiles)" superClass="ilg.gnumcueclipse.managedbuild.cross.riscv.option.c.linker.nostart" value="true" valueType="boolean"/>
 								<option id="ilg.gnumcueclipse.managedbuild.cross.riscv.option.c.linker.cref.1122677963" name="Cross reference (-Xlinker --cref)" superClass="ilg.gnumcueclipse.managedbuild.cross.riscv.option.c.linker.cref" value="true" valueType="boolean"/>
@@ -1080,7 +1077,6 @@
 								<option id="ilg.gnumcueclipse.managedbuild.cross.riscv.option.cpp.linker.nostart.1668117467" name="Do not use standard start files (-nostartfiles)" superClass="ilg.gnumcueclipse.managedbuild.cross.riscv.option.cpp.linker.nostart" value="true" valueType="boolean"/>
 								<option IS_BUILTIN_EMPTY="false" IS_VALUE_EMPTY="false" id="ilg.gnumcueclipse.managedbuild.cross.riscv.option.cpp.linker.flags.647101498" name="Linker flags (-Xlinker [option])" superClass="ilg.gnumcueclipse.managedbuild.cross.riscv.option.cpp.linker.flags" valueType="stringList">
 									<listOptionValue builtIn="false" value="-print-memory-usage"/>
-									<listOptionValue builtIn="false" value="--defsym=__METAL_RAM_SIZE__=0x1F400"/>
 								</option>
 								<option id="ilg.gnumcueclipse.managedbuild.cross.riscv.option.cpp.linker.usenewlibnosys.2033833704" name="Do not use syscalls (--specs=nosys.specs)" superClass="ilg.gnumcueclipse.managedbuild.cross.riscv.option.cpp.linker.usenewlibnosys" value="true" valueType="boolean"/>
 								<option id="ilg.gnumcueclipse.managedbuild.cross.riscv.option.cpp.linker.other.845794139" name="Other linker flags" superClass="ilg.gnumcueclipse.managedbuild.cross.riscv.option.cpp.linker.other" value="-Wl,-z,max-page-size=4096 -Wl,--wrap=__ctzdi2 -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=realloc -Wl,--wrap=free -Wl,--no-warn-rwx-segments -Wl,--wrap=sprintf -Wl,--wrap=snprintf -Wl,--wrap=vsnprintf -Wl,--wrap=printf -Wl,--wrap=vprintf -Wl,--wrap=puts -Wl,--wrap=putchar -Wl,--wrap=getchar" valueType="string"/>
