@@ -20,7 +20,7 @@ Typical differences between configurations:
 |---|---|
 | generic / host, generic ARM or RISC-V without `VENDOR_*` | none (STK only) |
 | `-DVENDOR_STM32=ON` | Arm CMSIS-Core, CMSIS-DSP headers, uOS++ glue, and the ST HAL of the selected family (F0 / F1 / F4) |
-| RISC-V (`RISCV`) | CSR encoding header, startup code, SiFive linker script |
+| RISC-V (`RISCV`) | CSR encoding header, startup code, STK linker script |
 | `-DENABLE_SEGGER_SYSVIEW=ON` (any target) | SEGGER RTT and SystemView (`LicenseRef-SEGGER-SystemView`) |
 
 ## Scope

@@ -61,7 +61,7 @@ using namespace bsp;
 // ---------------------------------------------------------------------------
 
 // R2350 requires larger stack due to stack-memory heavy SDK API
-#ifdef _PICO_H
+#ifdef PICO_BOARD
 static constexpr size_t TASK_STACK_SIZE = 1024U;
 #else
 static constexpr size_t TASK_STACK_SIZE = 256U;
@@ -91,45 +91,6 @@ static stk::Word s_LedTaskStackMem[4][TASK_STACK_MEMORY_SIZE] __stk_aligned(32U)
 // Non-Secure task memory (on ARMv8-M must be aligned to 32 bytes at least).
 static constexpr size_t TASK_MEMORY_SIZE = stk::Align<size_t>(10U, 32U);
 static stk::Word s_LedTaskMem[4][TASK_MEMORY_SIZE] __stk_aligned(32U);
-
-// Init mpu_shared_data: the Pico SDK's default linker script/runtime does not know
-// about STK's custom .stk_mpu_shared_data/.stk_mpu_shared_bss sections, so their
-// FLASH->RAM copy and zero-fill has to be done manually, and it must happen before
-// any C++ static constructor runs (globals living in those sections - like
-// g_TaskFlags and g_Timeline below - would otherwise be constructed on top of
-// uninitialized/stale memory).
-//
-// Two ways to guarantee that ordering are shown here; this example uses the second:
-//   1. __attribute__((constructor(101))) - 101 is the highest priority available to
-//      user code, forcing the function to the very start of the __init_array loop
-//      (kept below, commented out, for reference).
-//   2. PICO_RUNTIME_INIT_FUNC(..., "00100") - registers the function in the Pico
-//      SDK's preinit_array section, which the SDK's runtime guarantees to run
-//      before init_array (and therefore before any static constructor).
-//__attribute__((constructor(101)))
-static void InitMpuSharedData()
-{
-    extern char __stk_mpu_shared_data_start[];
-    extern char __stk_mpu_shared_data_end[];
-    extern char __stk_mpu_shared_data_source__[];
-    extern char __stk_mpu_shared_bss_start[];
-    extern char __stk_mpu_shared_bss_end[];
-
-    // copy initialized variables from FLASH to RAM
-    const size_t data_size = __stk_mpu_shared_data_end - __stk_mpu_shared_data_start;
-    if (data_size > 0)
-    {
-        STK_MEMCPY(__stk_mpu_shared_data_start, __stk_mpu_shared_data_source__, data_size);
-    }
-
-    // zero-fill the BSS region
-    const size_t bss_size = __stk_mpu_shared_bss_end - __stk_mpu_shared_bss_start;
-    if (bss_size > 0)
-    {
-        STK_MEMSET(__stk_mpu_shared_bss_start, 0, bss_size);
-    }
-}
-PICO_RUNTIME_INIT_FUNC(InitMpuSharedData, "00100");
 
 // Hw commands.
 struct HwCommand

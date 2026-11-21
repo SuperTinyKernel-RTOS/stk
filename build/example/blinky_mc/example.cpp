@@ -69,7 +69,7 @@ private:
             // switch LED on/off
             {
                 // we do not want preemption during IO with hardware
-                stk::hw::CriticalSection::ScopedLock __cs;
+                stk::ScopedSchedulerLock hw_io_guard_;
 
                 Led::Set(Led::GREEN, (m_task_id == LED_ON));
             }
@@ -98,7 +98,7 @@ private:
             // sleep 1s and delegate work to another task switching another LED;
             // Wait(1000) returns false on timeout (normal tick) or true if woken
             // early by Set() - either way proceed to the next toggle
-            g_WakeCtrl.Wait(1000);
+            g_WakeCtrl.Wait(250);
             g_WakeCtrl.Reset(); // re-arm for the next iteration
 
             // TryWrite is used because each pipe has capacity 1 and CtrlTask is

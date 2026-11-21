@@ -14,9 +14,9 @@ int main(int argc, char* argv[])
     (void)argc;
     (void)argv;
 
-    // activate RISC-V core of RP2350:
+    // activate ARM core of RP2350:
     // picotool reboot -c arm
 
     RunExample();
-    return 0 ;
+    return 0;
 }

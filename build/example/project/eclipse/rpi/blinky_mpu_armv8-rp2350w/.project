@@ -46,6 +46,11 @@
 			<locationURI>virtual:/virtual</locationURI>
 		</link>
 		<link>
+			<name>deps/ld/stk_pico_mpu_init.c</name>
+			<type>1</type>
+			<locationURI>PARENT-6-PROJECT_LOC/deps/port/rpi/ld/stk_pico_mpu_init.c</locationURI>
+		</link>
+		<link>
 			<name>deps/rpi/boards</name>
 			<type>2</type>
 			<locationURI>virtual:/virtual</locationURI>
@@ -99,6 +104,16 @@
 			<name>src/driver/rp2350w</name>
 			<type>2</type>
 			<locationURI>virtual:/virtual</locationURI>
+		</link>
+		<link>
+			<name>deps/ld/rp2350/memmap_mpu.ld</name>
+			<type>1</type>
+			<locationURI>PARENT-6-PROJECT_LOC/deps/port/rpi/ld/rp2350/memmap_mpu.ld</locationURI>
+		</link>
+		<link>
+			<name>deps/ld/rp2350/pico_flash_region.ld</name>
+			<type>1</type>
+			<locationURI>PARENT-6-PROJECT_LOC/deps/port/rpi/ld/rp2350/pico_flash_region.ld</locationURI>
 		</link>
 		<link>
 			<name>deps/rpi/boards/include</name>

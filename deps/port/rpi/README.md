@@ -2,7 +2,8 @@
 
 STK-native backends for three Pico SDK libraries that normally assume
 FreeRTOS or a bare polling loop: `pico_async_context`, `pico_cyw43_arch`,
-and `pico_lwip`. Lives at `deps/port/pico` in the STK repo, laid out to
+and `pico_lwip`, plus RP2350 linker scripts (`ld/`) for STK's MPU-isolated
+and TrustZone builds. Lives at `deps/port/pico` in the STK repo, laid out to
 match the Pico SDK's own `<lib>/include/pico/...` convention so it can be
 vendored straight into a Pico SDK tree (or pointed to via
 `PICO_SDK_EXTRAS_PATH` / an extra `add_subdirectory`) without renaming
@@ -24,11 +25,20 @@ deps/port/pico
 │           └── cyw43_arch
 │                   arch_stk.h
 │
-└── pico_lwip
-    ├── lwip_stk.cpp
-    └── include
-        └── pico
-                lwip_stk.h
+├── pico_lwip
+│   ├── lwip_stk.cpp
+│   └── include
+│       └── pico
+│               lwip_stk.h
+│
+└── ld
+    └── rp2350
+        ├── memmap_mpu.ld
+        ├── memmap_tz_sc.ld
+        ├── memmap_tz_ns.ld
+        ├── pico_flash_region.ld
+        ├── pico_flash_region_tz_sc.ld
+        └── pico_flash_region_tz_ns.ld
 ```
 
 **Every `.cpp` file here must be compiled as C++.** STK's API
@@ -187,6 +197,64 @@ If you're using `pico_async_context`/`pico_lwip` without CYW43, skip
 directly with `async_context_stk_init_with_defaults()` (or
 `async_context_stk_init()` for full control), then pass that context to
 `lwip_stk_init()`.
+
+## `ld` — RP2350 linker scripts
+
+Linker scripts based on the Pico SDK's RP2350 memory map, adding the
+sections and boundary symbols STK needs for MPU task isolation and for a
+TrustZone Secure / Non-Secure split. Pick **one** layout per firmware image
+and select it with `pico_set_linker_script()` (for the TrustZone layout,
+build two separate images, one linked with each script).
+Each `memmap_*.ld` `INCLUDE`s its matching `pico_flash_region*.ld`, so keep
+the files together in the same directory.
+
+| Script | Flash region file | Use for |
+|---|---|---|
+| `memmap_mpu.ld` | `pico_flash_region.ld` | Single-image build, MPU-sandboxed tasks, no TrustZone. `FLASH` = 4 MB at `0x10000000`, `RAM` = 512 KB at `0x20000000` |
+| `memmap_tz_sc.ld` | `pico_flash_region_tz_sc.ld` | TrustZone **Secure** image. `FLASH` = 2 MB, `FLASH_NSC` = 4 KB at `0x10200000`, `RAM_S` = 256 KB |
+| `memmap_tz_ns.ld` | `pico_flash_region_tz_ns.ld` | TrustZone **Non-Secure** image. `FLASH_NS` = 2044 KB at `0x10201000`, `RAM_NS` = 248 KB at `0x20040000`, NS stacks in `SCRATCH_X`/`SCRATCH_Y` at the top of RAM |
+
+The flash layouts assume a **4 MB** RP2350 flash; adjust the `LENGTH` values
+in the `pico_flash_region*.ld` files for other sizes.
+
+### MPU sections (all three scripts)
+
+Gather the memory shared by MPU-sandboxed tasks into contiguous, aligned
+blocks, so each can be covered by a single ARMv8-M MPU region. Place data
+into them with the STK macros; the linker exports the boundary symbols that
+STK's static MPU table (or per-task regions) consumes.
+
+| Macro | Section | Exported symbols |
+|---|---|---|
+| `STK_MPU_SHARED_CODE_SECTION` | `.stk_mpu_shared_code` (flash, XIP, RX) | `__stk_mpu_shared_code_start` / `_end` |
+| — | RAM-resident code inside `.data` | `__stk_mpu_ram_text_start` / `_end` |
+| `STK_MPU_SHARED_DATA_SECTION` | `.stk_mpu_shared_data` (RAM, loaded from flash) | `__stk_mpu_shared_data_start` / `_end`, `__stk_mpu_shared_data_source__` |
+| `STK_MPU_SHARED_BSS_SECTION` | `.stk_mpu_shared_bss` (RAM, `NOLOAD`) | `__stk_mpu_shared_bss_start` / `_end` |
+
+`.stk_mpu_shared_data` and `.stk_mpu_shared_bss` sit back-to-back so they
+form one RW, execute-never region. Region bases are aligned to 32 bytes to
+satisfy the MPU.
+
+### TrustZone notes
+
+- The MPU sections are a mechanism **separate from TrustZone**: the MPU
+  isolates tasks from each other *within* a world, while the SAU separates
+  the Secure world from the Non-Secure one. The Secure and Non-Secure images
+  each have their own, non-overlapping `stk_mpu_*` sections.
+- `.stk_mpu_shared_code` exists only in `memmap_mpu.ld` and `memmap_tz_sc.ld`.
+  Non-Secure tasks reach shared Secure code through the NSC veneers.
+- `memmap_tz_sc.ld` exports the SAU boundary symbols (`__sgstubs_start/_end`,
+  `__nsc_start/_end`, `__ns_flash_start/_end`, `__ns_ram_start/_end`,
+  `__ns_scratch_start/_end`) used by the application to program the SAU
+  before branching into the Non-Secure image. `.gnu.sgstubs` (the
+  auto-generated `cmse_nonsecure_entry` veneers, built with `-mcmse`) is
+  placed in `FLASH_NSC`.
+- `FLASH_NSC` must be a **power-of-two length** and 256-byte aligned to
+  satisfy SAU constraints — do not change its 4 KB size to a non-power-of-2.
+- `__ns_scratch_start/_end` are hardcoded in `memmap_tz_sc.ld` (it does not
+  include the NS flash region file) and mirrored in `memmap_tz_ns.ld`; keep
+  both, and the `SCRATCH_X`/`SCRATCH_Y` origins, in sync by hand.
+- Vector tables are aligned to 128 bytes in both TrustZone scripts.
 
 ## Compile-time configuration
 

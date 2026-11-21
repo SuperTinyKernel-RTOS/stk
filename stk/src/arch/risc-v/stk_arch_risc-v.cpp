@@ -19,6 +19,79 @@
 
 using namespace stk;
 
+#if STK_MPU_STACK_GUARD && !STK_MPU
+    #error "Enable MPU support (STK_MPU=1) to use per-task MPU feature (STK_MPU_STACK_GUARD=1)!"
+#endif
+
+/*! \def     STK_RISCV_USER_MODE
+    \brief   Enables non-privileged (U-mode) task execution, independent of the PMP based memory protection.
+    \details If (1), tasks created with \a ACCESS_USER run in U-mode (mstatus.MPP = 0) while \a ACCESS_PRIVILEGED
+             tasks run in M-mode. In this mode the driver provides: the privilege state tracking (s_StkRiscvNpriv),
+             ecall services (critical section, privilege boost/drop), the kernel service proxy for U-mode callers
+             (see IKernelService::GetInstance()) and U-mode aware CriticalSection API.
+             The hart must implement the U-mode (privilege levels M+U). Memory protection (PMP regions, stack guard)
+             is a separate feature on top of it, see \a STK_MPU.
+    \note    Default: follows \a STK_MPU (backward compatible). Define as (1) before including this file (or in
+             stk_config.h) to run \a ACCESS_USER tasks in U-mode without \a STK_MPU. Always (1) if \a STK_MPU is (1).
+    \note    Without \a STK_MPU there is no isolation: the shared code region check of the privilege boost
+             is not performed and U-mode is granted access to the whole address space (see \a STK_RISCV_PMP_PRESENT).
+    \see     STK_MPU, STK_RISCV_PMP_PRESENT
+*/
+#ifndef STK_RISCV_USER_MODE
+    #define STK_RISCV_USER_MODE STK_MPU
+#endif
+#if STK_MPU && !STK_RISCV_USER_MODE
+    #error "STK_MPU requires STK_RISCV_USER_MODE=1 (PMP restricts U-mode only)!"
+#endif
+#if STK_RISCV_USER_MODE && (STK_ARCH_CPU_COUNT > 1U) && !defined(STK_ARCH_GET_CPU_ID)
+    // the privilege state (s_StkRiscvNpriv[]) and the per-hart Context are looked up by hart id from U-mode code too,
+    // the default implementation reads mhartid CSR which traps in U-mode
+    #error "Multi-hart U-mode build (STK_RISCV_USER_MODE/STK_MPU) requires STK_ARCH_GET_CPU_ID() which is readable from U-mode (mhartid CSR is M-mode only)!"
+#endif
+
+/*! \def     STK_RISCV_PMP_PRESENT
+    \brief   If (1), the hart implements PMP. Used only if \a STK_RISCV_USER_MODE is (1) and \a STK_MPU is (0).
+    \details RISC-V rule: if PMP is implemented but no entry matches, U-mode access fails. Therefore, to let U-mode
+             tasks run without \a STK_MPU the driver programs one permissive PMP entry (RWX, whole address space).
+             Set to (0) if the hart has no PMP at all (all U-mode accesses are then allowed by hardware and the
+             PMP CSRs must not be touched).
+*/
+#ifndef STK_RISCV_PMP_PRESENT
+    #define STK_RISCV_PMP_PRESENT (1)
+#endif
+
+/*! \def     STK_RISCV_PMP_TASK_REGION_IDX
+    \brief   Base PMP entry index reserved for per-task regions (the last STK_MPU_TASK_REGIONS entries by default).
+    \note    PMP priority: the lowest entry index wins, therefore static regions (low indices) have priority
+             over per-task regions.
+*/
+#if STK_MPU
+    #ifndef STK_RISCV_PMP_TASK_REGION_IDX
+        #define STK_RISCV_PMP_TASK_REGION_IDX (STK_RISCV_PMP_REGIONS_MAX - STK_MPU_TASK_REGIONS)
+    #endif
+    #if (STK_RISCV_PMP_REGIONS_MAX > 16U)
+        #error "Only up to 16 PMP entries are supported by the driver."
+    #endif
+#endif
+
+/*! \brief External symbols defining the boundary addresses of the shared code region (see linker script).
+    \note  Used by the privilege boost/drop service to accept requests only from the shared code.
+*/
+#if STK_MPU
+    extern char __stk_mpu_shared_code_start[];
+    extern char __stk_mpu_shared_code_end[];
+#endif
+
+/*! \var    g_StkLastPanicId
+   \brief  Panic id cache for post-mortem inspection.
+   \note   Intentionally outside of the anonymous namespace: external C linkage keeps an unmangled,
+           stable symbol name for debuggers and tools; __stk_attr_used prevents it from being discarded.
+*/
+extern "C" volatile EKernelPanicId g_StkLastPanicId;
+__stk_attr_used
+STK_MPU_KERNEL_BSS_SECTION
+volatile EKernelPanicId g_StkLastPanicId = KERNEL_PANIC_NONE;
+
 /*! \def   _STK_RISCV_USE_PENDSV
     \brief Enables ARM-style PendSV-equivalent context switching via CLINT MSIP.
 
@@ -128,6 +201,10 @@ using namespace stk;
 /*! \brief  Get the hardware thread id (hart) of the calling core.
     \note   Defaults to reading the mhartid CSR. Define before including this file to override
             with a platform-specific implementation if mhartid is unavailable or aliased.
+    \warning With STK_RISCV_USER_MODE and STK_ARCH_CPU_COUNT > 1 this macro is also evaluated by U-mode code
+             (privilege state lookup, see s_StkRiscvNpriv), therefore it must be U-mode safe (must not access
+             M-mode CSRs, e.g. read a memory-mapped hart id or a value kept in a U-mode readable location)
+             and must be defined by the user.
 */
 #ifndef STK_ARCH_GET_CPU_ID
     #define STK_ARCH_GET_CPU_ID() read_csr(mhartid)
@@ -249,9 +326,20 @@ using namespace stk;
     #define STK_MSI_HANDLER riscv_mtvec_msi
 #endif
 
-// ----------------------------------------------------------------------------
-namespace {
-// ----------------------------------------------------------------------------
+//! mcause values handled by the MPU support (synchronous exceptions).
+#define STK_RISCV_CAUSE_IACCESS_FAULT (1U)
+#define STK_RISCV_CAUSE_LACCESS_FAULT (5U)
+#define STK_RISCV_CAUSE_SACCESS_FAULT (7U)
+#define STK_RISCV_CAUSE_ECALL_U       (8U)
+#define STK_RISCV_CAUSE_ECALL_M       (11U)
+
+//! Service ecall: register a5 carries (STK_RISCV_SVC_MAGIC | id), a0 an argument. Magic lets M-mode service calls
+//! be told apart from the scheduler start ecall and from the user-forwarded ecalls (a5 is available on RV32E too).
+#define STK_RISCV_SVC_MAGIC           (0x53544B00)
+
+// ****************************************************************************
+namespace { // file-local block (private)
+// ****************************************************************************
 
 /*! \struct TaskFrame
     \brief  Complete initial task register frame laid out at the bottom of a new stack
@@ -322,19 +410,32 @@ struct TaskFrame
     // instructions address them by byte offset and tolerate the type mismatch.
     Word F[32];   //!< f0-f31, all STK_STACK_MEMORY_FILLER-initialised (round-to-nearest set via X3_FSR).
 #endif
-};
 
-// ----------------------------------------------------------------------------
-} // namespace
-// ----------------------------------------------------------------------------
+    //! Check if context is privileged (MSTATUS_MPP bit set).
+    __stk_forceinline bool IsPrivileged() const
+    {
+        return ((MSTATUS & MSTATUS_MPP) == MSTATUS_MPP);
+    }
+
+    //! Make non-privileged.
+    __stk_forceinline void MakeNonPrivileged()
+    {
+        MSTATUS &= ~static_cast<Word>(MSTATUS_MPP);
+    }
+
+    //! Make privileged.
+    __stk_forceinline void MakePrivileged()
+    {
+        MSTATUS |= MSTATUS_MPP;
+    }
+};
 
 // Local functions of the driver:
 // ----------------------------------------------------------------------------
-namespace {
 namespace drv {
 // ----------------------------------------------------------------------------
 
-void OnTaskRun(ITask *task);
+void OnTaskRun(ITask *runnable);
 void OnTaskExit();
 void OnSchedulerSleep();
 void OnSchedulerSleepOverride();
@@ -342,15 +443,17 @@ void OnSchedulerExit();
 
 // ----------------------------------------------------------------------------
 } // namespace drv
-} // namespace
 // ----------------------------------------------------------------------------
+
+// ****************************************************************************
+} // namespace {
+// ****************************************************************************
 
 /*! Pointer Cache --------------------------------------------------------------
 
     ISR assembly pointer cache: stack pointers used by naked ISR handlers for
     context switching. Indexed by hart id (0 for single-core builds). Declared
-    volatile to prevent the compiler from caching reads. Using per-hart pointers
-    fully decouples ISR assembly from Context layout and sizeof.
+    volatile to prevent the compiler from caching reads.
 
     \note   Intentionally outside of the anonymous namespace: the ISR assembly references
             these symbols by name ("la reg, sym"), therefore they require external C linkage
@@ -382,46 +485,36 @@ extern Stack *volatile s_StkRiscvStackIsr[STK_ARCH_CPU_COUNT];
 extern volatile Word s_StkRiscvSpIsrInt[STK_ARCH_CPU_COUNT];
 #endif
 
-/*! \var    g_StkLastPanicId
-    \brief  Panic id cache for post-mortem inspection.
-    \note   External C linkage keeps an unmangled, stable symbol name for debuggers and tools.
-*/
-extern volatile EKernelPanicId g_StkLastPanicId;
-
 } // extern "C"
 
 __stk_attr_used
 STK_MPU_KERNEL_BSS_SECTION
-Stack *volatile s_StkRiscvStackIdle[STK_ARCH_CPU_COUNT];
+Stack *volatile s_StkRiscvStackIdle[STK_ARCH_CPU_COUNT] = {};
 
 __stk_attr_used
 STK_MPU_KERNEL_BSS_SECTION
-Stack *volatile s_StkRiscvStackActive[STK_ARCH_CPU_COUNT];
+Stack *volatile s_StkRiscvStackActive[STK_ARCH_CPU_COUNT] = {};
 
 __stk_attr_used
 STK_MPU_KERNEL_BSS_SECTION
-Stack *volatile s_StkRiscvStackIsr[STK_ARCH_CPU_COUNT];
+Stack *volatile s_StkRiscvStackIsr[STK_ARCH_CPU_COUNT] = {};
 
 #ifdef _STK_RISCV_USE_PENDSV
 __stk_attr_used
 STK_MPU_KERNEL_BSS_SECTION
-volatile Word s_StkRiscvSpIsrInt[STK_ARCH_CPU_COUNT];
+volatile Word s_StkRiscvSpIsrInt[STK_ARCH_CPU_COUNT] = {};
 #endif
 
-__stk_attr_used
-STK_MPU_KERNEL_BSS_SECTION
-volatile EKernelPanicId g_StkLastPanicId = KERNEL_PANIC_NONE;
-
-// ----------------------------------------------------------------------------
-namespace {
-// ----------------------------------------------------------------------------
+// ****************************************************************************
+namespace { // file-local block (private)
+// ****************************************************************************
 
 // Local static variables:
 STK_MPU_KERNEL_BSS_SECTION
 #if STK_CORE_FREQ_UNIFIED
-uint32_t s_StkSystemCoreClock[1U];
+uint32_t s_StkSystemCoreClock[1U] = {};
 #else
-uint32_t s_StkSystemCoreClock[STK_ARCH_CPU_COUNT];
+uint32_t s_StkSystemCoreClock[STK_ARCH_CPU_COUNT] = {};
 #endif
 
 /*! \brief    Cached spin-lock timeout, in retry-loop iterations.
@@ -432,7 +525,7 @@ uint32_t s_StkSystemCoreClock[STK_ARCH_CPU_COUNT];
               behavior) so that any spinlock attempt occurring before Initialize() has run
               still has a bounded, non-zero timeout instead of panicking immediately.
 */
-STK_MPU_KERNEL_DATA_SECTION
+STK_MPU_SHARED_DATA_SECTION
 uint32_t s_StkSpinlockTimeoutIters = 0xFFFFFFFU;
 
 #if (STK_ARCH_CPU_COUNT > 1U)
@@ -446,7 +539,7 @@ volatile bool s_StkRiscvCsuLock = false;
 */
 __stk_forceinline void __DSB()
 {
-    __asm volatile("fence rw, rw" ::: "memory");
+    __asm__ __volatile__("fence rw, rw" ::: "memory");
 }
 
 /*! \brief  Flush the instruction cache and pipeline (similar to ARM's __ISB).
@@ -454,7 +547,7 @@ __stk_forceinline void __DSB()
 __stk_forceinline void __ISB()
 {
 #ifdef __riscv_zifencei
-    __asm volatile("fence.i" ::: "memory");
+    __asm__ __volatile__("fence.i" ::: "memory");
 #else
     __sync_synchronize();
 #endif
@@ -464,7 +557,7 @@ __stk_forceinline void __ISB()
 */
 __stk_forceinline void __WFI()
 {
-    __asm volatile("wfi");
+    __asm__ __volatile__("wfi");
 }
 
 /*! \brief  Triggers scheduler startup via M-mode environment call (mcause = RISCV_EXCP_ENVIRONMENT_CALL_FROM_M_MODE).
@@ -472,7 +565,7 @@ __stk_forceinline void __WFI()
 */
 __stk_forceinline void HW_StartScheduler()
 {
-    __asm volatile("ecall");
+    __asm__ __volatile__("ecall");
 }
 
 /*! \brief  Get current (caller's) Hart Id.
@@ -486,7 +579,7 @@ __stk_forceinline uint8_t HW_GetHartId()
 */
 __stk_forceinline void HW_DisableInterrupts()
 {
-    __asm volatile("csrrci zero, mstatus, %0"
+    __asm__ __volatile__("csrrci zero, mstatus, %0"
     : /* output: none */
     : "i"(MSTATUS_MIE)
     : /* clobbers: none */);
@@ -496,7 +589,7 @@ __stk_forceinline void HW_DisableInterrupts()
 */
 __stk_forceinline void HW_EnableInterrupts()
 {
-    __asm volatile("csrrsi zero, mstatus, %0"
+    __asm__ __volatile__("csrrsi zero, mstatus, %0"
     : /* output: none */
     : "i"(MSTATUS_MIE)
     : /* clobbers: none */);
@@ -508,7 +601,7 @@ __stk_forceinline void HW_EnableInterrupts()
 __stk_forceinline Word HW_EnterCriticalSection()
 {
     Word ses;
-    __asm volatile("csrrci %0, mstatus, %1"
+    __asm__ __volatile__("csrrci %0, mstatus, %1"
     : "=r"(ses)
     : "i"(MSTATUS_MIE)
     :  /* clobbers: none */);
@@ -521,7 +614,7 @@ __stk_forceinline Word HW_EnterCriticalSection()
 */
 __stk_forceinline void HW_ExitCriticalSection(Word ses)
 {
-    __asm volatile("csrrs zero, mstatus, %0"
+    __asm__ __volatile__("csrrs zero, mstatus, %0"
     : /* output: none */
     : "r"(ses)
     : /* clobbers: none */);
@@ -544,12 +637,17 @@ __stk_forceinline void HW_StopMTimer()
 
 /*! \brief     Switch context by scheduling PendSV interrupt.
     \param[in] hart: Hard id.
+    \note      Pend Machine Software Interrupt (MSI) - equivalent of ARM's PENDSVSET.
 */
 __stk_forceinline void HW_ScheduleContextSwitch(uint8_t hart)
 {
-    // Pend Machine Software Interrupt (MSI) - equivalent of ARM's PENDSVSET
+#ifdef STK_RISCV_SOFTIRQ_ADDR
+    // RP2350: SET bit for the hart is at bit position [hart] of SIO RISCV_SOFTIRQ (see SIO_RISCV_SOFTIRQ_OFFSET)
+    *(volatile uint32_t *)(STK_RISCV_SOFTIRQ_ADDR) = (1U << hart);
+#else
     volatile uint32_t *msip = (volatile uint32_t *)(STK_RISCV_CLINT_BASE_ADDR);
     msip[hart] = 1U; // set pending
+#endif
     __DSB();
 }
 
@@ -655,7 +753,7 @@ __stk_forceinline uint64_t HW_GetMtimeElapsed(uint64_t since)
 */
 __stk_forceinline void HW_EnableCycleCounter()
 {
-    __asm volatile("csrci mcountinhibit, 0x1");
+    __asm__ __volatile__("csrci mcountinhibit, 0x1");
 }
 
 /*! \brief     Get value of cycle counter (for the hart of the caller).
@@ -666,9 +764,9 @@ __stk_forceinline Cycles HW_GetCycleCounter()
     uint32_t high, low, check;
     do
     {
-        __asm volatile("csrr %0, mcycleh" : "=r"(high));
-        __asm volatile("csrr %0, mcycle"  : "=r"(low));
-        __asm volatile("csrr %0, mcycleh" : "=r"(check));
+        __asm__ __volatile__("csrr %0, mcycleh" : "=r"(high));
+        __asm__ __volatile__("csrr %0, mcycle"  : "=r"(low));
+        __asm__ __volatile__("csrr %0, mcycleh" : "=r"(check));
     }
     while (high != check);
 
@@ -680,7 +778,7 @@ __stk_forceinline Cycles HW_GetCycleCounter()
 __stk_forceinline Word HW_GetCallerSP()
 {
     Word sp;
-    __asm volatile("mv %0, sp"
+    __asm__ __volatile__("mv %0, sp"
     : "=r"(sp)
     : /* input: none */
     : /* clobbers: none */);
@@ -690,13 +788,15 @@ __stk_forceinline Word HW_GetCallerSP()
 
 /*! \brief Start critical section.
 */
-__stk_forceinline void HW_CriticalSectionStart(Word &ses)
+__stk_forceinline Word HW_CriticalSectionStart()
 {
-    ses = HW_EnterCriticalSection();
+    const Word ses = HW_EnterCriticalSection();
 
     // ensure the disable is recognized before subsequent code
     __DSB();
     __ISB();
+
+    return ses;
 }
 
 /*! \brief End critical section.
@@ -711,6 +811,33 @@ __stk_forceinline void HW_CriticalSectionEnd(Word ses)
     // synchronization point: any pending interrupt can be serviced immediately at this boundary
     __ISB();
 }
+
+/*! \class  ScopedHwIrqLock
+    \brief  RAII wrapper over HW_CriticalSectionStart()/HW_CriticalSectionEnd(): masks local interrupts
+            for the lifetime of the object and restores the previous state on scope exit (any path).
+    \note   M-mode only (accesses mstatus). It is NOT hw::CriticalSection: no nesting counter, no multi-hart
+            spin-lock, no U-mode ecall path. Use it for short kernel-internal sections of the driver.
+    \warning Do not use where the section must not be closed by a destructor (scheduler start/stop paths
+            which leave through mret, panic handler): those restore mstatus by other means.
+    \note   Force-inlined: generates the same code as the explicit Start/End pair.
+*/
+class ScopedHwIrqLock
+{
+public:
+    __stk_forceinline ScopedHwIrqLock() : m_ses(HW_CriticalSectionStart())
+    {}
+
+    __stk_forceinline ~ScopedHwIrqLock()
+    {
+        HW_CriticalSectionEnd(m_ses);
+    }
+
+    ScopedHwIrqLock(const ScopedHwIrqLock &) = delete;
+    ScopedHwIrqLock &operator=(const ScopedHwIrqLock &) = delete;
+
+private:
+    const Word m_ses;
+};
 
 /*! \brief     Attempt to acquire a spin-lock without blocking (RISC-V).
     \details   Uses a GCC built-in atomic test-and-set with acquire memory ordering.
@@ -792,7 +919,7 @@ __stk_forceinline void HW_SpinLockUnlock(volatile bool &lock)
     // __atomic_clear with __ATOMIC_RELEASE provides the required store-release barrier,
     // the explicit fence rw,w is retained for toolchains that do not lower __ATOMIC_RELEASE
     // to a full release fence on all RISC-V targets
-    __asm volatile("fence rw, w" ::: "memory");
+    __asm__ __volatile__("fence rw, w" ::: "memory");
 
     __atomic_clear(&lock, __ATOMIC_RELEASE);
 }
@@ -891,7 +1018,7 @@ struct JmpFrame
 __attribute__((naked))
 int32_t SaveJmp(JmpFrame &/*f*/)
 {
-    __asm volatile(
+    __asm__ __volatile__(
     // a0 = &f - no prologue has touched sp or s0 yet
     SREG " ra, 0*" REGBYTES "(a0)  \n" // save return address
     SREG " sp, 1*" REGBYTES "(a0)  \n" // save caller's stack pointer
@@ -936,7 +1063,7 @@ int32_t SaveJmp(JmpFrame &/*f*/)
 __attribute__((naked, noreturn))
 void RestoreJmp(JmpFrame &/*f*/, int32_t /*val*/)
 {
-    __asm volatile(
+    __asm__ __volatile__(
     // a0 = &f, a1 = val
     LREG " ra, 0*" REGBYTES "(a0)  \n"
     LREG " sp, 1*" REGBYTES "(a0)  \n"
@@ -965,13 +1092,479 @@ void RestoreJmp(JmpFrame &/*f*/, int32_t /*val*/)
 } // namespace drv
 // ----------------------------------------------------------------------------
 
-// ----------------------------------------------------------------------------
-} // namespace
-// ----------------------------------------------------------------------------
+// ############################################################################
+#if STK_RISCV_USER_MODE
+// ############################################################################
+
+//! Service command ids (ecall), see STK_RISCV_SVC_MAGIC.
+enum ESvcCommandId : uint8_t
+{
+    SVC_ENTER_CRITICAL = 1U, //!< Enter critical section from U-mode (masks interrupts via mie).
+    SVC_EXIT_CRITICAL,       //!< Exit critical section from U-mode.
+    SVC_BOOST_PRIV,          //!< Elevate current task to M-mode (only from the shared code region).
+    SVC_DROP_PRIV            //!< Drop elevated privileges back to U-mode (only from the shared code region).
+};
+
+/*! \var     s_StkRiscvNpriv
+    \brief   Per-hart flag, non-zero if the active task of the hart runs in U-mode (STK_RISCV_USER_MODE). Lives in shared BSS
+             because U-mode can not read mstatus. Indexed by HW_GetHartId() (U-mode safe on multi-hart, see STK_ARCH_GET_CPU_ID).
+    \note    Written by the kernel only (context load, boost/drop). Fail-safe: a wrong "privileged" reading
+             makes the CSR access trap as an illegal instruction, a wrong "unprivileged" reading just takes the ecall path.
+    \warning User ISRs which run on a task's stack and call CriticalSection API must not interrupt U-mode code
+             in this state: such an ISR must run with its own stack (see HW_IsHandlerMode).
+*/
+STK_MPU_SHARED_BSS_SECTION
+volatile bool s_StkRiscvNpriv[STK_ARCH_CPU_COUNT] = {};
+
+//! Check if caller context is Privileged (M-mode).
+__stk_forceinline bool HW_IsPrivilegedContext()
+{
+    return !s_StkRiscvNpriv[HW_GetHartId()];
+}
+
+//! Issue service ecall.
+__stk_forceinline Word HW_Ecall(ESvcCommandId id, Word arg = 0U)
+{
+    register Word a0 __asm("a0") = arg;
+    register Word a5 __asm("a5") = (STK_RISCV_SVC_MAGIC | static_cast<Word>(id));
+    __asm__ __volatile__("ecall" : "+r"(a0) : "r"(a5) : "memory");
+    return a0;
+}
+
+// ############################################################################
+#else // !STK_RISCV_USER_MODE
+// ############################################################################
+
+__stk_forceinline bool HW_IsPrivilegedContext() { return true; }
+
+// ############################################################################
+#endif // STK_RISCV_USER_MODE
+// ############################################################################
+
+// ############################################################################
+#if STK_MPU || (STK_RISCV_USER_MODE && STK_RISCV_PMP_PRESENT)
+// ############################################################################
 
 // ----------------------------------------------------------------------------
-namespace {
+namespace hw_int {
+namespace pmp {
 // ----------------------------------------------------------------------------
+
+constexpr Word   CFG_A_NAPOT   = (3U << 3U);                   // A field = NAPOT, L = 0 (unlocked, U-mode only)
+
+/*! \def   STK_RISCV_PMP_RX_SWAPPED
+    \brief Set to 1 if the core has R and X bits of pmpcfg swapped (default 0 = standard layout).
+    \note  RP2350 Hazard3, erratum RP2350-E6: pmpcfg = [L, 0, 0, A[1:0], R, W, X], i.e. bit 2 = R, bit 1 = W,
+           bit 0 = X, while the RISC-V Privileged ISA has bit 0 = R, bit 1 = W, bit 2 = X. Without the swap a
+           "RW" region becomes "WX" (not readable, executable), and "R-X" stays "R-X" (symmetric).
+*/
+#ifndef STK_RISCV_PMP_RX_SWAPPED
+    #define STK_RISCV_PMP_RX_SWAPPED (0)
+#endif
+
+//! Build R/W/X bits of a pmpcfg byte from STK access (bit 0 = R, bit 1 = W) and exec (bit 2 = X) flags.
+constexpr Word MakeCfgPerm(Word access_rw, Word exec)
+{
+#if STK_RISCV_PMP_RX_SWAPPED
+    return ((access_rw & 0x1U) << 2U) | (access_rw & 0x2U) | ((exec & 0x4U) >> 2U);
+#else
+    return (access_rw & 0x3U) | (exec & 0x4U);
+#endif
+}
+constexpr size_t CFG_PER_WORD  = sizeof(Word);                 // mpu.cfg entries per CSR: 4 (RV32), 8 (RV64)
+
+// CSR numbers must be immediates, with constant indices the switch folds into straight-line code.
+#define STK_PMP_CSR_W(num, v) __asm__ __volatile__("csrw %0, %1" : : "i"(num), "r"(v) : "memory")
+#define STK_PMP_CSR_R(num, o) __asm__ __volatile__("csrr %0, %1" : "=r"(o) : "i"(num))
+#define STK_PMP_ADDR_W(n) case n: STK_PMP_CSR_W(0x3B0 + n, v); break;
+#define STK_PMP_ADDR_R(n) case n: STK_PMP_CSR_R(0x3B0 + n, r); break;
+
+__stk_forceinline void WriteAddr(size_t i, Word v)
+{
+    switch (i)
+    {
+    STK_PMP_ADDR_W(0)  STK_PMP_ADDR_W(1)  STK_PMP_ADDR_W(2)  STK_PMP_ADDR_W(3)
+    STK_PMP_ADDR_W(4)  STK_PMP_ADDR_W(5)  STK_PMP_ADDR_W(6)  STK_PMP_ADDR_W(7)
+    STK_PMP_ADDR_W(8)  STK_PMP_ADDR_W(9)  STK_PMP_ADDR_W(10) STK_PMP_ADDR_W(11)
+    STK_PMP_ADDR_W(12) STK_PMP_ADDR_W(13) STK_PMP_ADDR_W(14) STK_PMP_ADDR_W(15)
+    default: STK_ASSERT(false); break;
+    }
+}
+
+__stk_forceinline Word ReadAddr(size_t i)
+{
+    Word r = 0U;
+    switch (i)
+    {
+    STK_PMP_ADDR_R(0)  STK_PMP_ADDR_R(1)  STK_PMP_ADDR_R(2)  STK_PMP_ADDR_R(3)
+    STK_PMP_ADDR_R(4)  STK_PMP_ADDR_R(5)  STK_PMP_ADDR_R(6)  STK_PMP_ADDR_R(7)
+    STK_PMP_ADDR_R(8)  STK_PMP_ADDR_R(9)  STK_PMP_ADDR_R(10) STK_PMP_ADDR_R(11)
+    STK_PMP_ADDR_R(12) STK_PMP_ADDR_R(13) STK_PMP_ADDR_R(14) STK_PMP_ADDR_R(15)
+    default: STK_ASSERT(false); break;
+    }
+    return r;
+}
+
+// w = index of the packed word (RV32: mpu.cfg0..3, RV64: mpu.cfg0 and mpu.cfg2 only)
+__stk_forceinline Word ReadCfgWord(size_t w)
+{
+    Word r = 0U;
+    switch (w)
+    {
+#if (__riscv_xlen == 32)
+    case 0: STK_PMP_CSR_R(0x3A0, r); break;
+    case 1: STK_PMP_CSR_R(0x3A1, r); break;
+    case 2: STK_PMP_CSR_R(0x3A2, r); break;
+    case 3: STK_PMP_CSR_R(0x3A3, r); break;
+#else
+    case 0: STK_PMP_CSR_R(0x3A0, r); break;
+    case 1: STK_PMP_CSR_R(0x3A2, r); break;
+#endif
+    default: STK_ASSERT(false); break;
+    }
+    return r;
+}
+
+__stk_forceinline void WriteCfgWord(size_t w, Word v)
+{
+    switch (w)
+    {
+#if (__riscv_xlen == 32)
+    case 0: STK_PMP_CSR_W(0x3A0, v); break;
+    case 1: STK_PMP_CSR_W(0x3A1, v); break;
+    case 2: STK_PMP_CSR_W(0x3A2, v); break;
+    case 3: STK_PMP_CSR_W(0x3A3, v); break;
+#else
+    case 0: STK_PMP_CSR_W(0x3A0, v); break;
+    case 1: STK_PMP_CSR_W(0x3A2, v); break;
+#endif
+    default: STK_ASSERT(false); break;
+    }
+}
+
+//! Set cfg byte of the entry (read-modify-write of the packed word).
+__stk_forceinline void WriteCfgByte(size_t idx, Word cfg)
+{
+    const size_t w  = idx / CFG_PER_WORD;
+    const size_t sh = (idx % CFG_PER_WORD) * 8U;
+    WriteCfgWord(w, (ReadCfgWord(w) & ~(static_cast<Word>(0xFFU) << sh)) | ((cfg & 0xFFU) << sh));
+}
+
+//! "MPU off": permissive entry 0 for U-mode (RWX, whole address space), shadows all entries below.
+void Disable()
+{
+    WriteCfgByte(0U, 0U);
+    WriteAddr(0U, ~static_cast<Word>(0U));
+    WriteCfgByte(0U, 0x7U | CFG_A_NAPOT);
+    __DSB();
+}
+
+#if !STK_MPU
+/*! \brief U-mode without memory protection (STK_RISCV_USER_MODE=1, STK_MPU=0).
+    \note  Permissive PMP entry is mandatory: with PMP implemented, U-mode accesses which match no entry fail.
+*/
+void ConfigureUserAccess()
+{
+    Disable();
+
+    // allow U-mode to read time/cycle/instret counters
+    __asm__ __volatile__("csrs mcounteren, %0" : : "r"(static_cast<Word>(0x7U)));
+
+    __DSB();
+}
+#endif // !STK_MPU
+
+// ----------------------------------------------------------------------------
+} // namespace pmp
+} // namespace hw_int
+// ----------------------------------------------------------------------------
+
+// ############################################################################
+#endif // STK_MPU || (STK_RISCV_USER_MODE && STK_RISCV_PMP_PRESENT)
+// ############################################################################
+
+// ############################################################################
+#if STK_MPU
+// ############################################################################
+
+// ----------------------------------------------------------------------------
+namespace hw_int {
+namespace pmp {
+// ----------------------------------------------------------------------------
+
+constexpr size_t TASK_IDX = STK_RISCV_PMP_TASK_REGION_IDX;
+
+//! Disabled/inactive region.
+constexpr MpuRegionConfig s_StkDisabledMpuRegion =
+{
+    .addr        = 0U,
+    .size        = 0U,
+    .access_perm = hw::mpu::ACCESS_NONE,
+    .mem_type    = hw::mpu::TYPE_STRONGLY_ORDERED,
+    .share       = hw::mpu::SHARE_NON,
+    .exec        = hw::mpu::EXEC_NEVER
+};
+
+struct RegionBounds
+{
+    Word start;
+    Word end;
+    bool valid;
+};
+
+__stk_forceinline RegionBounds GetRegionBounds(const MpuRegionConfig &cfg)
+{
+    RegionBounds result = { 0U, 0U, false };
+
+    if ((cfg.size != 0U) && (cfg.access_perm != hw::mpu::ACCESS_NONE))
+    {
+        result.start = cfg.addr & ~static_cast<Word>(cfg.size - 1U);
+        result.end   = result.start + cfg.size - 1U;
+        result.valid = (result.start < result.end);
+    }
+
+    return result;
+}
+
+__stk_forceinline bool IsOverlapping(const RegionBounds &a, const RegionBounds &b)
+{
+    return ((!a.valid || !b.valid) ? false : ((a.start <= b.end) && (b.start <= a.end)));
+}
+
+// PMP applies the lowest matching entry index, a silent overlap would change the meaning, treat it as an error.
+void ValidateNoOverlaps(const MpuRegionConfig dynamic_cfg_list[], size_t dynamic_cfg_count,
+    const MpuRegionConfig static_cfg_list[], size_t static_cfg_count)
+{
+    // 1. Validate internal overlaps within dynamic list
+    for (size_t i = 0U; i < dynamic_cfg_count; ++i)
+    {
+        const RegionBounds bounds_i = GetRegionBounds(dynamic_cfg_list[i]);
+        if (!bounds_i.valid)
+        {
+            continue;
+        }
+
+        for (size_t j = i + 1U; j < dynamic_cfg_count; ++j)
+        {
+            const RegionBounds bounds_j = GetRegionBounds(dynamic_cfg_list[j]);
+            if (!bounds_j.valid)
+            {
+                continue;
+            }
+
+            // Assert failure means two active dynamic configurations cross boundaries
+            if (IsOverlapping(bounds_i, bounds_j))
+            {
+                STK_KERNEL_PANIC(KERNEL_PANIC_BAD_MEMORY_REGION);
+            }
+        }
+
+        // 2. Validate dynamic region 'i' against static regions from overrider
+        if (static_cfg_list != nullptr)
+        {
+            for (size_t k = 0U; k < static_cfg_count; ++k)
+            {
+                const RegionBounds static_bounds = GetRegionBounds(static_cfg_list[k]);
+                if (!static_bounds.valid)
+                {
+                    continue;
+                }
+
+                // Assert failure means a dynamic region collides with a static region
+                if (IsOverlapping(bounds_i, static_bounds))
+                {
+                    STK_KERNEL_PANIC(KERNEL_PANIC_BAD_MEMORY_REGION);
+                }
+            }
+        }
+    }
+
+    // validate static list against itself (dynamic list is empty)
+    if ((dynamic_cfg_count == 0U) && (static_cfg_list != nullptr))
+    {
+        for (size_t i = 0U; i < static_cfg_count; ++i)
+        {
+            const RegionBounds static_bounds_i = GetRegionBounds(static_cfg_list[i]);
+            if (!static_bounds_i.valid)
+            {
+                continue;
+            }
+
+            for (size_t j = i + 1U; j < static_cfg_count; ++j)
+            {
+                const RegionBounds static_bounds_j = GetRegionBounds(static_cfg_list[j]);
+                if (!static_bounds_j.valid)
+                {
+                    continue;
+                }
+
+                if (IsOverlapping(static_bounds_i, static_bounds_j))
+                {
+                    STK_KERNEL_PANIC(KERNEL_PANIC_BAD_MEMORY_REGION);
+                }
+            }
+        }
+    }
+}
+
+/*! \brief      Compute mpu.addr/mpu.cfg values for a region without touching hardware.
+    \param[out] reg: reg.addr = mpu.addr value, reg.attr = mpu.cfg byte.
+    \note       NAPOT only: size must be a power of two >= 8 and addr aligned to size (STK_ASSERT).
+*/
+void ConfigureRegion(MpuRegion &reg, const MpuRegionConfig &cfg)
+{
+    if ((cfg.size != 0U) && (cfg.access_perm != hw::mpu::ACCESS_NONE))
+    {
+        STK_ASSERT(cfg.size >= 8U);
+        STK_ASSERT((cfg.size & (cfg.size - 1U)) == 0U);
+        STK_ASSERT((cfg.addr & (cfg.size - 1U)) == 0U);
+
+        // NAPOT: mpu.addr = (base | (size / 2 - 1)) >> 2
+        reg.addr = (cfg.addr | static_cast<Word>((cfg.size >> 1U) - 1U)) >> 2U;
+        reg.attr = MakeCfgPerm(static_cast<Word>(cfg.access_perm), static_cast<Word>(cfg.exec)) |
+                   CFG_A_NAPOT;
+    }
+    else
+    {
+        reg.addr = 0U;
+        reg.attr = 0U; // A = OFF
+    }
+}
+
+void ConfigureStatic(const MpuRegionConfig cfg_list[], size_t cfg_count, uint32_t flags)
+{
+    STK_ASSERT((cfg_list != nullptr) || (cfg_count == 0U));
+    STK_ASSERT(cfg_count <= TASK_IDX);
+    STK_ASSERT((flags & hw::mpu::MPU_CFG_IN_FAULTS) == 0U);
+
+    ValidateNoOverlaps(nullptr, 0U, cfg_list, cfg_count);
+
+    for (size_t i = 0U; i < TASK_IDX; ++i)
+    {
+        MpuRegion reg;
+        ConfigureRegion(reg, (i < cfg_count ? cfg_list[i] : s_StkDisabledMpuRegion));
+
+        WriteCfgByte(i, 0U); // disable first: mpu.addr change must not create a transient match
+        WriteAddr(i, reg.addr);
+        WriteCfgByte(i, reg.attr);
+    }
+
+    // allow U-mode to read time/cycle/instret counters
+    __asm__ __volatile__("csrs mcounteren, %0" : : "r"(static_cast<Word>(0x7U)));
+
+    __DSB();
+}
+
+#if STK_MPU_STACK_GUARD
+void ConfigureDynamic(TaskMpu &task_mpu, const MpuRegionConfig cfg_list[], size_t cfg_count,
+    IPlatform::IEventOverrider *overrider)
+{
+    STK_ASSERT((cfg_list != nullptr) || (cfg_count == 0U));
+    STK_ASSERT(cfg_count <= TaskMpu::NUM_REGIONS);
+
+    const size_t clamped_count = (cfg_count < TaskMpu::NUM_REGIONS ? cfg_count : TaskMpu::NUM_REGIONS);
+
+    MpuRegionList static_regions(nullptr, 0);
+    if (overrider != nullptr)
+    {
+        const MpuConfig *const cfg = overrider->OnConfigureMpu();
+        if (cfg != nullptr)
+        {
+            static_regions = cfg->regions;
+        }
+    }
+
+    // check dynamic region, static region is checked by ConfigureStatic
+    if (clamped_count != 0)
+    {
+        ValidateNoOverlaps(cfg_list, clamped_count, static_regions.GetPtr(), static_regions.GetSize());
+    }
+
+    size_t idx = 0U;
+    for (; idx < clamped_count; ++idx)
+    {
+        ConfigureRegion(task_mpu.region[idx], cfg_list[idx]);
+    }
+    for (; idx < TaskMpu::NUM_REGIONS; ++idx)
+    {
+        ConfigureRegion(task_mpu.region[idx], s_StkDisabledMpuRegion);
+    }
+}
+#endif // STK_MPU_STACK_GUARD
+
+/*! \brief     Make per-task PMP regions of the incoming task effective.
+    \note      Called with interrupts disabled, between context save and load (see hw_int::LoadTask).
+*/
+__stk_forceinline void LoadRegions(const Stack *st)
+{
+#if !STK_MPU_STACK_GUARD
+    STK_UNUSED(st);
+#else
+    constexpr size_t N = TaskMpu::NUM_REGIONS;
+    constexpr size_t B = TASK_IDX;
+
+    for (size_t i = 0U; i < N; ++i)
+    {
+        WriteAddr(B + i, st->mpu.region[i].addr);
+    }
+
+    for (size_t w = (B / CFG_PER_WORD); w <= ((B + N - 1U) / CFG_PER_WORD); ++w)
+    {
+        Word v = ReadCfgWord(w);
+
+        const size_t first = ((B > (w * CFG_PER_WORD)) ? B : (w * CFG_PER_WORD));
+        const size_t last  = (((B + N) < ((w + 1U) * CFG_PER_WORD)) ? (B + N) : ((w + 1U) * CFG_PER_WORD));
+
+        for (size_t e = first; e < last; ++e)
+        {
+            const size_t sh = (e % CFG_PER_WORD) * 8U;
+            v = (v & ~(static_cast<Word>(0xFFU) << sh)) | ((st->mpu.region[e - B].attr & 0xFFU) << sh);
+        }
+
+        WriteCfgWord(w, v);
+    }
+#endif
+}
+
+// ----------------------------------------------------------------------------
+} // namespace pmp
+} // namespace hw_int
+// ----------------------------------------------------------------------------
+
+// ############################################################################
+#endif // STK_MPU
+// ############################################################################
+
+// ############################################################################
+#if STK_RISCV_USER_MODE
+// ############################################################################
+
+// ----------------------------------------------------------------------------
+namespace hw_int {
+// ----------------------------------------------------------------------------
+
+/*! \brief     Publish privilege state of the incoming task and make its PMP regions effective (if STK_MPU).
+    \note      Called with interrupts disabled, between context save and load.
+*/
+__stk_forceinline void LoadActiveTask(const Stack *st)
+{
+    const TaskFrame *const tf = hw::WordToPtr<TaskFrame>(st->SP);
+
+    // update privilege level of the active task
+    s_StkRiscvNpriv[HW_GetHartId()] = !tf->IsPrivileged();
+
+#if STK_MPU
+    pmp::LoadRegions(st);
+#endif
+}
+
+// ----------------------------------------------------------------------------
+} // namespace hw_int
+// ----------------------------------------------------------------------------
+
+// ############################################################################
+#endif // STK_RISCV_USER_MODE
+// ############################################################################
 
 //! Internal context.
 struct Context final : public PlatformContext
@@ -981,7 +1574,7 @@ struct Context final : public PlatformContext
     #if STK_TICKLESS_IDLE
         m_sleep_ticks(0),
     #endif
-        m_csu(0), m_csu_nesting(0),
+        m_csu(0), m_csu_nesting(0), m_csu_npriv(false),
         m_starting(false), m_started(false), m_exiting(false)
 
     {}
@@ -993,10 +1586,10 @@ struct Context final : public PlatformContext
 
         STK_STATIC_ASSERT_DESC_N(SP, offsetof(Stack, SP) == 0U,
             "expect Stack::mode member at offset of 0 (first member)");
-    #if (STK_ARCH_CPU_COUNT > 1U)
-        STK_ASSERT(s_StkRiscvCsuLock == false);
+    #if STK_MPU
+        STK_STATIC_ASSERT_DESC_N(pmp_idx, (STK_RISCV_PMP_TASK_REGION_IDX + STK_MPU_TASK_REGIONS) <= STK_RISCV_PMP_REGIONS_MAX,
+            "PMP task region block exceeds the number of implemented PMP entries");
     #endif
-        STK_ASSERT(g_StkLastPanicId == KERNEL_PANIC_NONE);
 
         // init ISR's stack
         {
@@ -1046,8 +1639,7 @@ struct Context final : public PlatformContext
     __stk_forceinline void ProcessTick()
     {
         // process tick - scheduler may update m_stack_active to point at a new task
-        Word cs;
-        HW_CriticalSectionStart(cs);
+        const ScopedHwIrqLock cs_;
 
     #if STK_TICKLESS_IDLE
         Timeout ticks = m_sleep_ticks;
@@ -1093,15 +1685,12 @@ struct Context final : public PlatformContext
     #if STK_TICKLESS_IDLE
         m_sleep_ticks = ticks;
     #endif
-
-        HW_CriticalSectionEnd(cs);
     }
 
     __stk_forceinline void EnterCriticalSection()
     {
         // disable local interrupts and save state
-        Word current_ses;
-        HW_CriticalSectionStart(current_ses);
+        const Word current_ses = HW_CriticalSectionStart();
 
         if (m_csu_nesting == 0U)
         {
@@ -1143,9 +1732,76 @@ struct Context final : public PlatformContext
         #endif
 
             // restore hardware interrupts
-            HW_CriticalSectionEnd(ses_to_restore);
+        #if STK_RISCV_USER_MODE
+            if (m_csu_npriv)
+            {
+                // entered from U-mode: m_csu holds saved mie, interrupts resume on mret of the ecall trap
+                m_csu_npriv = false;
+                write_csr(mie, ses_to_restore);
+                __DSB();
+            }
+            else
+        #endif
+            {
+                HW_CriticalSectionEnd(ses_to_restore);
+            }
         }
     }
+
+#if STK_RISCV_USER_MODE
+    /*! \brief  Enter critical section on behalf of a U-mode task (runs inside the ecall trap).
+        \note   Interrupts are masked through mie CSR (mstatus.MIE does not mask M-mode interrupts in U-mode).
+    */
+    __stk_forceinline void EnterCriticalSectionNpriv()
+    {
+        const Word saved_mie = read_csr(mie);
+        write_csr(mie, 0U);
+
+        if (m_csu_nesting == 0U)
+        {
+        #if (STK_ARCH_CPU_COUNT > 1U)
+            // mirror of EnterCriticalSection(): ExitCriticalSection() releases the global lock unconditionally
+            HW_SpinLockLock(s_StkRiscvCsuLock);
+        #endif
+
+            m_csu       = saved_mie;
+            m_csu_npriv = true;
+        }
+
+        if (++m_csu_nesting > STK_CS_NESTINGS_MAX)
+        {
+            STK_KERNEL_PANIC(KERNEL_PANIC_CS_NESTING_OVERFLOW);
+        }
+    }
+
+#endif // STK_RISCV_USER_MODE
+
+#if STK_MPU
+    /*! \brief  Configure global (static) PMP regions, mirror of ARM ConfigureMpu().
+    */
+    void ConfigureMpu()
+    {
+        const MpuConfig *const cfg = (m_overrider != nullptr ? m_overrider->OnConfigureMpu() : nullptr);
+
+        if (cfg != nullptr)
+        {
+            if ((cfg->mode & hw::mpu::MPU_CFG_CLEAR_ON_INIT) != 0U)
+            {
+                for (size_t i = 0U; i < STK_RISCV_PMP_REGIONS_MAX; ++i)
+                {
+                    hw_int::pmp::WriteCfgByte(i, 0U);
+                    hw_int::pmp::WriteAddr(i, 0U);
+                }
+            }
+
+            hw_int::pmp::ConfigureStatic(cfg->regions.GetPtr(), cfg->regions.GetSize(), cfg->mode);
+        }
+        else
+        {
+            hw_int::pmp::Disable();
+        }
+    }
+#endif // STK_MPU
 
     uint64_t GetSleepTicksPrev()
     {
@@ -1294,6 +1950,7 @@ struct Context final : public PlatformContext
 #endif
     Word          m_csu;           //!< user critical session
     uint8_t       m_csu_nesting;   //!< depth of user critical session nesting
+    bool          m_csu_npriv;     //!< 'true' if the outermost critical section was entered from U-mode (mie masking)
     bool          m_starting;      //!< 'true' when in is being started
     bool          m_started;       //!< 'true' when in started state
     volatile bool m_exiting;       //!< 'true' when is exiting the scheduling process
@@ -1305,9 +1962,9 @@ struct Context final : public PlatformContext
 STK_MPU_KERNEL_DATA_SECTION
 Context s_StkPlatformContext[STK_ARCH_CPU_COUNT];
 
-// ----------------------------------------------------------------------------
-} // namespace
-// ----------------------------------------------------------------------------
+// ****************************************************************************
+} // namespace {
+// ****************************************************************************
 
 __stk_attr_noinline // keep out of inlining to preserve stack frame
 __stk_attr_noreturn // never returns - a trap
@@ -1329,12 +1986,8 @@ void STK_PANIC_HANDLER_DEFAULT(EKernelPanicId id)
 void PlatformRiscV::ProcessTick()
 {
 #ifdef _STK_RISCV_USE_PENDSV
-    Word cs;
-    HW_CriticalSectionStart(cs);
-
+    // Context::ProcessTick() masks interrupts itself
     GetContext().ProcessTick();
-
-    HW_CriticalSectionEnd(cs);
 #else
     // unsupported scenario
     STK_ASSERT(false);
@@ -1539,14 +2192,14 @@ void PlatformRiscV::ProcessTick()
     STK_ASM_LOAD_CONTEXT_FP\
     "addi sp, sp, " REGSIZE   " \n" /* shrink stack memory of registers */
 
-// ----------------------------------------------------------------------------
 // Make file local content (anonymous namespace): helpers which depend on Context.
-namespace {
-// ----------------------------------------------------------------------------
+// ****************************************************************************
+namespace { // file-local block (private)
+// ****************************************************************************
 
 __stk_forceinline void HW_LoadContextAndExit()
 {
-    __asm volatile(
+    __asm__ __volatile__(
     LREG " t0, %0               \n" // load the first member (SP) into t0
     LREG " sp, 0(t0)            \n" // sp = t0
 
@@ -1561,7 +2214,7 @@ __stk_forceinline void HW_LoadContextAndExit()
 __stk_forceinline void HW_EnableFullFpuAccess()
 {
 #if (STK_RISCV_FPU != 0)
-    __asm volatile(
+    __asm__ __volatile__(
     "csrs mstatus, %0"
     : /* output: none */
     : "r"(MSTATUS_FS | MSTATUS_XS)
@@ -1572,7 +2225,7 @@ __stk_forceinline void HW_EnableFullFpuAccess()
 __stk_forceinline void HW_ClearFpuState()
 {
 #if (STK_RISCV_FPU != 0)
-    __asm volatile(
+    __asm__ __volatile__(
     "fssr x0"
     : /* output: none */
     : /* input: none */
@@ -1582,7 +2235,7 @@ __stk_forceinline void HW_ClearFpuState()
 
 __stk_forceinline void HW_SaveMainSP()
 {
-    __asm volatile(
+    __asm__ __volatile__(
     SREG " sp, %0"
     : "=m"(GetContext().m_stack_main)
     : /* input: none */
@@ -1591,7 +2244,7 @@ __stk_forceinline void HW_SaveMainSP()
 
 __stk_forceinline void HW_LoadMainSP()
 {
-    __asm volatile(
+    __asm__ __volatile__(
     LREG " sp, %0"
     : /* output: none */
     : "m"(GetContext().m_stack_main)
@@ -1610,7 +2263,7 @@ __stk_forceinline void HW_LoadMainSP()
 __stk_forceinline Word HW_GetCurrentException()
 {
     Word mcause;
-    __asm volatile("csrr %0, mcause" : "=r"(mcause));
+    __asm__ __volatile__("csrr %0, mcause" : "=r"(mcause));
     return mcause;
 }
 
@@ -1631,20 +2284,173 @@ __stk_forceinline void OnTaskStart()
     HW_LoadContextAndExit();
 }
 
-// ----------------------------------------------------------------------------
-} // namespace
-// ----------------------------------------------------------------------------
+// ****************************************************************************
+} // namespace {
+// ****************************************************************************
 
 // __stk_attr_used for LTO
 extern "C" STK_RISCV_ISR_SECTION __stk_attr_used void TrySwitchContext()
 {
     GetContext().OnSwitchContext();
+
+#if STK_RISCV_USER_MODE && !defined(_STK_RISCV_USE_PENDSV)
+    // the switch is committed by the SysTick handler, load privilege (and PMP) state of the (possibly new) active task
+    hw_int::LoadActiveTask(s_StkRiscvStackActive[HW_GetHartId()]);
+#endif
 }
 
+// ############################################################################
+#if STK_RISCV_USER_MODE
+// ############################################################################
+
+/*! \brief Make privilege (and PMP, if STK_MPU) state of the active task effective (called between context save and load).
+    \note  Leaf-like C function, called from asm on the ISR stack: all caller-saved registers are free there.
+*/
+extern "C" STK_RISCV_ISR_SECTION __stk_attr_used void StkRiscvLoadActive()
+{
+    hw_int::LoadActiveTask(s_StkRiscvStackActive[HW_GetHartId()]);
+}
+
+/*! \brief   Dispatcher of synchronous traps taken from/with the saved task frame (ecall services, PMP faults if STK_MPU).
+    \param   cause: mcause.
+    \param   f: Saved task frame (on the task stack), modified in place and restored by the asm epilogue.
+    \return  SP to resume with (frame address).
+*/
+extern "C" STK_RISCV_ISR_SECTION __stk_attr_used Word StkRiscvTrapDispatch(Word cause, TaskFrame *tf)
+{
+    Context &ctx = GetContext();
+    const bool from_user = !tf->IsPrivileged();
+
+    if ((cause == STK_RISCV_CAUSE_ECALL_U) || (cause == STK_RISCV_CAUSE_ECALL_M))
+    {
+    #if STK_MPU
+        const Word ecall_pc = tf->MEPC;
+        const bool in_shared = (ecall_pc >= hw::PtrToWord(__stk_mpu_shared_code_start)) &&
+                               (ecall_pc <  hw::PtrToWord(__stk_mpu_shared_code_end));
+    #else
+        // no memory protection: there is no shared code region to bind the escalation to (and nothing
+        // to protect, U-mode code can alter any memory anyway), accept boost/drop from any call site
+        const bool in_shared = true;
+    #endif
+
+        tf->MEPC += 4U; // ecall is always a 4 byte instruction
+
+        switch (static_cast<ESvcCommandId>(tf->X15 & 0xFFU))
+        {
+        case SVC_ENTER_CRITICAL:
+            ctx.EnterCriticalSectionNpriv(); // masks via mie, valid whichever mode made the ecall
+            break;
+
+        case SVC_EXIT_CRITICAL:
+            ctx.ExitCriticalSection();       // restores mie because m_csu_npriv is set
+            break;
+
+        case SVC_BOOST_PRIV:
+            // limit privilege escalation to STK_MPU_SHARED_CODE_SECTION functions only (read-only, immutable),
+            // the check is effective with STK_MPU only
+            if (in_shared && from_user)
+            {
+                tf->MakePrivileged();
+                s_StkRiscvNpriv[HW_GetHartId()] = false; // boost to privileged
+            }
+            else
+            {
+                STK_KERNEL_PANIC(KERNEL_PANIC_NS_ACCESS);
+            }
+            break;
+
+        case SVC_DROP_PRIV:
+            if (in_shared && !from_user)
+            {
+                tf->MakeNonPrivileged();
+                s_StkRiscvNpriv[HW_GetHartId()] = true; // revert to non-privileged
+            }
+            else
+            {
+                STK_KERNEL_PANIC(KERNEL_PANIC_NS_ACCESS);
+            }
+            break;
+
+        default:
+            // any service number not in ESvcCommandId is a defect, panic unconditionally
+            STK_KERNEL_PANIC(KERNEL_PANIC_UNKNOWN_SVC);
+            break;
+        }
+    }
+#if STK_MPU
+    else
+    {
+        // access faults (PMP violations): mcause 1, 5, 7
+        if (from_user)
+        {
+            FaultContext fc;
+            fc.mcause  = cause;
+            fc.mepc    = tf->MEPC;
+            fc.mtval   = read_csr(mtval);
+            fc.mstatus = tf->MSTATUS;
+        #if STK_MPU
+            for (size_t w = 0U; w < FaultContext::PMP_CFG_WORDS; ++w)
+            {
+                fc.mpu.cfg[w] = hw_int::pmp::ReadCfgWord(w);
+            }
+            for (size_t i = 0U; i < STK_RISCV_PMP_REGIONS_MAX; ++i)
+            {
+                fc.mpu.addr[i] = hw_int::pmp::ReadAddr(i);
+            }
+        #endif
+
+            const TId tid = ctx.m_handler->OnGetTid(hw::PtrToWord(tf));
+
+            // if handled: skip the faulting load/store instruction (2 or 4 bytes), an instruction
+            // access fault can not be skipped (instruction length is unknown), treat it as fatal
+            if ((ctx.m_overrider != nullptr) &&
+                ctx.m_overrider->OnException(HW_EXCEPT_MEMACCESS, tid, &fc) &&
+                (cause != STK_RISCV_CAUSE_IACCESS_FAULT))
+            {
+                const uint16_t insn = *reinterpret_cast<const uint16_t *>(tf->MEPC);
+                tf->MEPC += (((insn & 0x3U) == 0x3U) ? 4U : 2U);
+            }
+            else
+            {
+                STK_KERNEL_PANIC(KERNEL_PANIC_CPU_EXCEPTION);
+            }
+        }
+        else
+        {
+            // fault of M-mode code: same behaviour as for any other unexpected exception
+            if (ctx.m_specific != nullptr)
+            {
+                ctx.m_specific->OnException(cause);
+            }
+            else
+            {
+                STK_KERNEL_PANIC(KERNEL_PANIC_CPU_EXCEPTION);
+            }
+        }
+    }
+
+#else
+    else
+    {
+        // the front-end routes ecalls only (no PMP faults to handle without STK_MPU)
+        STK_KERNEL_PANIC(KERNEL_PANIC_CPU_EXCEPTION);
+    }
+#endif // STK_MPU
+
+    return hw::PtrToWord(tf);
+}
+
+// ############################################################################
+#endif // STK_RISCV_USER_MODE
+// ############################################################################
+
+// ############################################################################
 #ifdef _STK_RISCV_USE_PENDSV
+// ############################################################################
+
 extern "C" STK_RISCV_ISR_SECTION __stk_attr_naked void STK_SYSTICK_HANDLER()
 {
-    __asm volatile(
+    __asm__ __volatile__(
     // 1. save full interrupted context onto the task stack
     STK_ASM_SAVE_CONTEXT
 
@@ -1698,7 +2504,10 @@ extern "C" STK_RISCV_ISR_SECTION __stk_attr_naked void STK_SYSTICK_HANDLER()
     : /* inputs: all addresses loaded as linker symbols via "la" */
     : /* clobbers: none - the asm string owns all registers */);
 }
+
+// ############################################################################
 #endif // _STK_RISCV_USE_PENDSV
+// ############################################################################
 
 /*! \brief STK_MSI_HANDLER
 
@@ -1723,7 +2532,7 @@ extern "C" STK_RISCV_ISR_SECTION __stk_attr_naked void STK_SYSTICK_HANDLER()
 */
 extern "C" STK_RISCV_ISR_SECTION __stk_attr_naked void STK_MSI_HANDLER()
 {
-    __asm volatile(
+    __asm__ __volatile__(
     // 1. save context
     STK_ASM_SAVE_CONTEXT
 
@@ -1744,16 +2553,43 @@ extern "C" STK_RISCV_ISR_SECTION __stk_attr_naked void STK_MSI_HANDLER()
     SREG " sp, 0(t1)                     \n" // Stack::SP = task's sp (SP is first member)
 
     // 3. clear exception: MSIP[hart] = 0
-#if (STK_ARCH_CPU_COUNT > 1U)
+#ifdef STK_RISCV_SOFTIRQ_ADDR
+    // RP2350: write CLR bit (8 + hart) of SIO RISCV_SOFTIRQ. All registers are already
+    // saved, t0-t2 are free scratch.
+    "csrr  t1, mhartid                   \n"
+    "li    t2, 0x100                     \n"
+    "sll   t2, t2, t1                    \n" // t2 = 0x100 << hart
+    "li    t0, %[softirq_addr]           \n"
+    "sw    t2, 0(t0)                     \n"
+#else
+  #if (STK_ARCH_CPU_COUNT > 1U)
     "csrr  t0, mhartid                   \n"
     "slli  t0, t0, 2                     \n" // t0 = hart * 4
     "li    t1, %[clint_msip_base]        \n"
     "add   t0, t0, t1                    \n" // t0 = &MSIP[hart]
-#else
+  #else
     "li    t0, %[clint_msip_base]        \n" // t0 = &MSIP[0]
-#endif
+  #endif
     "sw    zero, 0(t0)                   \n" // MSIP[hart] = 0
+#endif
     "fence rw, rw                        \n" // fence rw,rw  - ensure the write is visible before re-enable
+
+#if STK_RISCV_USER_MODE
+    // U-mode/PMP: switch to the private ISR stack and make privilege (and PMP) state of the incoming task effective
+    // (all registers of the incoming task are not loaded yet, caller-saved ones are free)
+#if (STK_ARCH_CPU_COUNT > 1U)
+    "csrr t0, mhartid                    \n"
+    "la   t1, s_StkRiscvStackIsr         \n"
+    "slli t0, t0, " REGBYTES_LOG2 "      \n"
+    "add  t1, t1, t0                     \n" // t1 = &s_StkRiscvStackIsr[hart]
+    LREG " t1, 0(t1)                     \n" // t1 = s_StkRiscvStackIsr[hart] (Stack*)
+#else
+    "la   t1, s_StkRiscvStackIsr         \n"
+    LREG " t1, 0(t1)                     \n" // t1 = s_StkRiscvStackIsr[0] (Stack*)
+#endif
+    LREG " sp, 0(t1)                     \n" // sp = Stack::SP of ISR stack
+    "jal  ra, StkRiscvLoadActive         \n"
+#endif
 
     // 4. load SP from s_StkRiscvStackActive[hart]->SP
 #if (STK_ARCH_CPU_COUNT > 1U)
@@ -1775,11 +2611,18 @@ extern "C" STK_RISCV_ISR_SECTION __stk_attr_naked void STK_MSI_HANDLER()
     STK_ASM_EXIT_FROM_HANDLER "          \n"
 
     : /* outputs:  none - naked, compiler emits nothing outside this asm */
+#ifdef STK_RISCV_SOFTIRQ_ADDR
+    : [softirq_addr] "i" (STK_RISCV_SOFTIRQ_ADDR) /* other inputs: all addresses loaded as linker symbols via "la" */
+#else
     : [clint_msip_base] "i" (STK_RISCV_CLINT_BASE_ADDR) /* other inputs: all addresses loaded as linker symbols via "la" */
+#endif
     : /* clobbers: none - the asm string owns all registers */);
 }
 
+// ############################################################################
 #ifndef _STK_RISCV_USE_PENDSV
+// ############################################################################
+
 /* STK_SYSTICK_HANDLER
 
 RISC-V machine-timer ISR: Saves the interrupted task's full context, switches
@@ -1789,7 +2632,7 @@ and runs the scheduler), then restores the (possibly new) task's context.
 DESIGN RULES - must be obeyed to work correctly at all optimisation levels:
 
  1. Single asm volatile, no compiler operands.
-    The function body is ONE __asm volatile("..." : : : ) with empty
+    The function body is ONE __asm__ __volatile__("..." : : : ) with empty
     input/output/clobber lists. No "m" or "r" constraints are used because
     the compiler evaluates those as C expressions BEFORE emitting any asm
     text, i.e. before the register save - trashing uninitialized registers.
@@ -1823,7 +2666,7 @@ DESIGN RULES - must be obeyed to work correctly at all optimisation levels:
 */
 extern "C" STK_RISCV_ISR_SECTION __stk_attr_naked void STK_SYSTICK_HANDLER()
 {
-    __asm volatile(
+    __asm__ __volatile__(
     // 1. save context
     STK_ASM_SAVE_CONTEXT
 
@@ -1889,7 +2732,10 @@ extern "C" STK_RISCV_ISR_SECTION __stk_attr_naked void STK_SYSTICK_HANDLER()
     : /* clobbers: none - the asm string owns all registers */
     );
 }
+
+// ############################################################################
 #endif // !_STK_RISCV_USE_PENDSV
+// ############################################################################
 
 void Context::OnStart()
 {
@@ -1912,6 +2758,19 @@ void Context::OnStart()
     s_StkRiscvStackActive[hart] = m_stack_active;
     s_StkRiscvStackIdle[hart]   = m_stack_idle;
 
+#if STK_MPU
+    // configure static PMP regions
+    ConfigureMpu();
+#elif STK_RISCV_USER_MODE && STK_RISCV_PMP_PRESENT
+    // U-mode without memory protection: grant U-mode access to the whole address space
+    hw_int::pmp::ConfigureUserAccess();
+#endif
+
+#if STK_RISCV_USER_MODE
+    // publish privilege state (and PMP window, if STK_MPU) of the first task
+    hw_int::LoadActiveTask(m_stack_active);
+#endif
+
     // start with initially 1 elapsed tick (after timer expires)
     StartTickTimer(1);
 
@@ -1930,7 +2789,85 @@ void Context::OnStart()
     set_csr(mie, MIP_MSIP);
 }
 
-STK_RISCV_ISR void STK_SVC_HANDLER()
+#if STK_RISCV_USER_MODE
+extern "C" void StkRiscvSvcHandlerC();
+
+/* STK_SVC_HANDLER (U-mode build)
+
+   Naked front-end of the exception vector. Traps it owns are processed by StkRiscvTrapDispatch() on the ISR stack:
+     - mcause 8  : ecall from U-mode (service call, id in a5),
+     - mcause 11 : ecall from M-mode carrying STK_RISCV_SVC_MAGIC in a5 (privilege drop of boosted code),
+     - mcause 1/5/7 : access faults (PMP violations, STK_MPU only).
+   Anything else (scheduler start ecall, user-forwarded ecalls, other exceptions) is chained to the original
+   handler with all registers intact. t0 is borrowed through mscratch for the classification only.
+*/
+extern "C" STK_RISCV_ISR_SECTION __stk_attr_naked void STK_SVC_HANDLER()
+{
+    __asm__ __volatile__(
+    "csrw  mscratch, t0                  \n"
+    "csrr  t0, mcause                    \n"
+#if STK_MPU
+    "addi  t0, t0, -1                    \n" // 1: instruction access fault
+    "beqz  t0, .Lstk_svc_ours            \n"
+    "addi  t0, t0, -4                    \n" // 5: load access fault
+    "beqz  t0, .Lstk_svc_ours            \n"
+    "addi  t0, t0, -2                    \n" // 7: store/AMO access fault
+    "beqz  t0, .Lstk_svc_ours            \n"
+    "addi  t0, t0, -1                    \n" // 8: ecall from U-mode
+    "beqz  t0, .Lstk_svc_ours            \n"
+#else
+    "addi  t0, t0, -8                    \n" // 8: ecall from U-mode
+    "beqz  t0, .Lstk_svc_ours            \n"
+#endif
+    "addi  t0, t0, -3                    \n" // 11: ecall from M-mode
+    "bnez  t0, .Lstk_svc_chain           \n"
+    "li    t0, " XSTR(STK_RISCV_SVC_MAGIC) " \n"
+    "xor   t0, t0, a5                    \n"
+    "srli  t0, t0, 8                     \n" // a5[31:8] == magic -> service call
+    "bnez  t0, .Lstk_svc_chain           \n"
+
+    ".Lstk_svc_ours:                     \n"
+    "csrr  t0, mscratch                  \n" // restore t0
+    STK_ASM_SAVE_CONTEXT
+    "mv    a1, sp                        \n" // a1 = TaskFrame*
+#if (STK_ARCH_CPU_COUNT > 1U)
+    "csrr  t0, mhartid                   \n"
+    "slli  t0, t0, " REGBYTES_LOG2 "     \n" // t0 = hart * sizeof(Stack*)
+    "la    t1, s_StkRiscvStackActive     \n"
+    "add   t1, t1, t0                    \n" // t1 = &s_StkRiscvStackActive[hart]
+    LREG " t1, 0(t1)                     \n"
+    SREG " sp, 0(t1)                     \n" // Stack::SP = frame
+    "la    t1, s_StkRiscvStackIsr        \n"
+    "add   t1, t1, t0                    \n" // t1 = &s_StkRiscvStackIsr[hart]
+    LREG " t1, 0(t1)                     \n"
+    LREG " sp, 0(t1)                     \n" // switch to ISR stack
+#else
+    "la    t1, s_StkRiscvStackActive     \n"
+    LREG " t1, 0(t1)                     \n"
+    SREG " sp, 0(t1)                     \n" // Stack::SP = frame
+    "la    t1, s_StkRiscvStackIsr        \n"
+    LREG " t1, 0(t1)                     \n"
+    LREG " sp, 0(t1)                     \n" // switch to ISR stack
+#endif
+    "csrr  a0, mcause                    \n"
+    "jal   ra, StkRiscvTrapDispatch      \n" // a0 = SP to resume with
+    "mv    sp, a0                        \n"
+    STK_ASM_LOAD_CONTEXT
+    STK_ASM_EXIT_FROM_HANDLER "          \n"
+
+    ".Lstk_svc_chain:                    \n"
+    "csrr  t0, mscratch                  \n" // restore t0
+    "j     StkRiscvSvcHandlerC           \n"
+    : /* outputs:  none */
+    : /* inputs:   none */
+    : /* clobbers: none */);
+}
+#define STK_SVC_HANDLER_BODY StkRiscvSvcHandlerC
+#else
+#define STK_SVC_HANDLER_BODY STK_SVC_HANDLER
+#endif
+
+STK_RISCV_ISR void STK_SVC_HANDLER_BODY()
 {
     const Word cause = HW_GetCurrentException();
     Context &ctx = GetContext();
@@ -1988,26 +2925,53 @@ STK_RISCV_ISR void STK_SVC_HANDLER()
     }
 }
 
-void drv::OnTaskRun(ITask *task)
+STK_MPU_SHARED_CODE_SECTION
+void drv::OnTaskRun(ITask *runnable)
 {
-    task->Run();
+    STK_ASSERT(runnable != nullptr);
+    runnable->Run();
 }
 
+STK_MPU_SHARED_CODE_SECTION
 void drv::OnTaskExit()
 {
+#if STK_RISCV_USER_MODE
+    // U-mode task: elevate for the kernel call (ecall is inside the shared code region)
+    const bool boost = !HW_IsPrivilegedContext();
+    if (boost)
+    {
+        HW_Ecall(SVC_BOOST_PRIV);
+    }
+#endif
+
     const Context &ctx = GetContext();
 
-    Word cs;
-    HW_CriticalSectionStart(cs);
-
-    ctx.m_handler->OnTaskExit(ctx.m_stack_active);
-
-    HW_CriticalSectionEnd(cs);
-
-    for (;;)
     {
-        __DSB(); // data barrier
-        __WFI(); // enter standby mode until time slot expires
+        // scoped: the section must end before the idle loop below (which never returns)
+        const ScopedHwIrqLock cs_;
+
+        ctx.m_handler->OnTaskExit(ctx.m_stack_active);
+    }
+
+#if STK_RISCV_USER_MODE
+    if (boost)
+    {
+        HW_Ecall(SVC_DROP_PRIV);
+
+        // can only busy-wait when non-Privileged (WFI is not guaranteed to be available in U-mode)
+        for (;;)
+        {
+            __stk_relax_cpu();
+        }
+    }
+    else
+#endif
+    {
+        for (;;)
+        {
+            __DSB(); // data barrier
+            __WFI(); // enter standby mode until time slot expires
+        }
     }
 }
 
@@ -2135,6 +3099,88 @@ void PlatformRiscV::Start()
     GetContext().Start();
 }
 
+// ############################################################################
+#if STK_MPU_STACK_GUARD
+// ############################################################################
+
+// ****************************************************************************
+namespace { // file-local block (private)
+// ****************************************************************************
+
+/*! \brief Build per-task PMP shadow table: application regions first, stack guard as the last slot.
+    \note  Mirror of the ARM driver: a task which does not provide MPU regions gets no stack guard,
+           the guard is canceled if the task's own regions overlap the stack.
+    \note  Stack memory must be power-of-two sized and naturally aligned (NAPOT).
+*/
+void ConfigureTaskMpu(IPlatform::IEventOverrider *overrider, Stack *stack, IStackMemory *stack_memory,
+    ITask *user_task)
+{
+    MpuRegionConfig task_mpu_cfg[TaskMpu::NUM_REGIONS] = {};
+    size_t cfg_count = 0U;
+
+    // user_task is null for the internal sleep/exit trap stacks, which never carry application-defined regions
+    if (user_task != nullptr)
+    {
+        const MpuRegionList *const regions = user_task->GetMpuRegions();
+        if (regions != nullptr)
+        {
+            const MpuRegionConfig stack_guard_cfg =
+            {
+                .addr        = hw::PtrToWord(stack_memory->GetStack()),
+                .size        = stack_memory->GetStackSize() * sizeof(Word),
+                .access_perm = hw::mpu::ACCESS_FULL,
+                .mem_type    = hw::mpu::TYPE_NORMAL_CACHEABLE,
+                .share       = hw::mpu::SHARE_NON,
+                .exec        = hw::mpu::EXEC_NEVER
+            };
+
+            const hw_int::pmp::RegionBounds bounds_s = hw_int::pmp::GetRegionBounds(stack_guard_cfg);
+
+            size_t regions_count = regions->GetSize();
+            bool stack_guard_canceled = false;
+
+            for (size_t i = 0U; i < regions_count; ++i)
+            {
+                const hw_int::pmp::RegionBounds bounds_i = hw_int::pmp::GetRegionBounds((*regions)[i]);
+
+                if (hw_int::pmp::IsOverlapping(bounds_s, bounds_i))
+                {
+                    stack_guard_canceled = true;
+                    break;
+                }
+            }
+
+            const size_t max_user_regions = stack_guard_canceled ? TaskMpu::NUM_REGIONS : (TaskMpu::NUM_REGIONS - 1U);
+
+            STK_ASSERT(regions_count <= max_user_regions);
+            if (regions_count > max_user_regions)
+            {
+                regions_count = max_user_regions; // defensively clamp in release builds
+            }
+
+            for (size_t i = 0U; i < regions_count; ++i)
+            {
+                task_mpu_cfg[cfg_count++] = (*regions)[i];
+            }
+
+            if (!stack_guard_canceled)
+            {
+                task_mpu_cfg[cfg_count++] = stack_guard_cfg;
+            }
+        }
+    }
+
+    hw_int::pmp::ConfigureDynamic(stack->mpu, task_mpu_cfg, cfg_count, overrider);
+}
+
+// ****************************************************************************
+} // namespace {
+// ****************************************************************************
+
+// ############################################################################
+#endif // STK_MPU_STACK_GUARD
+// ############################################################################
+
 void PlatformRiscV::InitStack(EStackType stack_type, Stack *stack, IStackMemory *stack_memory, ITask *user_task)
 {
     // TaskFrame must map exactly onto the slot layout consumed by STK_ASM_SAVE_CONTEXT / STK_ASM_LOAD_CONTEXT - no padding allowed
@@ -2178,15 +3224,29 @@ void PlatformRiscV::InitStack(EStackType stack_type, Stack *stack, IStackMemory 
 
     // mstatus: return to M-mode (MPP), interrupts enabled on mret (MPIE),
     // FPU/extension state initial (FS/XS) if FPU present
+#if STK_RISCV_USER_MODE
+    // ACCESS_USER tasks run in U-mode (MPP=0), where PMP (if STK_MPU) is enforced; traps (sleep/exit) always run in M-mode
+    const bool is_priv = (stack_type != STACK_USER_TASK) || ((stack->access_mode & ACCESS_PRIVILEGED) != 0U);
+    task_frame->MSTATUS = (is_priv ? MSTATUS_MPP : 0U) | MSTATUS_MPIE | (STK_RISCV_FPU != 0U ? (MSTATUS_FS | MSTATUS_XS) : 0U);
+#else
     task_frame->MSTATUS = MSTATUS_MPP | MSTATUS_MPIE | (STK_RISCV_FPU != 0U ? (MSTATUS_FS | MSTATUS_XS) : 0U);
+#endif
 
 #if (STK_RISCV_FPU != 0)
     task_frame->X3_FSR = 0U; // FCSR = 0: round-to-nearest, no accrued exception flags
+#endif
+
+#if STK_MPU_STACK_GUARD
+    ConfigureTaskMpu(GetContext().m_overrider, stack, stack_memory, user_task);
 #endif
 }
 
 void Context::OnStop()
 {
+#if STK_RISCV_USER_MODE
+    s_StkRiscvNpriv[HW_GetHartId()] = 0U; // main context is M-mode
+#endif
+
     // stop timer
     HW_StopMTimer();
 
@@ -2227,15 +3287,12 @@ uint32_t PlatformRiscV::GetSysTimerFrequency() const
 
 void PlatformRiscV::ForceContextSwitch(TId id)
 {
-    Word cs;
-    HW_CriticalSectionStart(cs);
+    const ScopedHwIrqLock cs_;
 
     Context &ctx = GetContext();
     STK_ASSERT(ctx.m_started);
 
     ctx.OnForceContextSwitch(id);
-
-    HW_CriticalSectionEnd(cs);
 }
 
 TId PlatformRiscV::GetTid() const
@@ -2350,48 +3407,364 @@ void PlatformRiscV::SetSpecificEventHandler(ISpecificEventHandler *handler)
     GetContext().m_specific = handler;
 }
 
+// ############################################################################
+#if STK_RISCV_USER_MODE
+// ############################################################################
+
+// ****************************************************************************
+namespace { // file-local block (private)
+// ****************************************************************************
+
+/*! \class ScopedPrivilegeBoost
+    \brief RAII utility to temporarily elevate U-mode execution to M-mode via ecall (mirror of the ARM driver).
+    \note  Both ecalls must originate from STK_MPU_SHARED_CODE_SECTION code (checked by the trap dispatcher
+           if STK_MPU=1), the destructor is force-inlined into such code.
+*/
+struct ScopedPrivilegeBoost
+{
+    explicit ScopedPrivilegeBoost();
+
+    __stk_forceinline ~ScopedPrivilegeBoost()
+    {
+        HW_Ecall(SVC_DROP_PRIV);
+    }
+};
+
+STK_MPU_SHARED_CODE_SECTION
+ScopedPrivilegeBoost::ScopedPrivilegeBoost()
+{
+    HW_Ecall(SVC_BOOST_PRIV);
+}
+
+/*! \class KernelServiceSvcProxy
+    \brief Proxy wrapper providing unprivileged tasks secure access to privileged kernel services.
+
+    This class implements the \a stk::IKernelService interface, acting as a bridge across the
+    MPU boundary. It resides within a dedicated shared data section and utilizes \a ScopedPrivilegeBoost
+    internally to elevate execution rights before forwarding system requests to the underlying
+    privileged kernel instance.
+
+    \note **HARDWARE ISOLATION:**
+          This proxy allows user-space tasks to invoke kernel APIs safely. The privilege elevation
+          occurs only for the duration of the targeted kernel service execution.
+*/
+class KernelServiceSvcProxy final : public stk::IKernelService
+{
+public:
+    /*! \brief Default constructor.
+    */
+    explicit KernelServiceSvcProxy() : IKernelService()
+    {}
+
+    /*! \brief Destructor.
+        \note  MISRA deviation: [STK-DEV-005] Rule 10-3-2.
+    */
+    STK_VIRT_DTOR ~KernelServiceSvcProxy() = default;
+
+    stk::TId GetTid() const override;
+    stk::Ticks GetTicks() const override;
+    uint32_t GetTickResolution() const override;
+    stk::Cycles GetSysTimerCount() const override;
+    uint32_t GetSysTimerFrequency() const override;
+    void Delay(stk::Timeout ticks) override;
+    bool Sleep(stk::Timeout ticks) override;
+    bool SleepUntil(stk::Ticks timestamp) override;
+    void SleepCancel(stk::TId task_id) override;
+    void SwitchToNext() override;
+    stk::EWaitResult Wait(stk::ISyncObject *sobj, stk::IMutex *mutex, stk::Timeout timeout) override;
+    stk::TId Wake(stk::ISyncObject *sobj, bool all) override;
+    stk::Timeout Suspend() override;
+    void Resume(stk::Timeout elapsed_ticks) override;
+    stk::Weight GetWeight(stk::TId tid) const override;
+    stk::EWaitOrder GetDefaultWaitOrder() const override;
+    stk::IWaitObject *SelectWaiter(stk::IWaitObject::ListHeadType &wlist, stk::EWaitOrder order) override;
+    void InheritWeight(stk::TId tid, stk::TId donor_tid) override;
+    void InheritWeight(stk::TId tid, const stk::ISyncObject *sobj) override;
+    void RestoreWeight(stk::TId tid, stk::ISyncObject *sobj) override;
+    stk::Weight SetWeight(stk::TId tid, stk::Weight weight) override;
+    stk::Timeout SetTimeSlice(stk::TId tid, stk::Timeout ticks) override;
+    void ExitTask() override;
+    ELockResult LockScheduler() override;
+    ELockResult UnlockScheduler() override;
+    ELockResult RestoreSchedulerLock(bool locked) override;
+};
+
+/*! \var s_KernelServiceSvcProxy
+    \brief Shared static proxy instance exposed to unprivileged context calls.
+*/
+STK_MPU_SHARED_DATA_SECTION
+KernelServiceSvcProxy s_StkKernelServiceUnprivProxy;
+
+// ****************************************************************************
+} // namespace {
+// ****************************************************************************
+
+STK_MPU_SHARED_CODE_SECTION
+stk::TId KernelServiceSvcProxy::GetTid() const
+{
+    const ScopedPrivilegeBoost pb;
+    return GetContext().m_service->GetTid();
+}
+
+STK_MPU_SHARED_CODE_SECTION
+stk::Ticks KernelServiceSvcProxy::GetTicks() const
+{
+    const ScopedPrivilegeBoost pb;
+    return GetContext().m_service->GetTicks();
+}
+
+STK_MPU_SHARED_CODE_SECTION
+uint32_t KernelServiceSvcProxy::GetTickResolution() const
+{
+    const ScopedPrivilegeBoost pb;
+    return GetContext().m_tick_resolution;
+}
+
+STK_MPU_SHARED_CODE_SECTION
+stk::Cycles KernelServiceSvcProxy::GetSysTimerCount() const
+{
+    const ScopedPrivilegeBoost pb;
+    return GetContext().m_service->GetSysTimerCount();
+}
+
+STK_MPU_SHARED_CODE_SECTION
+uint32_t KernelServiceSvcProxy::GetSysTimerFrequency() const
+{
+    const ScopedPrivilegeBoost pb;
+    return GetContext().m_service->GetSysTimerFrequency();
+}
+
+STK_MPU_SHARED_CODE_SECTION
+void KernelServiceSvcProxy::Delay(stk::Timeout ticks)
+{
+    const ScopedPrivilegeBoost pb;
+    GetContext().m_service->Delay(ticks);
+}
+
+STK_MPU_SHARED_CODE_SECTION
+bool KernelServiceSvcProxy::Sleep(stk::Timeout ticks)
+{
+    const ScopedPrivilegeBoost pb;
+    return GetContext().m_service->Sleep(ticks);
+}
+
+STK_MPU_SHARED_CODE_SECTION
+bool KernelServiceSvcProxy::SleepUntil(stk::Ticks timestamp)
+{
+    const ScopedPrivilegeBoost pb;
+    return GetContext().m_service->SleepUntil(timestamp);
+}
+
+STK_MPU_SHARED_CODE_SECTION
+void KernelServiceSvcProxy::SleepCancel(stk::TId task_id)
+{
+    const ScopedPrivilegeBoost pb;
+    GetContext().m_service->SleepCancel(task_id);
+}
+
+STK_MPU_SHARED_CODE_SECTION
+void KernelServiceSvcProxy::SwitchToNext()
+{
+    const ScopedPrivilegeBoost pb;
+    GetContext().m_service->SwitchToNext();
+}
+
+STK_MPU_SHARED_CODE_SECTION
+void KernelServiceSvcProxy::ExitTask()
+{
+    const ScopedPrivilegeBoost pb;
+    GetContext().m_service->ExitTask();
+}
+
+STK_MPU_SHARED_CODE_SECTION
+ELockResult KernelServiceSvcProxy::LockScheduler()
+{
+    const ScopedPrivilegeBoost pb;
+    return GetContext().m_service->LockScheduler();
+}
+
+STK_MPU_SHARED_CODE_SECTION
+ELockResult KernelServiceSvcProxy::UnlockScheduler()
+{
+    const ScopedPrivilegeBoost pb;
+    return GetContext().m_service->UnlockScheduler();
+}
+
+STK_MPU_SHARED_CODE_SECTION
+ELockResult KernelServiceSvcProxy::RestoreSchedulerLock(bool locked)
+{
+    const ScopedPrivilegeBoost pb;
+    return GetContext().m_service->RestoreSchedulerLock(locked);
+}
+
+STK_MPU_SHARED_CODE_SECTION
+stk::EWaitResult KernelServiceSvcProxy::Wait(stk::ISyncObject *sobj, stk::IMutex *mutex, stk::Timeout timeout)
+{
+    const ScopedPrivilegeBoost pb;
+    return GetContext().m_service->Wait(sobj, mutex, timeout);
+}
+
+STK_MPU_SHARED_CODE_SECTION
+stk::TId KernelServiceSvcProxy::Wake(stk::ISyncObject *sobj, bool all)
+{
+    const ScopedPrivilegeBoost pb;
+    return GetContext().m_service->Wake(sobj, all);
+}
+
+STK_MPU_SHARED_CODE_SECTION
+stk::Timeout KernelServiceSvcProxy::Suspend()
+{
+    return 0; // not allowed for non-privileged process
+}
+
+STK_MPU_SHARED_CODE_SECTION
+void KernelServiceSvcProxy::Resume(stk::Timeout elapsed_ticks)
+{
+    // not allowed for non-privileged process
+    STK_UNUSED(elapsed_ticks);
+}
+
+STK_MPU_SHARED_CODE_SECTION
+stk::Weight KernelServiceSvcProxy::GetWeight(stk::TId tid) const
+{
+    const ScopedPrivilegeBoost pb;
+    return GetContext().m_service->GetWeight(tid);
+}
+
+STK_MPU_SHARED_CODE_SECTION
+stk::EWaitOrder KernelServiceSvcProxy::GetDefaultWaitOrder() const
+{
+    const ScopedPrivilegeBoost pb;
+    return GetContext().m_service->GetDefaultWaitOrder();
+}
+
+STK_MPU_SHARED_CODE_SECTION
+stk::IWaitObject *KernelServiceSvcProxy::SelectWaiter(stk::IWaitObject::ListHeadType &wlist, stk::EWaitOrder order)
+{
+    const ScopedPrivilegeBoost pb;
+    return GetContext().m_service->SelectWaiter(wlist, order);
+}
+
+STK_MPU_SHARED_CODE_SECTION
+void KernelServiceSvcProxy::InheritWeight(stk::TId tid, stk::TId donor_tid)
+{
+    const ScopedPrivilegeBoost pb;
+    GetContext().m_service->InheritWeight(tid, donor_tid);
+}
+
+STK_MPU_SHARED_CODE_SECTION
+void KernelServiceSvcProxy::InheritWeight(stk::TId tid, const stk::ISyncObject *sobj)
+{
+    const ScopedPrivilegeBoost pb;
+    GetContext().m_service->InheritWeight(tid, sobj);
+}
+
+STK_MPU_SHARED_CODE_SECTION
+void KernelServiceSvcProxy::RestoreWeight(stk::TId tid, stk::ISyncObject *sobj)
+{
+    const ScopedPrivilegeBoost pb;
+    GetContext().m_service->RestoreWeight(tid, sobj);
+}
+
+STK_MPU_SHARED_CODE_SECTION
+stk::Weight KernelServiceSvcProxy::SetWeight(stk::TId tid, stk::Weight weight)
+{
+    const ScopedPrivilegeBoost pb;
+    return GetContext().m_service->SetWeight(tid, weight);
+}
+
+STK_MPU_SHARED_CODE_SECTION
+stk::Timeout KernelServiceSvcProxy::SetTimeSlice(stk::TId tid, stk::Timeout ticks)
+{
+    const ScopedPrivilegeBoost pb;
+    return GetContext().m_service->SetTimeSlice(tid, ticks);
+}
+
+// ############################################################################
+#endif // STK_RISCV_USER_MODE
+// ############################################################################
+
 IKernelService *IKernelService::GetInstance()
 {
+#if STK_RISCV_USER_MODE
+    if (HW_IsPrivilegedContext() || HW_IsHandlerMode())
+    {
+        return GetContext().m_service;
+    }
+
+    return &s_StkKernelServiceUnprivProxy;
+#else
     return GetContext().m_service;
+#endif
 }
 
-stk::hw::CriticalSection::Session stk::hw::CriticalSection::Enter(CriticalSection::Session is_npriv)
+STK_MPU_SHARED_CODE_SECTION
+stk::hw::CriticalSection::Session stk::hw::CriticalSection::Enter(const CriticalSection::Session ses)
 {
-    STK_UNUSED(is_npriv);
+#if STK_RISCV_USER_MODE
+    const bool is_priv_ses = ((ses & SESSION_FLAG_NPRIV) == 0U);
+
+    if (is_priv_ses && (HW_IsPrivilegedContext() || HW_IsHandlerMode()))
+    {
+        GetContext().EnterCriticalSection();
+        return SESSION_FLAG_NONE;
+    }
+
+    HW_Ecall(SVC_ENTER_CRITICAL);
+    return SESSION_FLAG_NPRIV;
+#else
+    STK_UNUSED(ses);
     GetContext().EnterCriticalSection();
     return DEFAULT_SESSION;
+#endif
 }
 
-void stk::hw::CriticalSection::Exit(CriticalSection::Session is_npriv)
+STK_MPU_SHARED_CODE_SECTION
+void stk::hw::CriticalSection::Exit(const CriticalSection::Session ses)
 {
-    STK_UNUSED(is_npriv);
+#if STK_RISCV_USER_MODE
+    if ((ses & SESSION_FLAG_NPRIV) == 0U)
+    {
+        GetContext().ExitCriticalSection();
+    }
+    else
+    {
+        HW_Ecall(SVC_EXIT_CRITICAL);
+    }
+#else
+    STK_UNUSED(ses);
     GetContext().ExitCriticalSection();
+#endif
 }
 
+STK_MPU_SHARED_CODE_SECTION
 void stk::hw::SpinLock::Lock()
 {
     HW_SpinLockLock(m_lock);
 }
 
+STK_MPU_SHARED_CODE_SECTION
 void stk::hw::SpinLock::Unlock()
 {
     HW_SpinLockUnlock(m_lock);
 }
 
+STK_MPU_SHARED_CODE_SECTION
 bool stk::hw::SpinLock::TryLock()
 {
     return HW_SpinLockTryLock(m_lock);
 }
 
+STK_MPU_SHARED_CODE_SECTION
 bool stk::hw::IsInsideISR()
 {
     return HW_IsHandlerMode();
 }
 
+STK_MPU_SHARED_CODE_SECTION
 bool stk::hw::IsPrivilegedContext()
 {
-    // always Privileged on RISC-V
-    return true;
+    return HW_IsPrivilegedContext();
 }
 
 stk::hw::HiResClock::HiResClock() : HiResClockState()
