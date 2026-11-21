@@ -626,10 +626,10 @@
         #if defined(__riscv_32e) && (__riscv_32e == 1)
             // RISC-V RV32E (Embedded): Small 16-register file.
             #if !defined(__riscv_flen) || (__riscv_flen == 0)
-                #define STK_STACK_SIZE_MIN (32U)
+                #define STK_STACK_SIZE_MIN (36U)
             #else
                 // FPU present: Requires additional space for 32 FP registers.
-                #define STK_STACK_SIZE_MIN (32U + (__riscv_flen * 2))
+                #define STK_STACK_SIZE_MIN (36U + (__riscv_flen * 2))
             #endif
         #else
             // Standard RISC-V (RV32I/RV64I): Large 32-register file.
@@ -643,7 +643,7 @@
         #endif
     #else
         // ARM Cortex-M and other architectures
-        #define STK_STACK_SIZE_MIN (32U)
+        #define STK_STACK_SIZE_MIN (36U)
     #endif
 #endif
 

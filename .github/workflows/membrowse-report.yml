@@ -2,9 +2,15 @@ name: Membrowse Memory Report
 
 on:
   pull_request:
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
   push:
     branches:
       - main
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -16,8 +22,12 @@ jobs:
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
-      - name: Checkout repository
+      - name: Sparse checkout target config
         uses: actions/checkout@v6
+        with:
+          sparse-checkout: .github/membrowse-targets.json
+          sparse-checkout-cone-mode: false
+          filter: blob:none
 
       - name: Load target matrix
         id: set-matrix
@@ -33,10 +43,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
-          fetch-depth: 0
-          submodules: recursive
+          fetch-depth: 1
+          submodules: recursive # Remove this line if submodules aren't needed for builds
 
       - name: Install packages
         run: ${{ matrix.setup_cmd }}
@@ -45,6 +55,7 @@ jobs:
         uses: hendrikmuhs/ccache-action@v1.2
         with:
           key: ${{ matrix.port }}-${{ matrix.board }}
+          save: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Build firmware
         run: ${{ matrix.build_cmd }}
@@ -68,3 +79,4 @@ jobs:
         with:
           name: membrowse-report-${{ matrix.target_name }}
           path: ${{ steps.analyze.outputs.report_path }}
+          retention-days: 1

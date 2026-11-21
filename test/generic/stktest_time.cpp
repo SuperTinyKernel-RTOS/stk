@@ -42,14 +42,25 @@ namespace stk
             STK_UNUSED(timeout);
             return WAIT_RESULT_FAIL;
         }
-        void Wake(ISyncObject *sobj, bool all)
+        TId Wake(ISyncObject *sobj, bool all) override
         {
             STK_UNUSED(sobj);
             STK_UNUSED(all);
+
+            return TID_NONE;
         }
         Timeout Suspend() override { return 1; }
         void Resume(Timeout elapsed_ticks) override { (void)elapsed_ticks; }
-        void InheritWeight(TId tid, Weight weight) override { (void)tid; (void)weight; }
+        void InheritWeight(TId tid, TId donor_tid) override
+        {
+            (void)tid;
+            (void)donor_tid;
+        }
+        void InheritWeight(TId tid, const ISyncObject *sobj) override
+        {
+            (void)tid;
+            (void)sobj;
+        }
         void RestoreWeight(TId tid, ISyncObject *sobj) override { (void)tid; (void)sobj; }
         Weight SetWeight(TId tid, Weight weight) override
         {

@@ -72,7 +72,8 @@ enum EKernelPanicId : uint8_t
     KERNEL_PANIC_NS_ACCESS           = 11U, //!< Non-secure access to protected resource.
     KERNEL_PANIC_BAD_MEMORY_REGION   = 12U, //!< Bad memory region (ARM TrustZone: provided memory region overlaps with another one; memory pools: a pointer that does not belong to the memory region of the pool it was returned to).
     KERNEL_PANIC_SYNC_DEADLOCK       = 13U, //!< Deadlock caused by a synchronization primitive: a task tried to acquire a non-recursive primitive (e.g. sync::FastMutex) that it already owns and would block forever. Not used for spin-lock timeouts, see KERNEL_PANIC_SPINLOCK_DEADLOCK.
-    KERNEL_PANIC_NO_MEM              = 14U  //!< Out of memory: a mandatory allocation (heap or a fixed-size static pool) failed in a context that cannot report the failure to the caller (e.g. an interop callback with a void/non-failing signature).
+    KERNEL_PANIC_NO_MEM              = 14U, //!< Out of memory: a mandatory allocation (heap or a fixed-size static pool) failed in a context that cannot report the failure to the caller (e.g. an interop callback with a void/non-failing signature).
+    KERNEL_PANIC_NS_REQUESTED        = 15U  //!< ARM TrustZone: panic requested by the Non-Secure state (not a Secure-side fault). The id reported by the Non-Secure state is unverified and available via tz::sec::GetNsPanicId().
 };
 
 /*! \enum  ETaskState
@@ -872,7 +873,9 @@ public:
     /*! \brief     Get id of the task which is served next, i.e. the one that WakeOne() would wake
                    (see FindNextWaiter and GetWaitOrder).
         \return    TId of the next waiter, or \a TID_NONE if no tasks are currently waiting.
-        \note      Read-only introspection for diagnostics / telemetry.
+        \note      Read-only introspection for diagnostics / telemetry. Walks the wait objects, so it is not available
+                   to the code which can not access them (e.g. Non-Secure code of ARM TrustZone): use the TId returned
+                   by IKernelService::Wake() to find out who was woken.
         \note      Enters a critical section (nestable, see \a hw::CriticalSection), so the wait list is walked safely
                    while it is modified concurrently (tick handler, ISR, other cores). The result is still a snapshot:
                    hold a critical section around this call and the others (e.g. GetWaitList) to read them consistently.
@@ -2044,10 +2047,14 @@ public:
         \param[in] sobj: Synchronization object whose waiting queue will be notified.
         \param[in] all: If \c true, unblocks all waiting tasks (broadcast mode); if \c false,
                    unblocks only the next waiting task (signal mode).
+        \return    TId of the task which was woken in signal mode (\a all is \c false), \a TID_NONE if nobody was
+                   waiting or in broadcast mode. The waiter is selected once, by the kernel, so it can be used to hand
+                   over the ownership (e.g. Mutex::Unlock()) without a second lookup and without accessing the wait
+                   objects (not accessible for Non-Secure code of ARM TrustZone).
         \see       Wait
         \warning   ISR-unsafe.
     */
-    virtual void Wake(ISyncObject *sobj, bool all) = 0;
+    virtual TId Wake(ISyncObject *sobj, bool all) = 0;
 
     /*! \brief     Suspend scheduling.
         \return    Number of ticks available for the suspension period, as determined by the
@@ -2080,7 +2087,7 @@ public:
                    base weight (the value set by SetWeight(), or ITask::GetWeight() if it was never
                    overridden). \a DEFAULT_WEIGHT for strategies without WEIGHT_API.
         \note      This is the weight the scheduler currently uses for the task, therefore it is the one
-                   to pass on to InheritWeight() (donated by a waiter to the owner) and to order waiters
+                   to be donated by InheritWeight(tid, donor_tid) (waiter to owner) and to order waiters
                    by (see EWaitOrder). Do not use it as the floor when recomputing a boost, use the base
                    weight there (see IKernelTask::GetBaseWeight).
         \note      Snapshot: call inside the critical section if the weight may change concurrently.
@@ -2117,12 +2124,26 @@ public:
     */
     virtual IWaitObject *SelectWaiter(IWaitObject::ListHeadType &wlist, EWaitOrder order) = 0;
 
-    /*! \brief     Inherit weight for the task.
-        \param[in] tid: Task id.
-        \param[in] weight: New weight, shall be higher than task's current weight (see \a ITask::GetWeight).
+    /*! \brief     Inherit weight of another task (priority inheritance: a waiter donates its weight to the owner).
+        \param[in] tid: Id of the task which inherits (e.g. the owner of a mutex).
+        \param[in] donor_tid: Id of the task which donates its effective weight (see GetWeight), e.g. a task which is
+                   about to block on the mutex owned by \a tid.
+        \note      The weight is applied only if it is higher than the current weight of \a tid, otherwise noop.
         \note      ISR-safe.
+        \see       RestoreWeight, GetWeight
     */
-    virtual void InheritWeight(TId tid, Weight weight) = 0;
+    virtual void InheritWeight(TId tid, TId donor_tid) = 0;
+
+    /*! \brief     Inherit the highest weight among the tasks waiting for the synchronization object.
+        \param[in] tid: Id of the task which inherits (e.g. the new owner of a mutex after the ownership handover).
+        \param[in] sobj: Synchronization object whose wait list is searched for the highest weight.
+        \note      The weight is applied only if the highest waiter weight is higher than the current weight of \a tid
+                   (see ISyncObject::FindWeightHigherThan), otherwise noop (also if nobody is waiting).
+        \note      Done by the kernel, wait objects are never accessed by the caller.
+        \note      Must be called inside the critical section (see \a hw::CriticalSection).
+        \see       RestoreWeight, GetWeight
+    */
+    virtual void InheritWeight(TId tid, const ISyncObject *sobj) = 0;
 
     /*! \brief     Restore weight of the task to the original value.
         \param[in] tid: Task id.
