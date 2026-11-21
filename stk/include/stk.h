@@ -1624,8 +1624,17 @@ public:
                 // the kernel state is checked inside of it
                 const hw::CriticalSection::ScopedLock cs_;
 
+                bool allow_addition = false;
+                if (IsInitialized())
+                {
+                    const bool dynamic_mode = IsDynamicMode();
+                    const bool started      = IsStarted();
+
+                    allow_addition = (dynamic_mode || !started);
+                }
+
                 // after Start() only KERNEL_DYNAMIC may add tasks
-                if (IsInitialized() && (IsDynamicMode() || !IsStarted()))
+                if (allow_addition)
                 {
                     KernelTask *const task = TryAllocateNewTask(user_task, result);
                     if (task != nullptr)

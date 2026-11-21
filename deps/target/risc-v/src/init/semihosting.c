@@ -15,8 +15,15 @@
 #include <sys/time.h>
 #include <errno.h>
 
-/*! \def   __SEMIHOSTING_PRINTF_BUFFER
+/*! \file  semihosting.c
+    \brief RISC-V semihosting back-end of the C library (console output and input through the debugger).
+    \note  Not implemented calls (marked "TO-DO") stop the CPU with SEMIHOSTING_UNIMPLEMENTED() or return an error.
+    \see   https://github.com/riscv-software-src/riscv-semihosting/blob/main/riscv-semihosting-spec.adoc
+*/
+
+/*! \def   SEMIHOSTING_PRINTF_BUFFER
     \brief printf() buffer size (bytes).
+    \note  Longer output is truncated.
 */
 #define SEMIHOSTING_PRINTF_BUFFER (128)
 
@@ -24,7 +31,6 @@ extern int _open(const char *path, int oflag, ...);
 extern int _close(int fildes);
 extern ssize_t _read(int fildes, void* buf, size_t nbyte);
 extern ssize_t _write(int fildes, const void* buf, size_t nbyte);
-extern off_t _lseek(int fildes, off_t offset, int whence);
 extern off_t _lseek(int fildes, off_t offset, int whence);
 extern int _fstat(int fildes, struct stat *buf);
 extern int _isatty(int fildes);
@@ -36,8 +42,9 @@ extern int putchar(int c);
 extern int getchar(void);
 extern time_t time(time_t *_timer);
 
-// Details: https://wiki.segger.com/Semihosting
-#define SEMIHOSTING_SYS_OPEN            (0x01)
+/*! \name  Semihosting operations.
+    \see   https://wiki.segger.com/Semihosting
+*/#define SEMIHOSTING_SYS_OPEN            (0x01)
 #define SEMIHOSTING_SYS_CLOSE           (0x02)
 #define SEMIHOSTING_SYS_WRITEC          (0x03)
 #define SEMIHOSTING_SYS_WRITE0          (0x04)
@@ -62,10 +69,17 @@ extern time_t time(time_t *_timer);
 #define SEMIHOSTING_SYS_ELAPSED         (0x30)
 #define SEMIHOSTING_SYS_TICKFREQ        (0x31)
 
+/*! \def   SEMIHOSTING_UNIMPLEMENTED
+    \brief Stops the CPU (idle state) in a call which is not implemented yet.
+*/
 #define SEMIHOSTING_UNIMPLEMENTED() do { __asm volatile("wfi"); } while(1)
 
-/*! \brief     Call host.
-    \note      https://github.com/riscv-software-src/riscv-semihosting/blob/main/riscv-semihosting-spec.adoc
+/*! \brief     Call the host (debugger) using the RISC-V semihosting protocol.
+    \param[in] reason: Semihosting operation, see SEMIHOSTING_SYS_xxx.
+    \param[in] arg:    Pointer to the operation parameters (operation specific).
+    \note      The marker sequence (slli, ebreak, srai) must be made of 32-bit wide instructions, compressed
+                16-bit instructions are not allowed, therefore the sequence is emitted with \c norvc.
+    \see       https://github.com/riscv-software-src/riscv-semihosting/blob/main/riscv-semihosting-spec.adoc
     \return    Return value of the call.
 */
 static inline __attribute__((always_inline)) int32_t smh_call_host(int32_t reason, const void *arg)
@@ -90,16 +104,25 @@ static inline __attribute__((always_inline)) int32_t smh_call_host(int32_t reaso
     return value;
 }
 
+/*! \brief     Write a null-terminated string to the host console.
+    \param[in] buf: String.
+*/
 static inline void smh_write0(const char *buf)
 {
     smh_call_host(SEMIHOSTING_SYS_WRITE0, buf);
 }
 
+/*! \brief     Write a character to the host console.
+    \param[in] c: Character.
+*/
 static inline void smh_writec(char c)
 {
     smh_call_host(SEMIHOSTING_SYS_WRITEC, &c);
 }
 
+/*! \brief  Read a character from the host console.
+    \return Character.
+*/
 static inline int32_t smh_readc(void)
 {
     return smh_call_host(SEMIHOSTING_SYS_READC, NULL);
@@ -110,7 +133,7 @@ int _open(const char *path, int oflag, ...)
     (void)path;
     (void)oflag;
 
-    // TO-DO
+    // TODO: not implemented
     SEMIHOSTING_UNIMPLEMENTED();
     return -1;
 }
@@ -119,7 +142,7 @@ int _close(int fildes)
 {
     (void)fildes;
 
-    // TO-DO
+    // TODO: not implemented
     SEMIHOSTING_UNIMPLEMENTED();
     return -1;
 }
@@ -130,7 +153,7 @@ ssize_t _read(int fildes, void* buf, size_t nbyte)
     (void)buf;
     (void)nbyte;
 
-    // TO-DO
+    // TODO: not implemented
     SEMIHOSTING_UNIMPLEMENTED();
     return -1;
 }
@@ -141,7 +164,7 @@ ssize_t _write(int fildes, const void* buf, size_t nbyte)
     (void)buf;
     (void)nbyte;
 
-    // TO-DO
+    // TODO: not implemented
     errno = ENOSYS;
     return -1;
 }
@@ -152,7 +175,7 @@ off_t _lseek(int fildes, off_t offset, int whence)
     (void)offset;
     (void)whence;
 
-    // TO-DO
+    // TODO: not implemented
     SEMIHOSTING_UNIMPLEMENTED();
     return -1;
 }
@@ -162,7 +185,7 @@ int _fstat(int fildes, struct stat *buf)
     (void)fildes;
     (void)buf;
 
-    // TO-DO
+    // TODO: not implemented
     errno = ENOSYS;
     return -1;
 }
@@ -171,14 +194,14 @@ int _isatty(int fildes)
 {
     (void)fildes;
 
-    // TO-DO
+    // TODO: not implemented
     SEMIHOSTING_UNIMPLEMENTED();
     return -1;
 }
 
 pid_t _getpid(void)
 {
-    // TO-DO
+    // TODO: not implemented
     SEMIHOSTING_UNIMPLEMENTED();
     return -1;
 }
@@ -188,7 +211,7 @@ int _kill(pid_t pid, int sig)
     (void)pid;
     (void)sig;
 
-    // TO-DO
+    // TODO: not implemented
     SEMIHOSTING_UNIMPLEMENTED();
     return -1;
 }
@@ -198,11 +221,15 @@ int _gettimeofday(struct timeval *tv, void *tz)
     (void)tv;
     (void)tz;
 
-    // TO-DO
+    // TODO: not implemented
     SEMIHOSTING_UNIMPLEMENTED();
     return -1;
 }
 
+/*! \brief     Formatted output to the host console (limited by SEMIHOSTING_PRINTF_BUFFER).
+    \param[in] fmt: Format string.
+    \return    Number of characters which would have been written without the truncation.
+*/
 int printf(const char *fmt, ...)
 {
     char buffer[SEMIHOSTING_PRINTF_BUFFER] = {};
@@ -216,17 +243,28 @@ int printf(const char *fmt, ...)
     return ret;
 }
 
+/*! \brief     Write a character to the host console.
+    \param[in] c: Character.
+    \return    Character written.
+*/
 int putchar(int c)
 {
     smh_writec((char)c);
     return c;
 }
 
+/*! \brief  Read a character from the host console.
+    \return Character.
+*/
 int getchar(void)
 {
     return smh_readc();
 }
 
+/*! \brief     Get the time from the host.
+    \param[out] _timer: Optional pointer to store the time to.
+    \return    Time in seconds since the Epoch.
+*/
 time_t time(time_t *_timer)
 {
     return smh_call_host(SEMIHOSTING_SYS_TIME, _timer);

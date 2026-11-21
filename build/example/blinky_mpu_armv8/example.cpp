@@ -119,14 +119,14 @@ static void InitMpuSharedData()
     const size_t data_size = __stk_mpu_shared_data_end - __stk_mpu_shared_data_start;
     if (data_size > 0)
     {
-        STK_MEMCPY(__stk_mpu_shared_data_start, __stk_mpu_shared_data_source__, data_size);
+        stk::STK_MEMCPY(__stk_mpu_shared_data_start, __stk_mpu_shared_data_source__, data_size);
     }
 
     // zero-fill the BSS region
     const size_t bss_size = __stk_mpu_shared_bss_end - __stk_mpu_shared_bss_start;
     if (bss_size > 0)
     {
-        STK_MEMSET(__stk_mpu_shared_bss_start, 0, bss_size);
+        stk::STK_MEMSET(__stk_mpu_shared_bss_start, 0, bss_size);
     }
 }
 PICO_RUNTIME_INIT_FUNC(InitMpuSharedData, "00100");

@@ -21,4 +21,9 @@ file(GLOB RISCV_SRC ${CMAKE_CURRENT_SOURCE_DIR}/src/init/*.c)
 # Target
 add_library(${TARGET_NAME} STATIC ${RISCV_SRC})
 
+# MPU (PMP) support: startup code initializes the .stk_mpu_xxx regions of stk-mpu.ld
+if (STK_MPU)
+    target_compile_definitions(${TARGET_NAME} PRIVATE STK_MPU=1)
+endif()
+
 install(TARGETS ${TARGET_NAME} DESTINATION ${LIBRARY_OUTPUT_PATH})

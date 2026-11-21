@@ -168,7 +168,7 @@ void RunExample()
     kernel.AddTask(&hwt3, MSEC(200),   MSEC(20), MSEC(0));
 
 #if !USE_EDF
-    auto wcrt_sched = SchedulabilityCheck::IsSchedulableWCRT<TASK_COUNT>(kernel.GetSwitchStrategy());
+    auto wcrt_sched = sched::SchedulabilityCheck::IsSchedulableWCRT<TASK_COUNT>(kernel.GetSwitchStrategy());
     STK_ASSERT(wcrt_sched == true);
 #endif
 

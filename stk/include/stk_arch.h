@@ -183,7 +183,9 @@ namespace stk {
 */
 __stk_forceinline void STK_KERNEL_PANIC(stk::EKernelPanicId id)
 {
+#ifndef _STK_ARCH_RISC_V
     __stk_debug_break();   // debug aid
+#endif
     STK_PANIC_HANDLER(id); // must not return
 }
 
