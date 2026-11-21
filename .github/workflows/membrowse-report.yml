@@ -52,7 +52,7 @@ jobs:
         run: ${{ matrix.setup_cmd }}
 
       - name: Setup ccache
-        uses: hendrikmuhs/ccache-action@v1.2
+        uses: hendrikmuhs/ccache-action@v1
         with:
           key: ${{ matrix.port }}-${{ matrix.board }}
           save: ${{ github.ref == 'refs/heads/main' }}
@@ -75,7 +75,7 @@ jobs:
 
       - name: Upload report artifact
         if: ${{ steps.analyze.outcome == 'success' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: membrowse-report-${{ matrix.target_name }}
           path: ${{ steps.analyze.outputs.report_path }}
