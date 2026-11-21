@@ -38,7 +38,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
-          fetch-depth: ${{ fromJson(github.event.inputs.num_commits) + 5 }}
+          fetch-depth: 0
           submodules: recursive # Remove this line if submodules aren't needed for builds
 
       - name: Install packages
