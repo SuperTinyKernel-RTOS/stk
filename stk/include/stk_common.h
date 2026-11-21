@@ -2052,7 +2052,9 @@ public:
                    over the ownership (e.g. Mutex::Unlock()) without a second lookup and without accessing the wait
                    objects (not accessible for Non-Secure code of ARM TrustZone).
         \see       Wait
-        \warning   ISR-unsafe.
+        \note      ISR-safe: never blocks, it is what Semaphore::Signal(), Event::Set(), ConditionVariable::NotifyOne()
+                   and the like rely on when they are called from an ISR. The caller must have exclusive access to the
+                   state of \a sobj and its wait list (the sync primitives hold a hw::CriticalSection for that).
     */
     virtual TId Wake(ISyncObject *sobj, bool all) = 0;
 
