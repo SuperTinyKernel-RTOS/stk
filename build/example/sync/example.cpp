@@ -34,8 +34,8 @@ extern void STK_ASSERT_HANDLER(const char *err, const char *source, int32_t line
 
 using namespace bsp;
 
-#ifdef _PICO_H
-    #define STK_EXAMPLE_DUALCORE 1
+#ifdef PICO_BOARD
+    #define STK_EXAMPLE_DUALCORE (STK_ARCH_CPU_COUNT == 2)
 #else
     #define STK_EXAMPLE_DUALCORE 0
 #endif
@@ -43,7 +43,7 @@ using namespace bsp;
 #define STK_EXAMPLE_USE_PIPE 1
 
 // R2350 requires larger stack due to stack-memory heavy SDK API
-#ifdef _PICO_H
+#ifdef PICO_BOARD
 enum { TASK_STACK_SIZE = 1024 };
 #else
 enum { TASK_STACK_SIZE = 256 };
@@ -222,7 +222,7 @@ void StartCore1()
 
 void RunExample()
 {
-    InitLeds();
+    Led::InitAll(false);
 
     // optional, for debugging only
 #if !STK_EXAMPLE_USE_PIPE

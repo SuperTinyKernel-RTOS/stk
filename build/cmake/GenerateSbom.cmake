@@ -84,7 +84,7 @@ function(stk_generate_sbom TARGET)
         COMMENT "stk: updating SPDX SBOM"
         VERBATIM)
 
-    install(FILES ${sbom_file} DESTINATION sbom OPTIONAL)
+    install(FILES ${sbom_file} DESTINATION ${LIBRARY_OUTPUT_PATH}/sbom OPTIONAL)
 
     message(STATUS "STK SBOM: ${sbom_file}")
 endfunction()

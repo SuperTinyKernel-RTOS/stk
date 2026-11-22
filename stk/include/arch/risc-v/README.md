@@ -22,6 +22,9 @@ This document is the configuration and porting reference for the RISC-V architec
   - [Multi-Core (SMP)](#multi-core-smp)
   - [PendSV Emulation](#pendsv-emulation)
   - [Stack Configuration](#stack-configuration)
+  - [Memory Protection (PMP) and U-mode](#memory-protection-pmp-and-u-mode)
+    - [Simplified use: privilege separation without PMP regions](#simplified-use-privilege-separation-without-pmp-regions)
+    - [Memory protection with PMP (STK_MPU)](#memory-protection-with-pmp-stk_mpu)
   - [Kernel Tuning](#kernel-tuning)
 - [Platform Examples](#platform-examples)
   - [RP2350 (Raspberry Pi Pico 2)](#rp2350-raspberry-pi-pico-2)
@@ -254,6 +257,62 @@ Default `STK_STACK_SIZE_MIN` values by ISA:
 | RV32I / RV64I (standard 32-register) | 256 | `512 + (__riscv_flen * 2)` |
 
 > The higher minimum for RV32I/RV64I is necessary to prevent memory corruption on platforms like RP2350 due to the larger register file saved on each context switch.
+
+---
+
+### Memory Protection (PMP) and U-mode
+
+STK uses the RISC-V **Physical Memory Protection (PMP)** unit as the counterpart of the Arm Cortex-M MPU. The application API is the same as on Cortex-M (`ACCESS_PRIVILEGED` / `ACCESS_USER`, `ITask::GetMpuRegions()`, `stk::MpuRegionConfig`, `IPlatform::IEventOverrider::OnConfigureMpu()`), so MPU-protected code is portable between both architectures.
+
+| Define | Default | Description |
+|--------|---------|-------------|
+| `STK_RISCV_USER_MODE` | follows `STK_MPU` | If `1`, `ACCESS_USER` tasks run in **U-mode** (`mstatus.MPP = 0`) and `ACCESS_PRIVILEGED` tasks in **M-mode**. Requires a hart with M+U privilege levels. Always `1` if `STK_MPU` is `1`. Can be enabled **without** `STK_MPU` for simplified use, see below. |
+| `STK_MPU` | `0` | Enables PMP-based memory protection (static regions, per-task regions). Requires `STK_RISCV_USER_MODE=1` (PMP restricts U-mode only). |
+| `STK_MPU_STACK_GUARD` | `0` | Reprograms the per-task PMP regions (application regions + automatic stack guard) on every context switch. Requires `STK_MPU=1`. |
+| `STK_MPU_TASK_REGIONS` | `2` | Number of PMP entries reserved per task: 2, 4, 6, 8, 12 or 16. One entry is used by the stack guard, the rest by `GetMpuRegions()`. |
+| `STK_RISCV_PMP_REGIONS_MAX` | `16` | Number of PMP entries implemented by the hart (the driver supports up to 16). |
+| `STK_RISCV_PMP_TASK_REGION_IDX` | `STK_RISCV_PMP_REGIONS_MAX - STK_MPU_TASK_REGIONS` | First PMP entry index of the per-task block. Entries below it are available for static (global) regions. |
+| `STK_RISCV_PMP_PRESENT` | `1` | Used only with `STK_RISCV_USER_MODE=1` and `STK_MPU=0`. Set to `0` if the hart has no PMP at all (PMP CSRs must not be touched then). |
+| `STK_RISCV_PMP_RX_SWAPPED` | `0` | Set to `1` for cores with R and X bits of `pmpcfg` swapped, e.g. **RP2350 Hazard3 (erratum RP2350-E6)**. |
+
+#### Simplified use: privilege separation without PMP regions
+
+If `STK_RISCV_USER_MODE` is defined as `1` (and `STK_MPU` is not), you can use `ACCESS_PRIVILEGED` / `ACCESS_USER` tasks without programming any PMP regions. `ACCESS_USER` tasks run in U-mode and `ACCESS_PRIVILEGED` tasks in M-mode. Because a hart with PMP fails any U-mode access that matches no PMP entry, the driver programs one permissive entry (RWX, whole address space) and allows U-mode to read the `time`/`cycle`/`instret` counters. This gives CPU privilege separation only (U-mode code cannot execute privileged instructions or access M-mode CSRs) and **no memory isolation**: the check that limits privilege boost to shared code is not performed either.
+
+```c
+// stk_config.h
+#define _STK_ARCH_RISC_V
+#define STK_RISCV_USER_MODE  1
+```
+
+```cpp
+class DriverTask : public stk::Task<256, ACCESS_PRIVILEGED> { ... }; // M-mode
+class ParserTask : public stk::Task<512, ACCESS_USER> { ... };       // U-mode
+```
+
+#### Memory protection with PMP (`STK_MPU`)
+
+```c
+// stk_config.h
+#define STK_MPU               1
+#define STK_MPU_STACK_GUARD   1
+#define STK_MPU_TASK_REGIONS  4
+```
+
+- **M-mode is never restricted.** Unlocked PMP entries apply to U-mode only, so `ACCESS_PRIVILEGED` tasks and the kernel have implicit access to all memory (equivalent of `MPU_CFG_PRIVILEGED_BG_MEM` on Cortex-M, accepted and implied). `MPU_CFG_IN_FAULTS` (needs Smepmp) is not supported.
+- **NAPOT regions.** Every region must have a power-of-two size (>= 8 bytes) and a base address aligned to that size. Stack memory of tasks must satisfy this too when `STK_MPU_STACK_GUARD` is enabled.
+- **Lowest entry index wins.** Static regions (from `OnConfigureMpu()`) occupy low PMP indices and per-task regions the last `STK_MPU_TASK_REGIONS` entries. Overlapping regions change the meaning in PMP, therefore the driver treats an overlap between static and per-task regions (or inside either list) as an error (`KERNEL_PANIC_BAD_MEMORY_REGION`).
+- **Per-task regions.** The driver builds the per-task table from `ITask::GetMpuRegions()` (application regions first) followed by the automatic stack guard (U-mode read/write, execute-never), and loads it on every context switch. A task that returns no regions gets no stack guard, and the guard is dropped if a task's own region overlaps its stack.
+- **Memory type and shareability** fields of `MpuRegionConfig` are ignored (attributes are fixed by hardware PMAs); `EXEC_ALLOWED` / `EXEC_NEVER` map to the PMP X bit.
+- **Shared and kernel sections.** Place code and data with the `STK_MPU_SHARED_CODE_SECTION`, `STK_MPU_SHARED_DATA_SECTION`, `STK_MPU_SHARED_BSS_SECTION`, `STK_MPU_KERNEL_*` macros. The linker script must provide the `.stk_mpu_shared_code` section with `__stk_mpu_shared_code_start` / `__stk_mpu_shared_code_end` symbols: privilege boost (`ecall`) from U-mode is accepted only from code inside that range, anything else is a kernel panic.
+- **Fault handling.** A PMP violation of a U-mode task (`mcause` 1, 5 or 7) is delivered to `IPlatform::IEventOverrider::OnException()` as `HW_EXCEPT_MEMACCESS` with a `stk::FaultContext` (`mcause`, `mepc`, `mtval`, `mstatus` and a snapshot of `pmpcfg` / `pmpaddr`). If handled, the faulting load/store is skipped; an instruction access fault is always fatal.
+- **Multi-hart.** With U-mode enabled and `STK_ARCH_CPU_COUNT > 1`, `STK_ARCH_GET_CPU_ID()` must be readable from U-mode (the default `mhartid` CSR read traps in U-mode).
+
+##### Examples
+
+- [blinky_mpu_riscv](https://github.com/SuperTinyKernel-RTOS/stk/tree/main/build/example/blinky_mpu_riscv) - example application.
+- [Eclipse project for QEMU](https://github.com/SuperTinyKernel-RTOS/stk/tree/main/build/example/project/eclipse/risc-v/mpu)
+- [Eclipse project for RP2350 (Pico 2 W)](https://github.com/SuperTinyKernel-RTOS/stk/tree/main/build/example/project/eclipse/rpi/blinky_mpu_riscv-rp2350w)
 
 ---
 

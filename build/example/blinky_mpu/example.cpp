@@ -90,8 +90,8 @@ static uint32_t g_SecureCounter = 0;
 // naturally aligned to its size (power-of-two rounded up), so each task's storage block
 // is both sized and aligned to TASK_MEMORY_SIZE - this is what lets the 'self' region in
 // GetMpuRegions() below cover exactly one task instance without spilling into its neighbor.
-static constexpr uint32_t TASK_MEMORY_SIZE = 4096;
-static uint8_t s_LedTaskMem[4][TASK_MEMORY_SIZE] __stk_aligned(TASK_MEMORY_SIZE);
+typedef stk::StackMemoryDef<1024> TaskMemory;
+static TaskMemory::Type s_LedTaskMem[4];
 
 // Hw commands.
 struct HwCommand
@@ -302,8 +302,8 @@ private:
         // allow access to self
         const MpuRegionConfig self =
         {
-            .addr        = hw::PtrToWord(this), // 'this'
-            .size        = TASK_MEMORY_SIZE,    // cover whole allocated region of the task instance
+            .addr        = hw::PtrToWord(this),    // 'this'
+            .size        = TaskMemory::SIZE_BYTES, // cover whole allocated region of the task instance
             .access_perm = hw::mpu::ACCESS_FULL,
             .mem_type    = hw::mpu::TYPE_NORMAL_CACHEABLE,
             .share       = hw::mpu::SHARE_NON,
@@ -451,7 +451,7 @@ void RunExample()
     kernel.GetPlatform()->SetEventOverrider(&event_overrider);
 
     // make sure memory is enough
-    STK_STATIC_ASSERT(sizeof(NonSecureLedTask<ACCESS_USER>) <= TASK_MEMORY_SIZE);
+    STK_STATIC_ASSERT(sizeof(NonSecureLedTask<ACCESS_USER>) <= TaskMemory::SIZE_BYTES);
 
     // Non-Secure tasks
     NonSecureLedTask<ACCESS_USER> *led_task1 = new (s_LedTaskMem[0]) NonSecureLedTask<ACCESS_USER>(LED_RED);

@@ -123,7 +123,7 @@
 
 /*! \brief Hardware memory barrier: ensures visibility across cores and bus masters.
 */
-static __stk_forceinline void __stk_dmb() { __asm volatile("dmb sy" ::: "memory"); }
+static __stk_forceinline void __stk_dmb() { __asm__ __volatile__("dmb sy" ::: "memory"); }
 
 /*! \file  stk_arch_arm-cortex-m.h
     \brief Platform port for ARM Cortex-M.
@@ -190,7 +190,7 @@ typedef PlatformArmCortexM PlatformDefault;
 static __stk_forceinline Word GetTls()
 {
     Word tp;
-    __asm volatile("MOV %0, r9" : "=r"(tp) : /* input: none */ : /* clobbers: none */);
+    __asm__ __volatile__("MOV %0, r9" : "=r"(tp) : /* input: none */ : /* clobbers: none */);
     return tp;
 }
 
@@ -204,7 +204,7 @@ static __stk_forceinline Word GetTls()
 */
 static __stk_forceinline void SetTls(Word tp)
 {
-    __asm volatile("MOV r9, %0" : /* output: none */ : "r"(tp) : /* clobbers: none */);
+    __asm__ __volatile__("MOV r9, %0" : /* output: none */ : "r"(tp) : /* clobbers: none */);
 }
 
 // Notify stk_arch.h that we defined inline versions of GetTls/SetTls.

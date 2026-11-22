@@ -28,9 +28,14 @@
 // SIO_BASE of RP2350  is per calling CPU core, thus there is no classic access via CLINT + hart
 #define STK_RISCV_CLINT_MTIMECMP_PER_HART (0)
 
+// RP2350 has no CLINT MSIP: software interrupt is controlled via SIO RISCV_SOFTIRQ
+// bits [1:0] = SET (core0/core1), bits [9:8] = CLR (core0/core1)
+#define STK_RISCV_SOFTIRQ_ADDR (SIO_BASE + SIO_RISCV_SOFTIRQ_OFFSET)
+
 // RP2350 ISR handlers, see crt0_riscv.S of pico-sdk
 #define STK_SYSTICK_HANDLER isr_riscv_machine_timer
 #define STK_SVC_HANDLER     isr_riscv_machine_exception
+#define STK_MSI_HANDLER     isr_riscv_machine_soft_irq
 
 // Keep STK's ISR handlers in RAM to be compatible with pico-sdk
 #define STK_RISCV_ISR_SECTION __not_in_flash("stk")

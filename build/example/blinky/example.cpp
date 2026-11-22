@@ -21,7 +21,7 @@
  */
 
 #include <stk.h>
-#include <sync/stk_sync_eventflags.h>
+#include <sync/stk_sync.h>
 #include "example.h"
 
 using namespace bsp;

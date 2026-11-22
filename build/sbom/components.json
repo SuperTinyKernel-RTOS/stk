@@ -130,46 +130,41 @@
       ],
       "when": { "all": ["VENDOR_STM32", "TARGET_CORTEX_M4"] }
     },
-
     {
       "id": "riscv-csr-encoding",
       "name": "RISC-V CSR encoding header (riscv-opcodes)",
-      "supplier": "NOASSERTION",
-      "license": "NOASSERTION",
-      "copyright": "NOASSERTION",
+      "supplier": "Organization: RISC-V International",
+      "license": "BSD-3-Clause",
+      "copyright": "Copyright RISC-V International",
       "download": "https://github.com/riscv/riscv-opcodes",
+      "purl": "pkg:github/riscv/riscv-opcodes",
       "relationship": "DEPENDS_ON",
-      "comment": "Selected as the device header (_STK_DEVICE_INC) for RISC-V builds. The file carries no license header and its upstream license has not been verified: resolve before relying on this SBOM.",
+      "comment": "Selected as the device header (_STK_DEVICE_INC) for RISC-V builds; generated from riscv-opcodes (BSD-3-Clause).",
       "paths": ["deps/target/risc-v/include/risc-v/encoding.h"],
       "when": { "all": ["RISCV"], "none": ["VENDOR_RPI"] }
     },
     {
       "id": "riscv-startup",
-      "name": "RISC-V startup code and vector table",
-      "supplier": "NOASSERTION",
-      "license": "Unlicense",
-      "copyright": "NONE",
+      "name": "RISC-V startup code, vector table and linker script",
+      "supplier": "Organization: Neutron Code Limited (stk@neutroncode.com)",
+      "license": "MIT",
+      "copyright": "Copyright (c) 2022-2026 Neutron Code Limited <stk@neutroncode.com>",
+      "homepage": "https://github.com/SuperTinyKernel-RTOS/stk/tree/main/deps/target/risc-v",
+      "download": "git+https://github.com/SuperTinyKernel-RTOS/stk/deps/target/risc-v",
       "relationship": "DEPENDS_ON",
-      "comment": "startup.c, vector_table.c, vector_table.h of the risc-v target support library (public domain dedication, no copyright line in the files).",
+      "comment": "startup.c, vector_table.c, vector_table.h and linker script of the RISC-V target support library.",
       "paths": [
         "deps/target/risc-v/src/init/startup.c",
         "deps/target/risc-v/src/init/vector_table.c",
-        "deps/target/risc-v/src/init/vector_table.h"
+        "deps/target/risc-v/src/init/vector_table.h",
+        "deps/target/risc-v/src/ld/stk.ld",
+        "deps/target/risc-v/src/ld/stk-mpu.ld"
       ],
-      "when": { "all": ["RISCV"], "none": ["VENDOR_RPI"] }
+      "when": {
+        "all": [ "RISCV" ],
+        "none": [ "VENDOR_RPI" ]
+      }
     },
-    {
-      "id": "sifive-metal-ld",
-      "name": "SiFive linker script (metal.ld)",
-      "supplier": "Organization: SiFive Inc.",
-      "license": "Apache-2.0",
-      "copyright": "Copyright (c) 2020 SiFive Inc.",
-      "relationship": "DEPENDS_ON",
-      "comment": "Default linker script of the risc-v target support library.",
-      "paths": ["deps/target/risc-v/src/ld/metal.ld"],
-      "when": { "all": ["RISCV"], "none": ["VENDOR_RPI"] }
-    },
-
     {
       "id": "segger-systemview",
       "name": "SEGGER RTT and SystemView",

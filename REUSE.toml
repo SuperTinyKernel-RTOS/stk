@@ -44,11 +44,7 @@ path = [
     "deps/target/CMakeLists.txt",
     "deps/target/PostBuild.cmake",
     "deps/target/stm32fx/**",
-    "deps/target/risc-v/CMakeLists.txt",
-    "deps/target/risc-v/ProjectInclude.cmake",
-    "deps/target/risc-v/ProjectIncludeLib.cmake",
-    "deps/target/risc-v/src/init/semihosting.c",
-    "deps/target/risc-v/src/init/system.c",
+    "deps/target/risc-v/**",
     "deps/segger/CMakeLists.txt",
     "deps/cpputest/CMakeLists.txt",
     "deps/segger/SEGGER_SYSVIEW_Conf.h"
@@ -143,20 +139,28 @@ SPDX-FileCopyrightText = "2014 Liviu Ionescu"
 SPDX-License-Identifier = "MIT"
 
 # ------------------------------------------------------------------------------------------------------------------
-# Third-party: RISC-V target (deps/target/risc-v)
+# First-party: RISC-V target (deps/target/risc-v)
 # ------------------------------------------------------------------------------------------------------------------
 
-# Public-domain style files (SPDX tag is in the file, only the copyright line is missing)
+# RISC-V startup code, vector table and linker script
 [[annotations]]
 path = [
     "deps/target/risc-v/**",
 ]
-precedence = "aggregate"
-SPDX-FileCopyrightText = "NONE"
-SPDX-License-Identifier = "Unlicense"
+SPDX-FileCopyrightText = "2022-2026 Neutron Code Limited <stk@neutroncode.com>"
+SPDX-License-Identifier = "MIT"
 
-# NOTE: deps/target/risc-v/include/risc-v/encoding.h ("Source: github.com/riscv/riscv-opcodes") has no license
-# header and its upstream license could not be verified here. Deliberately NOT annotated: resolve it manually.
+# ------------------------------------------------------------------------------------------------------------------
+# Third-party: RISC-V target (deps/target/risc-v/include/risc-v)
+# ------------------------------------------------------------------------------------------------------------------
+
+# RISC-V opcodes / CSR encoding header from github.com/riscv/riscv-opcodes (BSD-3-Clause)
+[[annotations]]
+path = [
+    "deps/target/risc-v/include/risc-v/encoding.h",
+]
+SPDX-FileCopyrightText = "RISC-V International"
+SPDX-License-Identifier = "BSD-3-Clause"
 
 # ------------------------------------------------------------------------------------------------------------------
 # Third-party: CppUTest (deps/cpputest), test-only, never part of the library SBOM

@@ -21,7 +21,7 @@
 #define STK_TICKLESS_IDLE (1)
 
 // Define _STK_CPU_COUNT as 2 to use STK on both CPU cores or on CPU1, if 1 then STK can be hosted on CPU0 only
-#define STK_ARCH_CPU_COUNT    (2)
+#define STK_ARCH_CPU_COUNT    (1)
 #define STK_ARCH_GET_CPU_ID() (*(uint32_t *)(SIO_BASE + SIO_CPUID_OFFSET)) // see get_core_num() in pico/platform.h
 
 // RP2350 implements access to RISC-V CLINT via SIO_BASE which is per calling CPU core
@@ -30,6 +30,10 @@
 
 // SIO_BASE of RP2350 is per calling CPU core, thus there is no classic access via CLINT + hart
 #define STK_RISCV_CLINT_MTIMECMP_PER_HART (0)
+
+// RP2350 has no CLINT MSIP: software interrupt is controlled via SIO RISCV_SOFTIRQ
+// bits [1:0] = SET (core0/core1), bits [9:8] = CLR (core0/core1)
+#define STK_RISCV_SOFTIRQ_ADDR (SIO_BASE + SIO_RISCV_SOFTIRQ_OFFSET)
 
 // RP2350 ISR handlers, see crt0_riscv.S of pico-sdk
 #define STK_SYSTICK_HANDLER isr_riscv_machine_timer

@@ -151,9 +151,9 @@
 			<locationURI>PARENT-5-PROJECT_LOC/deps/target/risc-v/src/init/vector_table.h</locationURI>
 		</link>
 		<link>
-			<name>deps/risc-v/src/ld/metal.ld</name>
+			<name>deps/risc-v/src/ld/stk.ld</name>
 			<type>1</type>
-			<locationURI>PARENT-5-PROJECT_LOC/deps/target/risc-v/src/ld/metal.ld</locationURI>
+			<locationURI>PARENT-5-PROJECT_LOC/deps/target/risc-v/src/ld/stk.ld</locationURI>
 		</link>
 		<link>
 			<name>deps/stk/include/arch/arm</name>
