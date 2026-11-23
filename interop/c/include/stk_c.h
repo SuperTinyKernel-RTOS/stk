@@ -219,12 +219,19 @@ typedef void (*stk_task_entry_t)(void *arg);
 
 /*! \brief     Outcome of a cancellable, timed kernel wait (see stk_cv_wait_ex(), stk_mutex_timed_lock_ex(), stk_sem_wait_ex(), ...).
     \note      It is a direct match for stk::EWaitResult.
+    \note      Destroying a synchronization object (stk_*_destroy()) while tasks are blocked on it releases all of
+               them with \c STK_WAIT_RESULT_DELETED. The void/bool lock and wait calls of such an object cannot
+               report it: stk_mutex_lock(), stk_fastmutex_lock(), stk_rwmutex_read_lock() and stk_rwmutex_lock()
+               end in a kernel panic, the bool variants return False. Use the \c *_ex() calls where an object may be
+               destroyed under its waiters.
 */
 typedef enum stk_wait_result_t {
     STK_WAIT_RESULT_FAIL     = -1, //!< The kernel returned an error without actually waiting.
     STK_WAIT_RESULT_SIGNAL   = 0,  //!< The wake was caused by a signal.
     STK_WAIT_RESULT_TIMEOUT  = 1,  //!< The wake was caused by a timeout expiry.
-    STK_WAIT_RESULT_CANCELED = 2   //!< The wait was cancelled by another task, independent of signal/timeout.
+    STK_WAIT_RESULT_CANCELED = 2,  //!< The wait was cancelled by another task, independent of signal/timeout.
+    STK_WAIT_RESULT_DELETED  = 3   //!< The synchronization object was destroyed while the task was waiting on it.
+                                   //!< The handle is no longer valid and must not be used (no unlock, no retry).
 } stk_wait_result_t;
 
 /*! \brief     Result of stk_kernel_add_task() and stk_kernel_add_task_hrt().
@@ -1488,6 +1495,7 @@ stk_mutex_t *stk_mutex_create_ex(stk_mutex_mem_t *const membuf, stk_wait_order_t
 
 /*! \brief     Destroy a Mutex.
     \param[in] mtx: Mutex handle.
+    \note      Tasks still waiting on it are released with \c STK_WAIT_RESULT_DELETED (see \c stk_wait_result_t).
 */
 void stk_mutex_destroy(stk_mutex_t *mtx);
 
@@ -1630,7 +1638,7 @@ stk_fastmutex_t *stk_fastmutex_create_ex(stk_fastmutex_mem_t *const membuf, stk_
 
 /*! \brief     Destroy a FastMutex.
     \param[in] mtx: FastMutex handle.
-    \note      Must not be destroyed while tasks are waiting on it.
+    \note      Tasks still waiting on it are released with \c STK_WAIT_RESULT_DELETED (see \c stk_wait_result_t).
 */
 void stk_fastmutex_destroy(stk_fastmutex_t *mtx);
 
@@ -2275,6 +2283,7 @@ typedef STK_C_EF_VALUE_TYPE stk_ef_val_t;
 #define STK_EF_ERROR_ISR       (STK_STATIC_CAST(stk_ef_val_t, STK_EF_ERROR_MASK | STK_STATIC_CAST(stk_ef_val_t, 0x04U))) /*!< Wait called from an ISR with a blocking timeout */
 #define STK_EF_ERROR_CANCELED  (STK_STATIC_CAST(stk_ef_val_t, STK_EF_ERROR_MASK | STK_STATIC_CAST(stk_ef_val_t, 0x08U))) /*!< Wait was cancelled before the flag condition was met */
 #define STK_EF_ERROR_FAIL      (STK_STATIC_CAST(stk_ef_val_t, STK_EF_ERROR_MASK | STK_STATIC_CAST(stk_ef_val_t, 0x10U))) /*!< The kernel rejected the wait (e.g. KERNEL_SYNC mode is not enabled) */
+#define STK_EF_ERROR_DELETED   (STK_STATIC_CAST(stk_ef_val_t, STK_EF_ERROR_MASK | STK_STATIC_CAST(stk_ef_val_t, 0x20U))) /*!< The event flags object was destroyed while the task was waiting: do not use it any more */
 
 /*! \brief     Returns true if a value returned by stk_ef_set(), stk_ef_clear(),
                stk_ef_wait(), or stk_ef_trywait() is an error sentinel (error bit set).
@@ -3510,8 +3519,11 @@ void stk_barrier_destroy(stk_barrier_t *barrier);
 typedef enum stk_barrier_result_t {
     STK_BARRIER_RELEASED     = 0, //!< Released because the barrier tripped; this task was not the last arrival.
     STK_BARRIER_LAST_ARRIVAL = 1, //!< This task was the last arrival and tripped the barrier.
-    STK_BARRIER_CANCELED     = 2  //!< Wait was cancelled before the barrier tripped; this task's arrival
+    STK_BARRIER_CANCELED     = 2, //!< Wait was cancelled before the barrier tripped; this task's arrival
                                    //!< was rolled back and does not count toward the generation it was waiting on.
+    STK_BARRIER_DELETED      = 3, //!< The barrier was destroyed while this task was waiting: it must not be used any more.
+    STK_BARRIER_FAILED       = 4  //!< The kernel rejected the wait (e.g. the scheduler is locked or KERNEL_SYNC is not enabled);
+                                   //!< the arrival was rolled back.
 } stk_barrier_result_t;
 
 /*! \brief     Block the calling task until \a count tasks have called \c stk_barrier_wait().
@@ -3531,7 +3543,8 @@ bool stk_barrier_wait(stk_barrier_t *barrier);
     \details   Identical to \c stk_barrier_wait(), except the caller can distinguish a
                normal release, being the last arrival, and a cancellation.
     \param[in] barrier: Barrier handle.
-    \return    \c STK_BARRIER_LAST_ARRIVAL, \c STK_BARRIER_RELEASED, or \c STK_BARRIER_CANCELED.
+    \return    \c STK_BARRIER_LAST_ARRIVAL, \c STK_BARRIER_RELEASED, \c STK_BARRIER_CANCELED,
+               \c STK_BARRIER_DELETED or \c STK_BARRIER_FAILED.
     \warning   ISR-unsafe.
 */
 stk_barrier_result_t stk_barrier_wait_ex(stk_barrier_t *barrier);

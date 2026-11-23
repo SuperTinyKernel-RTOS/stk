@@ -785,6 +785,7 @@ static int TimedResultToErrno(EWaitResult wr)
         result = ETIMEDOUT;
         break;
 
+    case WAIT_RESULT_DELETED: // the object was destroyed while waiting (undefined in POSIX): it must not be used
     case WAIT_RESULT_CANCELED:
     case WAIT_RESULT_FAIL:
     default:
@@ -1424,6 +1425,10 @@ static int JoinThread(pthread_t thread, void **retval, const struct timespec *ab
 
                 ReleaseThreadResources(ctrl);
             }
+            else if (wr == WAIT_RESULT_DELETED)
+            {
+                result = EINVAL; // the control block was released under the waiter: it must not be touched
+            }
             else
             {
                 // not finished (timeout) or the wait was rejected: give the join claim back
@@ -1798,7 +1803,9 @@ int pthread_cond_wait(pthread_cond_t *cond, pthread_mutex_t *mutex)
 
         const EWaitResult wr = EnsureCond(cond)->WaitEx(*HandleOf(mutex), WAIT_INFINITE);
 
-        result = (wr == WAIT_RESULT_FAIL) ? EINVAL : 0;
+        // WAIT_RESULT_DELETED: the condition variable was destroyed while waiting (undefined in POSIX): report
+        // EINVAL so that a caller looping on its predicate does not wait on the destroyed object again
+        result = ((wr == WAIT_RESULT_FAIL) || (wr == WAIT_RESULT_DELETED)) ? EINVAL : 0;
 
         TestCancelPoint(); // a cancellation request ends the wait: the mutex is held again here, as POSIX requires
     }
@@ -2185,7 +2192,18 @@ int pthread_barrier_wait(pthread_barrier_t *barrier)
         }
         while (br == sync::Barrier::BARRIER_CANCELED);
 
-        result = (br == sync::Barrier::BARRIER_LAST_ARRIVAL) ? PTHREAD_BARRIER_SERIAL_THREAD : 0;
+        if (br == sync::Barrier::BARRIER_LAST_ARRIVAL)
+        {
+            result = PTHREAD_BARRIER_SERIAL_THREAD;
+        }
+        else if (br == sync::Barrier::BARRIER_RELEASED)
+        {
+            result = 0;
+        }
+        else
+        {
+            result = EINVAL; // BARRIER_DELETED (the barrier was destroyed while waiting) or BARRIER_FAILED
+        }
     }
 
     return result;
@@ -2843,6 +2861,7 @@ static int SemWaitResult(EWaitResult wr, int timeout_errno)
         result = SemFail(EINTR); // otherwise like a signal interruption, the caller retries
         break;
 
+    case WAIT_RESULT_DELETED: // the semaphore was destroyed while waiting (undefined in POSIX)
     case WAIT_RESULT_FAIL:
     default:
         result = SemFail(EINVAL);

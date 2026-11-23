@@ -28,12 +28,18 @@ STK_TEST_DECL_ASSERT;
 #define _STK_POOL_TEST_LONG_SLEEP  100
 #define _STK_POOL_BLOCK_SIZE       32U
 #define _STK_POOL_CAPACITY         8U
+#define _STK_POOL_DELETE_CAPACITY  4U // capacity of the pool destroyed by the delete-with-waiter tests
 #ifdef __ARM_ARCH_6M__
 #define _STK_POOL_STACK_SIZE       128 // ARM Cortex-M0
 #define STK_TASK
 #else
 #define _STK_POOL_STACK_SIZE       256
 #define STK_TASK                   static
+#endif
+
+#ifndef _NEW
+inline void *operator new(std::size_t, void *ptr) noexcept { return ptr; }
+inline void operator delete(void *, void *) noexcept { /* nothing for placement delete */ }
 #endif
 
 namespace stk {
@@ -72,6 +78,24 @@ static volatile int64_t g_VictimSleepElapsed     = 0;            // ms spent in 
 // RunTest<CancelAllocTask> call), so a constructor argument would silently keep the value of the first case.
 // Set by main() before each RunTest() call.
 static volatile int32_t g_CancelParam            = 0;
+
+// Delete-with-waiter test state (see DeleteWithWaiterTask): a dedicated pool, with its own external block buffer, which is
+// destroyed while tasks wait for a block, g_Pool must stay untouched. The pool object lives in raw storage which is
+// overwritten after the destruction: a waiter which wrote to the destroyed pool would leave a trace in it. The outcome of
+// the waits on the destroyed pool is reported through g_VictimResult[] / g_VictimGotBlock[] / g_VictimElapsed[] above
+// (index 0: task 1, index 1: task 2).
+alignas(stk::memory::BlockMemoryPool) static uint8_t g_DeletePoolObj[sizeof(stk::memory::BlockMemoryPool)];
+alignas(stk::memory::BlockMemoryPool::ALIGN_DEFAULT) static uint8_t
+    g_DeleteBlocks[_STK_POOL_DELETE_CAPACITY * stk::memory::BlockMemoryPool::AlignBlockSize(_STK_POOL_BLOCK_SIZE)];
+static stk::memory::BlockMemoryPool * volatile g_DeletePool = nullptr;
+static const uint8_t                    DELETED_FILL         = 0xDD;
+static ITask * volatile                 g_DeleteVictim2      = nullptr;      // second waiter (task 2), published right before it blocks
+static volatile int32_t                 g_DeleteCheckResult  = -100;         // EWaitResult of the follow-up wait of task 1 on g_Pool (-100 = not set)
+static volatile bool                    g_DeleteCheckGotBlock = false;       // true if that follow-up wait returned a block (not expected)
+static volatile int64_t                 g_DeleteCheckElapsed = 0;            // ms spent in that follow-up wait
+
+// Scenario selector of DeleteWithWaiterTask, a global for the same reason as g_CancelParam
+static volatile int32_t                 g_DeleteParam        = 0;
 
 // Cancel the wait of g_Victim either via IKernel::CancelTaskWait() or via stk::SleepCancel()
 static void CancelVictim(bool use_sleep_cancel)
@@ -974,6 +998,236 @@ private:
 };
 
 // ---------------------------------------------------------------------------
+// Tests 23+ – Destruction of a pool which tasks are blocked on (WAIT_RESULT_DELETED)
+// ---------------------------------------------------------------------------
+
+static const int32_t DW_EX    = 1; // one waiter in TimedAllocEx(): WAIT_RESULT_DELETED
+static const int32_t DW_TIMED = 2; // one waiter in TimedAlloc(): nullptr (every non-SIGNAL result is mapped to nullptr)
+static const int32_t DW_TWO   = 3; // two waiters in TimedAllocEx(), both must be released
+
+/*! \class DeleteWithWaiterTask
+    \brief Tests destruction of a BlockMemoryPool which tasks are blocked on (WAIT_RESULT_DELETED).
+    \note  Task 0 creates a dedicated pool (external storage of its own), drains it and destroys it while task 1 (and
+           task 2 in the two-waiters scenario) wait for a block with an infinite timeout. A task can wait only for an
+           empty pool, so this is the one way to destroy a pool with waiters: all its blocks are outstanding and are
+           simply not returned (the owner must not Free() them into the destroyed pool). Nobody frees a block, so only
+           the destruction can end the waits: the waiters must get WAIT_RESULT_DELETED and no block (neither a block,
+           a timeout nor a cancellation) without touching the destroyed object. The storage of the pool object is
+           overwritten after the destruction and must still hold that pattern when the waiters are back, so any write
+           by a woken waiter is detected. Afterwards the kernel and g_Pool must be fully usable: task 0 drains g_Pool
+           and the victim performs a TimedAllocEx(20) on it, which must run to its deadline (a stale wait entry would
+           end it early) and return no block; once task 0 has returned its blocks g_Pool must be empty (no leak).
+           The scenario is selected by g_DeleteParam: 1 = a waiter in TimedAllocEx(), 2 = a waiter in TimedAlloc()
+           (reports nullptr; an infinite wait can not time out, so nullptr after ~50 ms identifies the destruction),
+           3 = two waiters in TimedAllocEx() are both released. Task 2 is added by RunTest() but stays idle unless the
+           scenario is 3. The plain Alloc() is not covered.
+*/
+template <EAccessMode _AccessMode>
+class DeleteWithWaiterTask : public Task<_STK_POOL_STACK_SIZE, _AccessMode>
+{
+    uint8_t m_task_id;
+    int32_t m_scenario;
+
+public:
+    DeleteWithWaiterTask(uint8_t task_id, int32_t) // scenario is taken from g_DeleteParam in Run(), see g_DeleteParam
+        : m_task_id(task_id), m_scenario(0)
+    {}
+
+private:
+    void Run() override
+    {
+        m_scenario = g_DeleteParam;
+
+        if (m_task_id == 0)
+            RunDestroyer();
+        else
+        if (m_task_id == 1)
+            RunVictim();
+        else
+            RunSecondWaiter();
+    }
+
+    // Task 1: block on the dedicated pool, record how the wait ended
+    void RunVictim()
+    {
+        stk::Sleep(_STK_POOL_TEST_SHORT_SLEEP);
+
+        g_Victim    = static_cast<ITask *>(this);
+        g_VictimTid = stk::GetTid();
+
+        stk::memory::BlockMemoryPool *const pool = g_DeletePool; // created by task 0 before it went to sleep
+
+        void   *blk    = nullptr;
+        int32_t result = static_cast<int32_t>(WAIT_RESULT_FAIL);
+
+        const int64_t start = GetTimeNowMs();
+
+        // blocks until the pool is destroyed; nothing but the result is read afterwards
+        if (pool != nullptr)
+        {
+            if (m_scenario == DW_TIMED)
+            {
+                // TimedAlloc() maps every non-SIGNAL result to nullptr; stored as 1 = block / 0 = no block
+                blk    = pool->TimedAlloc(WAIT_INFINITE);
+                result = (blk != nullptr ? 1 : 0);
+            }
+            else
+            {
+                result = static_cast<int32_t>(pool->TimedAllocEx(&blk, WAIT_INFINITE));
+            }
+        }
+
+        g_VictimElapsed[0]  = GetTimeNowMs() - start;
+        g_VictimResult[0]   = result;
+        g_VictimGotBlock[0] = (blk != nullptr); // a block, if any, is not returned: the pool is gone
+
+        // the kernel is in a sane state: a wait on another pool (drained by task 0 at this moment) works, runs to
+        // its deadline and returns no block
+        void *blk2 = nullptr;
+
+        const int64_t     start2 = GetTimeNowMs();
+        const EWaitResult r2     = g_Pool->TimedAllocEx(&blk2, 20);
+
+        g_DeleteCheckElapsed  = GetTimeNowMs() - start2;
+        g_DeleteCheckGotBlock = (blk2 != nullptr);
+        g_DeleteCheckResult   = static_cast<int32_t>(r2);
+
+        if (blk2 != nullptr) // not expected: do not leak it
+            g_Pool->Free(blk2);
+    }
+
+    // Task 2: second waiter, queued behind task 1
+    void RunSecondWaiter()
+    {
+        if (m_scenario != DW_TWO)
+            return;
+
+        stk::Sleep(2 * _STK_POOL_TEST_SHORT_SLEEP); // block after task 1
+
+        g_DeleteVictim2 = static_cast<ITask *>(this);
+
+        stk::memory::BlockMemoryPool *const pool = g_DeletePool;
+
+        void *blk = nullptr;
+        EWaitResult r = WAIT_RESULT_FAIL;
+
+        const int64_t start = GetTimeNowMs();
+
+        if (pool != nullptr)
+            r = pool->TimedAllocEx(&blk, WAIT_INFINITE);
+
+        g_VictimElapsed[1]  = GetTimeNowMs() - start;
+        g_VictimResult[1]   = static_cast<int32_t>(r);
+        g_VictimGotBlock[1] = (blk != nullptr);
+    }
+
+    // True if the storage of the destroyed pool object still holds the pattern written after the destruction
+    static bool StorageUntouched()
+    {
+        for (size_t i = 0; i < sizeof(g_DeletePoolObj); ++i)
+        {
+            if (g_DeletePoolObj[i] != DELETED_FILL)
+                return false;
+        }
+
+        return true;
+    }
+
+    // Task 0: create, drain, destroy and verify
+    void RunDestroyer()
+    {
+        stk::memory::BlockMemoryPool *const pool = ::new (g_DeletePoolObj) stk::memory::BlockMemoryPool(
+            _STK_POOL_DELETE_CAPACITY, _STK_POOL_BLOCK_SIZE, g_DeleteBlocks, sizeof(g_DeleteBlocks));
+        g_DeletePool = pool;
+
+        // drain the dedicated pool so that the waiters block; the blocks are never returned (the pool is destroyed)
+        bool drained = pool->IsStorageValid();
+        for (size_t i = 0; i < _STK_POOL_DELETE_CAPACITY; ++i)
+            drained &= (pool->TryAlloc() != nullptr);
+        drained &= pool->IsFull();
+
+        stk::Sleep(60); // task 1 (and task 2) block on it in the meantime
+
+        // destroy the pool which is waited on: the waiters are released by the destructor of its condition variable
+        pool->~BlockMemoryPool();
+        memset(g_DeletePoolObj, DELETED_FILL, sizeof(g_DeletePoolObj));
+        g_DeletePool = nullptr;
+
+        // make the follow-up allocation of task 1 block: it must wait on g_Pool until its deadline
+        void *blocks[_STK_POOL_CAPACITY] = {};
+        for (size_t i = 0; i < _STK_POOL_CAPACITY; ++i)
+            blocks[i] = g_Pool->TryAlloc();
+
+        stk::Sleep(40);
+
+        for (size_t i = 0; i < _STK_POOL_CAPACITY; ++i)
+        {
+            if (blocks[i] != nullptr)
+                g_Pool->Free(blocks[i]);
+        }
+
+        stk::Sleep(_STK_POOL_TEST_SHORT_SLEEP * 4); // let the waiters resume and task 1 finish its check on g_Pool
+
+        // safety net: if a waiter was not released it would block forever and the kernel would never stop,
+        // cancel it so that the test fails instead of hanging
+        const bool released = (g_VictimResult[0] != -100) &&
+                              ((m_scenario != DW_TWO) || (g_VictimResult[1] != -100));
+        if (!released)
+        {
+            ITask *const victim1 = g_Victim;
+            ITask *const victim2 = g_DeleteVictim2;
+
+            if (victim1 != nullptr)
+                g_Kernel.CancelTaskWait(victim1);
+            if (victim2 != nullptr)
+                g_Kernel.CancelTaskWait(victim2);
+
+            stk::Sleep(_STK_POOL_TEST_SHORT_SLEEP * 5);
+        }
+
+        const bool leak_free = g_Pool->IsEmpty(); // every block of g_Pool is back
+        const bool untouched = StorageUntouched();
+
+        printf("delete with waiter (scenario=%d): first=%d got_block=%d elapsed=%d ms, second=%d got_block=%d elapsed=%d ms, "
+            "g_Pool wait: result=%d got_block=%d elapsed=%d ms, leak_free=%d storage_untouched=%d\n",
+            (int)m_scenario,
+            (int)g_VictimResult[0], (int)g_VictimGotBlock[0], (int)g_VictimElapsed[0],
+            (int)g_VictimResult[1], (int)g_VictimGotBlock[1], (int)g_VictimElapsed[1],
+            (int)g_DeleteCheckResult, (int)g_DeleteCheckGotBlock, (int)g_DeleteCheckElapsed,
+            (int)leak_free, (int)untouched);
+
+        // task 1 started waiting at ~10 ms, task 2 at ~20 ms, the pool was destroyed at ~60 ms
+        bool pass = drained && released && !g_VictimGotBlock[0] &&
+                    (g_VictimElapsed[0] >= 35) && (g_VictimElapsed[0] <= 75);
+
+        if (m_scenario == DW_TIMED)
+        {
+            // nullptr, and an infinite wait can not time out: it was the destruction that ended it
+            pass = pass && (g_VictimResult[0] == 0);
+        }
+        else
+        {
+            pass = pass && (g_VictimResult[0] == WAIT_RESULT_DELETED);
+        }
+
+        if (m_scenario == DW_TWO)
+        {
+            pass = pass && (g_VictimResult[1] == WAIT_RESULT_DELETED) && !g_VictimGotBlock[1] &&
+                   (g_VictimElapsed[1] >= 25) && (g_VictimElapsed[1] <= 65);
+        }
+
+        // the other pool was not affected: a 20 ms wait on it ran to its deadline (a stale wait entry would cut it
+        // short) without a block, and all its blocks are back; the destroyed pool was not written to
+        pass = pass &&
+               (g_DeleteCheckResult == WAIT_RESULT_TIMEOUT) && !g_DeleteCheckGotBlock && (g_DeleteCheckElapsed >= 15) &&
+               leak_free && untouched;
+
+        if (pass)
+            g_TestResult = 1;
+    }
+};
+
+// ---------------------------------------------------------------------------
 // Helper – reset shared state between tests
 // ---------------------------------------------------------------------------
 
@@ -986,6 +1240,12 @@ static void ResetTestState()
     g_Victim             = nullptr;
     g_VictimTid          = TID_NONE;
     g_VictimSleepElapsed = 0;
+
+    g_DeletePool          = nullptr;
+    g_DeleteVictim2       = nullptr;
+    g_DeleteCheckResult   = -100;
+    g_DeleteCheckGotBlock = false;
+    g_DeleteCheckElapsed  = 0;
 
     for (int32_t i = 0; i < 2; ++i)
     {
@@ -1015,16 +1275,18 @@ static bool NeedsTwoTasks(const char *test_name)
            (strcmp(test_name, "TimedAllocSuccess")  == 0) ||
            (strcmp(test_name, "ConcurrentAllocFree")== 0) ||
            (strcmp(test_name, "Stress")             == 0) ||
-           (strncmp(test_name, "CancelAlloc", 11)   == 0);
+           (strncmp(test_name, "CancelAlloc", 11)   == 0) ||
+           (strncmp(test_name, "DeleteWithWaiter", 16) == 0);
 }
 
 /*! \fn    NeedsThreeTasks
     \brief Returns true if the test requires tasks 0, 1 and 2 (but not 3-4).
-    \note  Cancellation tests: canceller, victim and a second waiter.
+    \note  Cancellation and delete-with-waiter tests: canceller (destroyer), victim and a second waiter.
 */
 static bool NeedsThreeTasks(const char *test_name)
 {
-    return (strncmp(test_name, "CancelAlloc", 11) == 0);
+    return (strncmp(test_name, "CancelAlloc", 11) == 0) ||
+           (strncmp(test_name, "DeleteWithWaiter", 16) == 0);
 }
 
 /*! \fn    NeedsAllTasks
@@ -1186,6 +1448,31 @@ int main(int argc, char **argv)
             g_CancelParam = cases[i].param;
 
             if (RunTest<CancelAllocTask<ACCESS_PRIVILEGED>>(cases[i].name, cases[i].param)
+                != TestContext::SUCCESS_EXIT_CODE)
+                total_failures++;
+            else
+                total_success++;
+        }
+    }
+
+    // Tests 23-25: pool destroyed while tasks wait for a block (WAIT_RESULT_DELETED, tasks 0-2 only)
+    {
+        using namespace stk::test::blockpool;
+
+        struct DeleteCase { const char *name; int32_t param; };
+
+        static const DeleteCase cases[] =
+        {
+            { "DeleteWithWaiter",       DW_EX    },
+            { "DeleteWithWaiterTimed",  DW_TIMED },
+            { "DeleteWithWaiterTwo",    DW_TWO   }
+        };
+
+        for (size_t i = 0; i < (sizeof(cases) / sizeof(cases[0])); ++i)
+        {
+            g_DeleteParam = cases[i].param;
+
+            if (RunTest<DeleteWithWaiterTask<ACCESS_PRIVILEGED>>(cases[i].name, cases[i].param)
                 != TestContext::SUCCESS_EXIT_CODE)
                 total_failures++;
             else

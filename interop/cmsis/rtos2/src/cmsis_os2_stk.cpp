@@ -190,6 +190,10 @@ __stk_forceinline osStatus_t StkWaitFailToCmsis(stk::Timeout timeout)
 // or IKernelService::SleepCancel() and a wait rejected by the kernel (WAIT_RESULT_FAIL)
 // are both reported as the generic osError instead of being disguised as a timeout.
 // A timeout keeps the usual mapping: NO_WAIT -> osErrorResource, otherwise -> osErrorTimeout.
+//
+// A wait released because the object was deleted (WAIT_RESULT_DELETED) is reported as
+// osErrorResource, as the Arm RTX reference implementation does for threads blocked on a deleted
+// mutex, semaphore or message queue. The caller must not use the object any more.
 // -----------------------------------------------------------------------------
 __stk_forceinline osStatus_t StkWaitResultToCmsis(stk::EWaitResult wr, stk::Timeout timeout)
 {
@@ -203,6 +207,10 @@ __stk_forceinline osStatus_t StkWaitResultToCmsis(stk::EWaitResult wr, stk::Time
 
     case stk::WAIT_RESULT_TIMEOUT:
         result = StkWaitFailToCmsis(timeout);
+        break;
+
+    case stk::WAIT_RESULT_DELETED:
+        result = osErrorResource;
         break;
 
     case stk::WAIT_RESULT_CANCELED:
@@ -857,6 +865,11 @@ __stk_forceinline uint32_t StkFlagsResultToCmsis(uint32_t result)
     {
         cmsis_result = osFlagsErrorISR;
     }
+    else if (result == stk::sync::EventFlags::ERROR_DELETED)
+    {
+        // the event flags object was deleted while the thread was waiting (as Arm RTX reports it)
+        cmsis_result = osFlagsErrorResource;
+    }
     else if ((result == stk::sync::EventFlags::ERROR_CANCELED) ||
              (result == stk::sync::EventFlags::ERROR_FAIL))
     {
@@ -902,6 +915,10 @@ uint32_t CmsisFlagsWait(stk::sync::EventFlags &ef, uint32_t flags, uint32_t opti
 
         case stk::WAIT_RESULT_TIMEOUT:
             result = osFlagsErrorTimeout;
+            break;
+
+        case stk::WAIT_RESULT_DELETED: // object deleted while waiting: 'ef' is gone, do not touch it
+            result = osFlagsErrorResource;
             break;
 
         case stk::WAIT_RESULT_CANCELED: // CMSIS has no "canceled" flags status
@@ -1682,6 +1699,7 @@ osStatus_t osThreadJoin(osThreadId_t thread_id)
                     // Block until OnExit() fires (transitions state to Exited).
                     // m_join_cv.Wait() atomically releases the critical section and suspends.
                     bool wait_ok = true;
+                    bool deleted = false;
 
                     while (wait_ok && (th->m_join_state == StkThread::JoinState::Joined))
                     {
@@ -1689,14 +1707,29 @@ osStatus_t osThreadJoin(osThreadId_t thread_id)
                         // A cancelled wait is harmless (the predicate is re-checked), but a rejected one
                         // (WAIT_RESULT_FAIL) returns at once without releasing cs_: bail out instead of
                         // spinning with interrupts disabled. The state check below turns it into osError.
-                        wait_ok = (th->m_join_cv.WaitEx(cs_, stk::WAIT_INFINITE) != stk::WAIT_RESULT_FAIL);
+                        // WAIT_RESULT_DELETED means the control block (and m_join_cv) was destroyed under the
+                        // waiter: 'th' must not be touched any more, so leave without reading it again.
+                        const stk::EWaitResult wr = th->m_join_cv.WaitEx(cs_, stk::WAIT_INFINITE);
+
+                        deleted = (wr == stk::WAIT_RESULT_DELETED);
+                        wait_ok = ((wr != stk::WAIT_RESULT_FAIL) && !deleted);
+                    }
+
+                    if (deleted)
+                    {
+                        th     = nullptr;
+                        result = osError;
                     }
                 }
                 // else Exited: OnExit() already fired, nothing to wait for
 
                 // At this point m_join_state == Exited (or Detached if someone
                 // raced osThreadDetach - treat that as an error).
-                if (th->m_join_state != StkThread::JoinState::Exited)
+                if (th == nullptr)
+                {
+                    // control block deleted while joining, result already set
+                }
+                else if (th->m_join_state != StkThread::JoinState::Exited)
                 {
                     result = osError;
                 }

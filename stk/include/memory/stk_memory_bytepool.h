@@ -207,9 +207,10 @@ public:
     /*! \brief     Destructor.
         \details   Frees heap-allocated storage if \c m_storage_owned is \c true.
                    External storage is never touched. Asserts that all blocks were returned.
-        \note      Destroying the pool while tasks are blocked in \c Alloc() or
-                   \c TimedAlloc() is a logical error (dangling waiters). An assertion
-                   is triggered in debug builds inside the \c ConditionVariable destructor.
+        \note      Tasks still blocked in \c Alloc(), \c TimedAlloc() or \c TimedAllocEx() are woken by
+                   the destructor of the internal \c ConditionVariable with \c WAIT_RESULT_DELETED
+                   (\c TimedAllocEx()) or \c nullptr (the other variants) and must not access the pool
+                   afterwards. No block is allocated for them.
         \note      MISRA deviation: [STK-DEV-005] Rule 10-3-2.
     */
     STK_VIRT_DTOR ~BytePool();
@@ -241,8 +242,8 @@ public:
     /*! \brief     Allocate a block, preserving the full wait outcome.
         \details   Searches for a free block of at least \a size bytes. If none exists the calling
                    task is suspended via the internal \c ConditionVariable and re-tries after
-                   every \c Free() until the request is satisfied, the timeout expires or the
-                   wait is cancelled. The timeout is a total budget, not per wake-up.
+                   every \c Free() until the request is satisfied, the timeout expires, the
+                   wait is cancelled or the pool is destroyed. The timeout is a total budget, not per wake-up.
         \param[out] block: Receives the allocated block on \c WAIT_RESULT_SIGNAL, \c nullptr on
                    any other result. Must not be \c nullptr.
         \param[in] size:   Requested payload size in bytes (must be > 0 and <= \c GetMaxRequest()).
@@ -254,6 +255,8 @@ public:
                                              (or \c NO_WAIT was passed); a block freed at the very
                                              moment the timeout expired is still returned as SIGNAL,
                    \c WAIT_RESULT_CANCELED - the wait was cancelled via \c IKernel::CancelTaskWait(),
+                   \c WAIT_RESULT_DELETED  - the pool was destroyed while the task was waiting, nothing was
+                                             allocated and the pool must not be accessed afterwards,
                    \c WAIT_RESULT_FAIL     - invalid arguments (\a block is \c nullptr, \a size is 0
                                              or exceeds \c GetMaxRequest(), no valid storage) or the
                                              kernel rejected the wait.
@@ -265,8 +268,8 @@ public:
         \param[in] size:          Requested payload size in bytes.
         \param[in] timeout_ticks: Maximum time to wait (ticks). Same semantics as \c TimedAllocEx().
         \return    Pointer to an uninitialized block of at least \a size bytes aligned to \c BLOCK_ALIGN,
-                   or \c nullptr on timeout, cancellation or invalid arguments.
-        \note      Collapses timeout and cancellation. Use \c TimedAllocEx() to tell them apart.
+                   or \c nullptr on timeout, cancellation, deletion of the pool or invalid arguments.
+        \note      Collapses timeout, cancellation and deletion. Use \c TimedAllocEx() to tell them apart.
         \warning   ISR-safe \b only when \a timeout_ticks = \c NO_WAIT; ISR-unsafe otherwise.
     */
     void *TimedAlloc(size_t size, Timeout timeout_ticks = WAIT_INFINITE);
@@ -284,8 +287,8 @@ public:
     /*! \brief     Allocate a block, blocking indefinitely until memory is available.
         \param[in] size: Requested payload size in bytes.
         \return    Pointer to an uninitialized block. Returns \c nullptr only if the wait was
-                   cancelled via \c IKernel::CancelTaskWait() or the request is invalid
-                   (never on timeout). Use \c TimedAllocEx() to tell these apart.
+                   cancelled via \c IKernel::CancelTaskWait(), the pool was destroyed while waiting or the
+                   request is invalid (never on timeout). Use \c TimedAllocEx() to tell these apart.
         \warning   ISR-unsafe.
     */
     void *Alloc(size_t size);
@@ -635,8 +638,9 @@ inline BytePool::BytePool(size_t storage_size, const char *name)
 
 inline BytePool::~BytePool()
 {
-    // ConditionVariable destructor asserts the wait list is empty
-    STK_ASSERT(m_stats.allocated == 0U); // all blocks must be returned before the pool goes away
+    // tasks still waiting are released with WAIT_RESULT_DELETED by the destructor of m_cv (runs after this body)
+    // memory may be outstanding only if tasks are waiting for it (they are released with WAIT_RESULT_DELETED)
+    STK_ASSERT((m_stats.allocated == 0U) || !m_cv.GetWaitList().IsEmpty());
 
 #if STK_MEMORY_HAS_HEAP
     if (m_storage_owned && (m_storage != nullptr))
@@ -728,7 +732,7 @@ inline EWaitResult BytePool::TimedAllocEx(void **block, size_t size, Timeout tim
                 result = m_cv.WaitEx(cs_, remaining);
                 if ((result != WAIT_RESULT_SIGNAL) && (result != WAIT_RESULT_TIMEOUT))
                 {
-                    break; // cancellation or kernel failure: report as is
+                    break; // cancellation, deletion (the pool is gone, 'this' must not be touched) or kernel failure: report as is
                 }
 
                 // the lock was re-acquired: re-scan regardless of the wake reason, because the memory

@@ -30,6 +30,7 @@ stk_wait_result_t ToCWaitResult(EWaitResult wr)
     case WAIT_RESULT_SIGNAL:   result = STK_WAIT_RESULT_SIGNAL;   break;
     case WAIT_RESULT_TIMEOUT:  result = STK_WAIT_RESULT_TIMEOUT;  break;
     case WAIT_RESULT_CANCELED: result = STK_WAIT_RESULT_CANCELED; break;
+    case WAIT_RESULT_DELETED:  result = STK_WAIT_RESULT_DELETED;  break;
     default:                   result = STK_WAIT_RESULT_FAIL;     break;
     }
 
@@ -1528,9 +1529,11 @@ stk_barrier_result_t stk_barrier_wait_ex(stk_barrier_t *barrier)
 
     switch (barrier->handle.WaitEx())
     {
+    case Barrier::BARRIER_RELEASED:     result = STK_BARRIER_RELEASED;     break;
     case Barrier::BARRIER_LAST_ARRIVAL: result = STK_BARRIER_LAST_ARRIVAL; break;
     case Barrier::BARRIER_CANCELED:     result = STK_BARRIER_CANCELED;     break;
-    default:                            result = STK_BARRIER_RELEASED;     break;
+    case Barrier::BARRIER_DELETED:      result = STK_BARRIER_DELETED;      break;
+    default:                            result = STK_BARRIER_FAILED;       break;
     }
 
     return result;

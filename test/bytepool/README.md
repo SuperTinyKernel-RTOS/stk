@@ -56,7 +56,7 @@ assert(g_Pool.IsStorageValid());
 | `AllocT<T>` | `T *AllocT<T>()` | Typed wrapper around `Alloc(sizeof(T))`; `nullptr` only on cancel. ISR-unsafe. |
 | `TryAlloc` | `void *TryAlloc(size_t size)` | Non-blocking; returns `nullptr` immediately if no suitable free block exists. ISR-safe. |
 | `TryAllocT<T>` | `T *TryAllocT<T>()` | Typed wrapper around `TryAlloc()`. ISR-safe. |
-| `TimedAllocEx` | `EWaitResult TimedAllocEx(void **block, size_t size, Timeout timeout = WAIT_INFINITE)` | Same as `TimedAlloc()`, but preserves the full outcome: `WAIT_RESULT_SIGNAL` (a block was allocated, immediately or after waiting; `*block` is set), `WAIT_RESULT_TIMEOUT` (nothing suitable within the timeout, or `NO_WAIT` with no suitable block), `WAIT_RESULT_CANCELED` (wait cancelled via `IKernel::CancelTaskWait()` or `SleepCancel()`; nothing is allocated), `WAIT_RESULT_FAIL` (null `block`, `size` is `0` or exceeds `GetMaxRequest()`, no valid storage, or the kernel rejected the wait). `*block` is `nullptr` for every result except `SIGNAL`. ISR-safe only with `NO_WAIT`. |
+| `TimedAllocEx` | `EWaitResult TimedAllocEx(void **block, size_t size, Timeout timeout = WAIT_INFINITE)` | Same as `TimedAlloc()`, but preserves the full outcome: `WAIT_RESULT_SIGNAL` (a block was allocated, immediately or after waiting; `*block` is set), `WAIT_RESULT_TIMEOUT` (nothing suitable within the timeout, or `NO_WAIT` with no suitable block), `WAIT_RESULT_CANCELED` (wait cancelled via `IKernel::CancelTaskWait()` or `SleepCancel()`; nothing is allocated), `WAIT_RESULT_DELETED` (the pool was destroyed while waiting; nothing is allocated and the pool must not be accessed afterwards), `WAIT_RESULT_FAIL` (null `block`, `size` is `0` or exceeds `GetMaxRequest()`, no valid storage, or the kernel rejected the wait). `*block` is `nullptr` for every result except `SIGNAL`. ISR-safe only with `NO_WAIT`. |
 | `TimedAlloc` | `void *TimedAlloc(size_t size, Timeout timeout = WAIT_INFINITE)` | Blocks up to `timeout` ticks. `NO_WAIT` is identical to `TryAlloc()`. Returns `nullptr` on timeout, cancellation or invalid request (use `TimedAllocEx()` to tell these apart). ISR-safe only when `timeout == NO_WAIT`. |
 | `TimedAllocT<T>` | `T *TimedAllocT<T>(Timeout timeout = WAIT_INFINITE)` | Typed wrapper around `TimedAlloc()`. Asserts `alignof(T) <= 8`. |
 | `Free` | `bool Free(void *ptr)` | Marks the block free, merges it with the free blocks that follow it, and wakes all blocked allocators. Returns `false` for `nullptr`, out-of-range, misaligned or not-in-use pointers. ISR-safe (not constant time). |
@@ -114,8 +114,13 @@ otherwise             →  mark FREE, merge with following free blocks, NotifyAl
   wrap on long uptimes.
 - Freed memory is not reserved for the longest-waiting task, so a large request can be
   starved by a stream of small ones (not tested; documented behaviour).
-- Destroying a pool while tasks are blocked in `Alloc()` or `TimedAlloc()` is a logic
-  error; an assertion fires in debug builds inside the `ConditionVariable` destructor.
+- Destroying a pool while tasks are blocked in an allocation releases **all** of them with
+  `WAIT_RESULT_DELETED` (done by the destructor of the internal `ConditionVariable`), whatever
+  their request sizes: they get no block, do not time out, and must not access the pool
+  afterwards. `TimedAllocEx()` reports it, `TimedAlloc()` maps it to `nullptr` like every
+  non-`SIGNAL` result. The blocks that are outstanding at that moment are not returned to the
+  destroyed pool and their owners must not `Free()` them into it (with external storage the
+  buffer stays owned by the caller).
 
 ---
 
@@ -141,8 +146,8 @@ test starts with a fully free pool in a known state. `ResetTestState()` resets `
 (below) between tests.
 
 Task registration in `RunTest()` is gated by name: task 0 is always added; task 1 is
-added when `NeedsTwoTasks()` matches; task 2 is added when `NeedsThreeTasks()`
-(`WakeAllWaiters` and the `"CancelAlloc*"` tests) or `NeedsAllTasks()` matches; tasks 3–4 are
+added when `NeedsTwoTasks()` matches (the `"DeleteWithWaiter*"` tests included); task 2 is added when `NeedsThreeTasks()`
+(`WakeAllWaiters`, the `"CancelAlloc*"` and the `"DeleteWithWaiter*"` tests) or `NeedsAllTasks()` matches; tasks 3–4 are
 added only when `NeedsAllTasks()` matches.
 
 Because `BytePool` has no used-block counter, the tests inspect the pool through
@@ -178,17 +183,34 @@ The cancellation tests (17–27) additionally use:
 The helper `CancelVictim(use_sleep_cancel)` cancels the victim either with
 `g_Kernel.CancelTaskWait(g_Victim)` or with `stk::SleepCancel(g_VictimTid)`.
 
+The delete-with-waiter tests (28–30) destroy a **separate** pool: `g_DeletePool` points to a `BytePool` of two uniform
+blocks (128 bytes, external buffer `g_DeleteStorage`) constructed with placement-new in the static `g_DeletePoolObj`, so
+the pool `g_Pool` of `RunTest()` is never destroyed by the test itself. Task 0 allocates both blocks of the dedicated pool
+and never returns them. After the destruction both the storage of the pool object and the external buffer are overwritten
+with the byte `DELETED_FILL` (`0xDD`), and task 0 checks at the end that every byte still holds it: a woken waiter that
+wrote to the destroyed pool, or re-scanned its block list (a scan merges free blocks, so it writes), would leave a trace.
+The tests reuse `g_Victim`, `g_VictimTid`, `g_VictimResult[]`, `g_VictimGotBlock[]` and `g_VictimElapsed[]` (index 0:
+task 1, index 1: task 2), the helpers `DrainPool()`, `ReleaseAll()` and `IsAllFree()`, and add:
+
+| Variable | Purpose |
+|----------|---------|
+| `g_DeletePool` | Pointer to the dedicated pool; set back to `nullptr` right after the destruction |
+| `g_DeleteVictim2` | Task 2 (second waiter), published right before it blocks; used by the safety net |
+| `g_DeleteCheckResult` / `g_DeleteCheckGotBlock` / `g_DeleteCheckElapsed` | `EWaitResult`, whether a block was returned (not expected) and milliseconds of the follow-up `TimedAllocEx(20)` of task 1 on `g_Pool` (`-100` = not set) |
+| `g_DeleteParam` | Scenario selector (`DW_EX = 1`, `DW_TIMED = 2`, `DW_TWO = 3`); a global for the same reason as `g_CancelParam` |
+
 ---
 
 ## Platform Notes
 
 On **Cortex-M0** (`__ARM_ARCH_6M__`) the device has insufficient RAM to link many
-distinct task class templates simultaneously. Tests 1–15 and the cancellation tests
-(17–27) are skipped on M0 under `#ifndef __ARM_ARCH_6M__`; only `Stress` (test 16) runs.
-In the source the cancellation tests execute after test 15 and before `Stress`.
+distinct task class templates simultaneously. Tests 1–15, the cancellation tests
+(17–27) and the delete-with-waiter tests (28–30) are skipped on M0 under `#ifndef __ARM_ARCH_6M__`; only `Stress` (test 16) runs.
+In the source the cancellation tests and then the delete-with-waiter tests execute after test 15 and before `Stress`.
 
 The cancellation tests add one more task class template (`CancelAllocTask`, shared by
-all eleven cases), further increasing the static memory footprint.
+all eleven cases) and the delete-with-waiter tests another (`DeleteWithWaiterTask`, shared by
+all three cases), further increasing the static memory footprint.
 
 `StressTask` runs on M0 because it uses a single task class template instantiated for
 all five task slots, fitting within the available memory.
@@ -199,7 +221,7 @@ because some tests keep several `BytePool` objects and scratch arrays on a task 
 | Platform | `_STK_POOL_STACK_SIZE` | Tests run |
 |----------|------------------------|-----------|
 | Cortex-M0 (`__ARM_ARCH_6M__`) | `128` words | Test 16 only |
-| All others | `512` words | Tests 1–27 |
+| All others | `512` words | Tests 1–30 |
 
 ---
 
@@ -594,6 +616,58 @@ wake without disturbing the already-delivered block.
 
 ---
 
+### Tests 28–30 — `DeleteWithWaiter*`
+**Tasks:** 0–2 &nbsp;|&nbsp; **Task class:** `DeleteWithWaiterTask` &nbsp;|&nbsp; **Runs on M0: no**
+
+Verify that destroying a pool which tasks are blocked on releases **all** waiters with `WAIT_RESULT_DELETED`, without giving
+them a block and without touching the destroyed pool. Task 0 constructs a dedicated pool (`g_DeletePool`, two uniform
+64-byte blocks in the external buffer `g_DeleteStorage`, placement-new into `g_DeletePoolObj`), allocates **both** blocks with
+`TryAlloc()` (`GetInfo()` must then report `0 / 0 / 0`) and sleeps 60 ticks; the blocks are never returned. Task 1 sleeps
+`_STK_POOL_TEST_SHORT_SLEEP`, publishes its `ITask` pointer in `g_Victim` and blocks on the pool with `WAIT_INFINITE`: nobody frees
+memory, so only the destruction can end the wait. Task 0 then destroys the pool while it is waited on, and overwrites both the
+storage of the pool object and the external buffer with `0xDD`, so that any access to the destroyed pool by a woken waiter would
+read garbage, and any write would be detected. A `BytePool` waiter is normally woken to **re-scan** its request, and a scan merges
+the free blocks it passes; a waiter woken by the destruction must not do that, which the untouched buffer proves. Task 1
+records the result, the elapsed time and whether it got a block, without touching the destroyed pool. It then performs a
+`TimedAllocEx(&blk, 56, 20)` on `g_Pool`, which task 0 has drained right after the destruction: the wait must run to its
+deadline and return `WAIT_RESULT_TIMEOUT` without a block; a stale wait entry left behind would end it early or with another
+result. Task 0 returns the blocks of `g_Pool` at about tick 100 and checks the outcome at about tick 140. If a waiter was not
+released, task 0 cancels its wait with `g_Kernel.CancelTaskWait()`, so the test fails instead of hanging the kernel.
+
+**Common pass condition:** the dedicated pool was exhausted before the destruction; task 1's elapsed time is in `[35, 75]` ms
+(waiting from ~10 ms, destroyed at ~60 ms) and it got no block; the follow-up `TimedAllocEx(20)` on `g_Pool` returned
+`WAIT_RESULT_TIMEOUT` without a block after at least 15 ms; `IsAllFree()` for `g_Pool` at the end (no leak); every byte of the
+storage of the destroyed pool object and of its external buffer still holds `0xDD`
+
+#### Test 28 — `DeleteWithWaiter`
+**Param:** `DW_EX` &nbsp;|&nbsp; Task 2 is added by `RunTest()` but stays idle.
+
+Task 1 blocks in `TimedAllocEx(&blk, 56, WAIT_INFINITE)`.
+
+**Pass condition:** common, and the result is `WAIT_RESULT_DELETED` (not a block, a timeout or a cancellation)
+
+#### Test 29 — `DeleteWithWaiterTimed`
+**Param:** `DW_TIMED` &nbsp;|&nbsp; Task 2 is added by `RunTest()` but stays idle.
+
+Task 1 uses `TimedAlloc(56, WAIT_INFINITE)`, which maps every non-`SIGNAL` result to `nullptr`. An infinite wait can not time out
+and nobody cancels it, so `nullptr` after ~50 ms identifies the destruction.
+
+**Pass condition:** common, and `TimedAlloc()` returned `nullptr`
+
+#### Test 30 — `DeleteWithWaiterTwo`
+**Param:** `DW_TWO`
+
+Task 1 blocks first for one block (56 bytes), task 2 blocks behind it (`Sleep(20)`, then `TimedAllocEx(&blk, 120, WAIT_INFINITE)`) for
+the whole pool, the largest valid request. The waiters have different request sizes, as in `WakeAllWaiters`: the destruction must
+release both whatever they asked for, and the wait list of the pool is walked completely, not just up to its first entry.
+
+**Pass condition:** common, and task 1 and task 2 both get `WAIT_RESULT_DELETED` without a block; the elapsed time of task 2 is in
+`[25, 65]` ms (waiting from ~20 ms)
+
+The plain `Alloc()` is not covered: it has no result code.
+
+---
+
 ## Summary Table
 
 | # | Test | Tasks | Pass condition | What it verifies |
@@ -625,3 +699,6 @@ wake without disturbing the already-delivered block.
 | 25 | `CancelAllocTask` (`SleepCancelNoStale`) | 0–2 | same as 20 | `SleepCancel()` leaves no stale wait entry |
 | 26 | `CancelAllocTask` (`SleepCancelTwo`) | 0–2 | same as 21 | `SleepCancel()` keeps the second waiter intact |
 | 27 | `CancelAllocTask` (`SleepCancelSignal`) | 0–2 | same as 22 | `SleepCancel()` after a `Free()` is a no-op |
+| 28 | `DeleteWithWaiterTask` (`DeleteWithWaiter`) | 0–2 | `DELETED`, no block, elapsed `[35, 75]` ms, follow-up wait on `g_Pool` times out `>= 15` ms, `IsAllFree()`, pool object and buffer untouched | Destroying a pool which a task waits on releases it with `WAIT_RESULT_DELETED`; no block is handed out; the waiter neither writes to the destroyed pool nor re-scans its blocks, and leaves no stale wait entry |
+| 29 | `DeleteWithWaiterTask` (`DeleteWithWaiterTimed`) | 0–2 | `TimedAlloc()` returns `nullptr` after `[35, 75]` ms, as test 28 | `TimedAlloc()` maps a destruction to `nullptr`; an infinite wait can not time out, so it identifies the destruction |
+| 30 | `DeleteWithWaiterTask` (`DeleteWithWaiterTwo`) | 0–2 | both `DELETED`, task 2 elapsed `[25, 65]` ms, as test 28 | The destruction releases every waiter whatever its request size, not only the first one |

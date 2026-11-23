@@ -28,6 +28,7 @@ A recursive mutual exclusion primitive used to protect shared resources.
 - **Features**: Supports `Lock`, `TryLock`, `Unlock`, `TimedLock`, and `TimedLockEx` (returns the full `EWaitResult`). Also `GetOwner()`, `IsLocked()` and `GetRecursionCount()`; max recursion depth is `0xFFFE`.
 - **Wait Order**: `Mutex(EWaitOrder order = STK_SYNC_WAIT_ORDER_DEFAULT)` selects which waiter receives ownership on `Unlock()`, see [Wait Order](#wait-order).
 - **Priority Inheritance**: Temporarily boosts the priority of the lock owner when a higher-priority task blocks on `Lock()`/`TimedLock()`, mitigating priority inversion; the boost is restored automatically on `Unlock()` (no-op on switch strategies that don't support priority inheritance).
+- **Deletion-aware**: `TimedLockEx()` returns `WAIT_RESULT_DELETED` if the mutex is destroyed while the task waits, see [Deleting a primitive that has waiters](#deleting-a-primitive-that-has-waiters).
 - **Low-Power Aware**: Waiting tasks are suspended by the kernel.
 
 ### 3. Fast Mutex (`sync::FastMutex`)
@@ -38,6 +39,7 @@ A lightweight non-recursive (binary) mutex with ownership tracking.
 - **Direct Handover**: On `Unlock()` ownership is transferred directly to the next waiter per the [wait order](#wait-order).
 - **Wait Order**: `FastMutex(EWaitOrder order = STK_SYNC_WAIT_ORDER_DEFAULT)`, see [Wait Order](#wait-order).
 - **Priority Inheritance**: Supported in the same way as `sync::Mutex` (no-op on switch strategies that don't support priority inheritance).
+- **Deletion-aware**: `TimedLockEx()` returns `WAIT_RESULT_DELETED` if the mutex is destroyed while the task waits.
 - **Low-Power Aware**: Waiting tasks are suspended by the kernel.
 
 ### 4. Spinlock (`sync::SpinLock`)
@@ -50,7 +52,7 @@ A high-performance recursive spinlock for very short critical sections.
 Used in conjunction with a Mutex to wait for specific application states.
 - **Features**: `Wait`, `NotifyOne`, and `NotifyAll`.
 - **Wait Order**: `ConditionVariable(EWaitOrder order = ...)` selects the task woken by `NotifyOne()`, see [Wait Order](#wait-order). `NotifyAll()` wakes everybody.
-- **Cancellable Waits**: `WaitEx()` returns the full `EWaitResult` (`WAIT_RESULT_SIGNAL`, `WAIT_RESULT_TIMEOUT`, `WAIT_RESULT_CANCELED`), letting callers distinguish a timeout from a wait cancelled via `IKernel::CancelTaskWait()`.
+- **Cancellable Waits**: `WaitEx()` returns the full `EWaitResult` (`WAIT_RESULT_SIGNAL`, `WAIT_RESULT_TIMEOUT`, `WAIT_RESULT_CANCELED`, `WAIT_RESULT_DELETED`), letting callers distinguish a timeout from a wait cancelled via `IKernel::CancelTaskWait()` or from the destruction of the condition variable. After `WAIT_RESULT_DELETED` the passed mutex is **not** re-locked.
 - **Critical-Section Variants**: `NotifyOne_CS()`/`NotifyAll_CS()` skip the internal critical-section entry/exit for callers that already hold one (e.g. other primitives built on top of `ConditionVariable`); ISR-safe under the same rules as `NotifyOne()`/`NotifyAll()`.
 - **Real-time**: Releases mutex and suspends task atomically, ensuring no "lost wake-up" signals.
 - **Low-Power Aware**: Waiting tasks are suspended by the kernel.
@@ -70,7 +72,7 @@ A counting signaling primitive used for resource tracking or producer-consumer p
 - **Wait Order**: `SemaphoreT(initial_count, max_count, order)` selects which waiter receives the token in `Signal()`, see [Wait Order](#wait-order).
 - **Bounded Signal**: `TrySignal()` posts without exceeding `max_count`, returning `false` instead of asserting — safe for multiple concurrent signalers where a redundant post should be tolerated rather than treated as a caller error.
 - **Per-call Ceiling**: `TrySignal(ceiling)` additionally limits the counter by a caller-supplied ceiling (the effective limit is the smaller of `ceiling` and the `max_count` given at construction). The check and the increment (or hand-off to a waiter) are atomic — equivalent of ThreadX `tx_semaphore_ceiling_put()`.
-- **Cancellable Waits**: `WaitEx()` returns the full `EWaitResult` (`WAIT_RESULT_SIGNAL`, `WAIT_RESULT_TIMEOUT`, `WAIT_RESULT_CANCELED`, `WAIT_RESULT_FAIL`), letting callers distinguish a timeout from a wait cancelled via `IKernel::CancelTaskWait()`; a non-signal result never consumes a token.
+- **Cancellable Waits**: `WaitEx()` returns the full `EWaitResult` (`WAIT_RESULT_SIGNAL`, `WAIT_RESULT_TIMEOUT`, `WAIT_RESULT_CANCELED`, `WAIT_RESULT_DELETED`, `WAIT_RESULT_FAIL`), letting callers distinguish a timeout from a wait cancelled via `IKernel::CancelTaskWait()`; a non-signal result never consumes a token.
 - **Low-Power Aware**: Waiting tasks are suspended by the kernel.
 
 ### 8. Pipe (`sync::Pipe` / `sync::PipeT<T, Capacity>`)
@@ -106,7 +108,8 @@ A multi-flag synchronization primitive for coordinating multiple independent eve
 - **Rendezvous**: `Sync(ctx, set_flags, wait_flags, timeout, actual_flags)` sets flags and waits for a group of flags atomically (equivalent of FreeRTOS `xEventGroupSync()`). The task which completes the condition clears the group once and releases **all** participants blocked on the same caller-supplied `EventFlags::SyncContext`, so it works as a multi-task barrier; independent groups on one object use separate contexts and `EventFlagsT` itself carries no extra state.
 - **Selective clear**: By default matched bits are atomically cleared on a successful `Wait()`; pass `OPT_NO_CLEAR` to suppress this, allowing multiple concurrent waiters to each satisfy on the same `Set()`.
 - **Cancellable Waits**: `Wait()` returns `ERROR_CANCELED` (distinct from `ERROR_TIMEOUT`) if the wait was interrupted via `IKernel::CancelTaskWait()` before the requested flag condition was met.
-- **Status/flags separation**: `WaitEx(flags, options, timeout, actual_flags)` and `TryWaitEx(flags, options, actual_flags)` return a full `EWaitResult` (`WAIT_RESULT_SIGNAL`, `WAIT_RESULT_TIMEOUT`, `WAIT_RESULT_CANCELED`, `WAIT_RESULT_FAIL`) and report the entire flags word (taken before auto-clear) via `actual_flags`, so no bit is overloaded as an error indicator (equivalent of ThreadX `tx_event_flags_get()`). Invalid arguments and a blocking wait from an ISR are reported as `WAIT_RESULT_FAIL`.
+- **Deletion**: if the object is destroyed while a task waits, `Wait()` returns `ERROR_DELETED` (`ERROR_MASK | 0x20`) and `WaitEx()` returns `WAIT_RESULT_DELETED` with `actual_flags` set to `0`; the object must not be accessed afterwards.
+- **Status/flags separation**: `WaitEx(flags, options, timeout, actual_flags)` and `TryWaitEx(flags, options, actual_flags)` return a full `EWaitResult` (`WAIT_RESULT_SIGNAL`, `WAIT_RESULT_TIMEOUT`, `WAIT_RESULT_CANCELED`, `WAIT_RESULT_DELETED`, `WAIT_RESULT_FAIL`) and report the entire flags word (taken before auto-clear) via `actual_flags`, so no bit is overloaded as an error indicator (equivalent of ThreadX `tx_event_flags_get()`). Invalid arguments and a blocking wait from an ISR are reported as `WAIT_RESULT_FAIL`.
 - **Low-Power Aware**: Waiting tasks are suspended by the kernel.
 
 ### 11. Reader-Writer Mutex (`sync::RWMutex`)
@@ -115,7 +118,7 @@ A synchronization primitive that allows multiple concurrent readers or one exclu
 - **Shared Access**: Multiple tasks can acquire `ReadLock()` simultaneously for read-only operations.
 - **Exclusive Access**: `Lock()` provides exclusive write access; blocks all other readers and writers.
 - **Wait Order**: `RWMutex(EWaitOrder writer_order = ...)` applies to waiting writers only; waiting readers are released together, and writer preference is unchanged. See [Wait Order](#wait-order).
-- **Timeout Support**: `TimedReadLock()` and `TimedLock()` with configurable timeouts.
+- **Timeout Support**: `TimedReadLock()` and `TimedLock()` with configurable timeouts; the `TimedReadLockEx()` / `TimedLockEx()` variants return the full `EWaitResult`, including `WAIT_RESULT_DELETED` when the lock is destroyed while the task waits (the writer queue is left untouched in that case).
 - **RAII Guards**: `ScopedTimedReadMutex` and `ScopedTimedLock` acquire on construction and release automatically on scope exit.
 - **Non-Recursive**: Unlike `sync::Mutex` and `sync::SpinLock` (but like `sync::FastMutex`), a task must not call `ReadLock()` or `Lock()` again before releasing it — doing so will deadlock.
 - **Low-Power Aware**: Waiting tasks are suspended by the kernel.
@@ -125,10 +128,10 @@ A cyclic rendezvous point that blocks a fixed-size group of tasks until all of t
 - **Cyclic**: Automatically resets after releasing the group, ready for the next round without re-creation.
 - **Generation Tracking**: An internal generation counter distinguishes successive rounds and guards against spurious wakeups.
 - **Last-Arriver Signal**: `Wait()` returns `true` for the single task that triggers release of the group, `false` for all others — useful for once-per-round bookkeeping.
-- **Cancellable Waits**: `WaitEx()` returns the full `EResult` (`BARRIER_RELEASED`, `BARRIER_LAST_ARRIVAL`, `BARRIER_CANCELED`, `BARRIER_FAILED`), distinguishing a wait cancelled via `IKernel::CancelTaskWait()` from a normal release, and a wait rejected by the kernel (e.g. the scheduler is locked) as `BARRIER_FAILED`; a cancelled or failed arrival is rolled back so it can't trip the barrier short-handed.
+- **Cancellable Waits**: `WaitEx()` returns the full `EResult` (`BARRIER_RELEASED`, `BARRIER_LAST_ARRIVAL`, `BARRIER_CANCELED`, `BARRIER_DELETED`, `BARRIER_FAILED`), distinguishing a wait cancelled via `IKernel::CancelTaskWait()` from a normal release, and a wait rejected by the kernel (e.g. the scheduler is locked) as `BARRIER_FAILED`; a cancelled or failed arrival is rolled back so it can't trip the barrier short-handed. `BARRIER_DELETED` means the barrier was destroyed while waiting: nothing is rolled back and the barrier must not be accessed.
 - **Wait Order**: Not applicable, all waiting tasks are released together.
 - **Introspection**: `GetThreshold()` returns the configured party count.
-- **Built on Mutex/ConditionVariable**: Composed from `sync::Mutex` and `sync::ConditionVariable`.
+- **Built on ConditionVariable**: Composed from `sync::ConditionVariable` guarded by a critical section (no internal `sync::Mutex`, so a waiter released by deletion never has to re-lock a destroyed object).
 - **Low-Power Aware**: Waiting tasks are suspended by the kernel.
 
 ---
@@ -151,7 +154,7 @@ Ties are broken by arrival order. Selection costs O(n) in the number of waiters,
 
 - **Per object**: pass an `EWaitOrder` as the last constructor argument, or call `SetWaitOrder()` later (safe at any time). `GetWaitOrder()` returns the configured value (possibly `WAIT_ORDER_AUTO`) and `GetNextWaiter()` the id of the task that would be served next (`TID_NONE` if none), replacing the former `GetFirstWaiterTid()`.
 - **Globally**: define `STK_SYNC_WAIT_ORDER_DEFAULT` in `stk_config.h`, e.g. as `stk::WAIT_ORDER_FIFO` to keep arrival order everywhere.
-- **Not configurable**: `EventFlagsT` and `Barrier` wake all waiters at once, so the order does not apply.
+- **Not configurable**: `EventFlagsT` and `Barrier` wake all waiters at once, so the order does not apply. Deletion of a primitive also releases all waiters together, see [Deleting a primitive that has waiters](#deleting-a-primitive-that-has-waiters).
 - **Strategy defaults**: each built-in strategy declares what "urgent" means through the optional `WAIT_ORDER_HINT` constant (RR/SWRR: FIFO, FP: priority, PT: packed priority, EDF: deadline, RM: period, DM: fixed deadline). See [`include/strategy/README.md`](../strategy/README.md).
 
 ```cpp
@@ -161,6 +164,42 @@ stk::sync::Semaphore g_Pool(4, stk::sync::Semaphore::COUNT_MAX, stk::WAIT_ORDER_
 ```
 
 > With a priority-based strategy the default is now priority order instead of FIFO. Define `STK_SYNC_WAIT_ORDER_DEFAULT` as `stk::WAIT_ORDER_FIFO` to restore the old behaviour.
+
+---
+
+## Deleting a primitive that has waiters
+
+Destroying a primitive while tasks are blocked on it is supported. Every primitive owns its wait list through `SyncObjectBase`, whose destructor releases **all** waiters with `WAIT_RESULT_DELETED` (the equivalent of `TX_DELETED` in ThreadX) instead of asserting. The release runs inside a critical section and also covers the internal `ConditionVariable` members of composite primitives (`RWMutex`, `Pipe`, `MessageQueue`, `EventFlags`, `Barrier`, `BlockMemoryPool`, `BytePool`).
+
+**Rule for the waiter:** after it observes `WAIT_RESULT_DELETED` it must not touch the destroyed object: no unlock, no retry, no query. The built-in primitives follow this rule internally.
+
+| Primitive                                              | What the waiter sees                                                                            |
+|--------------------------------------------------------|-------------------------------------------------------------------------------------------------|
+| `Mutex`, `FastMutex`                                   | `TimedLockEx()` returns `WAIT_RESULT_DELETED`                                                   |
+| `RWMutex`                                              | `TimedLockEx()`, `TimedReadLockEx()` return `WAIT_RESULT_DELETED`                               |
+| `Event`, `SemaphoreT`, `ConditionVariable`             | `WaitEx()` returns `WAIT_RESULT_DELETED` (`Wait()` returns `false`)                             |
+| `Pipe`, `MessageQueue`                                 | The `*Ex()` variants return `WAIT_RESULT_DELETED`; `bool` variants return `false`               |
+| `EventFlagsT`                                          | `Wait()` returns `ERROR_DELETED`; `WaitEx()` returns `WAIT_RESULT_DELETED`, `actual_flags = 0`  |
+| `Barrier`                                              | `WaitEx()` returns `BARRIER_DELETED`                                                            |
+| `memory::BlockMemoryPool`, `memory::BytePool`          | `TimedAllocEx()` returns `WAIT_RESULT_DELETED` (`*block = nullptr`); other variants return `nullptr` |
+
+- **Void lock calls panic.** `Mutex::Lock()`, `FastMutex::Lock()`, `RWMutex::ReadLock()` / `Lock()` cannot report a result, so `WAIT_RESULT_DELETED` there ends in `KERNEL_PANIC_ASSERT`, like any other failed wait. Use `TimedLockEx()` (or the `Scoped*` RAII guards, which expose the result) where the lock may be destroyed under a waiter.
+- **Destroying an owned mutex.** Waiters are released, but the owner keeps any priority inherited from them; unlock before destroying if that matters.
+- **Destructor assertions.** Idle-state assertions in destructors accept waiters, because a task can only wait on a held lock or an exhausted pool.
+- **Order.** Waiters are made ready in wait-list (arrival) order, not by the [wait order](#wait-order), all inside one critical section.
+- **Kernel mode.** Requires `KERNEL_SYNC`, as any blocking wait does.
+- **TrustZone.** On ARM Cortex-M Non-Secure builds the wait objects live in Secure memory, so `~SyncObjectBase` calls `IKernelService::WakeDeleted()` through a new NSC gateway instead of walking the list.
+
+```cpp
+stk::sync::Mutex *m = new stk::sync::Mutex();
+
+// task A
+if (m->TimedLockEx(stk::WAIT_INFINITE) == stk::WAIT_RESULT_DELETED)
+    return;                       // 'm' is gone: do not unlock or touch it
+
+// task B
+delete m;                         // task A wakes with WAIT_RESULT_DELETED
+```
 
 ---
 

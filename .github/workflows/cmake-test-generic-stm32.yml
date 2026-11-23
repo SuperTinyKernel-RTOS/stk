@@ -44,10 +44,10 @@ jobs:
       #run: docker build --pull --rm -f "build/test/qemu/Dockerfile" -t stk-qemu-arm:latest "build/test/qemu"
 
     - name: Setup Docker Buildx
-      uses: docker/setup-buildx-action@v2
+      uses: docker/setup-buildx-action@v4
 
     - name: Docker build
-      uses: docker/build-push-action@v3
+      uses: docker/build-push-action@v7
       with:
         context: .
         file: build/test/qemu/Dockerfile.arm

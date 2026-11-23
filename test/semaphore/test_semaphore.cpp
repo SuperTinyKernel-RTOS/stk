@@ -82,6 +82,20 @@ static volatile int64_t g_VictimSleepElapsed     = 0;            // ms spent in 
 // Set by main() before each RunTest() call.
 static volatile int32_t g_CancelParam            = 0;
 
+// Delete-with-waiter test state (see DeleteWithWaiterTask): a dedicated semaphore which is destroyed while tasks wait on
+// it, g_TestSemaphore must stay untouched. It lives in raw storage which is overwritten after the destruction: a waiter
+// which wrote to the destroyed semaphore would leave a trace in it. The outcome of the waits on the destroyed object is
+// reported through g_VictimResult[] / g_VictimElapsed[] above (index 0: task 1, index 1: task 2).
+alignas(sync::Semaphore) static uint8_t g_DeleteSemStorage[sizeof(sync::Semaphore)];
+static sync::Semaphore * volatile       g_DeleteSem          = nullptr;
+static const uint8_t                    DELETED_FILL         = 0xDD;
+static ITask * volatile                 g_DeleteVictim2      = nullptr;      // second waiter (task 2), published right before it blocks
+static volatile int32_t                 g_DeleteCheckResult  = -100;         // EWaitResult of the follow-up wait of task 1 on g_TestSemaphore (-100 = not set)
+static volatile int64_t                 g_DeleteCheckElapsed = 0;            // ms spent in that follow-up wait
+
+// Scenario selector of DeleteWithWaiterTask, a global for the same reason as g_CancelParam
+static volatile int32_t                 g_DeleteParam        = 0;
+
 // Cancel the wait of g_Victim either via IKernel::CancelTaskWait() or via stk::SleepCancel()
 static void CancelVictim(bool use_sleep_cancel)
 {
@@ -1184,6 +1198,188 @@ private:
     }
 };
 
+static const int32_t DW_WAIT_EX     = 1; // one waiter in WaitEx()
+static const int32_t DW_BOOL_WAIT   = 2; // one waiter in the boolean Wait(): the destruction is reported as false
+static const int32_t DW_TWO_WAITERS = 3; // two waiters in WaitEx(), both must be released
+
+/*! \class DeleteWithWaiterTask
+    \brief Tests destruction of a semaphore which tasks are blocked on (WAIT_RESULT_DELETED).
+    \note  Task 0 creates a dedicated semaphore (count 0) and destroys it while task 1 (and task 2 in the two-waiters
+           scenario) wait on it with an infinite timeout. Nobody signals it, so only the destruction can end the waits:
+           the waiters must get WAIT_RESULT_DELETED (neither a token, a timeout nor a cancellation) without touching the
+           destroyed object. Direct Handover means no token is passed to them, and the counter, which is gone, must not
+           be updated: the storage of the object is overwritten after the destruction and must still hold that pattern
+           when the waiters are back. Afterwards the kernel and g_TestSemaphore must be fully usable: the stale wait entry
+           must not be left behind, which is checked by a timed wait on g_TestSemaphore (count 0) that must run to its
+           deadline, and no permit may have appeared in it. The scenario is selected by g_DeleteParam: 1 = a single waiter
+           in WaitEx(), 2 = a single waiter in the boolean Wait() (reports false, an infinite wait can not time out, so
+           false after ~50 ms identifies the destruction), 3 = two waiters in WaitEx() are both released.
+           Task 2 is added by RunTest() but stays idle unless the scenario is 3.
+*/
+template <EAccessMode _AccessMode>
+class DeleteWithWaiterTask : public Task<_STK_SEM_STACK_SIZE, _AccessMode>
+{
+    uint8_t m_task_id;
+    int32_t m_scenario;
+
+public:
+    DeleteWithWaiterTask(uint8_t task_id, int32_t) // scenario is taken from g_DeleteParam in Run(), see g_DeleteParam
+        : m_task_id(task_id), m_scenario(0)
+    {}
+
+private:
+    void Run()
+    {
+        m_scenario = g_DeleteParam;
+
+        if (m_task_id == 0)
+            RunDestroyer();
+        else
+        if (m_task_id == 1)
+            RunVictim();
+        else
+            RunSecondWaiter();
+    }
+
+    // Task 1: block on the dedicated semaphore, record how the wait ended
+    void RunVictim()
+    {
+        stk::Sleep(_STK_SEM_TEST_SHORT_SLEEP);
+
+        g_Victim    = static_cast<ITask *>(this);
+        g_VictimTid = stk::GetTid();
+
+        sync::Semaphore *const sem = g_DeleteSem; // created by task 0 before it went to sleep
+
+        const int64_t start = GetTimeNowMs();
+        int32_t result;
+
+        // blocks until the semaphore is destroyed; nothing but the result is read afterwards
+        if (m_scenario == DW_BOOL_WAIT)
+        {
+            // boolean variant: the destruction is reported as false, same as a timeout (an infinite wait can not
+            // time out, so false means destroyed here); stored as 1 = acquired / 0 = not acquired
+            result = ((sem != nullptr) && sem->Wait(WAIT_INFINITE)) ? 1 : 0;
+        }
+        else
+        {
+            result = static_cast<int32_t>((sem != nullptr) ? sem->WaitEx(WAIT_INFINITE) : WAIT_RESULT_FAIL);
+        }
+
+        g_VictimElapsed[0] = GetTimeNowMs() - start;
+        g_VictimResult[0]  = result;
+
+        // the kernel is in a sane state: a wait on another semaphore works and the task is not stuck in a wait
+        const int64_t     start2 = GetTimeNowMs();
+        const EWaitResult r2     = g_TestSemaphore.WaitEx(20);
+
+        g_DeleteCheckElapsed = GetTimeNowMs() - start2;
+        g_DeleteCheckResult  = static_cast<int32_t>(r2);
+    }
+
+    // Task 2: second waiter, queued behind task 1
+    void RunSecondWaiter()
+    {
+        if (m_scenario != DW_TWO_WAITERS)
+            return;
+
+        stk::Sleep(2 * _STK_SEM_TEST_SHORT_SLEEP); // block after task 1
+
+        g_DeleteVictim2 = static_cast<ITask *>(this);
+
+        sync::Semaphore *const sem = g_DeleteSem;
+
+        const int64_t     start = GetTimeNowMs();
+        const EWaitResult r     = ((sem != nullptr) ? sem->WaitEx(WAIT_INFINITE) : WAIT_RESULT_FAIL);
+
+        g_VictimElapsed[1] = GetTimeNowMs() - start;
+        g_VictimResult[1]  = static_cast<int32_t>(r);
+    }
+
+    // True if the storage of the destroyed semaphore still holds the pattern written after the destruction
+    static bool StorageUntouched()
+    {
+        for (size_t i = 0; i < sizeof(g_DeleteSemStorage); ++i)
+        {
+            if (g_DeleteSemStorage[i] != DELETED_FILL)
+                return false;
+        }
+
+        return true;
+    }
+
+    // Task 0: create, destroy and verify
+    void RunDestroyer()
+    {
+        sync::Semaphore *const sem = ::new (g_DeleteSemStorage) sync::Semaphore(0U);
+        g_DeleteSem = sem;
+
+        stk::Sleep(60); // task 1 (and task 2) block on it in the meantime
+
+        // destroy the semaphore which is waited on: the waiters are released by the destructor
+        sem->~SemaphoreT();
+        memset(g_DeleteSemStorage, DELETED_FILL, sizeof(g_DeleteSemStorage));
+        g_DeleteSem = nullptr;
+
+        stk::Sleep(_STK_SEM_TEST_SHORT_SLEEP * 4); // let the waiters resume and task 1 finish its check on g_TestSemaphore
+
+        // safety net: if a waiter was not released it would block forever and the kernel would never stop,
+        // cancel it so that the test fails instead of hanging
+        const bool released = (g_VictimResult[0] != -100) &&
+                              ((m_scenario != DW_TWO_WAITERS) || (g_VictimResult[1] != -100));
+        if (!released)
+        {
+            ITask *const victim1 = g_Victim;
+            ITask *const victim2 = g_DeleteVictim2;
+
+            if (victim1 != nullptr)
+                g_Kernel.CancelTaskWait(victim1);
+            if (victim2 != nullptr)
+                g_Kernel.CancelTaskWait(victim2);
+
+            stk::Sleep(_STK_SEM_TEST_SHORT_SLEEP * 5);
+        }
+
+        const bool    untouched = StorageUntouched();
+        const int32_t count     = (int32_t)g_TestSemaphore.GetCount();
+
+        printf("delete with waiter (scenario=%d): first=%d elapsed=%d ms, second=%d elapsed=%d ms, "
+            "g_TestSemaphore wait: result=%d elapsed=%d ms count=%d, storage_untouched=%d\n",
+            (int)m_scenario,
+            (int)g_VictimResult[0], (int)g_VictimElapsed[0],
+            (int)g_VictimResult[1], (int)g_VictimElapsed[1],
+            (int)g_DeleteCheckResult, (int)g_DeleteCheckElapsed, (int)count, (int)untouched);
+
+        // task 1 started waiting at ~10 ms, task 2 at ~20 ms, the semaphore was destroyed at ~60 ms
+        bool pass = released && (g_VictimElapsed[0] >= 35) && (g_VictimElapsed[0] <= 75);
+
+        if (m_scenario == DW_BOOL_WAIT)
+        {
+            // false, and an infinite wait can not time out: it was the destruction that ended it
+            pass = pass && (g_VictimResult[0] == 0);
+        }
+        else
+        {
+            pass = pass && (g_VictimResult[0] == WAIT_RESULT_DELETED);
+        }
+
+        if (m_scenario == DW_TWO_WAITERS)
+        {
+            pass = pass && (g_VictimResult[1] == WAIT_RESULT_DELETED) &&
+                   (g_VictimElapsed[1] >= 25) && (g_VictimElapsed[1] <= 65);
+        }
+
+        // the other semaphore was not affected: a 20 ms wait on it still runs to its deadline (a stale wait entry
+        // would cut it short) and no permit has appeared in it; the destroyed semaphore was not written to
+        pass = pass &&
+               (g_DeleteCheckResult == WAIT_RESULT_TIMEOUT) && (g_DeleteCheckElapsed >= 15) &&
+               (count == 0) && untouched;
+
+        if (pass)
+            g_TestResult = 1;
+    }
+};
+
 // Helper function to reset test state
 static void ResetTestState(uint32_t initial_count = 0, uint32_t max_count = sync::Semaphore::COUNT_MAX)
 {
@@ -1198,6 +1394,11 @@ static void ResetTestState(uint32_t initial_count = 0, uint32_t max_count = sync
     g_Victim             = nullptr;
     g_VictimTid          = TID_NONE;
     g_VictimSleepElapsed = 0;
+
+    g_DeleteSem          = nullptr;
+    g_DeleteVictim2      = nullptr;
+    g_DeleteCheckResult  = -100;
+    g_DeleteCheckElapsed = 0;
 
     for (int32_t i = 0; i < 2; ++i)
     {
@@ -1227,7 +1428,8 @@ static bool NeedsExtendedTasks(const char *test_name)
            (strcmp(test_name, "WideCounter32") != 0) &&
            (strcmp(test_name, "NarrowCounter8") != 0) &&
            (strcmp(test_name, "WideCounter64") != 0) &&
-           (strncmp(test_name, "CancelWait", 10) != 0); // cancel tests use tasks 0-2 only
+           (strncmp(test_name, "CancelWait", 10) != 0) && // cancel tests use tasks 0-2 only
+           (strncmp(test_name, "DeleteWithWaiter", 16) != 0); // delete tests use tasks 0-2 only (task 2 is idle in the single-waiter ones)
 }
 
 /*! \fn    RunTest
@@ -1409,9 +1611,32 @@ int main(int argc, char **argv)
         }
     }
 
+    // Tests 27-29: semaphore destroyed while tasks wait on it (WAIT_RESULT_DELETED, tasks 0-2 only)
+    {
+        struct DeleteCase { const char *name; int32_t param; };
+
+        static const DeleteCase cases[] =
+        {
+            { "DeleteWithWaiter",         DW_WAIT_EX     },
+            { "DeleteWithWaiterBool",     DW_BOOL_WAIT   },
+            { "DeleteWithWaiterTwo",      DW_TWO_WAITERS }
+        };
+
+        for (size_t i = 0; i < (sizeof(cases) / sizeof(cases[0])); ++i)
+        {
+            g_DeleteParam = cases[i].param;
+
+            if (RunTest<DeleteWithWaiterTask<ACCESS_PRIVILEGED>>(cases[i].name, cases[i].param)
+                != TestContext::SUCCESS_EXIT_CODE)
+                total_failures++;
+            else
+                total_success++;
+        }
+    }
+
 #endif // __ARM_ARCH_6M__
 
-    // Test 27: Stress test (no signals lost)
+    // Test 30: Stress test (no signals lost)
     if (RunTest<StressTestTask<ACCESS_PRIVILEGED>>("StressTest", 400) != TestContext::SUCCESS_EXIT_CODE)
         total_failures++;
     else

@@ -1,0 +1,93 @@
+name: Code Coverage - PR Comment
+
+on:
+  workflow_run:
+    workflows: [ "Code Coverage - Generic" ]
+    types: [ completed ]
+
+env:
+  PASS_THRESHOLD: 100
+
+jobs:
+  comment:
+    if: >
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-22.04
+    permissions:
+      actions: read          # download artifact from the triggering run
+      contents: read
+      pull-requests: write
+      issues: write
+
+    steps:
+    - name: Install LCOV
+      run: sudo apt update && sudo apt install -y lcov
+
+    - name: Download coverage artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: coverage-pr
+        path: cov-artifact
+        run-id: ${{ github.event.workflow_run.id }}
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Validate PR number
+      id: pr
+      run: |
+        PR=$(tr -d '[:space:]' < cov-artifact/pr-number)
+        if ! [[ "$PR" =~ ^[0-9]+$ ]]; then
+          echo "Invalid PR number in artifact"; exit 1
+        fi
+        echo "number=$PR" >> "$GITHUB_OUTPUT"
+
+    - name: Build coverage report
+      id: report
+      run: |
+        INFO=cov-artifact/coverage.info
+        PCT=$(lcov --summary "$INFO" 2>&1 | grep -E '^\s*lines' | sed -E 's/.*: *([0-9.]+)%.*/\1/')
+        [[ "$PCT" =~ ^[0-9.]+$ ]] || { echo "Could not parse coverage"; exit 1; }
+        if awk "BEGIN{exit !($PCT >= $PASS_THRESHOLD)}"; then
+          STATUS="✅ passed"; PASS=true
+        else
+          STATUS="❌ failed"; PASS=false
+        fi
+        {
+          echo "<!-- coverage-report -->"
+          echo "## Code Coverage: ${PCT}% ($STATUS, threshold ${PASS_THRESHOLD}%)"
+          echo
+          echo "<details><summary>Per-file coverage</summary>"
+          echo
+          echo '```'
+          lcov --list "$INFO" 2>&1 | head -c 50000
+          echo '```'
+          echo "</details>"
+        } > report.md
+        echo "pass=$PASS" >> "$GITHUB_OUTPUT"
+        echo "pct=$PCT" >> "$GITHUB_OUTPUT"
+        cat report.md >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Post or update PR comment
+      uses: actions/github-script@v8
+      env:
+        PR_NUMBER: ${{ steps.pr.outputs.number }}
+      with:
+        script: |
+          const fs = require('fs');
+          const issue_number = Number(process.env.PR_NUMBER);
+          const body = fs.readFileSync('report.md', 'utf8');
+          const { owner, repo } = context.repo;
+          const comments = await github.paginate(
+            github.rest.issues.listComments, { owner, repo, issue_number });
+          const existing = comments.find(c => c.body && c.body.includes('<!-- coverage-report -->'));
+          if (existing) {
+            await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+          } else {
+            await github.rest.issues.createComment({ owner, repo, issue_number, body });
+          }
+
+    - name: Enforce threshold
+      if: steps.report.outputs.pass != 'true'
+      run: |
+        echo "Coverage ${{ steps.report.outputs.pct }}% is below ${PASS_THRESHOLD}%"
+        exit 1

@@ -223,7 +223,7 @@ TEST(SwitchStrategyMonotonic, FailedWCRT)
     kernel.AddTask(&task1, 50, 50, 0); // 100% CPU
     kernel.AddTask(&task2, 60, 30, 0); // additional load
 
-    auto result = SchedulabilityCheck::IsSchedulableWCRT<2>(strategy);
+    auto result = sched::SchedulabilityCheck::IsSchedulableWCRT<2>(strategy);
 
     CHECK_EQUAL(100, result.info[0].cpu_load.total);
     CHECK_EQUAL(150, result.info[1].cpu_load.total);
@@ -246,7 +246,7 @@ TEST(SwitchStrategyMonotonic, SchedulableWCRT)
     kernel.AddTask(&task2, 100, 30, 0); // task2: C=30, T=100
     kernel.AddTask(&task3, 200, 10, 0); // task3: C=10, T=200
 
-    auto result = SchedulabilityCheck::IsSchedulableWCRT<3>(strategy);
+    auto result = sched::SchedulabilityCheck::IsSchedulableWCRT<3>(strategy);
     CHECK_TEXT(result, "Task set should be schedulable according to WCRT");
 
     CHECK_EQUAL(50, result.info[0].cpu_load.total);
@@ -269,7 +269,6 @@ TEST(SwitchStrategyMonotonic, YieldNotSupported)
     // not handled for any of the tasks (not supported by this strategy)
     CHECK_FALSE(strategy->OnTaskYield(k1));
 }
-
 
 TEST(SwitchStrategyMonotonic, TimeSliceNotSupported)
 {

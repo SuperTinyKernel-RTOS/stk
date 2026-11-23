@@ -33,11 +33,11 @@ stk::sync::Event g_Evt(true,  true);    // manual-reset, initially signaled
 |--------|-----------|-------------|
 | `Set` | `bool Set()` | Transitions to signaled state. Auto-reset: wakes one waiter and auto-resets. Manual-reset: wakes all waiters, stays signaled. Returns `true` if state changed, `false` if already signaled. ISR-safe. |
 | `Reset` | `bool Reset()` | Transitions to non-signaled state. Returns `true` if state changed, `false` if already non-signaled. ISR-safe. |
-| `WaitEx` | `EWaitResult WaitEx(Timeout timeout = WAIT_INFINITE)` | Same as `Wait()`, but preserves the full outcome: `WAIT_RESULT_SIGNAL` (signaled), `WAIT_RESULT_TIMEOUT` (timeout expired, or `NO_WAIT` on a non-signaled event), `WAIT_RESULT_CANCELED` (wait cancelled via `IKernel::CancelTaskWait()` or `SleepCancel()`; the event state is **not** consumed), `WAIT_RESULT_FAIL` (kernel rejected the wait). ISR-safe only with `NO_WAIT`. |
+| `WaitEx` | `EWaitResult WaitEx(Timeout timeout = WAIT_INFINITE)` | Same as `Wait()`, but preserves the full outcome: `WAIT_RESULT_SIGNAL` (signaled), `WAIT_RESULT_TIMEOUT` (timeout expired, or `NO_WAIT` on a non-signaled event), `WAIT_RESULT_CANCELED` (wait cancelled via `IKernel::CancelTaskWait()` or `SleepCancel()`; the event state is **not** consumed), `WAIT_RESULT_DELETED` (the event was destroyed while waiting; it must not be accessed afterwards), `WAIT_RESULT_FAIL` (kernel rejected the wait). ISR-safe only with `NO_WAIT`. |
 | `Wait` | `bool Wait(Timeout timeout = WAIT_INFINITE)` | Blocks until signaled or timeout expires. Takes fast path (returns immediately) if already signaled, auto-resetting in auto-reset mode. Returns `true` if signaled, `false` otherwise (timeout, cancellation, or `NO_WAIT` on a non-signaled event); use `WaitEx()` to tell these apart. ISR-unsafe. |
 | `TryWait` | `bool TryWait()` | Non-blocking poll. Returns `true` if signaled at the time of call (auto-resets in auto-reset mode); `false` otherwise. Never blocks. ISR-safe. |
 | `Pulse` | `void Pulse()` | Win32 `PulseEvent()` semantics: wakes waiters (one for auto-reset, all for manual-reset) then forces non-signaled, regardless of whether anyone was waiting. ISR-safe. |
-| `~Event` | (destructor) | Asserts `m_wait_list.IsEmpty()` in debug builds. Destroying an event with active waiters is a logic error. |
+| `~Event` | (destructor) | Wakes all tasks still waiting with `WAIT_RESULT_DELETED` (done by `~SyncObjectBase`); they must not access the object afterwards, so a waiter that may outlive the event must use `WaitEx()` to observe it (`Wait()` just returns `false`). |
 
 **Behavior by mode:**
 
@@ -62,8 +62,10 @@ stk::sync::Event g_Evt(true,  true);    // manual-reset, initially signaled
   so the auto-reset in `RemoveWaitObject()` only applies to waiters released by a signal.
 - If a signal reaches a waiter before a cancel does, the signal wins (`WAIT_RESULT_SIGNAL`)
   and the cancel is a no-op.
-- Destroying an `Event` while tasks are waiting is a logic error; an assertion fires
-  in debug builds.
+- Destroying an `Event` while tasks are waiting releases them with `WAIT_RESULT_DELETED`: they neither
+  consume a signal nor time out, and `WaitEx()` returns without reading or writing any member of the
+  destroyed object (the auto-reset in `RemoveWaitObject()` does not run, the base-class implementation
+  is used because the derived part is already gone).
 
 ---
 
@@ -82,6 +84,12 @@ before each test. `ResetTestState()` accepts `manual_reset` and `initial_state`
 parameters that are forwarded directly to the `Event` constructor, so the same helper
 serves all tests without any additional setup code per test.
 
+The delete-with-waiter test (19) destroys a **separate** event: `g_DeleteEvent` points to an object constructed
+(auto-reset, non-signaled) with placement-new in the static `g_DeleteEventStorage`, so `g_TestEvent` is never
+destroyed by the test itself. It reuses `g_Victim`, `g_VictimResult[]` and `g_VictimElapsed[]` (see below):
+index 0 holds how the wait on the destroyed event ended, index 1 the outcome of the follow-up wait on
+`g_TestEvent`. `g_DeleteEvent` is set back to `nullptr` right after the destruction.
+
 The cancellation tests (9–18) additionally use a small amount of shared state, reset by
 `ResetTestState()`:
 
@@ -99,14 +107,15 @@ The helper `CancelVictim(use_sleep_cancel)` cancels the victim either with
 
 ## Platform Notes
 
-On **Cortex-M0** (`__ARM_ARCH_6M__`) the device has insufficient RAM to link all nine
+On **Cortex-M0** (`__ARM_ARCH_6M__`) the device has insufficient RAM to link all ten
 distinct task class templates simultaneously. Test 1 (`AutoResetBasic`) runs on all
-platforms; tests 2–18 are skipped on M0 under `#ifndef __ARM_ARCH_6M__`.
+platforms; tests 2–19 are skipped on M0 under `#ifndef __ARM_ARCH_6M__`.
 
 `AutoResetBasic` runs on M0 because it uses a single task class template
 (`AutoResetBasicTask`) instantiated for all five task slots, fitting within the
-available memory. Tests 2–8 each introduce a distinct task class template, and tests 9–18
-add one more (`CancelWaitTask`, shared by all ten cancellation tests), multiplying the
+available memory. Tests 2–8 each introduce a distinct task class template, tests 9–18
+add one more (`CancelWaitTask`, shared by all ten cancellation tests) and test 19 another
+(`DeleteWithWaiterTask`), multiplying the
 static memory footprint beyond what M0 can accommodate.
 
 | Platform | `_STK_EVT_STACK_SIZE` |
@@ -362,6 +371,28 @@ through to a plain wake without disturbing the already-delivered signal.
 
 ---
 
+### Test 19 — `DeleteWithWaiter`
+**Tasks:** 0–1 active, task 2 added but idle (`"DeleteWithWaiter"` is excluded from the extended task set) &nbsp;|&nbsp; **Mode:** auto-reset &nbsp;|&nbsp; **Task class:** `DeleteWithWaiterTask` &nbsp;|&nbsp; **Runs on M0: no**
+
+Verifies that destroying an event which a task is blocked on releases the waiter with
+`WAIT_RESULT_DELETED`. Task 0 constructs a dedicated event (`g_DeleteEvent`, placement-new into
+`g_DeleteEventStorage`) and sleeps 60 ticks. Task 1 sleeps `_STK_EVT_TEST_SHORT_SLEEP`, publishes its `ITask`
+pointer in `g_Victim` and blocks in `WaitEx(WAIT_INFINITE)` on that event: nobody signals it, so only its
+destruction can end the wait. Task 0 then destroys the event while it is waited for, and overwrites its
+storage with `0xDD`, so that any access to the destroyed object by the woken waiter (or by the kernel) would
+read garbage. Task 1 records the result and the elapsed time without touching the destroyed object, then
+performs a `WaitEx(20)` on `g_TestEvent` to show that the task and the kernel are in a sane state: nobody
+signals `g_TestEvent`, so the wait must run to its deadline and return `WAIT_RESULT_TIMEOUT`; a stale wait entry
+left behind would end it early or with another result. Task 0 sleeps 40 more ticks and checks the
+outcome. If the waiter was not released, task 0 cancels its wait with `g_Kernel.CancelTaskWait()`, so the test
+fails instead of hanging the kernel.
+
+**Pass condition:** task 1's first result is `WAIT_RESULT_DELETED` (not a signal, a timeout or a cancellation);
+elapsed time is in `[35, 75]` ms (started at ~10 ms, destroyed at ~60 ms); the follow-up `WaitEx(20)` on
+`g_TestEvent` returned `WAIT_RESULT_TIMEOUT` after at least 15 ms; `g_TestEvent.TryWait()` is `false` at the end
+
+---
+
 ## Summary Table
 
 | # | Test | Tasks | Mode | Pass condition | What it verifies |
@@ -384,3 +415,4 @@ through to a plain wake without disturbing the already-delivered signal.
 | 16 | `CancelWait_SleepCancelNoStale` | 0–2 | auto-reset | as test 11 | `SleepCancel()` leaves no stale wait entry (regression for `OnTaskSleepCancel()`) |
 | 17 | `CancelWait_SleepCancelTwo` | 0–2 | auto-reset | as test 13 | `SleepCancel()` keeps the wait list intact |
 | 18 | `CancelWait_SleepCancelSignal` | 0–2 | auto-reset | as test 14 | `SleepCancel()` after a signal is a harmless no-op |
+| 19 | `DeleteWithWaiterTask` | 0–1 (+ idle 2) | auto-reset | `DELETED`, elapsed `[35, 75]` ms, follow-up wait on `g_TestEvent` times out `>= 15` ms | Destroying an event which a task waits for releases the waiter with `WAIT_RESULT_DELETED`; the waiter does not touch the destroyed object and leaves no stale wait entry |

@@ -62,13 +62,13 @@ All counter updates run under the critical section, so every counter type is saf
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `Wait` | `bool Wait(Timeout timeout = WAIT_INFINITE)` | Decrements counter if `> 0` (fast path, no blocking). If counter is `0` and `timeout == 0` (`NO_WAIT`), returns `false` immediately. Otherwise blocks until `Signal()` or timeout. Returns `true` if acquired, `false` on timeout **or cancellation** (use `WaitEx()` to tell them apart). ISR-unsafe. |
-| `WaitEx` | `EWaitResult WaitEx(Timeout timeout = WAIT_INFINITE)` | Same as `Wait()` but reports the full outcome: `WAIT_RESULT_SIGNAL` (acquired, including the fast path), `WAIT_RESULT_TIMEOUT` (timeout expired, or `NO_WAIT` on an empty semaphore), `WAIT_RESULT_CANCELED` (wait cancelled via `IKernel::CancelTaskWait()` / `stk::SleepCancel()`), `WAIT_RESULT_FAIL` (kernel rejected the wait). ISR-unsafe. |
+| `Wait` | `bool Wait(Timeout timeout = WAIT_INFINITE)` | Decrements counter if `> 0` (fast path, no blocking). If counter is `0` and `timeout == 0` (`NO_WAIT`), returns `false` immediately. Otherwise blocks until `Signal()` or timeout. Returns `true` if acquired, `false` on timeout, cancellation **or destruction of the semaphore** (use `WaitEx()` to tell them apart). ISR-unsafe. |
+| `WaitEx` | `EWaitResult WaitEx(Timeout timeout = WAIT_INFINITE)` | Same as `Wait()` but reports the full outcome: `WAIT_RESULT_SIGNAL` (acquired, including the fast path), `WAIT_RESULT_TIMEOUT` (timeout expired, or `NO_WAIT` on an empty semaphore), `WAIT_RESULT_CANCELED` (wait cancelled via `IKernel::CancelTaskWait()` / `stk::SleepCancel()`), `WAIT_RESULT_DELETED` (the semaphore was destroyed while waiting; it must not be accessed afterwards), `WAIT_RESULT_FAIL` (kernel rejected the wait). ISR-unsafe. |
 | `Signal` | `void Signal()` | If tasks are waiting, delivers token directly to the first waiter (Direct Handover — counter is not incremented). If no tasks are waiting, increments `m_count`; asserts if the counter is already at `max_count`. ISR-safe. |
 | `TrySignal` | `bool TrySignal()` | Like `Signal()`, but returns `false` (counter unchanged) instead of asserting when the counter is at `max_count` and no task is waiting. With a waiter present it still succeeds by direct hand-off, even at `max_count`. ISR-safe. |
 | `TrySignal` | `bool TrySignal(T ceiling)` | Like `TrySignal()`, but the counter is additionally limited by a per-call `ceiling`: the effective limit is the smaller of `ceiling` and `max_count`. Returns `false` (counter unchanged) if the counter is already at or above the effective limit and no task is waiting. With a waiter present it always succeeds by direct hand-off, whatever the ceiling. The check and the increment are atomic. Intended for APIs with a per-call ceiling (for example ThreadX `tx_semaphore_ceiling_put`). ISR-safe. |
 | `GetCount` | `T GetCount() const` | Returns the current counter value (advisory snapshot). ISR-safe; a counter wider than a pointer is read under the critical section. |
-| `~SemaphoreT` | (destructor) | Asserts `m_wait_list.IsEmpty()` in debug builds. Destroying a semaphore with active waiters is a logic error. |
+| `~SemaphoreT` | (destructor) | Wakes all tasks still waiting with `WAIT_RESULT_DELETED` (done by `~SyncObjectBase`); they must not access the object afterwards. No token is handed to them and the counter is not touched. `Wait()` reports it as `false`, use `WaitEx()` to tell it from a timeout. |
 
 **Fast path vs slow path:**
 
@@ -101,8 +101,11 @@ TrySignal(ceiling) — no waiters       →  ++m_count only if m_count < min(cei
 - If a `Signal()` hand-over already woke the waiter before the cancel arrives, the cancel is a
   no-op: the waiter owns the token and gets `WAIT_RESULT_SIGNAL`; the token is neither lost nor
   duplicated.
-- Destroying a semaphore while tasks are waiting is a logic error; an assertion
-  fires in debug builds.
+- Destroying a semaphore while tasks are waiting releases **all** of them with
+  `WAIT_RESULT_DELETED`: they do not receive a token (a deleted wait never counts as an
+  acquisition, whatever the Direct Handover policy would have done for a `Signal()`), they do not
+  time out, and `WaitEx()` does not read or write any member of the destroyed object, the counter
+  included.
 
 ---
 
@@ -149,22 +152,36 @@ The scenario is a global rather than a constructor argument on purpose: `RunTest
 instantiation, so a constructor argument would silently keep the value of the first `CancelWait_*`
 case for every later case. `CancelWaitTask` therefore reads `g_CancelParam` at the start of `Run()`.
 
+The delete-with-waiter tests (27–29) destroy a **separate** semaphore: `g_DeleteSem` points to a `Semaphore`
+(count 0) constructed with placement-new in the static `g_DeleteSemStorage`, so `g_TestSemaphore` is never destroyed
+by the test itself. After the destruction the storage is overwritten with the byte `DELETED_FILL` (`0xDD`), and task 0
+checks at the end that every byte still holds it: a woken waiter that wrote to the destroyed semaphore would leave a
+trace. The tests reuse `g_Victim`, `g_VictimResult[]` and `g_VictimElapsed[]` (index 0: task 1, index 1: task 2), and add:
+
+| Variable | Purpose |
+|----------|---------|
+| `g_DeleteSem` | Pointer to the dedicated semaphore; set back to `nullptr` right after the destruction |
+| `g_DeleteVictim2` | Task 2 (second waiter), published right before it blocks; used by the safety net |
+| `g_DeleteCheckResult` / `g_DeleteCheckElapsed` | `EWaitResult` and milliseconds of the follow-up `WaitEx(20)` of task 1 on `g_TestSemaphore` (`-100` = not set) |
+| `g_DeleteParam` | Scenario selector (`DW_WAIT_EX = 1`, `DW_BOOL_WAIT = 2`, `DW_TWO_WAITERS = 3`); a global for the same reason as `g_CancelParam` |
+
 Tasks 0–2 are always added by `RunTest()`; tasks 3–4 are added unless the test is `TimeoutWait`,
 `ZeroTimeout`, `SignalBeforeWait`, `BoundedBuffer`, `TrySignalSaturation`, `AlreadySignaledOnInit`,
-`TrySignalCeiling`, `TrySignalCeilingHandoff`, `WideCounter32`, `NarrowCounter8`, `WideCounter64`
-or a `CancelWait_*` test.
+`TrySignalCeiling`, `TrySignalCeilingHandoff`, `WideCounter32`, `NarrowCounter8`, `WideCounter64`,
+a `CancelWait_*` test or a `DeleteWithWaiter*` test.
 
 ---
 
 ## Platform Notes
 
 On **Cortex-M0** (`__ARM_ARCH_6M__`) the device has insufficient RAM to link all the
-distinct task class templates simultaneously. Tests 1–26 are skipped on M0 and only
-`StressTest` (test 27) runs, under `#ifndef __ARM_ARCH_6M__`.
+distinct task class templates simultaneously. Tests 1–29 are skipped on M0 and only
+`StressTest` (test 30) runs, under `#ifndef __ARM_ARCH_6M__`.
 
 `StressTest` runs on M0 because it uses a single task class template (`StressTestTask`)
-instantiated for all five task slots, fitting within the available memory. Tests 1–26
-introduce distinct task class templates (tests 15–26 share one, `CancelWaitTask`), multiplying the static memory footprint
+instantiated for all five task slots, fitting within the available memory. Tests 1–29
+introduce distinct task class templates (tests 15–26 share one, `CancelWaitTask`, and tests 27–29 share
+another, `DeleteWithWaiterTask`), multiplying the static memory footprint
 beyond what M0 can accommodate.
 
 | Platform | `_STK_SEM_STACK_SIZE` |
@@ -461,7 +478,54 @@ Same scenarios as tests 15, 17, 18, 19 and 20, but cancelled through `stk::Sleep
 
 ---
 
-### Test 27 — `StressTest`
+### Tests 27–29 — `DeleteWithWaiter*`
+**Tasks:** 0–2 &nbsp;|&nbsp; **Task class:** `DeleteWithWaiterTask` &nbsp;|&nbsp; **Initial count:** `0` &nbsp;|&nbsp; **Runs on M0: no**
+
+Verify that destroying a semaphore which tasks are blocked on releases **all** waiters with
+`WAIT_RESULT_DELETED`: no token is handed to them, and the destroyed object is not touched. Task 0 constructs a
+dedicated semaphore (`g_DeleteSem`, count 0, placement-new into `g_DeleteSemStorage`) and sleeps 60 ticks. Task 1
+sleeps `_STK_SEM_TEST_SHORT_SLEEP`, publishes its `ITask` pointer in `g_Victim` and blocks on that semaphore with
+`WAIT_INFINITE`: nobody signals it, so only its destruction can end the wait. Task 0 then destroys the semaphore
+while it is waited on, and overwrites its storage with `0xDD`, so that any access to the destroyed object by a woken
+waiter (or by the kernel) would read garbage, and any write would be detected. Task 1 records the result and the
+elapsed time without touching the destroyed object. It then performs a `WaitEx(20)` on `g_TestSemaphore` (count 0)
+to show that the task and the kernel are in a sane state: nobody signals `g_TestSemaphore`, so the wait must run to
+its deadline and return `WAIT_RESULT_TIMEOUT`; a stale wait entry left behind would end it early or with another
+result. Task 0 sleeps 40 more ticks and checks the outcome. If a waiter was not released, task 0 cancels its wait with
+`g_Kernel.CancelTaskWait()`, so the test fails instead of hanging the kernel.
+
+**Common pass condition:** task 1's elapsed time is in `[35, 75]` ms (waiting from ~10 ms, destroyed at ~60 ms); the
+follow-up `WaitEx(20)` on `g_TestSemaphore` returned `WAIT_RESULT_TIMEOUT` after at least 15 ms; `g_TestSemaphore.GetCount() == 0`
+(deletion created no permit); every byte of the storage of the destroyed semaphore still holds `0xDD`.
+
+#### Test 27 — `DeleteWithWaiter`
+**Param:** `DW_WAIT_EX` &nbsp;|&nbsp; Task 2 is added by `RunTest()` but stays idle.
+
+Task 1 blocks in `WaitEx(WAIT_INFINITE)`.
+
+**Pass condition:** common, and the result is `WAIT_RESULT_DELETED` (not a token, a timeout or a cancellation).
+
+#### Test 28 — `DeleteWithWaiterBool`
+**Param:** `DW_BOOL_WAIT` &nbsp;|&nbsp; Task 2 is added by `RunTest()` but stays idle.
+
+Task 1 uses the boolean `Wait(WAIT_INFINITE)`. The destruction is reported as `false`, the same as a timeout; since an
+infinite wait can not time out, `false` after ~50 ms identifies the destruction.
+
+**Pass condition:** common, and `Wait()` returned `false`.
+
+#### Test 29 — `DeleteWithWaiterTwo`
+**Param:** `DW_TWO_WAITERS`
+
+Task 1 blocks first, task 2 blocks behind it (`Sleep(20)`, then `WaitEx(WAIT_INFINITE)`). The destruction must release
+both: the wait list of the semaphore is walked completely, not just up to its first entry, and no token goes to
+the first waiter by Direct Handover.
+
+**Pass condition:** common, and task 1 and task 2 both get `WAIT_RESULT_DELETED`; the elapsed time of task 2 is in
+`[25, 65]` ms (waiting from ~20 ms)
+
+---
+
+### Test 30 — `StressTest`
 **Tasks:** 0–4 (all 5) — **runs on all platforms including Cortex-M0** &nbsp;|&nbsp; **Param:** `iterations = 400` &nbsp;|&nbsp; **Initial count:** `0`
 
 Task 0 is the sole producer, firing 400 signals with a `Delay(1)` every 10 iterations
@@ -505,4 +569,7 @@ hold exactly, proving no signal was lost or double-counted under contention.
 | 24 | `CancelWait_SleepCancelTwo` | 0–2 | `0` | as test 18 | Test 18 via `stk::SleepCancel()` |
 | 25 | `CancelWait_SleepCancelSignal` | 0–2 | `0` | as test 19 | Test 19 via `stk::SleepCancel()` |
 | 26 | `CancelWait_SleepCancelBool` | 0–2 | `0` | as test 20 | Test 20 via `stk::SleepCancel()` |
-| 27 | `StressTestTask` | 0–4 | `0` | `consumed + remaining == 400` | No signal lost or double-counted under full five-task contention; runs on all platforms including M0 |
+| 27 | `DeleteWithWaiter` | 0–2 | `0` | `WAIT_RESULT_DELETED`, elapsed `[35, 75]` ms, follow-up wait on `g_TestSemaphore` times out `>= 15` ms, `count == 0`, storage untouched | Destroying a semaphore which a task waits on releases it with `WAIT_RESULT_DELETED`; no token is handed over; the waiter writes nothing to the destroyed object and leaves no stale wait entry |
+| 28 | `DeleteWithWaiterBool` | 0–2 | `0` | `Wait()` returns `false` after `[35, 75]` ms, as test 27 | The boolean `Wait()` collapses a destruction into `false`; an infinite wait can not time out, so it identifies the destruction |
+| 29 | `DeleteWithWaiterTwo` | 0–2 | `0` | both `DELETED`, task 2 elapsed `[25, 65]` ms, as test 27 | The destruction releases every waiter, not only the first one |
+| 30 | `StressTestTask` | 0–4 | `0` | `consumed + remaining == 400` | No signal lost or double-counted under full five-task contention; runs on all platforms including M0 |

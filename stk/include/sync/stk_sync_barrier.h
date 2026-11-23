@@ -68,6 +68,9 @@ public:
                               //!< the remaining parties - it does not, and cannot, make the barrier trip
                               //!< without a replacement arrival.
 
+        BARRIER_DELETED,      //!< The barrier was destroyed while this task was waiting (WAIT_RESULT_DELETED).
+                              //!< The barrier must not be accessed afterwards; no bookkeeping is touched.
+
         BARRIER_FAILED        //!< The kernel rejected the wait (WAIT_RESULT_FAIL, e.g. the scheduler is locked,
                               //!< KERNEL_SYNC is not enabled or the kernel is not running). The arrival is rolled
                               //!< back the same way as for BARRIER_CANCELED.
@@ -83,11 +86,10 @@ public:
     }
 
     /*! \brief     Destructor.
-        \note      Destroying a barrier while tasks are waiting on it is a logical error (an assertion
-                   is triggered in debug builds by the destructor of the internal ConditionVariable).
+        \note      Tasks still waiting on the barrier at destruction time are woken and \c WaitEx() returns
+                   \c BARRIER_DELETED (\c Wait() returns \c false); they must not access the barrier afterwards.
     */
-    STK_VIRT_DTOR ~Barrier()
-    {}
+    STK_VIRT_DTOR ~Barrier() = default;
 
     /*! \brief     Block the calling task until \a count tasks have called \c Wait().
         \details   Once the last task arrives, all currently waiting tasks are woken up and the
@@ -122,7 +124,6 @@ public:
 private:
     STK_NONCOPYABLE_CLASS(Barrier);
 
-    Mutex             m_mutex;      //!< protects m_count / m_generation and serializes calls to m_cond
     ConditionVariable m_cond;       //!< signals waiting tasks when the current generation completes
     const uint32_t    m_threshold;  //!< number of tasks required to trip the barrier
     uint32_t          m_count;      //!< number of tasks still to arrive in the current generation
@@ -139,7 +140,9 @@ inline Barrier::EResult Barrier::WaitEx()
 
     STK_ASSERT(!hw::IsInsideISR()); // API contract: caller must not be in ISR
 
-    m_mutex.Lock();
+    // a critical section guards the state: the kernel re-locks it in the waiting task
+    // after the wake, which must stay valid when the barrier is destroyed while the task waits
+    ScopedCriticalSection cs_;
 
     const uint32_t gen = m_generation;
 
@@ -149,7 +152,7 @@ inline Barrier::EResult Barrier::WaitEx()
         ++m_generation;
         m_count = m_threshold;
 
-        m_cond.NotifyAll();
+        m_cond.NotifyAll_CS();
 
         result = BARRIER_LAST_ARRIVAL;
     }
@@ -159,12 +162,19 @@ inline Barrier::EResult Barrier::WaitEx()
         // we are still in the same generation we entered with
         while (gen == m_generation)
         {
-            const EWaitResult wr = m_cond.WaitEx(m_mutex, WAIT_INFINITE);
+            const EWaitResult wr = m_cond.WaitEx(cs_, WAIT_INFINITE);
+
+            if (wr == WAIT_RESULT_DELETED)
+            {
+                // the barrier was destroyed while waiting: no member may be touched
+                result = BARRIER_DELETED;
+                break;
+            }
 
             if (wr != WAIT_RESULT_SIGNAL)
             {
                 // cancellation or kernel failure (e.g. scheduler locked): the wait did not block, so the loop
-                // must not retry (it would spin forever). The cancel wakes this task before m_mutex is
+                // must not retry (it would spin forever). The cancel wakes this task before the critical section is
                 // re-acquired, so the barrier may have tripped in between (the trip has then already consumed
                 // our arrival and reset m_count): signal wins, report a normal release and leave the count alone
                 if (gen == m_generation)
@@ -182,8 +192,6 @@ inline Barrier::EResult Barrier::WaitEx()
             // genuine signal here means gen != m_generation already and the loop exits next check
         }
     }
-
-    m_mutex.Unlock();
 
     return result;
 }

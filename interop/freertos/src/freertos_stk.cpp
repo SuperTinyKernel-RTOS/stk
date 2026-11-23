@@ -2048,6 +2048,8 @@ QueueHandle_t xQueueCreateStatic(UBaseType_t    uxQueueLength,
     return static_cast<QueueHandle_t>(q);
 }
 
+// Tasks still blocked on a queue when it is deleted are released and their call fails (pdFAIL / NULL);
+// they do not touch the deleted object afterwards. FreeRTOS itself leaves this case undefined.
 void vQueueDelete(QueueHandle_t xQueue)
 {
     if (xQueue == nullptr)
@@ -2746,6 +2748,8 @@ SemaphoreHandle_t xSemaphoreCreateRecursiveMutexStatic(StaticSemaphore_t *pxMute
 
 #endif // configUSE_MUTEXES
 
+// Tasks still blocked on a semaphore or mutex when it is deleted are released and their call fails (pdFAIL / NULL);
+// they do not touch the deleted object afterwards. FreeRTOS itself leaves this case undefined.
 void vSemaphoreDelete(SemaphoreHandle_t xSemaphore)
 {
     if (xSemaphore == nullptr)
@@ -4067,16 +4071,20 @@ size_t xStreamBufferSend(StreamBufferHandle_t xStreamBuffer,
 
     FrtosStreamBuffer *sb = static_cast<FrtosStreamBuffer *>(xStreamBuffer);
 
+    // Read the callback before blocking: if the stream buffer is deleted while this task waits, the wait
+    // ends early (possibly after a partial transfer) and 'sb' must not be dereferenced any more.
+    const StreamBufferCallbackFunction_t send_cb = sb->m_send_cb;
+
     const size_t sent = sb->m_pipe.WriteBulk(
         static_cast<const uint8_t *>(pvTxData),
         xDataLengthBytes,
         FrtosTimeoutToStk(xTicksToWait));
 
     // Fire send-complete callback outside any critical section.
-    if ((sent > 0U) && (sb->m_send_cb != nullptr))
+    if ((sent > 0U) && (send_cb != nullptr))
     {
         BaseType_t woken = pdFALSE;
-        sb->m_send_cb(xStreamBuffer, &woken);
+        send_cb(xStreamBuffer, &woken);
     }
 
     return sent;
@@ -4129,6 +4137,10 @@ size_t xStreamBufferReceive(StreamBufferHandle_t xStreamBuffer,
     //   - Blocking with trigger: waits until m_trigger bytes are present, then
     //     drains up to xBufferLengthBytes in one atomic CS pass.
     //   - Timeout before trigger: drains whatever arrived, possibly 0.
+    // The callback is read before blocking: the wait may end because the stream buffer was deleted
+    // (after a partial transfer), and 'sb' must not be dereferenced after that.
+    const StreamBufferCallbackFunction_t recv_cb = sb->m_recv_cb;
+
     const size_t total = sb->m_pipe.ReadBulkTriggered(
         static_cast<uint8_t *>(pvRxData),
         sb->m_trigger,
@@ -4136,10 +4148,10 @@ size_t xStreamBufferReceive(StreamBufferHandle_t xStreamBuffer,
         FrtosTimeoutToStk(xTicksToWait));
 
     // Fire receive-complete callback outside any critical section.
-    if ((total > 0U) && (sb->m_recv_cb != nullptr))
+    if ((total > 0U) && (recv_cb != nullptr))
     {
         BaseType_t woken = pdFALSE;
-        sb->m_recv_cb(xStreamBuffer, &woken);
+        recv_cb(xStreamBuffer, &woken);
     }
 
     return total;

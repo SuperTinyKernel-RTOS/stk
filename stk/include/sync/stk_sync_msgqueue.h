@@ -82,9 +82,8 @@ public:
                           EWaitOrder order = STK_SYNC_WAIT_ORDER_DEFAULT);
 
     /*! \brief     Destructor.
-        \note      If tasks are still waiting at destruction time it is considered a logical error
-                   (dangling waiters). An assertion is triggered in debug builds via the
-                   ConditionVariable destructors.
+        \note      Tasks still waiting at destruction time are woken (by the destructors of the internal
+                   ConditionVariables) with \c WAIT_RESULT_DELETED and must not access the object afterwards.
         \note      MISRA deviation: [STK-DEV-005] Rule 10-3-2.
     */
     STK_VIRT_DTOR ~MessageQueue() = default;
@@ -102,6 +101,7 @@ public:
                    queue), \c WAIT_RESULT_CANCELED if the wait was cancelled via
                    IKernel::CancelTaskWait(), \c WAIT_RESULT_FAIL if the kernel rejected the wait.
                    Nothing is enqueued on a non-signal result.
+        \note      \c WAIT_RESULT_DELETED: the object was destroyed while waiting; it must not be accessed afterwards.
     */
     EWaitResult PutEx(const void *msg_ptr, Timeout timeout_ticks = WAIT_INFINITE);
 
@@ -143,6 +143,7 @@ public:
                    non-blocking attempt.
         \warning   ISR-safe only with \a timeout_ticks = \c NO_WAIT, ISR-unsafe otherwise.
         \return    Same values as \c PutEx(). Nothing is enqueued on a non-signal result.
+        \note      \c WAIT_RESULT_DELETED: the object was destroyed while waiting; it must not be accessed afterwards.
     */
     EWaitResult PutFrontEx(const void *msg_ptr, Timeout timeout_ticks = WAIT_INFINITE);
 
@@ -191,6 +192,7 @@ public:
                     queue), \c WAIT_RESULT_CANCELED if the wait was cancelled via
                     IKernel::CancelTaskWait(), \c WAIT_RESULT_FAIL if the kernel rejected the wait.
                     Nothing is dequeued or copied on a non-signal result.
+        \note      \c WAIT_RESULT_DELETED: the object was destroyed while waiting; it must not be accessed afterwards.
     */
     EWaitResult GetEx(void *msg_ptr, Timeout timeout_ticks = WAIT_INFINITE);
 
@@ -234,6 +236,7 @@ public:
                     non-blocking attempt.
         \warning    ISR-safe only with \a timeout_ticks = \c NO_WAIT, ISR-unsafe otherwise.
         \return     Same values as \c GetEx(). Nothing is copied on a non-signal result.
+        \note      \c WAIT_RESULT_DELETED: the object was destroyed while waiting; it must not be accessed afterwards.
     */
     EWaitResult PeekEx(void *msg_ptr, Timeout timeout_ticks = WAIT_INFINITE);
 
@@ -282,6 +285,7 @@ public:
                     non-blocking attempt.
         \warning    ISR-safe only with \a timeout_ticks = \c NO_WAIT, ISR-unsafe otherwise.
         \return     Same values as \c GetEx(). Nothing is copied on a non-signal result.
+        \note      \c WAIT_RESULT_DELETED: the object was destroyed while waiting; it must not be accessed afterwards.
     */
     EWaitResult PeekFrontEx(void *msg_ptr, Timeout timeout_ticks = WAIT_INFINITE);
 
@@ -782,9 +786,8 @@ public:
     {}
 
     /*! \brief     Destructor.
-        \note      If tasks are still waiting at destruction time it is considered a logical error
-                   (dangling waiters). An assertion is triggered in debug builds via the
-                   ConditionVariable destructors.
+        \note      Tasks still waiting at destruction time are woken (by the destructors of the internal
+                   ConditionVariables) with \c WAIT_RESULT_DELETED and must not access the object afterwards.
         \note      MISRA deviation: [STK-DEV-005] Rule 10-3-2.
     */
     STK_VIRT_DTOR ~MessageQueueT() = default;

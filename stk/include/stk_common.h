@@ -140,7 +140,9 @@ enum EWaitResult : int8_t
     WAIT_RESULT_FAIL     = -1, //!< IKernelService::Wait returned with error without waiting.
     WAIT_RESULT_SIGNAL   = 0,  //!< The wake was caused by a signal.
     WAIT_RESULT_TIMEOUT  = 1,  //!< The wake was caused by a timeout expiry.
-    WAIT_RESULT_CANCELED = 2   //!< The wait was cancelled by another task via IKernel::CancelTaskWait(), independent of signal/timeout.
+    WAIT_RESULT_CANCELED = 2,  //!< The wait was cancelled by another task via IKernel::CancelTaskWait(), independent of signal/timeout.
+    WAIT_RESULT_DELETED  = 3   //!< The synchronization object was destroyed while the task was waiting on it (ThreadX: TX_DELETED).
+                               //!< The object must not be accessed after this result: no resource was acquired or consumed.
 };
 
 /*! \enum  EAddResult
@@ -629,7 +631,8 @@ public:
         STATE_WAIT,      //!< Wait is active.
         STATE_SIGNALED,  //!< Wake signaled.
         STATE_TIMEOUT,   //!< Wait expired due to timeout rather than a Wake() signal.
-        STATE_CANCELLED  //!< Wait was cancelled via Cancel() rather than Wake()/timeout.
+        STATE_CANCELLED, //!< Wait was cancelled via Cancel() rather than Wake()/timeout.
+        STATE_DELETED    //!< Wait was ended by destruction of the sync object, see WakeDeleted().
     };
 
     /*! \brief     Get thread Id of the task that owns this wait object.
@@ -652,6 +655,14 @@ public:
                    object's wait list (via ISyncObject::RemoveWaitObject) as part of the wake sequence.
     */
     virtual void Wake(bool timeout) = 0;
+
+    /*! \brief     Wake task because the synchronization object it waits on is being destroyed.
+        \note      Same wake sequence as Wake(), but the result of the wait is WAIT_RESULT_DELETED.
+                   The wait object is removed from the sync object's wait list through the base-class
+                   ISyncObject::RemoveWaitObject path only (see SyncObjectBase::~SyncObjectBase), and the
+                   woken task must not access the destroyed object afterwards.
+    */
+    virtual void WakeDeleted() = 0;
 
     /*! \brief     Get current state.
         \return    State value.
@@ -851,6 +862,22 @@ public:
              obj = detail::DListCast::ListEntryToParent<IWaitObject>(wlist.GetFirst()))
         {
             obj->Wake(false);
+        }
+    }
+
+    /*! \brief     Wake all tasks in the wait list because the owning sync object is being destroyed.
+        \param[in] wlist: Wait list.
+        \note      Each woken task is notified with WAIT_RESULT_DELETED (see IWaitObject::WakeDeleted).
+        \note      Does nothing if no tasks are currently waiting.
+        \note      Must be called inside the critical section (see \a hw::CriticalSection).
+    */
+    static inline void DeleteAll(IWaitObject::ListHeadType &wlist)
+    {
+        for (IWaitObject *obj = detail::DListCast::ListEntryToParent<IWaitObject>(wlist.GetFirst());
+             obj != nullptr;
+             obj = detail::DListCast::ListEntryToParent<IWaitObject>(wlist.GetFirst()))
+        {
+            obj->WakeDeleted();
         }
     }
 
@@ -2057,6 +2084,18 @@ public:
                    state of \a sobj and its wait list (the sync primitives hold a hw::CriticalSection for that).
     */
     virtual TId Wake(ISyncObject *sobj, bool all) = 0;
+
+    /*! \brief     Wake all tasks waiting on a synchronization object which is being destroyed.
+        \param[in] sobj: Synchronization object being destroyed (called from its destructor, see
+                   SyncObjectBase::~SyncObjectBase). Its wait list is expected to be non-empty, otherwise noop.
+        \details  Each waiting task is released with WAIT_RESULT_DELETED (see IWaitObject::WakeDeleted) and must not
+                   access \a sobj afterwards. Needed by the code which can not access the wait objects itself
+                   (Non-Secure code of ARM TrustZone), the kernel does it on its behalf; other builds release the
+                   waiters directly (see ISyncObject::DeleteAll) and need no kernel call.
+        \see       Wake, ISyncObject::DeleteAll
+        \note      ISR-safe. Must be called inside the critical section (see \a hw::CriticalSection).
+    */
+    virtual void WakeDeleted(ISyncObject *sobj) = 0;
 
     /*! \brief     Suspend scheduling.
         \return    Number of ticks available for the suspension period, as determined by the

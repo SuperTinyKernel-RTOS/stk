@@ -95,9 +95,8 @@ public:
                   EWaitOrder order = STK_SYNC_WAIT_ORDER_DEFAULT);
 
     /*! \brief     Destructor.
-        \note      If tasks are still waiting at destruction time it is considered a logical error
-                   (dangling waiters). An assertion is triggered in debug builds via the
-                   ConditionVariable destructors.
+        \note      Tasks still waiting at destruction time are woken (by the destructors of the internal
+                   ConditionVariables) with \c WAIT_RESULT_DELETED and must not access the object afterwards.
         \note      MISRA deviation: [STK-DEV-005] Rule 10-3-2.
     */
     STK_VIRT_DTOR ~Pipe() = default;
@@ -113,6 +112,7 @@ public:
                    \c WAIT_RESULT_CANCELED if the wait was cancelled via IKernel::CancelTaskWait(),
                    \c WAIT_RESULT_FAIL if the kernel rejected the wait. Nothing is written on a
                    non-signal result.
+        \note      \c WAIT_RESULT_DELETED: the object was destroyed while waiting; it must not be accessed afterwards.
     */
     EWaitResult WriteEx(const void *data, Timeout timeout_ticks = WAIT_INFINITE);
 
@@ -156,6 +156,7 @@ public:
                    elements fitted, \c WAIT_RESULT_CANCELED if the wait was cancelled via
                    IKernel::CancelTaskWait(), \c WAIT_RESULT_FAIL if \a src is \c nullptr or the kernel
                    rejected the wait. On any non-signal result \a written holds the partial count.
+        \note      \c WAIT_RESULT_DELETED: the object was destroyed while waiting; it must not be accessed afterwards.
     */
     EWaitResult WriteBulkEx(const void *src, size_t count, size_t &written,
                             Timeout timeout_ticks = WAIT_INFINITE);
@@ -211,6 +212,7 @@ public:
                    \c WAIT_RESULT_CANCELED if the wait was cancelled via IKernel::CancelTaskWait(),
                    \c WAIT_RESULT_FAIL if the kernel rejected the wait. Nothing is read on a
                    non-signal result.
+        \note      \c WAIT_RESULT_DELETED: the object was destroyed while waiting; it must not be accessed afterwards.
     */
     EWaitResult ReadEx(void *data, Timeout timeout_ticks = WAIT_INFINITE);
 
@@ -254,6 +256,7 @@ public:
                    elements were available, \c WAIT_RESULT_CANCELED if the wait was cancelled via
                    IKernel::CancelTaskWait(), \c WAIT_RESULT_FAIL if \a dst is \c nullptr or the kernel
                    rejected the wait. On any non-signal result \a read_count holds the partial count.
+        \note      \c WAIT_RESULT_DELETED: the object was destroyed while waiting; it must not be accessed afterwards.
     */
     EWaitResult ReadBulkEx(void *dst, size_t count, size_t &read_count,
                            Timeout timeout_ticks = WAIT_INFINITE);
@@ -318,6 +321,7 @@ public:
                    \c WAIT_RESULT_FAIL if \a dst is \c nullptr or the kernel rejected the wait.
                    On a timeout or cancellation \a read_count holds the (possibly zero) number of
                    elements that were available and drained.
+        \note      \c WAIT_RESULT_DELETED: the object was destroyed while waiting; it must not be accessed afterwards.
     */
     EWaitResult ReadBulkTriggeredEx(void *dst, size_t trigger, size_t max_count, size_t &read_count,
                                     Timeout timeout_ticks = WAIT_INFINITE);
@@ -878,6 +882,7 @@ public:
                    \c WAIT_RESULT_CANCELED if the wait was cancelled via IKernel::CancelTaskWait(),
                    \c WAIT_RESULT_FAIL if the kernel rejected the wait. Nothing is written on a
                    non-signal result.
+        \note      \c WAIT_RESULT_DELETED: the object was destroyed while waiting; it must not be accessed afterwards.
     */
     EWaitResult WriteEx(const T &data, Timeout timeout_ticks = WAIT_INFINITE)
     {
@@ -963,6 +968,7 @@ public:
                    elements fitted, \c WAIT_RESULT_CANCELED if the wait was cancelled via
                    IKernel::CancelTaskWait(), \c WAIT_RESULT_FAIL if \a src is \c nullptr or the kernel
                    rejected the wait. On any non-signal result \a written holds the partial count.
+        \note      \c WAIT_RESULT_DELETED: the object was destroyed while waiting; it must not be accessed afterwards.
     */
     EWaitResult WriteBulkEx(const T *src, size_t count, size_t &written,
                             Timeout timeout_ticks = WAIT_INFINITE)
@@ -1103,6 +1109,7 @@ public:
                    \c WAIT_RESULT_CANCELED if the wait was cancelled via IKernel::CancelTaskWait(),
                    \c WAIT_RESULT_FAIL if the kernel rejected the wait. \a data is not modified on a
                    non-signal result.
+        \note      \c WAIT_RESULT_DELETED: the object was destroyed while waiting; it must not be accessed afterwards.
     */
     EWaitResult ReadEx(T &data, Timeout timeout_ticks = WAIT_INFINITE)
     {
@@ -1188,6 +1195,7 @@ public:
                    elements were available, \c WAIT_RESULT_CANCELED if the wait was cancelled via
                    IKernel::CancelTaskWait(), \c WAIT_RESULT_FAIL if \a dst is \c nullptr or the kernel
                    rejected the wait. On any non-signal result \a read_count holds the partial count.
+        \note      \c WAIT_RESULT_DELETED: the object was destroyed while waiting; it must not be accessed afterwards.
     */
     EWaitResult ReadBulkEx(T *dst, size_t count, size_t &read_count,
                            Timeout timeout_ticks = WAIT_INFINITE)

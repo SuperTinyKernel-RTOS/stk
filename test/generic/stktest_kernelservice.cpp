@@ -1360,7 +1360,7 @@ TEST(KernelService, DefaultWaitOrderNoHintHrt)
     kernel.AddTask(&task, 2, 1, 0);
     kernel.Start();
 
-    CHECK_EQUAL(WAIT_ORDER_DEADLINE, g_KernelService->GetDefaultWaitOrder());
+    CHECK_EQUAL(WAIT_ORDER_DEADLINE, GetDefaultWaitOrder());
 }
 
 TEST(KernelService, DefaultWaitOrderNoHintPriority)
@@ -1373,7 +1373,7 @@ TEST(KernelService, DefaultWaitOrderNoHintPriority)
     kernel.AddTask(&task);
     kernel.Start();
 
-    CHECK_EQUAL(WAIT_ORDER_PRIORITY, g_KernelService->GetDefaultWaitOrder());
+    CHECK_EQUAL(WAIT_ORDER_PRIORITY, GetDefaultWaitOrder());
 }
 
 TEST(KernelService, DefaultWaitOrderNoHintWeightedFifo)
@@ -1386,7 +1386,7 @@ TEST(KernelService, DefaultWaitOrderNoHintWeightedFifo)
     kernel.AddTask(&task);
     kernel.Start();
 
-    CHECK_EQUAL(WAIT_ORDER_FIFO, g_KernelService->GetDefaultWaitOrder());
+    CHECK_EQUAL(WAIT_ORDER_FIFO, GetDefaultWaitOrder());
 }
 
 TEST(KernelService, DefaultWaitOrderNoHintFifo)
@@ -1399,7 +1399,7 @@ TEST(KernelService, DefaultWaitOrderNoHintFifo)
     kernel.AddTask(&task);
     kernel.Start();
 
-    CHECK_EQUAL(WAIT_ORDER_FIFO, g_KernelService->GetDefaultWaitOrder());
+    CHECK_EQUAL(WAIT_ORDER_FIFO, GetDefaultWaitOrder());
 }
 
 // ============================================================================ //

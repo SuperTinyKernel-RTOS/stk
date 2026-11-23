@@ -79,16 +79,21 @@ public:
     {}
 
     /*! \brief  Destructor.
-        \note   Destroying an RWMutex while readers are active, writers are waiting,
-                or a writer holds the lock is a logical error (dangling state).
-                An assertion is triggered in debug builds.
+        \note   Destroying an RWMutex while readers are active or a writer holds the lock is a logical
+                error (dangling state), an assertion is triggered in debug builds, unless tasks are waiting
+                for the lock (see below): a task can wait only for a held lock, so that is the way to destroy it.
+        \note   Tasks still waiting at destruction time are woken with \c WAIT_RESULT_DELETED (see
+                \c TimedReadLockEx() / \c TimedLockEx()) and must not access the object afterwards. The
+                \c void ReadLock() / \c Lock() panic (KERNEL_PANIC_ASSERT) in that case.
         \note   MISRA deviation: [STK-DEV-005] Rule 10-3-2.
     */
     STK_VIRT_DTOR ~RWMutex()
     {
-        // API contract: must not be destroyed while readers are active, writers are waiting,
-        // or a writer holds the lock
-        STK_ASSERT((m_readers == 0U) && (m_writers_waiting == 0U) && !m_writer_active);
+        // API contract: must not be destroyed while readers are active or a writer holds the lock, unless tasks
+        // are waiting for it (they can wait only for a held lock): those are released with WAIT_RESULT_DELETED
+        // by the internal ConditionVariables
+        STK_ASSERT(((m_readers == 0U) && !m_writer_active) ||
+                   (m_writers_waiting != 0U) || !m_cv_readers.GetWaitList().IsEmpty());
     }
 
     /*! \class ScopedTimedLock
@@ -162,6 +167,7 @@ public:
                    the wait was cancelled via IKernel::CancelTaskWait(), \c WAIT_RESULT_FAIL if the
                    kernel rejected the wait.
         \warning   ISR-safe only with \a timeout_ticks = \c NO_WAIT, ISR-unsafe otherwise.
+        \note      \c WAIT_RESULT_DELETED: the object was destroyed while waiting; it must not be accessed afterwards.
     */
     EWaitResult TimedReadLockEx(Timeout timeout_ticks);
 
@@ -211,6 +217,7 @@ public:
                    kernel rejected the wait.
         \note      Non-recursive.
         \warning   ISR-safe only with \a timeout_ticks = \c NO_WAIT, ISR-unsafe otherwise.
+        \note      \c WAIT_RESULT_DELETED: the object was destroyed while waiting; it must not be accessed afterwards.
     */
     EWaitResult TimedLockEx(Timeout timeout_ticks);
 
@@ -388,6 +395,13 @@ inline EWaitResult RWMutex::TimedLockEx(Timeout timeout_ticks)
         }
 
         result = m_cv_writers.WaitEx(cs_, remaining);
+
+        if (result == WAIT_RESULT_DELETED)
+        {
+            // the lock was destroyed while waiting: 'this' is gone, no member may be touched
+            break;
+        }
+
         if (result != WAIT_RESULT_SIGNAL)
         {
             // timeout, cancellation or kernel failure: withdraw from the waiting writers queue

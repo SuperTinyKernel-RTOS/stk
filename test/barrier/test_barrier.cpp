@@ -80,6 +80,13 @@ static sync::Mutex g_CounterMtx;
 alignas(sync::Barrier) static uint8_t g_CancelBarrierStorage[sizeof(sync::Barrier)];
 static sync::Barrier * g_CancelBarrier = nullptr;
 
+// Barrier of the delete-with-waiter tests (see DeleteWithWaiterTask): destroyed while tasks wait on it. It lives in raw
+// storage like g_CancelBarrier, and the storage is overwritten after the destruction: a waiter which wrote to the
+// destroyed barrier (e.g. the arrival rollback of a cancelled wait) would leave a trace in it.
+alignas(sync::Barrier) static uint8_t g_DeleteBarrierStorage[sizeof(sync::Barrier)];
+static sync::Barrier * volatile       g_DeleteBarrier = nullptr;
+static const uint8_t                  DELETED_FILL    = 0xDD;
+
 // Cancellation test state (see CancelWaitTask); the first index is the task id
 static const int32_t    CR_NOT_SET      = -100; // result not recorded yet
 static ITask * volatile g_CancelTask[_STK_BARRIER_TEST_TASKS_MAX];      // published by every task when it starts
@@ -94,6 +101,9 @@ static volatile int32_t g_CancelDone[_STK_BARRIER_TEST_TASKS_MAX];      // 1 onc
 // Set by main() before each RunTest() call.
 static volatile int32_t  g_CancelParam     = 0;
 static volatile uint32_t g_CancelThreshold = 2U;
+
+// Scenario selector of the delete-with-waiter tests, a global for the same reason as g_CancelParam
+static volatile int32_t  g_DeleteParam     = 0;
 
 // Cancel the wait of the victim (task 1) either via IKernel::CancelTaskWait() or via stk::SleepCancel()
 static void CancelVictim(bool use_sleep_cancel)
@@ -799,6 +809,209 @@ private:
     }
 };
 
+static const int32_t DW_BASIC   = 1; // two-party barrier, one waiter
+static const int32_t DW_MANY    = 2; // three-party barrier, two waiters
+
+static const int32_t CR_DELETED = static_cast<int32_t>(sync::Barrier::BARRIER_DELETED);
+
+/*! \class DeleteWithWaiterTask
+    \brief Tests destruction of a barrier which tasks are blocked on (BARRIER_DELETED).
+    \note  Tasks 0-3 are the parties, task 4 is the verifier and watchdog (same layout as CancelWaitTask). Task 0 creates
+           a dedicated barrier and destroys it while the victim (task 1) and, in the many-waiters scenario, task 2 are
+           blocked in WaitEx() one party short; nobody ever completes the round, so only the destruction can end the
+           waits. The waiters must get BARRIER_DELETED (not RELEASED, LAST_ARRIVAL or CANCELED) without touching the
+           destroyed barrier: its storage is overwritten after the destruction and must still hold that pattern when the
+           waiters are back, so any write by a woken waiter (the arrival rollback of a cancelled wait, say) is detected.
+           Afterwards the kernel must be fully usable: the victim goes through a rendezvous on g_CancelBarrier (threshold
+           2) with task 3, which arrives late, so the victim must block until then (a stale wait entry would release it
+           early or with another result). The scenario is selected by g_DeleteParam: 1 = a two-party barrier with one
+           waiter, 2 = a three-party barrier with two waiters, both released by the destruction.
+           Timeline (ticks): task 0 destroys at ~60, the victim waits from ~10, task 2 from ~20, task 3 arrives at the
+           g_CancelBarrier at ~100, task 4 evaluates at CW_VERIFY_AT and then releases anything still blocked.
+*/
+template <EAccessMode _AccessMode>
+class DeleteWithWaiterTask : public Task<_STK_BARRIER_STACK_SIZE, _AccessMode>
+{
+    uint8_t m_task_id;
+    int32_t m_scenario;
+
+public:
+    DeleteWithWaiterTask(uint8_t task_id, int32_t) // scenario is taken from g_DeleteParam in Run(), see g_DeleteParam
+        : m_task_id(task_id), m_scenario(0)
+    {}
+
+private:
+    void Run()
+    {
+        m_scenario = g_DeleteParam;
+
+        // publish this task for the watchdog
+        g_CancelTask[m_task_id] = static_cast<ITask *>(this);
+        g_CancelTid[m_task_id]  = stk::GetTid();
+
+        if (m_task_id == (_STK_BARRIER_TEST_TASKS_MAX - 1))
+        {
+            RunVerifier();
+        }
+        else
+        {
+            RunParty();
+            g_CancelDone[m_task_id] = 1;
+        }
+    }
+
+    // Record how the call-th WaitEx() of this task ended
+    void Record(int32_t call, sync::Barrier::EResult r, int64_t start)
+    {
+        g_CancelElapsed[m_task_id][call] = GetTimeNowMs() - start;
+        g_CancelResult[m_task_id][call]  = static_cast<int32_t>(r);
+    }
+
+    // Call 0: arrive at the barrier which gets destroyed; nothing but the result is read afterwards
+    void ArriveDeleted()
+    {
+        sync::Barrier *const bar = g_DeleteBarrier; // created by task 0 before it went to sleep
+
+        const int64_t start = GetTimeNowMs();
+        const sync::Barrier::EResult r = (bar != nullptr ? bar->WaitEx() : sync::Barrier::BARRIER_FAILED);
+
+        Record(0, r, start);
+    }
+
+    // Call 1: arrive at the live barrier of the sanity check
+    void ArriveSanity()
+    {
+        const int64_t start = GetTimeNowMs();
+        const sync::Barrier::EResult r = g_CancelBarrier->WaitEx();
+
+        Record(1, r, start);
+    }
+
+    // Tasks 0-3: the script of this task in the selected scenario
+    void RunParty()
+    {
+        if (m_task_id == 0)
+        {
+            const uint32_t threshold = (m_scenario == DW_BASIC ? 2U : 3U);
+
+            sync::Barrier *const bar = ::new (g_DeleteBarrierStorage) sync::Barrier(threshold);
+            g_DeleteBarrier = bar;
+
+            stk::Sleep(60); // the waiters block on it (at ~10 and ~20 ms) in the meantime
+
+            // destroy the barrier which is waited on: the waiters are released by the destructor
+            bar->~Barrier();
+            memset(g_DeleteBarrierStorage, DELETED_FILL, sizeof(g_DeleteBarrierStorage));
+            g_DeleteBarrier = nullptr;
+        }
+        else
+        if (m_task_id == 1)
+        {
+            stk::Sleep(_STK_BARRIER_TEST_SHORT_SLEEP);
+            ArriveDeleted();
+            ArriveSanity(); // waits for task 3, which arrives at ~100 ms
+        }
+        else
+        if (m_task_id == 2)
+        {
+            if (m_scenario == DW_MANY)
+            {
+                stk::Sleep(2 * _STK_BARRIER_TEST_SHORT_SLEEP);
+                ArriveDeleted();
+            }
+        }
+        else
+        {
+            stk::Sleep(_STK_BARRIER_TEST_LONG_SLEEP);
+            ArriveSanity();
+        }
+    }
+
+    // True if every party (tasks 0-3) has finished its script
+    static bool AllDone()
+    {
+        for (int32_t id = 0; id < (_STK_BARRIER_TEST_TASKS_MAX - 1); ++id)
+        {
+            if (g_CancelDone[id] == 0)
+                return false;
+        }
+
+        return true;
+    }
+
+    // True if the storage of the destroyed barrier still holds the pattern written after the destruction
+    static bool StorageUntouched()
+    {
+        for (size_t i = 0; i < sizeof(g_DeleteBarrierStorage); ++i)
+        {
+            if (g_DeleteBarrierStorage[i] != DELETED_FILL)
+                return false;
+        }
+
+        return true;
+    }
+
+    // Task 4: evaluate the scenario, then release anything still blocked
+    void RunVerifier()
+    {
+        stk::Sleep(CW_VERIFY_AT);
+
+        const bool pass = Evaluate();
+
+        // Safety net: if a waiter was not released it is blocked forever and the kernel would never stop. Cancel
+        // every task which has not finished so that the test fails instead of hanging; repeat, because a released
+        // party may block again in its next barrier call.
+        for (int32_t i = 0; (i < 4) && !AllDone(); ++i)
+        {
+            for (int32_t id = 0; id < (_STK_BARRIER_TEST_TASKS_MAX - 1); ++id)
+            {
+                if (g_CancelDone[id] == 0)
+                    g_Kernel.CancelTaskWait(g_CancelTask[id]);
+            }
+
+            stk::Sleep(_STK_BARRIER_TEST_SHORT_SLEEP);
+        }
+
+        if (pass)
+            g_TestResult = 1;
+    }
+
+    // Check the recorded results of the selected scenario
+    bool Evaluate() const
+    {
+        // the victim waited from ~10 ms, the barrier was destroyed at ~60 ms
+        bool pass = (g_CancelResult[1][0] == CR_DELETED) &&
+                    (g_CancelElapsed[1][0] >= 35) && (g_CancelElapsed[1][0] <= 75);
+
+        // the second waiter waited from ~20 ms
+        if (m_scenario == DW_MANY)
+        {
+            pass = pass && (g_CancelResult[2][0] == CR_DELETED) &&
+                   (g_CancelElapsed[2][0] >= 25) && (g_CancelElapsed[2][0] <= 65);
+        }
+
+        // sanity check: the victim blocks on the live barrier from ~60 ms until task 3 arrives at ~100 ms, then is
+        // released; task 3, the last arrival, trips it
+        pass = pass &&
+               (g_CancelResult[1][1] == CR_RELEASED) && (g_CancelElapsed[1][1] >= 30) &&
+               (g_CancelResult[3][1] == CR_LAST);
+
+        // no waiter wrote to the destroyed barrier
+        const bool untouched = StorageUntouched();
+        pass = pass && untouched;
+
+        printf("delete with waiter (scenario=%d): victim=%d elapsed=%d ms, second=%d elapsed=%d ms, "
+               "sanity victim=%d elapsed=%d ms, sanity task3=%d, storage_untouched=%d\n",
+            (int)m_scenario,
+            (int)g_CancelResult[1][0], (int)g_CancelElapsed[1][0],
+            (int)g_CancelResult[2][0], (int)g_CancelElapsed[2][0],
+            (int)g_CancelResult[1][1], (int)g_CancelElapsed[1][1],
+            (int)g_CancelResult[3][1], (int)untouched);
+
+        return pass;
+    }
+};
+
 // Helper function to reset test state
 static void ResetTestState()
 {
@@ -825,6 +1038,8 @@ static void ResetTestState()
             g_CancelElapsed[i][call] = 0;
         }
     }
+
+    g_DeleteBarrier = nullptr;
 
     // Re-construct the barrier of the cancellation tests with the threshold of the scenario
     if (g_CancelBarrier != nullptr)
@@ -986,6 +1201,30 @@ int main(int argc, char **argv)
             g_CancelThreshold = cases[i].threshold;
 
             if (RunTest<CancelWaitTask<ACCESS_PRIVILEGED>>(cases[i].name, cases[i].param)
+                != TestContext::SUCCESS_EXIT_CODE)
+                total_failures++;
+            else
+                total_success++;
+        }
+    }
+
+    // Tests 19-20: barrier destroyed while tasks wait on it (BARRIER_DELETED, all five tasks: 0-3 are the parties,
+    // 4 verifies). g_CancelBarrier (threshold 2) serves as the live barrier of the sanity check.
+    {
+        struct DeleteCase { const char *name; int32_t param; };
+
+        static const DeleteCase cases[] =
+        {
+            { "DeleteWithWaiter",      DW_BASIC },
+            { "DeleteWithWaiterMany",  DW_MANY  }
+        };
+
+        for (size_t i = 0; i < (sizeof(cases) / sizeof(cases[0])); ++i)
+        {
+            g_DeleteParam     = cases[i].param;
+            g_CancelThreshold = 2U;
+
+            if (RunTest<DeleteWithWaiterTask<ACCESS_PRIVILEGED>>(cases[i].name, cases[i].param)
                 != TestContext::SUCCESS_EXIT_CODE)
                 total_failures++;
             else

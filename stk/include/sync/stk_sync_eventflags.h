@@ -157,6 +157,10 @@ public:
                WAIT_RESULT_FAIL, e.g. KERNEL_SYNC mode is not enabled). */
     static constexpr T ERROR_FAIL      = static_cast<T>(ERROR_MASK | static_cast<T>(0x10U));
 
+    /*! \brief Return sentinel: the event flags group was destroyed while the task was waiting
+               (WAIT_RESULT_DELETED). The object must not be accessed afterwards. */
+    static constexpr T ERROR_DELETED   = static_cast<T>(ERROR_MASK | static_cast<T>(0x20U));
+
     // -----------------------------------------------------------------------
     // Validation helpers
     // -----------------------------------------------------------------------
@@ -180,9 +184,9 @@ public:
     }
 
     /*! \brief     Destructor.
-        \note      If tasks are still waiting at destruction time it is a logical error
-                   (dangling waiters). An assertion is triggered in debug builds by the
-                   destructor of the internal ConditionVariable.
+        \note      Tasks still waiting at destruction time are woken (by the destructor of the internal
+                   ConditionVariable) with \c ERROR_DELETED / \c WAIT_RESULT_DELETED and must not access
+                   the object afterwards.
         \note      MISRA deviation: [STK-DEV-005] Rule 10-3-2.
     */
     STK_VIRT_DTOR ~EventFlagsT() = default;
@@ -286,6 +290,7 @@ public:
                    an ISR are reported as \c WAIT_RESULT_FAIL, and the wait is not performed. Use the
                    legacy overload if the distinct \c ERROR_PARAMETER / \c ERROR_ISR codes are needed.
         \warning   ISR-safe only with \a timeout_ticks = \c NO_WAIT, ISR-unsafe otherwise.
+        \note      \c WAIT_RESULT_DELETED: the object was destroyed while waiting; it must not be accessed afterwards.
     */
     EWaitResult WaitEx(T flags, uint32_t options, Timeout timeout_ticks, T &actual_flags);
 
@@ -295,6 +300,7 @@ public:
         \param[out] actual_flags: Snapshot of the entire flags word (see WaitEx()).
         \return     \c WAIT_RESULT_SIGNAL if satisfied, otherwise a non-signal result.
         \note       ISR-safe.
+        \note      \c WAIT_RESULT_DELETED: the object was destroyed while waiting; it must not be accessed afterwards.
     */
     EWaitResult TryWaitEx(T flags, uint32_t options, T &actual_flags)
     {
@@ -344,6 +350,7 @@ public:
         \note       A completion can also be caused by a plain Set() which satisfies \a wait_flags: the next
                     woken Sync() waiter then completes the rendezvous.
         \warning    ISR-safe only with \a timeout_ticks = \c NO_WAIT, ISR-unsafe otherwise.
+        \note      \c WAIT_RESULT_DELETED: the object was destroyed while waiting; it must not be accessed afterwards.
     */
     EWaitResult Sync(SyncContext &ctx, T set_flags, T wait_flags, Timeout timeout_ticks, T &actual_flags);
 
@@ -433,6 +440,7 @@ template <typename T> constexpr T        EventFlagsT<T>::ERROR_TIMEOUT;
 template <typename T> constexpr T        EventFlagsT<T>::ERROR_ISR;
 template <typename T> constexpr T        EventFlagsT<T>::ERROR_CANCELED;
 template <typename T> constexpr T        EventFlagsT<T>::ERROR_FAIL;
+template <typename T> constexpr T        EventFlagsT<T>::ERROR_DELETED;
 #endif
 
 /*! \typedef   EventFlags
@@ -545,8 +553,16 @@ inline EWaitResult EventFlagsT<T>::WaitCore(T flags, uint32_t options,
         // spurious/partial match under OPT_WAIT_ALL); loop back and re-check IsSatisfied()
     }
 
-    // full group snapshot, taken before any auto-clear
-    actual_flags = m_flags;
+    // full group snapshot, taken before any auto-clear; not available if the object was destroyed
+    // while waiting ('this' is gone and must not be read)
+    if (result == WAIT_RESULT_DELETED)
+    {
+        actual_flags = 0U;
+    }
+    else
+    {
+        actual_flags = m_flags;
+    }
 
     if (result == WAIT_RESULT_SIGNAL)
     {
@@ -595,6 +611,10 @@ inline T EventFlagsT<T>::Wait(T flags, uint32_t options, Timeout timeout_ticks)
         else if (wr == WAIT_RESULT_FAIL)
         {
             final_result = ERROR_FAIL;
+        }
+        else if (wr == WAIT_RESULT_DELETED)
+        {
+            final_result = ERROR_DELETED;
         }
         else
         {
@@ -690,6 +710,14 @@ inline EWaitResult EventFlagsT<T>::Sync(SyncContext &ctx, T set_flags, T wait_fl
             }
 
             const EWaitResult wr = m_cv.WaitEx(cs_, remaining);
+
+            if (wr == WAIT_RESULT_DELETED)
+            {
+                // the group was destroyed while waiting: neither this object nor the context snapshot is valid
+                actual_flags = 0U;
+                result = wr;
+                break;
+            }
 
             if (wr != WAIT_RESULT_SIGNAL)
             {

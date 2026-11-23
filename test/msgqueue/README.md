@@ -58,9 +58,9 @@ collapse both outcomes into `false`.
 
 | Method | Signature | Returns |
 |--------|-----------|---------|
-| `PutEx` | `EWaitResult PutEx(const void *msg_ptr, Timeout timeout = WAIT_INFINITE)` | `WAIT_RESULT_SIGNAL` if enqueued; `WAIT_RESULT_TIMEOUT`, `WAIT_RESULT_CANCELED` or `WAIT_RESULT_FAIL` otherwise (nothing enqueued) |
+| `PutEx` | `EWaitResult PutEx(const void *msg_ptr, Timeout timeout = WAIT_INFINITE)` | `WAIT_RESULT_SIGNAL` if enqueued; `WAIT_RESULT_TIMEOUT`, `WAIT_RESULT_CANCELED`, `WAIT_RESULT_DELETED` (the queue was destroyed while waiting; it must not be accessed afterwards) or `WAIT_RESULT_FAIL` otherwise (nothing enqueued) |
 | `PutFrontEx` | `EWaitResult PutFrontEx(const void *msg_ptr, Timeout timeout = WAIT_INFINITE)` | Same as `PutEx` |
-| `GetEx` | `EWaitResult GetEx(void *msg_ptr, Timeout timeout = WAIT_INFINITE)` | `WAIT_RESULT_SIGNAL` if a message was dequeued; otherwise timeout / canceled / fail (nothing dequeued or copied) |
+| `GetEx` | `EWaitResult GetEx(void *msg_ptr, Timeout timeout = WAIT_INFINITE)` | `WAIT_RESULT_SIGNAL` if a message was dequeued; otherwise timeout / canceled / deleted / fail (nothing dequeued or copied) |
 | `PeekEx` | `EWaitResult PeekEx(void *msg_ptr, Timeout timeout = WAIT_INFINITE)` | Same as `GetEx`, message stays in the queue |
 | `PeekFrontEx` | `EWaitResult PeekFrontEx(void *msg_ptr, Timeout timeout = WAIT_INFINITE)` | Same as `GetEx`, message stays in the queue |
 
@@ -74,6 +74,17 @@ wait list and the `*Ex` call returns `WAIT_RESULT_CANCELED`.
   arrives, the cancel is a no-op and the call returns `WAIT_RESULT_SIGNAL`.
 - A cancel leaves no stale wait entry: a later `Put` / `Get` is neither lost nor delivered twice,
   and a second waiter queued behind the cancelled one is still woken normally.
+
+**Destruction semantics:** destroying a queue while tasks wait on it (consumers in `Get()` / `Peek()` /
+`PeekFront()` on an empty queue, or producers in `Put()` / `PutFront()` on a full one; only one kind can exist at a time)
+releases **all** of them with `WAIT_RESULT_DELETED` (done by the destructors of the two internal `ConditionVariable`s).
+The released waiters neither transfer a message nor time out, and must not access the queue afterwards:
+
+- A released `Put` / `PutFront` stores nothing and touches neither the indices nor the count.
+- A released `Get` / `Peek` / `PeekFront` copies nothing into `msg_ptr` and dequeues nothing.
+- The boolean `Put()` / `PutFront()` / `Get()` / `Peek()` / `PeekFront()` report it as `false`, the same as a timeout or a
+  cancellation; use the `*Ex()` variants to tell it apart.
+- The messages that were in the queue are discarded with it, as by `Reset()`.
 
 **`Put()` flow:**
 
@@ -142,8 +153,9 @@ NotifyAll on cv_not_full  →  wakes all blocked Put() callers
   woken at once.
 - Head and tail indices wrap modulo `m_capacity` via the `Next()` / `Prev()` helpers,
   forming a true ring buffer.
-- Destroying a queue while tasks are waiting is a logic error; `ConditionVariable`
-  destructors assert an empty wait list in debug builds.
+- Destroying a queue while tasks are waiting releases **all** of them with `WAIT_RESULT_DELETED`
+  (see Destruction semantics): no message is copied, stored or counted, and no member of the
+  destroyed queue is read or written by a woken waiter.
 
 ---
 
@@ -170,7 +182,7 @@ to zero before each test.
 |-----------|-------|-------------|
 | `NeedsOnlyOneTask()` | TryPutGet, FillDrain, Accessors, WrapAround, TryPutFront, PutFrontWrapAround, Peek, PeekFront | task 0 only |
 | *(default)* | BlockingGet, BlockingPut, TimedGetTimeout, TimedGetSuccess, TimedPutTimeout, Reset, PingPong, BlockingPutFront, TimedPutFrontTimeout | tasks 0–1 |
-| `NeedsThreeTasks()` | Cancel_* (tests 14–28) | tasks 0–2 |
+| `NeedsThreeTasks()` | Cancel_* (tests 14–28), DeleteWithWaiter_* (tests 29–35) | tasks 0–2 |
 | `NeedsAllTasks()` | Stress | tasks 0–4 |
 
 ### Cancellation tests (tests 14–28)
@@ -222,8 +234,25 @@ directions so that any still-blocked getter, peeker or putter is released. A bro
 therefore reported as a failed test instead of hanging the kernel (which only stops when all
 tasks exit).
 
-Task-count gating gains one predicate: `NeedsThreeTasks()` (name prefix `"Cancel"`) registers
-tasks 0–2.
+Task-count gating gains one predicate: `NeedsThreeTasks()` (name prefixes `"Cancel"` and `"DeleteWithWaiter"`)
+registers tasks 0–2.
+
+### Delete-with-waiter tests (tests 29–35)
+
+These tests destroy a **separate** queue: `g_DeleteQueue` points to a `MessageQueueT<_STK_MQ_CAPACITY, _STK_MQ_MSG_SIZE>`
+(type `DeleteQueueT`) constructed with placement-new in the static `g_DeleteQueueObj`, so the queue `g_Queue` of `RunTest()` is
+never destroyed by the test itself. Its storage is internal to the object, so the whole queue, buffer included, is overwritten
+with the byte `DELETED_FILL` (`0xDD`) after the destruction, and task 0 checks at the end that every byte still holds it: a woken
+waiter that stored a message, advanced an index or changed the count of the destroyed queue would leave a trace. The tests reuse
+`g_Victim`, `g_VictimTid`, `g_VictimResult[]`, `g_VictimElapsed[]`, `g_VictimValue[]` and `g_VictimRxIntact` (index 0: task 1,
+index 1: task 2), the helpers `MakeMsg()`, `MsgValue()` and `TryPutVal()`, and add:
+
+| Variable | Purpose |
+|----------|---------|
+| `g_DeleteQueue` | Pointer to the dedicated queue; set back to `nullptr` right after the destruction |
+| `g_DeleteVictim2` | Task 2 (second getter), published right before it blocks; used by the safety net |
+| `g_DeleteCheckResult` / `g_DeleteCheckElapsed` / `g_DeleteCheckIntact` | `EWaitResult`, milliseconds and receive-buffer integrity of the follow-up call (20 ticks) of task 1 on `g_Queue` (`-100` = not set) |
+| `g_DeleteParam` | Scenario selector (`DW_GET = 1` … `DW_TWO_GETTERS = 7`, see the tests below); a global for the same reason as `g_CancelParam` |
 
 ---
 
@@ -231,8 +260,9 @@ tasks 0–2.
 
 On **Cortex-M0** (`__ARM_ARCH_6M__`) insufficient RAM prevents linking the full set of
 distinct task class templates simultaneously. All tests except `StressTask` (test 12),
-including the cancellation tests 14–28, are skipped on M0 under `#ifndef __ARM_ARCH_6M__`.
-The cancellation tests add one more task class template (`CancelWaitTask`).
+including the cancellation tests 14–28 and the delete-with-waiter tests 29–35, are skipped on M0 under `#ifndef __ARM_ARCH_6M__`.
+The cancellation tests add one more task class template (`CancelWaitTask`) and the delete-with-waiter tests
+another (`DeleteWithWaiterTask`).
 
 `StressTask` runs on M0 because it uses a single task class template instantiated
 for all five task slots, fitting within available memory.
@@ -678,6 +708,99 @@ Identical scenario to test 20 (`PutFrontFull`), but the canceller calls `stk::Sl
 
 ---
 
+## Delete-with-waiter Tests (tests 29–35)
+
+These tests verify that destroying a `MessageQueue` which tasks are blocked on releases **all** of them with
+`WAIT_RESULT_DELETED`, for each way to wait, without transferring a message and without touching the destroyed queue. Task 0
+constructs a dedicated queue (`g_DeleteQueue`, placement-new into `g_DeleteQueueObj`). For the putting scenarios it fills the queue first
+(messages `0..7`): a putter waits only on a full queue, a getter or peeker only on an empty one. It then sleeps 60 ticks. Task 1 sleeps
+`_STK_MQ_TEST_SHORT_SLEEP`, publishes its `ITask` pointer in `g_Victim` and blocks inside the queue call with `WAIT_INFINITE`: nobody
+puts or gets, so only the destruction can end the wait. Task 0 then destroys the queue while it is waited on, and overwrites its
+storage with `0xDD`, so that any access to the destroyed queue by a woken waiter would read garbage, and any write would be detected.
+Task 1 records the result, the elapsed time and whether its receive buffer (pre-filled with `0x5A`) is intact, without touching the
+destroyed queue. It then repeats the same call with a 20 tick timeout on `g_Queue` (empty for the reading scenarios; task 0 fills it
+with `0..7` for the putting ones): the call must run to its deadline and return `WAIT_RESULT_TIMEOUT` without copying anything; a
+stale wait entry left behind would end it early or with another result. Task 0 checks the outcome at about tick 100. If a waiter was
+not released, task 0 cancels its wait with `g_Kernel.CancelTaskWait()`, so the test fails instead of hanging the kernel.
+
+**Common pass condition:** the dedicated queue was in the expected state (empty or full) before the destruction; task 1's elapsed time is
+in `[35, 75]` ms (waiting from ~10 ms, destroyed at ~60 ms); for a getter or peeker its receive buffer is intact; the follow-up call on
+`g_Queue` returned `WAIT_RESULT_TIMEOUT` after at least 15 ms with its receive buffer intact; `g_Queue` is unchanged (empty, or still
+holding `0..7` in FIFO order); every byte of the storage of the destroyed queue still holds `0xDD`
+
+All tests use tasks 0–2 only (`"DeleteWithWaiter_*"` names); task 2 is added by `RunTest()` but stays idle except in test 35.
+
+---
+
+### Test 29 — `DeleteWithWaiter_Get`
+**`g_DeleteParam`:** `1` (`DW_GET`)
+
+Task 1 blocks in `GetEx(rx, WAIT_INFINITE)` on the empty dedicated queue.
+
+**Pass condition:** common, and `result == WAIT_RESULT_DELETED` (not `SIGNAL`, `TIMEOUT` or `CANCELED`)
+
+---
+
+### Test 30 — `DeleteWithWaiter_Put`
+**`g_DeleteParam`:** `2` (`DW_PUT`)
+
+The dedicated queue is full; task 1 blocks in `PutEx(msg{999}, WAIT_INFINITE)` on `cv_not_full`. The destroyed queue must receive
+neither the message nor an index or count update.
+
+**Pass condition:** common, and `result == WAIT_RESULT_DELETED`
+
+---
+
+### Test 31 — `DeleteWithWaiter_PutFront`
+**`g_DeleteParam`:** `3` (`DW_PUT_FRONT`)
+
+Like test 30, but task 1 calls `PutFrontEx()`, which retreats the read pointer (`m_tail`) only after a successful wait: a released
+call must neither store its message nor move `m_tail`.
+
+**Pass condition:** common, and `result == WAIT_RESULT_DELETED`
+
+---
+
+### Test 32 — `DeleteWithWaiter_Peek`
+**`g_DeleteParam`:** `4` (`DW_PEEK`)
+
+Task 1 blocks in `PeekEx(rx, WAIT_INFINITE)` on the empty dedicated queue. A successful `Peek` hands the wake-up on to the next
+waiter; a released one must not do that or copy anything.
+
+**Pass condition:** common, and `result == WAIT_RESULT_DELETED`
+
+---
+
+### Test 33 — `DeleteWithWaiter_PeekFront`
+**`g_DeleteParam`:** `5` (`DW_PEEK_FRONT`)
+
+Identical to test 32 but task 1 calls `PeekFrontEx()`.
+
+**Pass condition:** same as test 32
+
+---
+
+### Test 34 — `DeleteWithWaiter_GetBool`
+**`g_DeleteParam`:** `6` (`DW_GET_BOOL`)
+
+Task 1 uses the boolean `Get(rx, WAIT_INFINITE)`, which collapses a destruction into `false`, the same as a timeout or a cancellation.
+An infinite wait can not time out and nobody cancels it, so `false` after ~50 ms identifies the destruction.
+
+**Pass condition:** common, and `Get()` returned `false`
+
+---
+
+### Test 35 — `DeleteWithWaiter_TwoGetters`
+**`g_DeleteParam`:** `7` (`DW_TWO_GETTERS`)
+
+Task 1 and, 20 ms later, task 2 both block in `GetEx(WAIT_INFINITE)` on the empty dedicated queue. The destruction must release both: the
+wait list of the condition variable is walked completely, not just up to its first entry.
+
+**Pass condition:** common, and task 2 also gets `WAIT_RESULT_DELETED` with its receive buffer intact and elapsed time in `[25, 65]` ms
+(waiting from ~20 ms)
+
+---
+
 ## Summary Table
 
 | #   | Test | Tasks | Stack | Pass condition | What it verifies |
@@ -715,3 +838,10 @@ Identical scenario to test 20 (`PutFrontFull`), but the canceller calls `stk::Sl
 | 26  | `Cancel_SleepCancelTwo` | 0–2 | `_STK_MQ_STACK_SIZE` | as test 18 | `SleepCancel` of one of two getters leaves the other intact |
 | 27  | `Cancel_SleepCancelSignal` | 0–2 | `_STK_MQ_STACK_SIZE` | as test 19 | `SleepCancel` after signal is a no-op |
 | 28  | `Cancel_SleepCancelPutFront` | 0–2 | `_STK_MQ_STACK_SIZE` | as test 20 | `SleepCancel` cancels a blocked `PutFrontEx` cleanly |
+| 29  | `DeleteWithWaiter_Get` | 0–2 | `_STK_MQ_STACK_SIZE` | `DELETED`, elapsed `[35, 75]` ms, buffer intact, follow-up wait on `g_Queue` times out `>= 15` ms, storage untouched | Destroying a queue which a getter waits on releases it with `WAIT_RESULT_DELETED`; nothing is copied; no stale wait entry is left behind |
+| 30  | `DeleteWithWaiter_Put` | 0–2 | `_STK_MQ_STACK_SIZE` | as test 29, `g_Queue` content `0..7` intact | A putter on a full queue is released with `DELETED`; it stores nothing in, and does not touch, the destroyed queue |
+| 31  | `DeleteWithWaiter_PutFront` | 0–2 | `_STK_MQ_STACK_SIZE` | as test 30 | A released `PutFrontEx` stores nothing and does not retreat the read pointer |
+| 32  | `DeleteWithWaiter_Peek` | 0–2 | `_STK_MQ_STACK_SIZE` | as test 29 | A peeker is released with `DELETED`, copies nothing and passes no wake-up on |
+| 33  | `DeleteWithWaiter_PeekFront` | 0–2 | `_STK_MQ_STACK_SIZE` | as test 29 | Same for `PeekFrontEx` |
+| 34  | `DeleteWithWaiter_GetBool` | 0–2 | `_STK_MQ_STACK_SIZE` | `Get()` returns `false` after `[35, 75]` ms, as test 29 | The boolean `Get()` collapses a destruction into `false`; an infinite wait can not time out, so it identifies the destruction |
+| 35  | `DeleteWithWaiter_TwoGetters` | 0–2 | `_STK_MQ_STACK_SIZE` | both `DELETED`, task 2 elapsed `[25, 65]` ms, as test 29 | The destruction releases every waiter, not only the first one |

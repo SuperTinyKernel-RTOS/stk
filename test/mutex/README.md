@@ -33,12 +33,12 @@ stk::sync::Mutex g_Mtx;    // unlocked, no owner
 |--------|-----------|-------------|
 | `Lock` | `void Lock()` | Acquires the lock, blocking indefinitely. If already owned by the calling task, increments recursion count and returns immediately. **Not cancelable:** a cancellation (`IKernel::CancelTaskWait()`, `stk::SleepCancel()`) is absorbed and the wait is retried, so it always returns with the lock held. ISR-unsafe. |
 | `TryLock` | `bool TryLock()` | Acquires the lock without blocking (`timeout == NO_WAIT`). Returns `true` if acquired, `false` if held by another task. Recursive re-entry by the owner always returns `true`. ISR-unsafe. |
-| `TimedLockEx` | `EWaitResult TimedLockEx(Timeout timeout)` | Acquires the lock, blocking up to `timeout` ticks, and reports the full outcome: `WAIT_RESULT_SIGNAL` (acquired, including the immediate and recursive paths), `WAIT_RESULT_TIMEOUT` (busy and timeout expired, or `NO_WAIT`), `WAIT_RESULT_CANCELED` (wait cancelled), `WAIT_RESULT_FAIL` (kernel rejected the wait). ISR-safe only with `NO_WAIT`. |
+| `TimedLockEx` | `EWaitResult TimedLockEx(Timeout timeout)` | Acquires the lock, blocking up to `timeout` ticks, and reports the full outcome: `WAIT_RESULT_SIGNAL` (acquired, including the immediate and recursive paths), `WAIT_RESULT_TIMEOUT` (busy and timeout expired, or `NO_WAIT`), `WAIT_RESULT_CANCELED` (wait cancelled), `WAIT_RESULT_DELETED` (the mutex was destroyed while waiting; it must not be accessed afterwards), `WAIT_RESULT_FAIL` (kernel rejected the wait). ISR-safe only with `NO_WAIT`. |
 | `TimedLock` | `bool TimedLock(Timeout timeout)` | Acquires the lock, blocking up to `timeout` ticks. Returns `true` if acquired, `false` on timeout, cancellation or `NO_WAIT` on a busy mutex (use `TimedLockEx()` to tell them apart). `timeout == 0` is equivalent to `TryLock()`. ISR-unsafe. |
 | `Unlock` | `void Unlock()` | Decrements recursion count. When count reaches zero, transfers ownership to the first waiter (FIFO) or marks the mutex free. Asserts the caller is the current owner. ISR-unsafe. |
 | `GetOwner` | `TId GetOwner() const` | Returns the owner's task ID, or `TID_NONE` if free. ISR-safe. |
 | `GetRecursionCount` | `uint16_t GetRecursionCount() const` | Returns the current recursion depth: `0` if free, otherwise the number of nested `Lock()` calls made by the owner (`1..RECURSION_MAX`). Stable only for the owner; a snapshot for any other caller. ISR-safe. |
-| `~Mutex` | (destructor) | Asserts `m_wait_list.IsEmpty()` in debug builds. Destroying a mutex with active waiters is a logic error. |
+| `~Mutex` | (destructor) | Wakes all tasks still waiting with `WAIT_RESULT_DELETED` (done by `~SyncObjectBase`); they must not access the object afterwards. A task blocked in the void `Lock()` cannot observe it and panics (`KERNEL_PANIC_ASSERT`), so use `TimedLockEx()` where the mutex may be destroyed while waited on. Destroying a mutex that is still owned is a logic error: the owner keeps any priority inherited through it. |
 
 **Lock paths in `TimedLockEx()` (`TimedLock()` and `TryLock()` are thin wrappers):**
 
@@ -47,8 +47,9 @@ caller == owner (recursive)  →  ++m_count, return WAIT_RESULT_SIGNAL immediate
 m_count == 0   (free)        →  m_count = 1, m_owner_tid = caller, return WAIT_RESULT_SIGNAL immediately
 timeout == 0   (try-lock)    →  return WAIT_RESULT_TIMEOUT immediately (NO_WAIT fast-fail)
 otherwise      (contended)   →  block until Unlock() transfers ownership (WAIT_RESULT_SIGNAL),
-                                the timeout expires (WAIT_RESULT_TIMEOUT) or the wait is
-                                cancelled (WAIT_RESULT_CANCELED)
+                                the timeout expires (WAIT_RESULT_TIMEOUT), the wait is
+                                cancelled (WAIT_RESULT_CANCELED) or the mutex is destroyed
+                                (WAIT_RESULT_DELETED, no member is accessed afterwards)
 ```
 
 **Ownership transfer in `Unlock()`:**
@@ -75,8 +76,9 @@ otherwise      (contended)   →  block until Unlock() transfers ownership (WAIT
   no-op: the waiter owns the mutex (depth 1) and gets `WAIT_RESULT_SIGNAL`.
 - `Lock()` cannot report failure, so it is not cancelable: it absorbs a cancellation and retries.
   This also keeps the mutex re-acquisition at the end of `ConditionVariable::Wait()` reliable.
-- Destroying a `Mutex` while tasks are waiting is a logic error; an assertion fires
-  in debug builds.
+- Destroying a `Mutex` while tasks are waiting releases them with `WAIT_RESULT_DELETED`: they neither
+  acquire the mutex nor time out, and `TimedLockEx()` returns without reading or writing any member of
+  the destroyed object. The void `Lock()` has no way to report it and panics (`KERNEL_PANIC_ASSERT`).
 
 ---
 
@@ -97,6 +99,11 @@ its naturally unlocked state after each test completes. `ResetTestState()` reset
 the counters and flags (`g_TestResult`, `g_SharedCounter`, `g_ExpectedCounter`, `g_OrderIndex`,
 `g_InstancesDone`, `g_Task1Tid`, `g_Task1Acquired`, `g_WaiterTask`, `g_AcquisitionOrder[]`) and the
 cancellation state described below.
+
+The delete-with-waiter test (28) destroys a **separate** mutex: `g_DeleteMutex` points to an object constructed
+with placement-new in the static `g_DeleteMutexStorage`, so `g_TestMutex` is never destroyed. It reuses
+`g_Victim`, `g_VictimResult[]`, `g_VictimOwner[]` and `g_VictimElapsed[]` (see below) to report how the
+waiter's lock attempt ended; `g_DeleteMutex` is set back to `nullptr` right after the destruction.
 
 Cancellation tests (14–27) use additional shared state, all cleared by `ResetTestState()`:
 
@@ -126,16 +133,16 @@ leave a verifier task waiting forever.
 The number of tasks added per test is selected by test name in `RunTest()`: tasks 0–1 are always
 added; task 2 is added unless `IsTwoTaskTest()` is true; tasks 3–4 are added unless
 `IsTwoTaskTest()` is true or the test is `TimedLock` or a `CancelWait_*` test (tasks 0–2 only). Two-task tests are
-`TryLock`, `OwnerState`, `OwnershipHandoff`, `CancelledWait`, `RecursiveContended` and
-`RecursionMax`; all other tests except `TimedLock` and `CancelWait_*` use all five tasks.
+`TryLock`, `OwnerState`, `OwnershipHandoff`, `CancelledWait`, `RecursiveContended`,
+`RecursionMax` and `DeleteWithWaiter`; all other tests except `TimedLock` and `CancelWait_*` use all five tasks.
 
 ---
 
 ## Platform Notes
 
 On **Cortex-M0** (`__ARM_ARCH_6M__`) the device has insufficient RAM to link all the
-distinct task class templates simultaneously. Tests 1–27 are skipped on M0 and only
-`StressTest` (test 28) runs, under `#ifndef __ARM_ARCH_6M__`.
+distinct task class templates simultaneously. Tests 1–28 are skipped on M0 and only
+`StressTest` (test 29) runs, under `#ifndef __ARM_ARCH_6M__`.
 
 `StressTest` runs on M0 because it uses a single task class template (`StressTestTask`)
 instantiated for all five task slots, fitting within the available memory.
@@ -441,7 +448,27 @@ Same scenarios as tests 14, 16, 17, 18, 19 and 21, but cancelled through `stk::S
 
 ---
 
-### Test 28 — `StressTest`
+### Test 28 — `DeleteWithWaiter`
+**Tasks:** 0–1 (2 tasks) &nbsp;|&nbsp; **Task class:** `DeleteWithWaiterTask`
+
+Verifies that destroying a mutex which a task is blocked on releases the waiter with
+`WAIT_RESULT_DELETED`. Task 0 constructs a dedicated mutex (`g_DeleteMutex`, placement-new into
+`g_DeleteMutexStorage`), locks it and sleeps 60 ticks. Task 1 sleeps `SHORT_SLEEP`, publishes its `ITask`
+pointer in `g_Victim` and blocks in `TimedLockEx(WAIT_INFINITE)` on that mutex: only its destruction can end the
+wait. Task 0 then destroys the mutex while it is still owned and waited for, and overwrites its storage with
+`0xDD`, so that any access to the destroyed object by the woken waiter (or by the kernel) would read garbage.
+Task 1 records the result and the elapsed time without touching the destroyed object, then takes and releases
+`g_TestMutex` to show that the task and the kernel are in a sane state (no stale wait entry left behind).
+Task 0 sleeps 20 more ticks and checks the outcome. If the waiter was not released, task 0 cancels its wait
+with `g_Kernel.CancelTaskWait()`, so the test fails instead of hanging the kernel.
+
+**Pass condition:** task 1's result is `WAIT_RESULT_DELETED` (not a timeout, a cancellation or ownership);
+elapsed time is in `[35, 75]` ms (started at ~10 ms, destroyed at ~60 ms); task 1 then locked and unlocked
+`g_TestMutex` with `WAIT_RESULT_SIGNAL`; `g_TestMutex` is free at the end
+
+---
+
+### Test 29 — `StressTest`
 **Tasks:** 0–4 (all 5) — **runs on all platforms including Cortex-M0** &nbsp;|&nbsp; **Param:** `iterations = 400`
 
 All five tasks run 400 iterations each, cycling through three lock strategies by
@@ -490,4 +517,5 @@ accounted for, so a lost update is detected.
 | 25 | `CancelWait_SleepCancelSignal` | 0–2 | `_STK_MUTEX_STACK_SIZE` | as test 18 | Test 18 via `stk::SleepCancel()` |
 | 26 | `CancelWait_SleepCancelAbsorbs` | 0–2 | `_STK_MUTEX_STACK_SIZE` | as test 19 | Test 19 via `stk::SleepCancel()` |
 | 27 | `CancelWait_SleepCancelRecursive` | 0–2 | `_STK_MUTEX_STACK_SIZE` | as test 21 | Test 21 via `stk::SleepCancel()` |
-| 28 | `StressTestTask` | 0–4 | `_STK_MUTEX_STACK_SIZE` | `counter > 0`, `counter == expected`, mutex free | No corruption, lost update or deadlock under full five-task contention mixing `Lock()`, `TryLock()`, and `TimedLock(10)`; runs on all platforms |
+| 28 | `DeleteWithWaiterTask` | 0–1 | `_STK_MUTEX_STACK_SIZE` | `WAIT_RESULT_DELETED`, elapsed `[35, 75]` ms, `g_TestMutex` usable afterwards and free | Destroying a mutex which a task waits for releases the waiter with `WAIT_RESULT_DELETED`; the waiter does not touch the destroyed object and leaves no stale wait entry |
+| 29 | `StressTestTask` | 0–4 | `_STK_MUTEX_STACK_SIZE` | `counter > 0`, `counter == expected`, mutex free | No corruption, lost update or deadlock under full five-task contention mixing `Lock()`, `TryLock()`, and `TimedLock(10)`; runs on all platforms |

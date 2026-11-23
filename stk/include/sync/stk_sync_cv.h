@@ -79,14 +79,11 @@ public:
     {}
 
     /*! \brief     Destructor.
-        \note      If tasks are still waiting at destruction time it is considered a logical error
-                   (dangling waiters). An assertion is triggered in debug builds.
+        \note      Tasks still waiting at destruction time are woken with \c WAIT_RESULT_DELETED and must not
+                   access the object afterwards (see \c WaitEx()).
         \note      MISRA deviation: [STK-DEV-005] Rule 10-3-2.
     */
-    STK_VIRT_DTOR  ~ConditionVariable()
-    {
-        STK_ASSERT(m_wait_list.IsEmpty()); // API contract: must not be destroyed with waiting tasks
-    }
+    STK_VIRT_DTOR  ~ConditionVariable() = default;
 
     /*! \brief     Wait for a signal.
         \details   Atomically releases \a mutex and blocks the calling task. The \a mutex is
@@ -117,6 +114,7 @@ public:
         \return    \c WAIT_RESULT_SIGNAL, \c WAIT_RESULT_TIMEOUT, \c WAIT_RESULT_CANCELED, or
                    \c WAIT_RESULT_FAIL if the kernel rejected the wait (e.g. the scheduler is locked).
         \warning   ISR-safe only with timeout_ticks=NO_WAIT, ISR-unsafe otherwise.
+        \note      \c WAIT_RESULT_DELETED: the object was destroyed while waiting; it must not be accessed afterwards.
     */
     EWaitResult WaitEx(IMutex &mutex, Timeout timeout_ticks = WAIT_INFINITE);
 

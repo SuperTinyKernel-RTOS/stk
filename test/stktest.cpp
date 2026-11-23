@@ -19,6 +19,7 @@ IKernelService   *test::g_KernelService        = NULL;
 int32_t           test::g_CriticalSectionState = false;
 EKernelPanicId    test::g_PanicValue           = KERNEL_PANIC_NONE;
 bool              test::g_InsideISR            = false;
+void            (*test::g_CriticalSectionEnterHook)() = NULL;
 uintptr_t         g_Tls                        = 0;
 
 /*! \fn    STK_ASSERT_HANDLER
@@ -74,6 +75,13 @@ IKernelService *IKernelService::GetInstance()
 stk::hw::CriticalSection::Session stk::hw::CriticalSection::Enter(CriticalSection::Session is_npriv)
 {
     STK_UNUSED(is_npriv);
+
+    if (test::g_CriticalSectionEnterHook != NULL)
+    {
+        void (*hook)() = test::g_CriticalSectionEnterHook;
+        test::g_CriticalSectionEnterHook = NULL;
+        hook();
+    }
 
     ++g_CriticalSectionState;
 

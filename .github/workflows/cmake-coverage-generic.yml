@@ -3,9 +3,9 @@ name: Code Coverage - Generic
 on:
   push:
     branches: [ "main" ]
-  pull_request_target:
+  pull_request:
     branches: [ "main" ]
-  
+
 env:
   PASS_THRESHOLD: 100
 
@@ -13,29 +13,18 @@ jobs:
   build:
     runs-on: ubuntu-22.04
     permissions:
-      contents: write
-      pull-requests: write
-      issues: write
-      repository-projects: write
+      contents: read
 
     steps:
-    - name: Cache LCOV
-      uses: actions/cache@v3
-      id: lcov-cache
-      with:
-        path: /usr/bin/lcov
-        key: lcov-${{ runner.os }}-v1
-
-    - name: Install LCOV (if missing)
-      if: steps.lcov-cache.outputs.cache-hit != 'true'
+    - name: Install LCOV
       run: sudo apt update && sudo apt install -y lcov
-    
+
     - name: Checkout
       uses: actions/checkout@v6
       with:
         fetch-depth: 0
-        ref: ${{ github.event.pull_request.head.sha || github.sha }}
-    
+        persist-credentials: false
+
     - name: Generate Code Coverage
       run: |
         ./coverage.sh \
@@ -44,20 +33,22 @@ jobs:
           -o ${{ github.workspace }}/cov-report \
           -f ${{ github.workspace }}/cov-build/coverage.info
 
-    - name: Filter Coverage Info
-      run: |
-        lcov --remove ${{ github.workspace }}/cov-build/coverage.info \
-        '*/stk_sync_cv.h' \
-        '*/stk_sync_event.h' \
-        '*/stk_sync_mutex.h' \
-        '*/stk_sync_fastmutex.h' \
-        '*/stk_sync_pipe.h' \
-        '*/stk_sync_rwmutex.h' \
-        '*/stk_sync_semaphore.h' \
-        '*/stk_sync_spinlock.h' \
-        -o ${{ github.workspace }}/cov-build/coverage.info
+    # - name: Filter Coverage Info
+    #   run: |
+    #     lcov --remove ${{ github.workspace }}/cov-build/coverage.info \
+    #     '*/stk_sync_cv.h' \
+    #     '*/stk_sync_event.h' \
+    #     '*/stk_sync_mutex.h' \
+    #     '*/stk_sync_fastmutex.h' \
+    #     '*/stk_sync_pipe.h' \
+    #     '*/stk_sync_rwmutex.h' \
+    #     '*/stk_sync_semaphore.h' \
+    #     '*/stk_sync_spinlock.h' \
+    #     -o ${{ github.workspace }}/cov-build/coverage.info
 
+    # Push to main: report and enforce threshold here (no fork code involved)
     - name: Report Code Coverage with Pass Threshold - ${{env.PASS_THRESHOLD}}%
+      if: github.event_name == 'push'
       uses: zgosalvez/github-actions-report-lcov@v4
       with:
         coverage-files: ${{github.workspace}}/cov-build/coverage.info
@@ -65,3 +56,21 @@ jobs:
         artifact-name: code-coverage-report
         github-token: ${{secrets.GITHUB_TOKEN}}
         working-directory: ./
+
+    # Pull request: hand results over to the commenting workflow
+    - name: Stage coverage artifact
+      if: github.event_name == 'pull_request'
+      env:
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+      run: |
+        mkdir -p cov-artifact
+        cp cov-build/coverage.info cov-artifact/coverage.info
+        echo "$PR_NUMBER" > cov-artifact/pr-number
+
+    - name: Upload coverage artifact
+      if: github.event_name == 'pull_request'
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-pr
+        path: cov-artifact/
+        retention-days: 7
