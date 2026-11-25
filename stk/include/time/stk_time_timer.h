@@ -154,6 +154,17 @@ public:
     */
     uint32_t GetRemainingTicks() const;
 
+#ifdef _STK_UNDER_TEST
+    /*! \brief     Get the sequence number of the re-arm record (test builds only).
+    */
+    uint32_t GetRearmSeqForTest() const { return m_rearm.seq; }
+
+    /*! \brief     Set the sequence number of the re-arm record, e.g. to test its wrap-around (test builds only).
+        \param[in] seq: New sequence number.
+    */
+    void SetRearmSeqForTest(uint32_t seq) { m_rearm.seq = seq; }
+#endif
+
 private:
     /*! \struct ReadyNode
         \brief  Hook of a Timer in the ready list (expired timers waiting for a handler task).

@@ -33,6 +33,7 @@ It covers the layout and purpose of every header and source file under `stk/`, t
 - [include/strategy — Scheduling Strategies](#includestrategy--scheduling-strategies)
 - [include/sync — Synchronization Primitives](#includesync--synchronization-primitives)
   - [Wait order](#wait-order)
+  - [Deleting a primitive that has waiters](#deleting-a-primitive-that-has-waiters)
 - [include/memory — Memory Allocation](#includememory--memory-allocation)
 - [include/time — Time Utilities](#includetime--time-utilities)
 - [src/arch — Architecture Implementations](#srcarch--architecture-implementations)
@@ -199,6 +200,7 @@ Defines every kernel interface, type alias, and enumeration. Key contents:
 | `ELockResult`    | `LOCK_FAIL_ISR` (-2), `LOCK_FAIL` (-1), `LOCK_WAS_UNLOCKED` (0), `LOCK_WAS_LOCKED` (1) — result of the scheduler lock calls, see [Scheduler lock](#scheduler-lock)                                                                                                                 |
 | `EAddResult`     | `ADD_OK`, `ADD_FAIL_POOL_FULL`, `ADD_FAIL_DUPLICATE`, `ADD_FAIL_INVALID` — result of `IKernel::AddTask()` (both the soft real-time and the hard real-time overloads), see [Adding and removing tasks at runtime](#adding-and-removing-tasks-at-runtime-kernel_dynamic) |
 | `EConsts`        | `PERIODICITY_MAX` (99 000 µs), `PERIODICITY_DEFAULT` (1 000 µs), `STACK_SIZE_MIN`                                                                                                                                                                                      |
+| `EWaitResult`    | Result of `IKernelService::Wait()` and of the timed/`Ex` primitive calls: `WAIT_RESULT_FAIL` (-1, the kernel rejected the wait), `WAIT_RESULT_SIGNAL` (0, woken by the object), `WAIT_RESULT_TIMEOUT` (1), `WAIT_RESULT_CANCELED` (2, `IKernel::CancelTaskWait()`), `WAIT_RESULT_DELETED` (3, the synchronization object was destroyed while the task was blocked on it; the object must not be touched afterwards). See [Deleting a primitive that has waiters](#deleting-a-primitive-that-has-waiters) |
 | `EWaitOrder`     | Policy a synchronization object uses to pick which blocked task is served next: `WAIT_ORDER_FIFO` (arrival order), `WAIT_ORDER_PRIORITY` (highest `GetWeight()`), `WAIT_ORDER_DEADLINE` (least `GetHrtRelativeDeadline()`, EDF), `WAIT_ORDER_PRIORITY_PACKED` (high 16 bits of the weight, for Preemption-Threshold), `WAIT_ORDER_PERIOD` (shortest period, Rate-Monotonic), `WAIT_ORDER_DEADLINE_FIXED` (shortest configured deadline, Deadline-Monotonic), `WAIT_ORDER_AUTO` (resolved to `IKernelService::GetDefaultWaitOrder()` when a waiter is selected). The deadline/period orders are `KERNEL_HRT` only. See [Wait order](#wait-order) |
 
 **Interfaces defined here:**
@@ -210,8 +212,8 @@ Defines every kernel interface, type alias, and enumeration. Key contents:
 - `IPlatform` — platform driver interface (`Initialize`, `Start`, `Stop`, `InitStack`, `GetTickResolution`, `GetSysTimerCount`, `GetSysTimerFrequency`, `ForceContextSwitch`, `ProcessTick`, `ProcessHardFault`, `SetEventOverrider`, `GetTid`, `Suspend`, `Resume`, `GetCallerSP`, `SetCpuFrequency(core_id, frequency)` (notifies the scheduler of a core's operating frequency for tick/tickless timing accuracy; pass `0xFF` as `core_id` to set the frequency for all cores at once — call it whenever a core's clock speed changes), etc.).
 - `IPlatform::IEventOverrider` — optional hook interface for extending the platform driver from user-space, registered via `IPlatform::SetEventOverrider(overrider, non_secure = false)` (the `non_secure` slot is TrustZone-only, for a separate Non-Secure-side overrider). Covers `OnSleep`, `OnHardFault`, `OnException` (per-exception fault reporting), and `OnConfigureMpu()` — returns a `const MpuConfig *` of global/background MPU regions applied underneath every task's own regions (see [MPU Configuration API](#mpu-configuration-api)).
 - `IKernel` — kernel control interface (`Initialize`, `AddTask` (two overloads, both returning `EAddResult`: plain, and with HRT periodicity/deadline/start-delay), `RemoveTask`, `ScheduleTaskRemoval`, `SuspendTask`, `ResumeTask`, `CancelTaskWait`, `GetTaskState` (`KERNEL_TELEMETRY`; fills a `TaskStateInfo` with an `ETaskState`), `EnumerateKernelTasks`, `EnumerateTasks`, `EnumerateTasksT<N>`, `SetSchedulerLock` (single entry point of the [scheduler lock](#scheduler-lock)), `Start`, `GetState` (`EKernelState`: `KSTATE_INACTIVE`, `KSTATE_READY`, `KSTATE_RUNNING`, `KSTATE_SUSPENDED`, `KSTATE_LOCKED`), `GetPlatform`, `GetSwitchStrategy`).
-- `IKernelService` — runtime service interface available to running tasks (`GetTid`, `GetTicks`, `GetTickResolution`, `GetSysTimerCount`, `GetSysTimerFrequency`, `Delay`, `Sleep`, `SleepUntil`, `SleepCancel`, `SwitchToNext`, `ExitTask`, `Wait`, `Wake`, `Suspend`, `Resume`, `InheritWeight`, `RestoreWeight`, `SetWeight`, `GetWeight` (effective run-time weight of a task: the inherited one while boosted by priority inheritance, otherwise the base weight), `GetDefaultWaitOrder` (the concrete `EWaitOrder` that suits the kernel mode and strategy, never `WAIT_ORDER_AUTO`), `SetTimeSlice`, `LockScheduler`, `UnlockScheduler`, `RestoreSchedulerLock`, plus the `ScopedSchedulerLock` RAII guard, see [Scheduler lock](#scheduler-lock)).
-- `ISyncObject`, `IWaitObject`, `IMutex`, `ITraceable` — synchronization building blocks. `ISyncObject` gained `GetWaitOrder()` (the configured `EWaitOrder`), `GetNextWaiter()` (id of the task `WakeOne()` would serve next, replaces `GetFirstWaiterTid()`) and the static `FindNextWaiter(wlist, order)`; `ISyncObject::WakeOne(wlist, order = WAIT_ORDER_FIFO)` takes the policy as an optional argument. `IWaitObject` gained `GetKernelTask()`, used to read the current weight/deadline of a waiter. The wait list itself is always kept in arrival order (O(1) insertion); the policy is applied when a waiter is selected (O(1) for FIFO, O(n) otherwise), so run-time weight changes and priority inheritance of blocked tasks are honored. `IKernelTask::GetHrtRelativeDeadline()` is now valid for a task blocked in a sync-object wait (the budget left when the wait began). See [Wait order](#wait-order).
+- `IKernelService` — runtime service interface available to running tasks (`GetTid`, `GetTicks`, `GetTickResolution`, `GetSysTimerCount`, `GetSysTimerFrequency`, `Delay`, `Sleep`, `SleepUntil`, `SleepCancel`, `SwitchToNext`, `ExitTask`, `Wait`, `Wake`, `WakeDeleted` (wakes every waiter of a sync object with `WAIT_RESULT_DELETED`; used by `~SyncObjectBase` on TrustZone Non-Secure builds), `Suspend`, `Resume`, `InheritWeight`, `RestoreWeight`, `SetWeight`, `GetWeight` (effective run-time weight of a task: the inherited one while boosted by priority inheritance, otherwise the base weight), `GetDefaultWaitOrder` (the concrete `EWaitOrder` that suits the kernel mode and strategy, never `WAIT_ORDER_AUTO`), `SetTimeSlice`, `LockScheduler`, `UnlockScheduler`, `RestoreSchedulerLock`, plus the `ScopedSchedulerLock` RAII guard, see [Scheduler lock](#scheduler-lock)).
+- `ISyncObject`, `IWaitObject`, `IMutex`, `ITraceable` — synchronization building blocks. `ISyncObject` gained `GetWaitOrder()` (the configured `EWaitOrder`), `GetNextWaiter()` (id of the task `WakeOne()` would serve next, replaces `GetFirstWaiterTid()`) and the static `FindNextWaiter(wlist, order)`; `ISyncObject::WakeOne(wlist, order = WAIT_ORDER_FIFO)` takes the policy as an optional argument. `IWaitObject` gained `GetKernelTask()`, used to read the current weight/deadline of a waiter. The wait list itself is always kept in arrival order (O(1) insertion); the policy is applied when a waiter is selected (O(1) for FIFO, O(n) otherwise), so run-time weight changes and priority inheritance of blocked tasks are honored. `IKernelTask::GetHrtRelativeDeadline()` is now valid for a task blocked in a sync-object wait (the budget left when the wait began). See [Wait order](#wait-order). `IWaitObject` also gained `WakeDeleted()` (pure virtual, releases the waiter with `WAIT_RESULT_DELETED`, state `STATE_DELETED`) and `ISyncObject` the static `DeleteAll(wlist)` that applies it to every entry of a wait list; a user-defined `IWaitObject` must implement `WakeDeleted()` and a user-defined `IKernelService` must implement `WakeDeleted(ISyncObject *)`. See [Deleting a primitive that has waiters](#deleting-a-primitive-that-has-waiters).
 - `StackMemoryDef<N>` — stack memory array type helper.
 
 ---
@@ -280,7 +282,7 @@ class MyTask : public stk::Task<256, Mode>
 
 **`StackMemoryWrapper<StackSize>`** — Adapter that wraps an externally-owned stack array (e.g. placed in a specific linker section) as an `IStackMemory` for passing to the kernel.
 
-**`SyncObjectBase`** — Default, storage-owning base implementation of `ISyncObject` used by all built-in `stk::sync` primitives (`Mutex`, `FastMutex`, `Event`, `Semaphore`, `ConditionVariable`, ...). Owns the intrusive wait list and provides the standard add/remove/wake bookkeeping; a synchronization object with a different storage strategy (e.g. a cross-domain TrustZone wrapper) may implement `ISyncObject` directly instead. The constructor takes an `EWaitOrder` (default `STK_SYNC_WAIT_ORDER_DEFAULT`) and `SetWaitOrder(order)` changes it at any time (the wait list is never pre-sorted, so this is always safe); `GetWaitOrder()` returns the configured value, which may still be `WAIT_ORDER_AUTO`.
+**`SyncObjectBase`** — Default, storage-owning base implementation of `ISyncObject` used by all built-in `stk::sync` primitives (`Mutex`, `FastMutex`, `Event`, `Semaphore`, `ConditionVariable`, ...). Owns the intrusive wait list and provides the standard add/remove/wake bookkeeping; a synchronization object with a different storage strategy (e.g. a cross-domain TrustZone wrapper) may implement `ISyncObject` directly instead. The constructor takes an `EWaitOrder` (default `STK_SYNC_WAIT_ORDER_DEFAULT`) and `SetWaitOrder(order)` changes it at any time (the wait list is never pre-sorted, so this is always safe); `GetWaitOrder()` returns the configured value, which may still be `WAIT_ORDER_AUTO`. The destructor releases every task still blocked on the object with `WAIT_RESULT_DELETED` (inside a critical section), so destroying a primitive that has waiters is defined behaviour; see [Deleting a primitive that has waiters](#deleting-a-primitive-that-has-waiters).
 
 **Free functions** (all delegate to `IKernelService::GetInstance()`):
 
@@ -749,7 +751,7 @@ Requires `KERNEL_SYNC` in the kernel mode bitmask for most primitives. `ScopedCr
 | `sync::Pipe`                  | `stk_sync_pipe.h`       | Runtime-sized FIFO ring-buffer over an external buffer, element size in bytes (`Pipe(buf, count, element_size)`), payloads copied with `memcpy`. Single-element and bulk read/write; `*Ex()` variants tell a timeout from a cancellation                                                         |
 | `sync::PipeT<T, N>`           | `stk_sync_pipe.h`       | Compile-time-sized, type-safe `Pipe` with internal storage and direct typed assignment                                                                                                                                                                                                           |
 | `sync::MessageQueue`          | `stk_sync_msgqueue.h`   | Opaque-message FIFO over external buffer. `Put/Get`, `TryPut/TryGet`, `Reset`                                                                                                                                                                                                                    |
-| `sync::Barrier`               | `stk_sync_barrier.h`    | Cyclic rendezvous point for a fixed-size group of tasks. `Wait` returns `true` for the last arriver; `WaitEx` reports cancellation (`BARRIER_CANCELED`) or a kernel failure (`BARRIER_FAILED`)                                                                                                   |
+| `sync::Barrier`               | `stk_sync_barrier.h`    | Cyclic rendezvous point for a fixed-size group of tasks. `Wait` returns `true` for the last arriver; `WaitEx` reports cancellation (`BARRIER_CANCELED`) or a kernel failure (`BARRIER_FAILED`); `BARRIER_DELETED` if the barrier was destroyed meanwhile |
 | `sync::MessageQueueT<N, MSG>` | `stk_sync_msgqueue.h`   | `MessageQueue` with compile-time capacity and internal storage                                                                                                                                                                                                                                   |
 
 **ISR safety at a glance:**
@@ -844,6 +846,43 @@ if (g_Limiter.Wait(1000)) { /* ... */ g_Limiter.Signal(); }
 
 For full API reference, C API (`stk_c.h`), C++ and C usage examples, and Eclipse project links, see [`include/sync/README.md`](include/sync/README.md).
 
+### Deleting a primitive that has waiters
+
+Destroying a primitive while tasks are blocked on it is supported. Every built-in primitive derives from `SyncObjectBase`, whose destructor releases **all** waiters with `WAIT_RESULT_DELETED` (the equivalent of `TX_DELETED` in ThreadX) instead of asserting. The release runs inside a critical section and also covers the internal `ConditionVariable` members of composite primitives (`RWMutex`, `Pipe`, `MessageQueue`, `EventFlags`, `BlockMemoryPool`, `BytePool`, ...).
+
+**Rule for the waiter:** once it observes `WAIT_RESULT_DELETED` it must not touch any member of the destroyed object. The built-in primitives follow this rule internally (they return without withdrawing from queues, re-locking mutexes or updating counters), and report the event as follows:
+
+| Primitive                                       | How a waiter learns the object was deleted                                                                  |
+|-------------------------------------------------|-------------------------------------------------------------------------------------------------------------|
+| `Mutex` / `FastMutex` `TimedLockEx()`           | Returns `WAIT_RESULT_DELETED`                                                                               |
+| `RWMutex` `TimedLockEx()`, `TimedReadLockEx()`  | Returns `WAIT_RESULT_DELETED`; the writer queue is not touched                                              |
+| `Event`, `SemaphoreT`, `ConditionVariable`      | `WaitEx()` returns `WAIT_RESULT_DELETED`                                                                |
+| `EventFlagsT` `*Ex()` waits                     | Error flag `ERROR_DELETED` (`ERROR_MASK \| 0x20`) in the returned word; the actual-flags output is `0`      |
+| `Barrier::WaitEx()`                             | `BARRIER_DELETED`; no bookkeeping is rolled back                                                            |
+| `Pipe`, `MessageQueue`, `BlockMemoryPool`, `BytePool` | The `*Ex()` / timed variants return `WAIT_RESULT_DELETED` (`TimedAllocEx()` additionally leaves `*block` as `nullptr`) |
+
+Notes:
+
+- **Void lock calls still panic.** `Mutex::Lock()`, `FastMutex::Lock()`, `RWMutex::ReadLock()` / `WriteLock()` have no way to report a result, so a `WAIT_RESULT_DELETED` there ends in `KERNEL_PANIC_ASSERT`, the same as for any other failed wait. Use `TimedLockEx()` where the lock may be destroyed under the waiter. `bool`-returning waits (`Event::Wait()`, `Semaphore::Wait()`, `ConditionVariable::Wait()`) return `false`.
+- **Destroying a still-owned mutex.** Waiters are released with `WAIT_RESULT_DELETED`, but a task that owned the mutex keeps the priority it inherited from those waiters; nothing restores it. Unlock before destroying when priority inheritance matters.
+- **Destructor assertions.** The destructors of the primitives no longer assert that the object is idle when tasks are waiting, since a task can only wait on a held lock or an exhausted pool. `RWMutex` still asserts that it is unlocked unless writers or readers are waiting; `BlockMemoryPool` and `BytePool` assert that all blocks were returned unless tasks are waiting for one.
+- **Ordering.** Waiters are made ready in wait-list (arrival) order, not in [wait order](#wait-order) order; the scheduler then runs them according to the active strategy. All of them become ready within the one critical section, so none can observe a half-destroyed object.
+- **Kernel mode.** `IKernelService::WakeDeleted()` is available with `KERNEL_SYNC` only (asserts otherwise). Without `KERNEL_SYNC` a wait cannot block, so no waiter can exist.
+- **ARM TrustZone.** Wait objects live in Secure memory, so the Non-Secure `~SyncObjectBase` calls `IKernelService::WakeDeleted(this)` (only when the wait list is not empty) rather than walking the list itself. It goes through the new `NSC_stk_KernelService_WakeDeleted` gateway, which finds the Secure proxy and wakes its waiters. `CmseISyncObjectProxy::Free()` now also unlinks the proxy from the kernel tick list, so a freed proxy is never visited by the tick processing. See the [ARM Cortex-M README](include/arch/arm/cortex-m/README.md).
+- **ThreadX shim.** `WAIT_RESULT_DELETED` maps to `TX_DELETED` (0x01).
+
+```cpp
+stk::sync::Mutex *m = new stk::sync::Mutex();
+
+// task A
+stk::EWaitResult r = m->TimedLockEx(stk::WAIT_INFINITE);
+if (r == stk::WAIT_RESULT_DELETED)
+    return;                       // 'm' is gone: do not unlock, do not touch it
+
+// task B (later)
+delete m;                         // wakes task A with WAIT_RESULT_DELETED
+```
+
 ---
 
 ## `include/memory` — Memory Allocation
@@ -898,7 +937,7 @@ stk::memory::BlockMemoryPool pool(N, sizeof(MyType), g_Buf, sizeof(g_Buf));
 | `TimedAllocEx(&block, size, timeout)`    | Yes — up to timeout | Only with `NO_WAIT`          |
 | `GetInfo(available, largest, fragments)` | No                  | Yes (O(n))                   |
 
-`TimedAllocEx()` returns the full `EWaitResult`, so a timeout can be told apart from a cancellation. The same `KERNEL_SYNC` rule applies as for `BlockMemoryPool`.
+`TimedAllocEx()` returns the full `EWaitResult`, so a timeout can be told apart from a cancellation. The same `KERNEL_SYNC` rule applies as for `BlockMemoryPool`. If the pool is destroyed while a task is waiting, that task gets `WAIT_RESULT_DELETED` and `*block` is `nullptr` (see [Deleting a primitive that has waiters](#deleting-a-primitive-that-has-waiters)).
 
 ```cpp
 // External static storage (zero heap)

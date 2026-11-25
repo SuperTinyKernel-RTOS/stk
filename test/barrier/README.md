@@ -30,16 +30,17 @@ stk::sync::Barrier g_Barrier(5U);   // 5 tasks must call Wait() before any is re
 
 | Method | Signature | Description |
 |--------|-----------|--------------|
-| `WaitEx` | `EResult WaitEx()` | Same as `Wait()`, but preserves the full outcome: `BARRIER_LAST_ARRIVAL` (this task tripped the barrier), `BARRIER_RELEASED` (released because the barrier tripped; not the last arrival), `BARRIER_CANCELED` (wait cancelled via `IKernel::CancelTaskWait()` or `SleepCancel()` before the barrier tripped; the task's arrival is **rolled back**). ISR-unsafe. |
-| `Wait` | `bool Wait()` | Blocks the calling task until `count` tasks (as passed to the constructor) have called `Wait()`. Returns `true` for the one task that triggered the release (i.e. the last to arrive), `false` otherwise (released waiter, or cancelled wait); use `WaitEx()` to tell these apart. ISR-unsafe. |
+| `WaitEx` | `EResult WaitEx()` | Same as `Wait()`, but preserves the full outcome: `BARRIER_LAST_ARRIVAL` (this task tripped the barrier), `BARRIER_RELEASED` (released because the barrier tripped; not the last arrival), `BARRIER_CANCELED` (wait cancelled via `IKernel::CancelTaskWait()` or `SleepCancel()` before the barrier tripped; the task's arrival is **rolled back**), `BARRIER_DELETED` (the barrier was destroyed while waiting; it must not be accessed afterwards: no member is touched, so nothing is rolled back). ISR-unsafe. |
+| `Wait` | `bool Wait()` | Blocks the calling task until `count` tasks (as passed to the constructor) have called `Wait()`. Returns `true` for the one task that triggered the release (i.e. the last to arrive), `false` otherwise (released waiter, cancelled wait, or destroyed barrier); use `WaitEx()` to tell these apart. ISR-unsafe. |
 | `GetThreshold` | `uint32_t GetThreshold() const` | Returns the number of tasks required to trip the barrier. ISR-safe. |
-| `~Barrier` | (destructor) | The underlying `Mutex`/`ConditionVariable` members assert `IsEmpty()` on their own wait lists in debug builds if destroyed with tasks still waiting. |
+| `~Barrier` | (destructor) | Wakes all tasks still waiting on the barrier: the destructor of the internal `ConditionVariable` releases them with `WAIT_RESULT_DELETED`, which `WaitEx()` reports as `BARRIER_DELETED` (`Wait()` returns `false`). They must not access the barrier afterwards. |
 
 **Round lifecycle in `Wait()` / `WaitEx()`:**
 
 ```
 --m_count > 0          →  block on m_cond until m_generation changes, then return false (BARRIER_RELEASED)
                           if cancelled before that: ++m_count (arrival rolled back), return BARRIER_CANCELED
+                          if the barrier is destroyed meanwhile: return BARRIER_DELETED, touch nothing
 --m_count == 0         →  ++m_generation, m_count = m_threshold, NotifyAll(), return true (BARRIER_LAST_ARRIVAL)
 ```
 
@@ -64,6 +65,10 @@ stk::sync::Barrier g_Barrier(5U);   // 5 tasks must call Wait() before any is re
   rolled back. The count stays consistent for the next round.
 - The internal mutex is released on every path, including cancellation. Its re-acquisition
   inside the wait is not cancelable (`Mutex::Lock()` absorbs a cancel and retries).
+- Destroying a `Barrier` while tasks are waiting on it releases **all** of them with `BARRIER_DELETED`:
+  the round is neither completed nor cancelled, and `WaitEx()` does not read or write any member of the
+  destroyed barrier afterwards. In particular the arrival rollback of a cancelled wait is **not** applied
+  (there is no count left to correct), and no replacement arrival can ever complete the round.
 
 ---
 
@@ -114,14 +119,25 @@ shared state, also reset by `ResetTestState()` (the first index is always the ta
 The helper `CancelVictim(use_sleep_cancel)` cancels the victim either with
 `g_Kernel.CancelTaskWait(g_CancelTask[1])` or with `stk::SleepCancel(g_CancelTid[1])`.
 
+The delete-with-waiter tests (19–20) destroy a **separate** barrier: `g_DeleteBarrier` points to a `Barrier` constructed
+with placement-new in the static `g_DeleteBarrierStorage`, with a threshold that no set of waiters can ever reach, so only
+the destruction can end the waits. After the destruction the storage is overwritten with the byte `DELETED_FILL`
+(`0xDD`), and the verifier checks at the end that every byte still holds it: a woken waiter that wrote to the
+destroyed barrier would leave a trace. These tests add all five tasks, reuse the per-task state of the cancellation tests
+(`g_CancelTask[]`, `g_CancelTid[]`, `g_CancelResult[][2]`, `g_CancelElapsed[][2]`, `g_CancelDone[]`, with call 0 = the
+wait on the destroyed barrier and call 1 = the wait on the live `g_CancelBarrier` of the sanity check, threshold 2), and
+select the scenario with `g_DeleteParam` (`DW_BASIC = 1`, `DW_MANY = 2`), a global for the same reason as
+`g_CancelParam`. `g_DeleteBarrier` is set back to `nullptr` right after the destruction.
+
 ---
 
 ## Platform Notes
 
-On **Cortex-M0** (`__ARM_ARCH_6M__`) the device has insufficient RAM to link eight distinct task
-class templates simultaneously. Tests 1–7 and the cancellation tests 9–18 are skipped on M0 and
+On **Cortex-M0** (`__ARM_ARCH_6M__`) the device has insufficient RAM to link nine distinct task
+class templates simultaneously. Tests 1–7, the cancellation tests 9–18 and the delete-with-waiter tests 19–20 are skipped on M0 and
 only `StressTest` (test 8) runs, under `#ifndef __ARM_ARCH_6M__`. `CancelWaitTask` is the eighth
-template (shared by all ten cancellation tests).
+template (shared by all ten cancellation tests) and `DeleteWithWaiterTask` the ninth (shared by both
+delete-with-waiter tests).
 
 `StressTest` runs on M0 because it uses a single task class template (`StressTestTask`)
 instantiated for all five task slots, fitting within the available memory.
@@ -263,7 +279,8 @@ per test):
 | 2, 3 | other parties | arrive at ~20–100 depending on the test; idle in the tests that do not need them (9, 12) |
 | 4 | verifier and watchdog | sleeps until tick 200, evaluates the scenario, then releases any party still blocked |
 
-`StressTest` keeps the number 8 but runs last in `main()`, after the cancellation tests.
+`StressTest` keeps the number 8 but runs last in `main()`, after the cancellation tests and the
+delete-with-waiter tests (19–20).
 
 > **Safety net:** if a cancel does not work, or leaves the barrier with a wrong count, some
 > parties would stay blocked forever and the kernel would never stop. After evaluating the
@@ -400,6 +417,50 @@ Test 13 using `SleepCancel()`.
 
 ---
 
+### Tests 19–20 — `DeleteWithWaiter*`
+**Tasks:** 0–4 &nbsp;|&nbsp; **Task class:** `DeleteWithWaiterTask` &nbsp;|&nbsp; **Runs on M0: no**
+
+Verify that destroying a barrier which tasks are blocked on releases **all** of them with `BARRIER_DELETED`, without
+completing the round, rolling anything back, or touching the destroyed barrier. Same task layout as the cancellation
+tests: tasks 0–3 are the parties, task 4 is the verifier and watchdog.
+
+| Task | Role | Timeline |
+|------|------|----------|
+| 0 | destroyer | constructs the dedicated barrier (`g_DeleteBarrier`) at ~0, sleeps 60 ticks, destroys it and overwrites its storage with `0xDD` |
+| 1 | victim | arrives at the dedicated barrier at ~10 and blocks one party short; once released arrives at `g_CancelBarrier` (threshold 2) |
+| 2 | second waiter (test 20 only) | arrives at the dedicated barrier at ~20; idle in test 19 |
+| 3 | sanity partner | arrives at `g_CancelBarrier` at ~100 as the late second party |
+| 4 | verifier and watchdog | sleeps until tick 200, evaluates the scenario, then cancels any party still blocked so that a failure is not a hang |
+
+The victim records the result and the elapsed time of the wait on the destroyed barrier without touching it, then
+goes through a rendezvous with task 3 on the live `g_CancelBarrier` to show that the task and the kernel are in a
+sane state: it has to block from ~60 ms until task 3 arrives at ~100 ms and be released, and task 3, the last
+arrival, has to trip the barrier. A stale wait entry left behind would release the victim early or with another
+result.
+
+**Common pass condition:** the victim's first result is `BARRIER_DELETED` (not `BARRIER_RELEASED`,
+`BARRIER_LAST_ARRIVAL` or `BARRIER_CANCELED`) with elapsed time in `[35, 75]` ms (waiting from ~10 ms,
+destroyed at ~60 ms); on the live barrier the victim gets `BARRIER_RELEASED` after at least 30 ms and task 3
+gets `BARRIER_LAST_ARRIVAL`; every byte of the storage of the destroyed barrier still holds `0xDD`
+
+#### Test 19 — `DeleteWithWaiter`
+**Threshold of the destroyed barrier:** 2 &nbsp;|&nbsp; **Param:** `DW_BASIC`
+
+One waiter: the victim waits for a second party that never comes.
+
+**Pass condition:** common
+
+#### Test 20 — `DeleteWithWaiterMany`
+**Threshold of the destroyed barrier:** 3 &nbsp;|&nbsp; **Param:** `DW_MANY`
+
+Two waiters (the victim and task 2), one party short. The destruction must release both: the wait list of the
+barrier is walked completely, not just up to its first entry.
+
+**Pass condition:** common, and task 2 also gets `BARRIER_DELETED` with elapsed time in `[25, 65]` ms (waiting
+from ~20 ms)
+
+---
+
 ## Summary Table
 
 | # | Test | Tasks | Barrier | Pass condition | What it verifies |
@@ -422,3 +483,5 @@ Test 13 using `SleepCancel()`.
 | 16 | `CancelWait_SleepCancelOneOfMany` | 0–4 | `g_CancelBarrier` (3) | as test 11 | `SleepCancel()` leaves the other waiters undisturbed |
 | 17 | `CancelWait_SleepCancelSignal` | 0–4 | `g_CancelBarrier` (2) | as test 12 | `SleepCancel()` after a trip is a harmless no-op |
 | 18 | `CancelWait_SleepCancelTrip` | 0–4 | `g_CancelBarrier` (3) | as test 13 | `SleepCancel()` pending across a trip does not corrupt the count |
+| 19 | `DeleteWithWaiter` | 0–4 | `g_DeleteBarrier` (2), `g_CancelBarrier` (2) | victim `DELETED` elapsed `[35, 75]` ms; then `RELEASED` `>= 30` ms and task 3 `LAST_ARRIVAL` on the live barrier; storage untouched | Destroying a barrier which a task waits on releases it with `BARRIER_DELETED`; the waiter writes nothing to the destroyed barrier and leaves no stale wait entry |
+| 20 | `DeleteWithWaiterMany` | 0–4 | `g_DeleteBarrier` (3), `g_CancelBarrier` (2) | as test 19, and task 2 `DELETED` elapsed `[25, 65]` ms | The destruction releases every waiter, not only the first one |

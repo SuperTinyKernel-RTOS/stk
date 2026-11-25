@@ -572,6 +572,8 @@ protected:
                     return WAIT_RESULT_TIMEOUT;
                 case STATE_CANCELLED:
                     return WAIT_RESULT_CANCELED;
+                case STATE_DELETED:
+                    return WAIT_RESULT_DELETED;
                 default: {
                     STK_ASSERT(m_state != STATE_NONE);
                     STK_ASSERT(m_state != STATE_WAIT);
@@ -597,15 +599,34 @@ protected:
             */
             void Wake(bool timeout) override
             {
+                Release(timeout ? STATE_TIMEOUT : STATE_SIGNALED);
+            }
+
+            /*! \brief     Wake the waiting task because its sync object is being destroyed.
+                \note      Called from ~SyncObjectBase inside the critical section, where the dynamic type
+                           of m_sync_obj is already SyncObjectBase, so RemoveWaitObject() resolves to the base
+                           implementation and never touches derived (already destroyed) state.
+                \see       IWaitObject::WakeDeleted
+            */
+            void WakeDeleted() override
+            {
+                Release(STATE_DELETED);
+            }
+
+            /*! \brief     Finish an active wait with the given result and wake the owning task.
+                \param[in] state: Result state (STATE_SIGNALED, STATE_TIMEOUT or STATE_DELETED).
+            */
+            void Release(EState state)
+            {
                 STK_ASSERT(IsWaiting());
 
-                m_state     = (timeout ? STATE_TIMEOUT : STATE_SIGNALED);
+                m_state     = state;
                 m_time_wait = NO_WAIT;
 
                 m_sync_obj->RemoveWaitObject(this);
                 m_sync_obj = nullptr;
 
-                return m_task->Wake();
+                m_task->Wake();
             }
 
             /*! \brief  Advance the timeout countdown by a number of ticks.
@@ -1248,6 +1269,18 @@ protected:
             return result;
         }
 
+        void WakeDeleted(ISyncObject *sobj) override
+        {
+            if __stk_constexpr_cpp17 (IsSyncMode())
+            {
+                ISyncObject::DeleteAll(GetMutableWaitList(sobj));
+            }
+            else
+            {
+                STK_ASSERT(false);
+            }
+        }
+
         Timeout Suspend() override
         {
             if __stk_constexpr_cpp17 (IsTicklessMode())
@@ -1275,29 +1308,37 @@ protected:
 
         EWaitOrder GetDefaultWaitOrder() const override
         {
+            EWaitOrder order;
+
             // the strategy knows best what "urgent" means for it: use the order it declares (WAIT_ORDER_HINT)
-            EWaitOrder order = detail::StrategyWaitOrderHint<TStrategy>::Get();
+            const EWaitOrder hint = detail::StrategyWaitOrderHint<TStrategy>::Get();
 
-            if (order == WAIT_ORDER_AUTO)
+            // the strategy declares no hint (e.g. user-defined), derive the order from the mode and capabilities
+            if (hint == WAIT_ORDER_AUTO)
             {
-                // the strategy declares no hint (e.g. user-defined), derive the order from the mode and capabilities
-                order = WAIT_ORDER_FIFO;
-
                 if __stk_constexpr_cpp17 (IsHrtMode())
                 {
                     // urgency is the remaining deadline (weighted strategies are not supported in HRT mode)
                     order = WAIT_ORDER_DEADLINE;
                 }
-                else if __stk_constexpr_cpp17 (TStrategy::WEIGHT_API && TStrategy::PRIORITY_INHERITANCE_API)
-                {
-                    // weights are priorities (inheritance needs them to be), unlike weighted round-robin
-                    // where a weight is a CPU share and says nothing about urgency
-                    order = WAIT_ORDER_PRIORITY;
-                }
                 else
                 {
-                    // arrival order (fair)
+                    if __stk_constexpr_cpp17 (TStrategy::WEIGHT_API && TStrategy::PRIORITY_INHERITANCE_API)
+                    {
+                        // weights are priorities (inheritance needs them to be), unlike weighted round-robin
+                        // where a weight is a CPU share and says nothing about urgency
+                        order = WAIT_ORDER_PRIORITY;
+                    }
+                    else
+                    {
+                        // arrival order (fair)
+                        order = WAIT_ORDER_FIFO;
+                    }
                 }
+            }
+            else
+            {
+                order = hint;
             }
 
             return order;
@@ -1310,15 +1351,13 @@ protected:
             // nothing to choose from with 0 or 1 waiter
             if ((result != nullptr) && (result->GetNext() != nullptr))
             {
-                if (order == WAIT_ORDER_AUTO)
-                {
-                    order = GetDefaultWaitOrder();
-                }
+                const EWaitOrder effective_order =
+                    ((order == WAIT_ORDER_AUTO) ? GetDefaultWaitOrder() : order);
 
                 // orders which can not differ from FIFO for this strategy/mode are dropped at compile time:
                 // without WEIGHT_API all weights are equal, outside KERNEL_HRT all HRT keys are zero, so a
                 // strictly better waiter never exists and the first one (FIFO) is the result
-                switch (order)
+                switch (effective_order)
                 {
                 case WAIT_ORDER_PRIORITY:
                     if __stk_constexpr_cpp17 (TStrategy::WEIGHT_API)

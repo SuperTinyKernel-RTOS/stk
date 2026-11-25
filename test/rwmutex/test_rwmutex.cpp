@@ -32,6 +32,11 @@ STK_TEST_DECL_ASSERT;
 #define STK_TASK                      static
 #endif
 
+#ifndef _NEW
+inline void *operator new(std::size_t, void *ptr) noexcept { return ptr; }
+inline void operator delete(void *, void *) noexcept { /* nothing for placement delete */ }
+#endif
+
 namespace stk {
 namespace test {
 
@@ -66,6 +71,21 @@ static volatile int64_t g_VictimElapsed[2]       = {0, 0};       // ms spent acq
 // RunTest<CancelWaitTask> call), so a constructor argument would silently keep the value of the first case.
 // Set by main() before each RunTest() call.
 static volatile int32_t g_CancelParam            = 0;
+
+// Delete-with-waiter test state (see DeleteWithWaiterTask): a dedicated RWMutex which is destroyed while it is held and
+// tasks wait for it, g_TestRWMutex must stay untouched. It lives in raw storage which is overwritten after the
+// destruction: a waiter which wrote to the destroyed lock (e.g. the withdrawal of a cancelled or timed out writer from
+// m_writers_waiting) would leave a trace in it. The outcome of the waits on the destroyed lock is reported through
+// g_VictimResult[] / g_VictimElapsed[] above (index 0: task 1, index 1: task 2).
+alignas(sync::RWMutex) static uint8_t g_DeleteRWStorage[sizeof(sync::RWMutex)];
+static sync::RWMutex * volatile       g_DeleteRW           = nullptr;
+static const uint8_t                  DELETED_FILL         = 0xDD;
+static ITask * volatile               g_DeleteVictim2      = nullptr;      // second waiter (task 2), published right before it blocks
+static volatile int32_t               g_DeleteCheckResult  = -100;         // EWaitResult of the follow-up wait of task 1 on g_TestRWMutex (-100 = not set)
+static volatile int64_t               g_DeleteCheckElapsed = 0;            // ms spent in that follow-up wait
+
+// Scenario selector of DeleteWithWaiterTask, a global for the same reason as g_CancelParam
+static volatile int32_t               g_DeleteParam        = 0;
 
 // Cancel the wait of g_Victim either via IKernel::CancelTaskWait() or via stk::SleepCancel()
 static void CancelVictim(bool use_sleep_cancel)
@@ -1021,6 +1041,228 @@ private:
     }
 };
 
+static const int32_t DW_WRITER = 1; // a writer waits for a lock held by a reader
+static const int32_t DW_READER = 2; // a reader waits for a lock held by a writer
+static const int32_t DW_BOTH   = 3; // a writer and, behind it, a reader wait for a lock held by a reader (RAII guards)
+
+/*! \class DeleteWithWaiterTask
+    \brief Tests destruction of an RWMutex which tasks are blocked on (WAIT_RESULT_DELETED).
+    \note  Task 0 creates a dedicated RWMutex, holds it (as a reader or a writer) and destroys it while task 1 (and
+           task 2 in the third scenario) wait for it with an infinite timeout. A task can wait only for a held lock,
+           so this is the one legal way to destroy an RWMutex (the destructor asserts otherwise). Nobody releases
+           the lock, so only the destruction can end the waits: the waiters must get WAIT_RESULT_DELETED (neither
+           the lock, a timeout nor a cancellation) without touching the destroyed object. The storage of the object
+           is overwritten after the destruction and must still hold that pattern when the waiters are back, so any
+           write by a woken waiter (the withdrawal of a writer from m_writers_waiting, or an increment of m_readers
+           when the lock was wrongly considered granted) is detected. RWMutex has two internal condition variables,
+           one for the writers and one for the readers; the scenarios cover each of them and both together.
+           Afterwards the kernel and g_TestRWMutex must be fully usable: task 0 takes the write lock of
+           g_TestRWMutex and the victim performs a timed lock of the same kind as before on it, which must run to its
+           deadline (a stale wait entry would end it early) and must leave the lock pristine. The scenario is selected
+           by g_DeleteParam: 1 = a writer waits for a lock held by a reader, 2 = a reader waits for a lock held by a
+           writer, 3 = a writer and a reader (behind it, blocked by writer preference) wait for a lock held by a
+           reader, using the RAII guards ScopedTimedLock / ScopedTimedReadMutex, whose destructors must not unlock the
+           destroyed lock. Tasks 2 (except in scenario 3), 3 and 4 are added by RunTest() but stay idle. The void
+           Lock() / ReadLock() are not covered: they panic (KERNEL_PANIC_ASSERT) if the lock is destroyed while waiting.
+*/
+template <EAccessMode _AccessMode>
+class DeleteWithWaiterTask : public Task<_STK_RWMUTEX_STACK_SIZE, _AccessMode>
+{
+    uint8_t m_task_id;
+    int32_t m_scenario;
+
+public:
+    DeleteWithWaiterTask(uint8_t task_id, int32_t) // scenario is taken from g_DeleteParam in Run(), see g_DeleteParam
+        : m_task_id(task_id), m_scenario(0)
+    {}
+
+private:
+    void Run()
+    {
+        m_scenario = g_DeleteParam;
+
+        if (m_task_id == 0)
+            RunDestroyer();
+        else
+        if (m_task_id == 1)
+            RunVictim();
+        else
+        if (m_task_id == 2)
+            RunSecondWaiter();
+        // tasks 3 and 4 are not used by any scenario
+    }
+
+    // Task 1: block on the dedicated lock, record how the wait ended
+    void RunVictim()
+    {
+        stk::Sleep(_STK_RWMUTEX_TEST_SHORT_SLEEP);
+
+        g_Victim    = static_cast<ITask *>(this);
+        g_VictimTid = stk::GetTid();
+
+        sync::RWMutex *const rw = g_DeleteRW; // created by task 0 before it went to sleep
+
+        const bool reader = (m_scenario == DW_READER);
+
+        EWaitResult r = WAIT_RESULT_FAIL;
+
+        const int64_t start = GetTimeNowMs();
+
+        // blocks until the lock is destroyed; nothing but the result is read afterwards
+        if (rw != nullptr)
+        {
+            if (m_scenario == DW_BOTH)
+            {
+                // the guard destructor unlocks only if the lock was acquired: it must not touch the destroyed lock
+                sync::RWMutex::ScopedTimedLock guard(*rw, WAIT_INFINITE);
+                r = guard.GetResult();
+            }
+            else
+            if (reader)
+            {
+                r = rw->TimedReadLockEx(WAIT_INFINITE);
+            }
+            else
+            {
+                r = rw->TimedLockEx(WAIT_INFINITE);
+            }
+        }
+
+        g_VictimElapsed[0] = GetTimeNowMs() - start;
+        g_VictimResult[0]  = static_cast<int32_t>(r);
+
+        // the kernel is in a sane state: a timed lock of the same kind on another lock (write-locked by task 0 at
+        // this moment) works, runs to its deadline and leaves no trace in that lock
+        const int64_t     start2 = GetTimeNowMs();
+        const EWaitResult r2     = (reader ? g_TestRWMutex.TimedReadLockEx(20) : g_TestRWMutex.TimedLockEx(20));
+
+        g_DeleteCheckElapsed = GetTimeNowMs() - start2;
+        g_DeleteCheckResult  = static_cast<int32_t>(r2);
+
+        if (r2 == WAIT_RESULT_SIGNAL) // not expected: do not leave the lock taken
+        {
+            if (reader)
+                g_TestRWMutex.ReadUnlock();
+            else
+                g_TestRWMutex.Unlock();
+        }
+    }
+
+    // Task 2: a reader queued behind the writer of task 1, blocked only by the writer preference
+    void RunSecondWaiter()
+    {
+        if (m_scenario != DW_BOTH)
+            return;
+
+        stk::Sleep(2 * _STK_RWMUTEX_TEST_SHORT_SLEEP);
+
+        g_DeleteVictim2 = static_cast<ITask *>(this);
+
+        sync::RWMutex *const rw = g_DeleteRW;
+
+        EWaitResult r = WAIT_RESULT_FAIL;
+
+        const int64_t start = GetTimeNowMs();
+
+        if (rw != nullptr)
+        {
+            sync::RWMutex::ScopedTimedReadMutex guard(*rw, WAIT_INFINITE);
+            r = guard.GetResult();
+        }
+
+        g_VictimElapsed[1] = GetTimeNowMs() - start;
+        g_VictimResult[1]  = static_cast<int32_t>(r);
+    }
+
+    // True if the storage of the destroyed lock still holds the pattern written after the destruction
+    static bool StorageUntouched()
+    {
+        for (size_t i = 0; i < sizeof(g_DeleteRWStorage); ++i)
+        {
+            if (g_DeleteRWStorage[i] != DELETED_FILL)
+                return false;
+        }
+
+        return true;
+    }
+
+    // Task 0: create, hold, destroy and verify
+    void RunDestroyer()
+    {
+        sync::RWMutex *const rw = ::new (g_DeleteRWStorage) sync::RWMutex();
+        g_DeleteRW = rw;
+
+        // the lock is held while it is destroyed: the waiters can only exist for a held lock
+        if (m_scenario == DW_READER)
+            rw->Lock();
+        else
+            rw->ReadLock();
+
+        stk::Sleep(60); // task 1 (and task 2) block on it in the meantime
+
+        // destroy the lock which is held and waited for: the waiters are released by the destructor of the
+        // internal condition variables, the holder (this task) must not unlock it any more
+        rw->~RWMutex();
+        memset(g_DeleteRWStorage, DELETED_FILL, sizeof(g_DeleteRWStorage));
+        g_DeleteRW = nullptr;
+
+        // make the follow-up lock attempt of task 1 block: it must wait for this lock until its deadline
+        g_TestRWMutex.Lock();
+        stk::Sleep(40);
+        g_TestRWMutex.Unlock();
+
+        stk::Sleep(_STK_RWMUTEX_TEST_SHORT_SLEEP * 4); // let the waiters resume and task 1 finish its check on g_TestRWMutex
+
+        // safety net: if a waiter was not released it would block forever and the kernel would never stop,
+        // cancel it so that the test fails instead of hanging
+        const bool released = (g_VictimResult[0] != -100) &&
+                              ((m_scenario != DW_BOTH) || (g_VictimResult[1] != -100));
+        if (!released)
+        {
+            ITask *const victim1 = g_Victim;
+            ITask *const victim2 = g_DeleteVictim2;
+
+            if (victim1 != nullptr)
+                g_Kernel.CancelTaskWait(victim1);
+            if (victim2 != nullptr)
+                g_Kernel.CancelTaskWait(victim2);
+
+            stk::Sleep(_STK_RWMUTEX_TEST_SHORT_SLEEP * 5);
+        }
+
+        const bool pristine  = IsLockPristine();
+        const bool untouched = StorageUntouched();
+
+        printf("delete with waiter (scenario=%d): first=%d elapsed=%d ms, second=%d elapsed=%d ms, "
+            "g_TestRWMutex wait: result=%d elapsed=%d ms, pristine=%d storage_untouched=%d\n",
+            (int)m_scenario,
+            (int)g_VictimResult[0], (int)g_VictimElapsed[0],
+            (int)g_VictimResult[1], (int)g_VictimElapsed[1],
+            (int)g_DeleteCheckResult, (int)g_DeleteCheckElapsed, (int)pristine, (int)untouched);
+
+        // task 1 started waiting at ~10 ms, task 2 at ~20 ms, the lock was destroyed at ~60 ms
+        bool pass = released &&
+                    (g_VictimResult[0] == WAIT_RESULT_DELETED) &&
+                    (g_VictimElapsed[0] >= 35) && (g_VictimElapsed[0] <= 75);
+
+        if (m_scenario == DW_BOTH)
+        {
+            pass = pass && (g_VictimResult[1] == WAIT_RESULT_DELETED) &&
+                   (g_VictimElapsed[1] >= 25) && (g_VictimElapsed[1] <= 65);
+        }
+
+        // the other lock was not affected: a 20 ms attempt on it ran to its deadline (a stale wait entry would cut
+        // it short), the writer or reader withdrew correctly so the lock is pristine again; the destroyed lock was
+        // not written to
+        pass = pass &&
+               (g_DeleteCheckResult == WAIT_RESULT_TIMEOUT) && (g_DeleteCheckElapsed >= 15) &&
+               pristine && untouched;
+
+        if (pass)
+            g_TestResult = 1;
+    }
+};
+
 // Helper function to reset test state
 static void ResetTestState()
 {
@@ -1034,6 +1276,11 @@ static void ResetTestState()
 
     g_Victim    = nullptr;
     g_VictimTid = TID_NONE;
+
+    g_DeleteRW           = nullptr;
+    g_DeleteVictim2      = nullptr;
+    g_DeleteCheckResult  = -100;
+    g_DeleteCheckElapsed = 0;
 
     for (int32_t i = 0; i < 2; ++i)
     {
@@ -1206,9 +1453,32 @@ int main(int argc, char **argv)
         }
     }
 
+    // Tests 25-27: RWMutex destroyed while it is held and tasks wait for it (WAIT_RESULT_DELETED, tasks 0-2 used)
+    {
+        struct DeleteCase { const char *name; int32_t param; };
+
+        static const DeleteCase cases[] =
+        {
+            { "DeleteWithWaiterWriter",  DW_WRITER },
+            { "DeleteWithWaiterReader",  DW_READER },
+            { "DeleteWithWaiterBoth",    DW_BOTH   }
+        };
+
+        for (size_t i = 0; i < (sizeof(cases) / sizeof(cases[0])); ++i)
+        {
+            g_DeleteParam = cases[i].param;
+
+            if (RunTest<DeleteWithWaiterTask<ACCESS_PRIVILEGED>>(cases[i].name, cases[i].param)
+                != TestContext::SUCCESS_EXIT_CODE)
+                total_failures++;
+            else
+                total_success++;
+        }
+    }
+
 #endif // __ARM_ARCH_6M__
 
-    // Test 10 (runs last, after the cancellation tests): Stress test mixing readers and writers under full contention
+    // Test 10 (runs last, after the cancellation and delete-with-waiter tests): Stress test mixing readers and writers under full contention
     if (RunTest<StressTestTask<ACCESS_PRIVILEGED>>("StressTest", 100) != TestContext::SUCCESS_EXIT_CODE)
         total_failures++;
     else

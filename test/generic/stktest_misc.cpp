@@ -81,6 +81,99 @@ TEST(Basic, GetVersion)
     CHECK_EQUAL(static_cast<uint32_t>(STK_VERSION_ENCODE(v.major, v.minor, v.patch)), v.code);
 }
 
+TEST(Basic, MemCpy)
+{
+    alignas(4) uint8_t src[16];
+    alignas(4) uint8_t dst[16];
+
+    for (size_t i = 0; i < sizeof(src); i++)
+        src[i] = static_cast<uint8_t>(i + 1);
+
+    // fast path: aligned dest, aligned src, size multiple of 4
+    STK_MEMSET(dst, 0xEE, sizeof(dst));
+    STK_MEMCPY(dst, src, 8);
+    for (size_t i = 0; i < 8; i++)
+        CHECK_EQUAL(src[i], dst[i]);
+    for (size_t i = 8; i < sizeof(dst); i++) // bytes past the copied range untouched
+        CHECK_EQUAL(0xEE, dst[i]);
+
+    // slow path: size not a multiple of 4
+    STK_MEMSET(dst, 0xEE, sizeof(dst));
+    STK_MEMCPY(dst, src, 7);
+    for (size_t i = 0; i < 7; i++)
+        CHECK_EQUAL(src[i], dst[i]);
+    for (size_t i = 7; i < sizeof(dst); i++)
+        CHECK_EQUAL(0xEE, dst[i]);
+
+    // slow path: misaligned source
+    STK_MEMSET(dst, 0xEE, sizeof(dst));
+    STK_MEMCPY(dst, src + 1, 8);
+    for (size_t i = 0; i < 8; i++)
+        CHECK_EQUAL(src[i + 1], dst[i]);
+    CHECK_EQUAL(0xEE, dst[8]);
+
+    // slow path: misaligned destination
+    STK_MEMSET(dst, 0xEE, sizeof(dst));
+    STK_MEMCPY(dst + 1, src, 8);
+    CHECK_EQUAL(0xEE, dst[0]);
+    for (size_t i = 0; i < 8; i++)
+        CHECK_EQUAL(src[i], dst[i + 1]);
+    CHECK_EQUAL(0xEE, dst[9]);
+
+#ifndef _STK_CUSTOM_MEMCPY
+    // no-op cases: nullptr arguments and zero size must not crash or modify memory
+    STK_MEMSET(dst, 0xEE, sizeof(dst));
+    STK_MEMCPY(nullptr, src, 4);
+    STK_MEMCPY(dst, nullptr, 4);
+    STK_MEMCPY(dst, src, 0);
+    for (size_t i = 0; i < sizeof(dst); i++)
+        CHECK_EQUAL(0xEE, dst[i]);
+#endif
+}
+
+TEST(Basic, MemSet)
+{
+    alignas(4) uint8_t buf[16];
+
+    // fast path: aligned dest, size multiple of 4
+    STK_MEMSET(buf, 0x00, sizeof(buf));
+    STK_MEMSET(buf, 0xA5, 8);
+    for (size_t i = 0; i < 8; i++)
+        CHECK_EQUAL(0xA5, buf[i]);
+    for (size_t i = 8; i < sizeof(buf); i++) // bytes past the filled range untouched
+        CHECK_EQUAL(0x00, buf[i]);
+
+    // slow path: size not a multiple of 4
+    STK_MEMSET(buf, 0x00, sizeof(buf));
+    STK_MEMSET(buf, 0x5A, 7);
+    for (size_t i = 0; i < 7; i++)
+        CHECK_EQUAL(0x5A, buf[i]);
+    for (size_t i = 7; i < sizeof(buf); i++)
+        CHECK_EQUAL(0x00, buf[i]);
+
+    // slow path: misaligned destination
+    STK_MEMSET(buf, 0x00, sizeof(buf));
+    STK_MEMSET(buf + 1, 0xFF, 8);
+    CHECK_EQUAL(0x00, buf[0]);
+    for (size_t i = 1; i <= 8; i++)
+        CHECK_EQUAL(0xFF, buf[i]);
+    CHECK_EQUAL(0x00, buf[9]);
+
+    // fast path pattern replication: the byte value must fill all 4 bytes of every word
+    STK_MEMSET(buf, 0x12, sizeof(buf));
+    for (size_t i = 0; i < sizeof(buf); i++)
+        CHECK_EQUAL(0x12, buf[i]);
+
+#ifndef _STK_CUSTOM_MEMSET
+    // no-op cases: nullptr and zero size must not crash or modify memory
+    STK_MEMSET(buf, 0x77, sizeof(buf));
+    STK_MEMSET(nullptr, 0x00, 4);
+    STK_MEMSET(buf, 0x00, 0);
+    for (size_t i = 0; i < sizeof(buf); i++)
+        CHECK_EQUAL(0x77, buf[i]);
+#endif
+}
+
 TEST(Basic, ISwitchStrategyStub)
 {
     sched::SwitchStrategyRR ss;

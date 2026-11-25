@@ -14,7 +14,7 @@ Source: `test/condvar/test_condvar.cpp`
 
 `ConditionVariable` follows the **Monitor pattern**: `Wait()` atomically releases the
 associated `Mutex` and suspends the calling task. When the task wakes (via signal or
-timeout or cancellation) the `Mutex` is re-acquired before `Wait()` returns. All operations must be
+timeout, cancellation or destruction of the condition variable) the `Mutex` is re-acquired before `Wait()` returns. All operations must be
 performed with the mutex held by the caller, except `NotifyOne()` and `NotifyAll()`
 which are ISR-safe.
 
@@ -28,11 +28,11 @@ stk::sync::ConditionVariable g_Cond;
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `WaitEx` | `EWaitResult WaitEx(IMutex &mutex, Timeout timeout = WAIT_INFINITE)` | Same as `Wait()`, but preserves the full outcome: `WAIT_RESULT_SIGNAL` (notified), `WAIT_RESULT_TIMEOUT` (timeout expired, or `NO_WAIT`), `WAIT_RESULT_CANCELED` (wait cancelled via `IKernel::CancelTaskWait()` or `SleepCancel()`). `mutex` is re-acquired in all three cases. ISR-safe only with `NO_WAIT`. |
-| `Wait` | `bool Wait(IMutex &mutex, Timeout timeout = WAIT_INFINITE)` | Atomically releases `mutex` and blocks the calling task. Re-acquires `mutex` before returning, whatever ended the wait. Returns `true` if signaled, `false` otherwise (timeout, cancellation, or `NO_WAIT`); use `WaitEx()` to tell these apart. Returns `false` immediately without blocking if `timeout == NO_WAIT`. ISR-unsafe unless `timeout == NO_WAIT`. |
+| `WaitEx` | `EWaitResult WaitEx(IMutex &mutex, Timeout timeout = WAIT_INFINITE)` | Same as `Wait()`, but preserves the full outcome: `WAIT_RESULT_SIGNAL` (notified), `WAIT_RESULT_TIMEOUT` (timeout expired, or `NO_WAIT`), `WAIT_RESULT_CANCELED` (wait cancelled via `IKernel::CancelTaskWait()` or `SleepCancel()`), `WAIT_RESULT_DELETED` (the condition variable was destroyed while waiting; it must not be accessed afterwards). `mutex` is re-acquired in all four cases: it is a separate object and stays valid. ISR-safe only with `NO_WAIT`. |
+| `Wait` | `bool Wait(IMutex &mutex, Timeout timeout = WAIT_INFINITE)` | Atomically releases `mutex` and blocks the calling task. Re-acquires `mutex` before returning, whatever ended the wait. Returns `true` if signaled, `false` otherwise (timeout, cancellation, destruction of the condition variable, or `NO_WAIT`); use `WaitEx()` to tell these apart. Returns `false` immediately without blocking if `timeout == NO_WAIT`. ISR-unsafe unless `timeout == NO_WAIT`. |
 | `NotifyOne` | `void NotifyOne()` | Wakes one waiting task in FIFO arrival order. No-op if no tasks are waiting. ISR-safe. |
 | `NotifyAll` | `void NotifyAll()` | Wakes all waiting tasks simultaneously. No-op if no tasks are waiting. ISR-safe. |
-| `~ConditionVariable` | (destructor) | Asserts `m_wait_list.IsEmpty()` in debug builds. Destroying a CV with active waiters is a logic error. |
+| `~ConditionVariable` | (destructor) | Wakes all tasks still waiting with `WAIT_RESULT_DELETED` (done by `~SyncObjectBase`); they must not access the object afterwards. Each of them still re-acquires its `mutex` before `WaitEx()` / `Wait()` returns. `Wait()` reports it as `false`, use `WaitEx()` to tell it from a timeout. |
 
 **Canonical usage pattern** (spurious-wakeup-safe):
 
@@ -68,8 +68,11 @@ g_Mtx.Unlock();
   mutex, is a no-op.
 - A `ConditionVariable` keeps no signaled state: a notification with no waiter is lost,
   and a cancel never consumes one.
-- Destroying a `ConditionVariable` while tasks are still waiting is a logic error;
-  an assertion fires in debug builds.
+- Destroying a `ConditionVariable` while tasks are still waiting releases **all** of them with
+  `WAIT_RESULT_DELETED`: they neither consume a notification nor time out, and `WaitEx()` does not
+  read or write any member of the destroyed object. The mutex is a separate object, so it is
+  re-acquired on this path too, even if another task holds it at the time of the destruction
+  (the woken waiter then stays blocked in the mutex until it is released).
 
 ---
 
@@ -102,15 +105,28 @@ The cancellation tests (9–19) additionally use a small amount of shared state,
 The helper `CancelVictim(use_sleep_cancel)` cancels the victim either with
 `g_Kernel.CancelTaskWait(g_Victim)` or with `stk::SleepCancel(g_VictimTid)`.
 
+The delete-with-waiter tests (20–22) destroy a **separate** condition variable: `g_DeleteCond` points to an object
+constructed with placement-new in the static `g_DeleteCondStorage`, so `g_TestCond` and `g_TestMutex` are never
+destroyed by the test itself. They reuse `g_Victim`, `g_VictimResult[]`, `g_VictimElapsed[]` and
+`g_VictimOwnsMutex[]` (index 0: task 1, index 1: task 2), and add:
+
+| Variable | Purpose |
+|----------|---------|
+| `g_DeleteCond` | Pointer to the dedicated condition variable; set back to `nullptr` right after the destruction |
+| `g_DeleteVictim2` | Task 2 (second waiter), published right before it blocks; used by the safety net |
+| `g_DeleteCheckResult` / `g_DeleteCheckElapsed` / `g_DeleteCheckOwns` | `EWaitResult`, milliseconds and mutex ownership of the follow-up `WaitEx(20)` of task 1 on `g_TestCond` (`-100` = not set) |
+| `g_DeleteParam` | Scenario selector (`DW_BASIC = 1`, `DW_MUTEX_HELD = 2`, `DW_TWO_WAITERS = 3`); a global for the same reason as `g_CancelParam` |
+
 ---
 
 ## Platform Notes
 
-On **Cortex-M0** (`__ARM_ARCH_6M__`) the device has insufficient RAM to link all nine
-distinct task class templates simultaneously. Tests 1–7 and the cancellation tests 9–19
-are skipped on M0 and only `StressTest` (test 8) runs. `StressTest` uses a single task
+On **Cortex-M0** (`__ARM_ARCH_6M__`) the device has insufficient RAM to link all ten
+distinct task class templates simultaneously. Tests 1–7, the cancellation tests 9–19 and the
+delete-with-waiter tests 20–22 are skipped on M0 and only `StressTest` (test 8) runs. `StressTest` uses a single task
 class template instantiated five times, which fits within the available memory.
-`CancelWaitTask` adds one more template (shared by all eleven cancellation tests) to the
+`CancelWaitTask` adds one more template (shared by all eleven cancellation tests) and
+`DeleteWithWaiterTask` another (shared by the three delete-with-waiter tests) to the
 static footprint.
 
 Stack sizes differ between platforms because the `sync::Mutex` + `ConditionVariable` +
@@ -249,7 +265,8 @@ scenarios with `stk::SleepCancel()`. The scenario is selected by `param` (`1..6`
 adding `100` selects `SleepCancel`. In every scenario the victim must own the mutex when
 `WaitEx()` returns, regardless of how the wait ended.
 
-`StressTest` keeps the number 8 but runs last in `main()`, after the cancellation tests.
+`StressTest` keeps the number 8 but runs last in `main()`, after the cancellation tests and the
+delete-with-waiter tests (20–22).
 
 > **Safety net:** if a cancel does not work, the victim would stay blocked forever and the
 > kernel would never stop. On failure task 0 therefore calls `NotifyAll()` twice to release
@@ -384,6 +401,57 @@ absorbed there without disturbing the already-delivered notification.
 
 ---
 
+### Tests 20–22 — `DeleteWithWaiter*`
+**Tasks:** 0–2 &nbsp;|&nbsp; **Task class:** `DeleteWithWaiterTask` &nbsp;|&nbsp; **Runs on M0: no**
+
+Verify that destroying a condition variable which tasks are blocked on releases **all** waiters with
+`WAIT_RESULT_DELETED`, and that the mutex is re-acquired on this path like on every other. Task 0 constructs a
+dedicated condition variable (`g_DeleteCond`, placement-new into `g_DeleteCondStorage`) and sleeps 60 ticks. Task 1
+sleeps `_STK_CV_TEST_SHORT_SLEEP`, publishes its `ITask` pointer in `g_Victim`, locks `g_TestMutex` and blocks in
+`WaitEx(WAIT_INFINITE)` on that condition variable: nobody notifies it, so only its destruction can end the wait.
+Task 0 then destroys the condition variable while it is waited on, and overwrites its storage with `0xDD`, so that any
+access to the destroyed object by a woken waiter (or by the kernel) would read garbage. Task 1 records the result,
+the elapsed time and whether it owns `g_TestMutex`, without touching the destroyed object. It then performs a
+`WaitEx(g_TestMutex, 20)` on `g_TestCond` to show that the task and the kernel are in a sane state: nobody notifies
+`g_TestCond`, so the wait must run to its deadline and return `WAIT_RESULT_TIMEOUT` with the mutex re-acquired; a stale
+wait entry left behind would end it early or with another result. Task 0 sleeps 40 more ticks and checks the outcome.
+If a waiter was not released, task 0 cancels its wait with `g_Kernel.CancelTaskWait()`, so the test fails instead of
+hanging the kernel.
+
+**Common pass condition:** task 1's first result is `WAIT_RESULT_DELETED` (not a signal, a timeout or a cancellation)
+and it owns `g_TestMutex` on return; the follow-up `WaitEx(g_TestMutex, 20)` on `g_TestCond` returned
+`WAIT_RESULT_TIMEOUT` after at least 15 ms with the mutex owned; `g_TestMutex` is free at the end.
+
+#### Test 20 — `DeleteWithWaiter`
+**Param:** `DW_BASIC` &nbsp;|&nbsp; Task 2 is added by `RunTest()` but stays idle.
+
+One waiter, the mutex is free when the condition variable is destroyed.
+
+**Pass condition:** common, and the elapsed time of task 1 is in `[35, 75]` ms (started at ~10 ms, destroyed at ~60 ms).
+
+#### Test 21 — `DeleteWithWaiterMutexHeld`
+**Param:** `DW_MUTEX_HELD` &nbsp;|&nbsp; Task 2 is added by `RunTest()` but stays idle.
+
+Task 0 locks `g_TestMutex` (free, the waiter released it inside `WaitEx()`) and destroys the condition variable while
+holding it, then sleeps `_STK_CV_TEST_SHORT_SLEEP` ticks. The waiter has been woken as deleted but must stay blocked
+re-acquiring the mutex: its result is still unset and `GetOwner()` still names task 0. Task 0 then calls `Unlock()`,
+which hands the mutex over to the waiter.
+
+**Pass condition:** common, and the waiter was still blocked while task 0 held the mutex, `GetOwner()` was task 0,
+and the elapsed time of task 1 is in `[45, 90]` ms (it returns only after the mutex is handed over at ~70 ms).
+
+#### Test 22 — `DeleteWithWaiterTwo`
+**Param:** `DW_TWO_WAITERS`
+
+Task 1 blocks first, task 2 blocks behind it (`Sleep(20)`, then locks the mutex and calls `WaitEx(WAIT_INFINITE)`).
+The destruction must release both: the wait list of the condition variable is walked completely, not just up to its
+first entry.
+
+**Pass condition:** common, and task 2 also gets `WAIT_RESULT_DELETED` with the mutex owned; elapsed time of task 1 is in
+`[35, 75]` ms and of task 2 in `[25, 65]` ms (started at ~20 ms)
+
+---
+
 ## Summary Table
 
 | # | Test | Tasks | Pass condition | What it verifies |
@@ -407,3 +475,6 @@ absorbed there without disturbing the already-delivered notification.
 | 17 | `CancelWait_SleepCancelMutex` | 0–2 | as test 12 | `SleepCancel()` still lets the waiter re-acquire the mutex |
 | 18 | `CancelWait_SleepCancelTwo` | 0–2 | as test 13 | `SleepCancel()` keeps the wait list intact |
 | 19 | `CancelWait_SleepCancelSignal` | 0–2 | as test 14 | `SleepCancel()` after a notification is a harmless no-op |
+| 20 | `DeleteWithWaiter` | 0–2 | `DELETED`, mutex owned, elapsed `[35, 75]` ms, follow-up wait on `g_TestCond` times out `>= 15` ms | Destroying a condition variable which a task waits on releases it with `WAIT_RESULT_DELETED`; the mutex is re-acquired; the waiter does not touch the destroyed object and leaves no stale wait entry |
+| 21 | `DeleteWithWaiterMutexHeld` | 0–2 | blocked while mutex held, then `DELETED`, mutex owned | A waiter released by the destruction still re-acquires the mutex and blocks until it is handed over |
+| 22 | `DeleteWithWaiterTwo` | 0–2 | both `DELETED`, both own mutex | The destruction releases every waiter, not only the first one |

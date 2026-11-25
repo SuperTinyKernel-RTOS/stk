@@ -12,6 +12,7 @@
 #include <sync/stk_sync_fastmutex.h>
 #include <assert.h>
 #include <string.h>
+#include <new> // placement new
 
 #include "stktest_context.h"
 
@@ -49,6 +50,11 @@ static volatile int32_t g_OrderIndex = 0;
 static volatile int32_t g_InstancesDone = 0;
 static volatile TId     g_Task1Tid = TID_NONE;
 static ITask *volatile  g_WaiterTask = nullptr;
+
+// Delete-with-waiter test state (see DeleteWithWaiterTask): a dedicated mutex which is destroyed while a task waits
+// for it, g_TestMutex must stay untouched
+alignas(sync::FastMutex) static uint8_t g_DeleteMutexStorage[sizeof(sync::FastMutex)];
+static sync::FastMutex *volatile        g_DeleteMutex = nullptr;
 
 // Kernel
 static Kernel<KERNEL_DYNAMIC | KERNEL_SYNC | (STK_TICKLESS_IDLE ? KERNEL_TICKLESS : 0),
@@ -1038,6 +1044,95 @@ private:
     }
 };
 
+/*! \class DeleteWithWaiterTask
+    \brief Tests destruction of a mutex which a task is blocked on (WAIT_RESULT_DELETED).
+    \note  Task 0 creates a dedicated mutex, owns it and destroys it while task 1 waits for it without a timeout.
+           Only the destruction can end that wait: task 1 must get WAIT_RESULT_DELETED (neither a timeout, a
+           cancellation nor the ownership) without touching the destroyed object. The storage of the object is
+           overwritten after the destruction, so a stray access by the woken waiter would read garbage. Afterwards
+           the kernel and g_TestMutex must be fully usable: the stale wait entry must not be left behind.
+*/
+template <EAccessMode _AccessMode>
+class DeleteWithWaiterTask : public Task<_STK_FMUTEX_STACK_SIZE, _AccessMode>
+{
+    uint8_t m_task_id;
+
+public:
+    DeleteWithWaiterTask(uint8_t task_id, int32_t) : m_task_id(task_id)
+    {}
+
+private:
+    void Run()
+    {
+        if (m_task_id == 0)
+        {
+            sync::FastMutex *const mtx = ::new (g_DeleteMutexStorage) sync::FastMutex();
+            g_DeleteMutex = mtx;
+
+            mtx->Lock();
+            stk::Sleep(60); // task 1 blocks on it (at ~10 ms) in the meantime
+
+            // destroy the mutex which is still owned and waited for: the waiter is released by the destructor
+            mtx->~FastMutex();
+            memset(g_DeleteMutexStorage, 0xDD, sizeof(g_DeleteMutexStorage));
+            g_DeleteMutex = nullptr;
+
+            stk::Sleep(_STK_FMUTEX_TEST_SHORT_SLEEP * 2); // let task 1 resume
+
+            // safety net: if the waiter was not released it would block forever and the kernel would never stop,
+            // cancel it so that the test fails instead of hanging
+            const bool released = (g_VictimResult[0] != -100);
+            if (!released)
+            {
+                ITask *const victim = g_Victim;
+                if (victim != nullptr)
+                    g_Kernel.CancelTaskWait(victim);
+
+                stk::Sleep(_STK_FMUTEX_TEST_SHORT_SLEEP * 2);
+            }
+
+            printf("delete with waiter: result=%d elapsed=%d ms\n", (int)g_VictimResult[0], (int)g_VictimElapsed[0]);
+
+            // started waiting at ~10 ms, destroyed at ~60 ms; the other mutex was not affected
+            const bool pass = released &&
+                              (g_VictimResult[0] == WAIT_RESULT_DELETED) && (g_VictimOwner[0] == 0) &&
+                              (g_VictimElapsed[0] >= 35) && (g_VictimElapsed[0] <= 75) &&
+                              (g_VictimResult[1] == WAIT_RESULT_SIGNAL) && // reuse of g_TestMutex by task 1
+                              !g_TestMutex.IsLocked();
+
+            if (pass)
+                g_TestResult = 1;
+        }
+        else
+        if (m_task_id == 1)
+        {
+            stk::Sleep(_STK_FMUTEX_TEST_SHORT_SLEEP);
+
+            g_Victim = static_cast<ITask *>(this);
+
+            sync::FastMutex *const mtx = g_DeleteMutex; // created by task 0 before it went to sleep
+
+            const int64_t start = GetTimeNowMs();
+
+            // blocks (owned by task 0) until the mutex is destroyed; nothing but the result is read afterwards
+            const EWaitResult r = (mtx != nullptr ? mtx->TimedLockEx(WAIT_INFINITE) : WAIT_RESULT_FAIL);
+
+            g_VictimElapsed[0] = GetTimeNowMs() - start;
+            g_VictimOwner[0]   = 0; // the destroyed mutex can not be queried, ownership is never granted by deletion
+            g_VictimResult[0]  = static_cast<int32_t>(r);
+
+            // the kernel is in a sane state: a wait on another mutex works and the task is not stuck in a wait
+            if (g_TestMutex.TimedLockEx(10) == WAIT_RESULT_SIGNAL)
+            {
+                g_VictimResult[1] = static_cast<int32_t>(WAIT_RESULT_SIGNAL);
+                g_TestMutex.Unlock();
+            }
+        }
+
+        MarkDone();
+    }
+};
+
 // Note: locking a FastMutex already owned by the caller triggers STK_KERNEL_PANIC(KERNEL_PANIC_SYNC_DEADLOCK),
 // whose handler never returns, so this contract violation can not be exercised by this suite.
 
@@ -1239,9 +1334,15 @@ int main(int argc, char **argv)
         }
     }
 
+    // Test 22: FastMutex destroyed while a task waits for it (WAIT_RESULT_DELETED)
+    if (RunTest<DeleteWithWaiterTask<ACCESS_PRIVILEGED>>("DeleteWithWaiter", 2) != TestContext::SUCCESS_EXIT_CODE)
+        total_failures++;
+    else
+        total_success++;
+
 #endif // __ARM_ARCH_6M__
 
-    // Test 22: Stress test
+    // Test 23: Stress test
     if (RunTest<StressTestTask<ACCESS_PRIVILEGED>>("StressTest", 5, 400) != TestContext::SUCCESS_EXIT_CODE)
         total_failures++;
     else

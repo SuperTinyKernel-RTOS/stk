@@ -304,10 +304,26 @@ protected:
                so an object whose last waiter was just woken stays linked until the next tick. Destroying it
                in that window would leave a dangling entry which the tick handler walks.
         \note  Enters a critical section: the kernel walks the tick list from the tick ISR.
+        \note  Wakes all tasks still waiting on the object with WAIT_RESULT_DELETED (the single place for all
+               built-in primitives, including the internal ConditionVariable members of composite ones).
+               Woken tasks must not access the object: every primitive returns the result to the caller
+               without touching its own state. Does nothing (and needs no running kernel) if nobody waits.
     */
     ~SyncObjectBase()
     {
         const hw::CriticalSection::ScopedLock cs_;
+
+    #ifdef _STK_CORTEX_M_TRUSTZONE_NON_SECURE
+        // Non-Secure state: the wait objects live in the Secure state and are not accessible, the Secure kernel
+        // releases them (through its proxy of this object) while this object is still a valid SyncObjectBase.
+        // It has to happen here: ~NsSyncObject() runs after m_wait_list is destroyed and no proxy call is possible.
+        if (!m_wait_list.IsEmpty())
+        {
+            IKernelService::GetInstance()->WakeDeleted(this);
+        }
+    #else
+        ISyncObject::DeleteAll(m_wait_list);
+    #endif
 
         ISyncObject::ListHeadType *const head = GetHead();
         if (head != nullptr)
@@ -473,11 +489,13 @@ inline TObj *SelectBestWaiter(TList &wlist)
 //!       (IKernelService::SelectWaiter) which has it compiled for its own strategy and mode only.
 inline IWaitObject *ISyncObject::FindNextWaiter(IWaitObject::ListHeadType &wlist, EWaitOrder order)
 {
+    IKernelService *const service = IKernelService::GetInstance();
+    STK_ASSERT(service != nullptr);
+
     IWaitObject *const first = detail::DListCast::ListEntryToParent<IWaitObject>(wlist.GetFirst());
 
     // nothing to choose from with 0 or 1 waiter (this also avoids a trip to the kernel for nothing)
-    return (((first == nullptr) || (first->GetNext() == nullptr)) ?
-        first : IKernelService::GetInstance()->SelectWaiter(wlist, order));
+    return (((first == nullptr) || (first->GetNext() == nullptr)) ? first : service->SelectWaiter(wlist, order));
 }
 
 //! Implementation of ISyncObject::FindNextWaiter (const), see \a ISyncObject.
@@ -591,6 +609,8 @@ static __stk_forceinline Ticks GetTicks()
 static __stk_forceinline Time GetTimeNowMs()
 {
     const IKernelService *const service = IKernelService::GetInstance();
+    STK_ASSERT(service != nullptr);
+
     const uint32_t resolution = service->GetTickResolution();
     const Ticks tick_count = service->GetTicks();
 

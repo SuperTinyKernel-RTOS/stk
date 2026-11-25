@@ -84,6 +84,15 @@ static volatile int64_t g_VictimSleepElapsed     = 0;           // ms spent in S
 // Set by main() before each RunTest() call.
 static volatile int32_t g_CancelParam            = 0;
 
+// Delete-with-waiter test state (see DeleteWithWaiterTask): a dedicated EventFlags object which is destroyed while a task
+// waits for it, g_Flags must stay untouched. The results are reported through g_VictimResult[] / g_VictimEx /
+// g_VictimActual / g_VictimElapsed[] above (index 0: wait on the destroyed object, index 1: follow-up wait on g_Flags).
+alignas(sync::EventFlags) static uint8_t g_DeleteFlagsStorage[sizeof(sync::EventFlags)];
+static sync::EventFlags *volatile        g_DeleteFlags = nullptr;
+
+// Scenario selector of DeleteWithWaiterTask, a global for the same reason as g_CancelParam
+static volatile int32_t g_DeleteParam            = 0;
+
 // Cancel the wait of g_Victim either via IKernel::CancelTaskWait() or via stk::SleepCancel()
 static void CancelVictim(bool use_sleep_cancel)
 {
@@ -1424,6 +1433,148 @@ private:
 };
 
 // ---------------------------------------------------------------------------
+// Destruction of an EventFlags object while a task waits for it (WAIT_RESULT_DELETED)
+// ---------------------------------------------------------------------------
+
+static const int32_t DW_WAIT    = 1; // victim blocks in Wait(): ERROR_DELETED
+static const int32_t DW_WAIT_EX = 2; // victim blocks in WaitEx(): WAIT_RESULT_DELETED, actual_flags == 0
+static const int32_t DW_SYNC    = 3; // victim blocks in Sync(): WAIT_RESULT_DELETED, actual_flags == 0
+
+/*! \class DeleteWithWaiterTask
+    \brief Tests destruction of an EventFlags object which a task is blocked on (WAIT_RESULT_DELETED).
+    \note  Task 0 creates a dedicated EventFlags object and destroys it while task 1 waits on it without a timeout,
+           in one of three ways selected by g_DeleteParam: 1 = Wait() (ERROR_DELETED), 2 = WaitEx()
+           (WAIT_RESULT_DELETED), 3 = Sync() (WAIT_RESULT_DELETED). Only the destruction can end that wait. The storage
+           of the object is overwritten after the destruction, so reading the flags word of the destroyed object would
+           be visible: actual_flags of WaitEx()/Sync() must be 0 (the snapshot is not available), not 0xDDDDDDDD.
+           Afterwards the kernel and g_Flags must be fully usable: the stale wait entry must not be left behind, which
+           is checked by a timed wait on g_Flags that must run to its deadline. Task 2 is added by RunTest() but stays idle.
+*/
+template <EAccessMode _AccessMode>
+class DeleteWithWaiterTask : public Task<_STK_EF_STACK_SIZE, _AccessMode>
+{
+    uint8_t m_task_id;
+    int32_t m_scenario;
+
+public:
+    DeleteWithWaiterTask(uint8_t task_id, int32_t) // scenario is taken from g_DeleteParam in Run(), see g_DeleteParam
+        : m_task_id(task_id), m_scenario(0)
+    {}
+
+private:
+    void Run()
+    {
+        m_scenario = g_DeleteParam;
+
+        if (m_task_id == 0)
+            RunDestroyer();
+        else
+        if (m_task_id == 1)
+            RunVictim();
+    }
+
+    // Task 1: block on the dedicated object, record how the wait ended
+    void RunVictim()
+    {
+        stk::Sleep(_STK_EF_TEST_SHORT_SLEEP);
+
+        g_Victim = static_cast<ITask *>(this);
+
+        sync::EventFlags *const flags = g_DeleteFlags; // created by task 0 before it went to sleep
+
+        const int64_t start = GetTimeNowMs();
+
+        // blocks until the object is destroyed; nothing but the result is read afterwards
+        if (m_scenario == DW_WAIT)
+        {
+            const uint32_t r = (flags != nullptr ?
+                flags->Wait(FLAG_A, sync::EventFlags::OPT_WAIT_ANY, WAIT_INFINITE) : sync::EventFlags::ERROR_FAIL);
+
+            g_VictimElapsed[0] = GetTimeNowMs() - start;
+            g_VictimResult[0]  = r;
+        }
+        else
+        {
+            uint32_t actual = 0xA5A5A5A5U; // sentinel: must be overwritten (with 0, the flags word is gone)
+
+            EWaitResult wr = WAIT_RESULT_FAIL;
+            if (flags != nullptr)
+            {
+                // FLAG_B is never set: the Sync() rendezvous can not complete
+                wr = (m_scenario == DW_WAIT_EX ?
+                    flags->WaitEx(FLAG_A, sync::EventFlags::OPT_WAIT_ANY, WAIT_INFINITE, actual) :
+                    flags->Sync(g_SyncCtx[0], FLAG_A, FLAG_A | FLAG_B, WAIT_INFINITE, actual));
+            }
+
+            g_VictimElapsed[0] = GetTimeNowMs() - start;
+            g_VictimActual     = actual;
+            g_VictimEx         = wr;
+        }
+
+        // the kernel is in a sane state: a wait on another object works and the task is not stuck in a wait
+        const int64_t  start2 = GetTimeNowMs();
+        const uint32_t r2     = g_Flags.Wait(FLAG_A, sync::EventFlags::OPT_WAIT_ANY, 20);
+
+        g_VictimElapsed[1] = GetTimeNowMs() - start2;
+        g_VictimResult[1]  = r2;
+    }
+
+    // Task 0: create, destroy and verify
+    void RunDestroyer()
+    {
+        sync::EventFlags *const flags = ::new (g_DeleteFlagsStorage) sync::EventFlags(0U);
+        g_DeleteFlags = flags;
+
+        stk::Sleep(60); // task 1 blocks on it (at ~10 ms) in the meantime
+
+        // destroy the object which is waited for: the waiter is released by the destructor
+        flags->~EventFlagsT();
+        memset(g_DeleteFlagsStorage, 0xDD, sizeof(g_DeleteFlagsStorage));
+        g_DeleteFlags = nullptr;
+
+        stk::Sleep(_STK_EF_TEST_SHORT_SLEEP * 4); // let task 1 resume and finish its check on g_Flags
+
+        // safety net: if the waiter was not released it would block forever and the kernel would never stop,
+        // cancel it so that the test fails instead of hanging
+        const bool released = (m_scenario == DW_WAIT ? (g_VictimResult[0] != 0U) : (g_VictimEx != 99));
+        if (!released)
+        {
+            ITask *const victim = g_Victim;
+            if (victim != nullptr)
+                g_Kernel.CancelTaskWait(victim);
+
+            stk::Sleep(_STK_EF_TEST_SHORT_SLEEP * 5);
+        }
+
+        printf("delete with waiter (scenario=%d): result=0x%X ex=%d actual=0x%X elapsed=%d ms, "
+            "g_Flags wait: result=0x%X elapsed=%d ms\n",
+            (int)m_scenario, (unsigned)g_VictimResult[0], (int)g_VictimEx, (unsigned)g_VictimActual,
+            (int)g_VictimElapsed[0], (unsigned)g_VictimResult[1], (int)g_VictimElapsed[1]);
+
+        // started waiting at ~10 ms, destroyed at ~60 ms
+        bool pass = released && (g_VictimElapsed[0] >= 35) && (g_VictimElapsed[0] <= 75);
+
+        if (m_scenario == DW_WAIT)
+        {
+            pass = pass && (g_VictimResult[0] == sync::EventFlags::ERROR_DELETED);
+        }
+        else
+        {
+            // the flags snapshot is not available after the destruction: it is reported as 0
+            pass = pass && (g_VictimEx == WAIT_RESULT_DELETED) && (g_VictimActual == 0U);
+        }
+
+        // the other object was not affected: a 20 ms wait on it still runs to its deadline (a stale wait entry
+        // would cut it short)
+        pass = pass && (g_VictimResult[1] == sync::EventFlags::ERROR_TIMEOUT) && (g_VictimElapsed[1] >= 15) &&
+               (g_Flags.Get() == 0U);
+
+        if (pass)
+            g_TestResult = 1;
+    }
+};
+
+// ---------------------------------------------------------------------------
 // Helper: reset test state and re-construct the EventFlags object in-place
 // ---------------------------------------------------------------------------
 
@@ -1476,7 +1627,8 @@ static bool NeedsExtendedTasks(const char *test_name)
            (strcmp(test_name, "PollEx")        != 0) &&
            (strcmp(test_name, "Sync")          != 0) &&
            (strcmp(test_name, "SyncTimeout")   != 0) &&
-           (strncmp(test_name, "CancelWait", 10) != 0); // cancel tests use tasks 0-2 only
+           (strncmp(test_name, "CancelWait", 10) != 0) && // cancel tests use tasks 0-2 only
+           (strncmp(test_name, "DeleteWithWaiter", 16) != 0); // delete tests use tasks 0-2 only (task 2 is idle)
 }
 
 /*! \fn    RunTest
@@ -1673,6 +1825,30 @@ int main(int argc, char **argv)
             g_CancelParam = cases[i].param;
 
             if (RunTest<CancelWaitTask<ACCESS_PRIVILEGED>>(cases[i].name, cases[i].param, cases[i].initial_flags)
+                != TestContext::SUCCESS_EXIT_CODE)
+                total_failures++;
+            else
+                total_success++;
+        }
+    }
+
+    // Tests 32-34: EventFlags destroyed while a task waits for it (WAIT_RESULT_DELETED, tasks 0-2 only, task 2 idle),
+    // for each way to wait: Wait() / WaitEx() / Sync()
+    {
+        struct DeleteCase { const char *name; int32_t param; };
+
+        static const DeleteCase cases[] =
+        {
+            { "DeleteWithWaiter",     DW_WAIT    },
+            { "DeleteWithWaiterEx",   DW_WAIT_EX },
+            { "DeleteWithWaiterSync", DW_SYNC    }
+        };
+
+        for (size_t i = 0; i < (sizeof(cases) / sizeof(cases[0])); ++i)
+        {
+            g_DeleteParam = cases[i].param;
+
+            if (RunTest<DeleteWithWaiterTask<ACCESS_PRIVILEGED>>(cases[i].name, cases[i].param)
                 != TestContext::SUCCESS_EXIT_CODE)
                 total_failures++;
             else

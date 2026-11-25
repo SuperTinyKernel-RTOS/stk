@@ -129,6 +129,7 @@ public:
     TId GetTid() const override { return m_tid; }
     IKernelTask *GetKernelTask() const override { return m_task; }
     void Wake(bool) override { ++m_wake_count; }
+    void WakeDeleted() { ++m_wake_count; }
     EState GetState() const override { return STATE_WAIT; }
     bool Tick(Timeout) override { return false; }
 

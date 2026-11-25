@@ -25,6 +25,7 @@ TEST_GROUP(Kernel)
         g_TestContext.ExpectAssert(false);
         g_TestContext.ExpectPanic(false);
         test::g_PanicValue = KERNEL_PANIC_NONE;
+        g_InsideISR = false;
     }
 };
 
@@ -3523,6 +3524,28 @@ TEST(Kernel, SyncNotEnabledFailsOnWait)
     CHECK_EQUAL(WAIT_RESULT_FAIL, wresult);
 }
 
+TEST(Kernel, SyncNotEnabledFailsOnWakeDeleted)
+{
+    Kernel<KERNEL_STATIC, 1, sched::SwitchStrategyRR, PlatformTestMock> kernel;
+    TaskMock<ACCESS_USER> task;
+
+    kernel.Initialize();
+    kernel.AddTask(&task);
+    kernel.Start();
+
+    try
+    {
+        g_TestContext.ExpectAssert(true);
+        IKernelService::GetInstance()->WakeDeleted(nullptr);
+        CHECK_TRUE(false); // kernel does not support waiting (and therefore releasing waiters) without KERNEL_SYNC
+    }
+    catch (TestAssertPassed &pass)
+    {
+        CHECK(true);
+        g_TestContext.ExpectAssert(false);
+    }
+}
+
 TEST(Kernel, SyncNotEnabledFailsOnWake)
 {
     Kernel<KERNEL_STATIC, 1, sched::SwitchStrategyRR, PlatformTestMock> kernel;
@@ -3985,6 +4008,8 @@ TEST(Kernel, SyncInheritWeight)
     // boosted weight
     CHECK_EQUAL(2, ktasks[0]->GetCurrentWeight());
     CHECK_EQUAL(2, ktasks[0]->GetWeight()); // using GetCurrentWeight
+    CHECK_EQUAL(2, GetWeight(task1_id));
+    CHECK_EQUAL(2, GetWeight()); // current task is task1_id
 
     IKernelService::GetInstance()->RestoreWeight(task1_id);
 
@@ -4096,10 +4121,12 @@ TEST(Kernel, SetWeightClearsInheritedWeightEqual)
     CHECK_EQUAL(2, ktasks[0]->GetCurrentWeight());
 
     // new base weight equals the inherited weight: the boost is dropped too (<=)
-    IKernelService::GetInstance()->SetWeight(task1_id, 2);
+    {
+        stk::SetWeight(task1_id, 2);
 
-    CHECK_EQUAL(NO_WEIGHT, ktasks[0]->GetCurrentWeight());
-    CHECK_EQUAL(2, ktasks[0]->GetWeight());
+        CHECK_EQUAL(NO_WEIGHT, ktasks[0]->GetCurrentWeight());
+        CHECK_EQUAL(2, ktasks[0]->GetWeight());
+    }
 }
 
 TEST(Kernel, SetWeightKeepsHigherInheritedWeight)
@@ -4132,6 +4159,24 @@ TEST(Kernel, SetWeightKeepsHigherInheritedWeight)
     CHECK_EQUAL(5, ktasks[0]->GetWeight());
 }
 
+TEST(Kernel, SetWeightCurrentTask)
+{
+    Kernel<KERNEL_STATIC | KERNEL_SYNC, 2, sched::SwitchStrategyFP32, PlatformTestMock> kernel;
+    TaskMockW<1, ACCESS_USER> task1;
+    TaskMockW<5, ACCESS_USER> task2;
+
+    kernel.Initialize();
+    kernel.AddTask(&task1);
+    kernel.AddTask(&task2);
+    kernel.Start();
+
+    // current task is task2 with higher priority (weight)
+    CHECK_EQUAL(task2.GetTid(), stk::GetTid());
+
+    const Weight prev_base = stk::SetWeight(3);
+    CHECK_EQUAL(5, prev_base);
+}
+
 // ---------------------------------------------------------------------------- //
 // IKernelService::SetTimeSlice() (KERNEL_TIMESLICE)                             //
 // ---------------------------------------------------------------------------- //
@@ -4145,7 +4190,7 @@ public:
 
     // priority == threshold: the task is not "held" by preemption-threshold (held tasks are never
     // time-sliced), all TaskMockTS tasks share one priority level and therefore rotate
-    Weight GetWeight() const override { return SwitchStrategyPT32_TS::MakeWeight(1, 1); }
+    Weight GetWeight() const override { return sched::SwitchStrategyPT32_TS::MakeWeight(1, 1); }
 };
 
 typedef Kernel<KERNEL_STATIC | KERNEL_TIMESLICE, 2, sched::SwitchStrategyPT32_TS, PlatformTestMock> KernelTsType;
@@ -4675,19 +4720,19 @@ TEST(Kernel, LockUnlockResultAndState)
     CHECK_EQUAL(IKernel::KSTATE_RUNNING, kernel.GetState());
 
     // unlocked -> locked
-    CHECK_EQUAL(LOCK_WAS_UNLOCKED, IKernelService::GetInstance()->LockScheduler());
+    CHECK_EQUAL(LOCK_WAS_UNLOCKED, stk::LockScheduler());
     CHECK_EQUAL(IKernel::KSTATE_LOCKED, kernel.GetState());
 
     // not nested: locking again reports the previous (locked) state and changes nothing
-    CHECK_EQUAL(LOCK_WAS_LOCKED, IKernelService::GetInstance()->LockScheduler());
+    CHECK_EQUAL(LOCK_WAS_LOCKED, stk::LockScheduler());
     CHECK_EQUAL(IKernel::KSTATE_LOCKED, kernel.GetState());
 
     // a single Unlock() releases the lock
-    CHECK_EQUAL(LOCK_WAS_LOCKED, IKernelService::GetInstance()->UnlockScheduler());
+    CHECK_EQUAL(LOCK_WAS_LOCKED, stk::UnlockScheduler());
     CHECK_EQUAL(IKernel::KSTATE_RUNNING, kernel.GetState());
 
     // unlocking an unlocked kernel is harmless and reports the previous (unlocked) state
-    CHECK_EQUAL(LOCK_WAS_UNLOCKED, IKernelService::GetInstance()->UnlockScheduler());
+    CHECK_EQUAL(LOCK_WAS_UNLOCKED, stk::UnlockScheduler());
     CHECK_EQUAL(IKernel::KSTATE_RUNNING, kernel.GetState());
 
     CHECK_EQUAL_TEXT(0, g_CriticalSectionState, "critical section must be released");
@@ -4760,9 +4805,7 @@ TEST(Kernel, LockUnlockScopedInsideManualLock)
     kernel.AddTask(&task);
     kernel.Start();
 
-    IKernelService *const svc = IKernelService::GetInstance();
-
-    const ELockResult prev = svc->LockScheduler();
+    const ELockResult prev = LockScheduler();
     CHECK_EQUAL(LOCK_WAS_UNLOCKED, prev);
 
     {
@@ -4772,7 +4815,7 @@ TEST(Kernel, LockUnlockScopedInsideManualLock)
 
     CHECK_EQUAL_TEXT(IKernel::KSTATE_LOCKED, kernel.GetState(), "scope must not release the outer manual lock");
 
-    CHECK_EQUAL(LOCK_WAS_UNLOCKED, svc->RestoreSchedulerLock(prev == LOCK_WAS_LOCKED));
+    CHECK_EQUAL(LOCK_WAS_UNLOCKED, stk::RestoreSchedulerLock(prev == LOCK_WAS_LOCKED));
     CHECK_EQUAL(IKernel::KSTATE_RUNNING, kernel.GetState());
 }
 
@@ -4808,12 +4851,10 @@ TEST(Kernel, LockFailsWhenKernelNotRunning)
     kernel.Initialize();
     kernel.AddTask(&task);
 
-    IKernelService *const svc = IKernelService::GetInstance();
-
     // KSTATE_READY (not started)
-    CHECK_EQUAL(LOCK_FAIL, svc->LockScheduler());
-    CHECK_EQUAL(LOCK_FAIL, svc->UnlockScheduler());
-    CHECK_EQUAL(LOCK_FAIL, svc->RestoreSchedulerLock(false));
+    CHECK_EQUAL(LOCK_FAIL, stk::LockScheduler());
+    CHECK_EQUAL(LOCK_FAIL, stk::UnlockScheduler());
+    CHECK_EQUAL(LOCK_FAIL, stk::RestoreSchedulerLock(false));
     CHECK_EQUAL(IKernel::KSTATE_READY, kernel.GetState());
 }
 
@@ -4826,14 +4867,12 @@ TEST(Kernel, LockFailsFromIsr)
     kernel.AddTask(&task);
     kernel.Start();
 
-    IKernelService *const svc = IKernelService::GetInstance();
-
     // g_InsideISR is reset before any check: a failing CHECK throws and must not leave the flag set
     g_InsideISR = true;
 
-    const ELockResult lock    = svc->LockScheduler();
-    const ELockResult unlock  = svc->UnlockScheduler();
-    const ELockResult restore = svc->RestoreSchedulerLock(true);
+    const ELockResult lock    = stk::LockScheduler();
+    const ELockResult unlock  = stk::UnlockScheduler();
+    const ELockResult restore = stk::RestoreSchedulerLock(true);
 
     g_InsideISR = false;
 
@@ -4843,10 +4882,10 @@ TEST(Kernel, LockFailsFromIsr)
     CHECK_EQUAL_TEXT(IKernel::KSTATE_RUNNING, kernel.GetState(), "ISR must not change the lock state");
 
     // a lock taken in task context cannot be released from an ISR
-    CHECK_EQUAL(LOCK_WAS_UNLOCKED, IKernelService::GetInstance()->LockScheduler());
+    CHECK_EQUAL(LOCK_WAS_UNLOCKED, stk::LockScheduler());
 
     g_InsideISR = true;
-    const ELockResult isr_unlock = IKernelService::GetInstance()->UnlockScheduler();
+    const ELockResult isr_unlock = stk::UnlockScheduler();
     g_InsideISR = false;
 
     CHECK_EQUAL(LOCK_FAIL_ISR, isr_unlock);
@@ -4863,12 +4902,10 @@ TEST(Kernel, LockFailsInHrtMode)
     kernel.AddTask(&task, 1, 1, 0);
     kernel.Start();
 
-    IKernelService *const svc = IKernelService::GetInstance();
-
     // holding the CPU would break periodic deadlines
-    CHECK_EQUAL(LOCK_FAIL, svc->LockScheduler());
-    CHECK_EQUAL(LOCK_FAIL, svc->UnlockScheduler());
-    CHECK_EQUAL(LOCK_FAIL, svc->RestoreSchedulerLock(true));
+    CHECK_EQUAL(LOCK_FAIL, stk::LockScheduler());
+    CHECK_EQUAL(LOCK_FAIL, stk::UnlockScheduler());
+    CHECK_EQUAL(LOCK_FAIL, stk::RestoreSchedulerLock(true));
     CHECK_EQUAL(IKernel::KSTATE_RUNNING, kernel.GetState());
 }
 
@@ -4881,19 +4918,17 @@ TEST(Kernel, RestoreLock)
     kernel.AddTask(&task);
     kernel.Start();
 
-    IKernelService *const svc = IKernelService::GetInstance();
-
     // RestoreSchedulerLock() reports the NEW state (unlike LockScheduler/UnlockScheduler which report the previous one)
-    CHECK_EQUAL(LOCK_WAS_LOCKED, svc->RestoreSchedulerLock(true));
+    CHECK_EQUAL(LOCK_WAS_LOCKED, stk::RestoreSchedulerLock(true));
     CHECK_EQUAL(IKernel::KSTATE_LOCKED, kernel.GetState());
 
-    CHECK_EQUAL(LOCK_WAS_LOCKED, svc->RestoreSchedulerLock(true)); // idempotent
+    CHECK_EQUAL(LOCK_WAS_LOCKED, stk::RestoreSchedulerLock(true)); // idempotent
     CHECK_EQUAL(IKernel::KSTATE_LOCKED, kernel.GetState());
 
-    CHECK_EQUAL(LOCK_WAS_UNLOCKED, svc->RestoreSchedulerLock(false));
+    CHECK_EQUAL(LOCK_WAS_UNLOCKED, stk::RestoreSchedulerLock(false));
     CHECK_EQUAL(IKernel::KSTATE_RUNNING, kernel.GetState());
 
-    CHECK_EQUAL(LOCK_WAS_UNLOCKED, svc->RestoreSchedulerLock(false)); // idempotent
+    CHECK_EQUAL(LOCK_WAS_UNLOCKED, stk::RestoreSchedulerLock(false)); // idempotent
     CHECK_EQUAL(IKernel::KSTATE_RUNNING, kernel.GetState());
 }
 
@@ -4907,22 +4942,20 @@ TEST(Kernel, RestoreLockNesting)
     kernel.AddTask(&task);
     kernel.Start();
 
-    IKernelService *const svc = IKernelService::GetInstance();
-
     // outer section: kernel was unlocked
-    const ELockResult outer = svc->LockScheduler();
+    const ELockResult outer = stk::LockScheduler();
     CHECK_EQUAL(LOCK_WAS_UNLOCKED, outer);
 
     // inner section (e.g. a callee): kernel was already locked
-    const ELockResult inner = svc->LockScheduler();
+    const ELockResult inner = stk::LockScheduler();
     CHECK_EQUAL(LOCK_WAS_LOCKED, inner);
 
     // leaving the inner section restores "locked": the outer section stays protected
-    CHECK_EQUAL(LOCK_WAS_LOCKED, svc->RestoreSchedulerLock(inner == LOCK_WAS_LOCKED));
+    CHECK_EQUAL(LOCK_WAS_LOCKED, stk::RestoreSchedulerLock(inner == LOCK_WAS_LOCKED));
     CHECK_EQUAL(IKernel::KSTATE_LOCKED, kernel.GetState());
 
     // leaving the outer section restores "unlocked"
-    CHECK_EQUAL(LOCK_WAS_UNLOCKED, svc->RestoreSchedulerLock(outer == LOCK_WAS_LOCKED));
+    CHECK_EQUAL(LOCK_WAS_UNLOCKED, stk::RestoreSchedulerLock(outer == LOCK_WAS_LOCKED));
     CHECK_EQUAL(IKernel::KSTATE_RUNNING, kernel.GetState());
 }
 
@@ -4943,7 +4976,7 @@ TEST(Kernel, LockedTickDoesNotSwitchContext)
     const Ticks ticks_before = IKernelService::GetInstance()->GetTicks();
     const uint32_t switches_before = platform->m_context_switch_nr;
 
-    CHECK_EQUAL(LOCK_WAS_UNLOCKED, IKernelService::GetInstance()->LockScheduler());
+    CHECK_EQUAL(LOCK_WAS_UNLOCKED, stk::LockScheduler());
 
     // RR would rotate on every tick: while locked task1 keeps the CPU
     platform->ProcessTick();
@@ -4957,7 +4990,7 @@ TEST(Kernel, LockedTickDoesNotSwitchContext)
     CHECK_TRUE(IKernelService::GetInstance()->GetTicks() >= (ticks_before + 3));
 
     // released: the very next tick switches to the peer
-    CHECK_EQUAL(LOCK_WAS_LOCKED, IKernelService::GetInstance()->UnlockScheduler());
+    CHECK_EQUAL(LOCK_WAS_LOCKED, stk::UnlockScheduler());
 
     platform->ProcessTick();
 
@@ -4984,7 +5017,7 @@ TEST(Kernel, LockedDelayAllowed)
     kernel.AddTask(&task2);
     kernel.Start();
 
-    CHECK_EQUAL(LOCK_WAS_UNLOCKED, IKernelService::GetInstance()->LockScheduler());
+    CHECK_EQUAL(LOCK_WAS_UNLOCKED, stk::LockScheduler());
 
     g_LockDelayPlatform = platform;
     g_RelaxCpuHandler   = LockDelayRelaxCpu;
@@ -5017,7 +5050,7 @@ TEST(Kernel, LockedSleepIsNoop)
     CHECK_TRUE(ktask1 != NULL);
     CHECK_EQUAL(&task1, ktask1->GetUserTask());
 
-    CHECK_EQUAL(LOCK_WAS_UNLOCKED, IKernelService::GetInstance()->LockScheduler());
+    CHECK_EQUAL(LOCK_WAS_UNLOCKED, stk::LockScheduler());
 
     // debug build: contract violation asserts
     CHECK_TRUE(LockCallAsserts([]() { stk::Sleep(5); }));
@@ -5046,7 +5079,7 @@ TEST(Kernel, HolderShallNotSelfSuspendWhenKernelLocked)
     kernel.Start();
 
     CHECK_EQUAL((Word)task1.GetStack(), platform->m_stack_active->SP);
-    CHECK_EQUAL(LOCK_WAS_UNLOCKED, IKernelService::GetInstance()->LockScheduler());
+    CHECK_EQUAL(LOCK_WAS_UNLOCKED, stk::LockScheduler());
     CHECK_EQUAL(IKernel::KSTATE_LOCKED, kernel.GetState());
 
     // task1 (lock holder) is going away: pending sleep, busy-waiting for the ISR to de-schedule it
@@ -5069,7 +5102,7 @@ TEST(Kernel, HolderShallNotSelfSuspendWhenKernelLocked)
     CHECK_TRUE(idle == NULL);
     CHECK_TRUE(active == NULL);
 
-    CHECK_EQUAL(LOCK_WAS_LOCKED, IKernelService::GetInstance()->UnlockScheduler());
+    CHECK_EQUAL(LOCK_WAS_LOCKED, stk::UnlockScheduler());
 
     platform->ProcessTick();
     CHECK_EQUAL((Word)task2.GetStack(), platform->m_stack_active->SP);
@@ -5089,7 +5122,7 @@ TEST(Kernel, LockedSleepUntilIsNoop)
     ktask1 = kernel.GetSwitchStrategy()->GetFirst();
     CHECK_TRUE(ktask1 != NULL);
 
-    CHECK_EQUAL(LOCK_WAS_UNLOCKED, IKernelService::GetInstance()->LockScheduler());
+    CHECK_EQUAL(LOCK_WAS_UNLOCKED, stk::LockScheduler());
 
     CHECK_TRUE(LockCallAsserts([]() { stk::SleepUntil(stk::GetTicks() + 5); }));
 
@@ -5116,7 +5149,7 @@ TEST(Kernel, LockedYieldIsNoop)
     ktask1 = kernel.GetSwitchStrategy()->GetFirst();
     CHECK_TRUE(ktask1 != NULL);
 
-    CHECK_EQUAL(LOCK_WAS_UNLOCKED, IKernelService::GetInstance()->LockScheduler());
+    CHECK_EQUAL(LOCK_WAS_UNLOCKED, stk::LockScheduler());
 
     CHECK_TRUE(LockCallAsserts([]() { stk::Yield(); }));
 
@@ -5143,7 +5176,7 @@ TEST(Kernel, LockedWaitFails)
     ktask = kernel.GetSwitchStrategy()->GetFirst();
     CHECK_TRUE(ktask != NULL);
 
-    CHECK_EQUAL(LOCK_WAS_UNLOCKED, IKernelService::GetInstance()->LockScheduler());
+    CHECK_EQUAL(LOCK_WAS_UNLOCKED, stk::LockScheduler());
 
     CHECK_TRUE(LockCallAsserts([&]() { IKernelService::GetInstance()->Wait(&sobj, &mutex, 5); }));
 
@@ -5174,8 +5207,8 @@ TEST(Kernel, LockedWaitAllowedAfterUnlock)
     kernel.Start();
 
     // lock/unlock pair leaves no trace: blocking works again
-    CHECK_EQUAL(LOCK_WAS_UNLOCKED, IKernelService::GetInstance()->LockScheduler());
-    CHECK_EQUAL(LOCK_WAS_LOCKED, IKernelService::GetInstance()->UnlockScheduler());
+    CHECK_EQUAL(LOCK_WAS_UNLOCKED, stk::LockScheduler());
+    CHECK_EQUAL(LOCK_WAS_LOCKED, stk::UnlockScheduler());
 
     MutexMock::ScopedLock guard(mutex);
 
@@ -5201,7 +5234,7 @@ TEST(Kernel, LockReleasedWhenHolderExits)
     kernel.AddTask(&task2);
     kernel.Start();
 
-    CHECK_EQUAL(LOCK_WAS_UNLOCKED, IKernelService::GetInstance()->LockScheduler());
+    CHECK_EQUAL(LOCK_WAS_UNLOCKED, stk::LockScheduler());
     CHECK_EQUAL(IKernel::KSTATE_LOCKED, kernel.GetState());
 
     // task1 (lock holder) exits: it is marked sleeping + pending for removal and then busy-waits for the ISR
@@ -5233,7 +5266,7 @@ TEST(Kernel, LockReleasedWhenHolderExits)
     CHECK_EQUAL(&task2, kernel.GetSwitchStrategy()->GetFirst()->GetUserTask());
 
     // the leaked state is gone, the lock can be taken again by the new running task
-    CHECK_EQUAL(LOCK_WAS_UNLOCKED, IKernelService::GetInstance()->LockScheduler());
+    CHECK_EQUAL(LOCK_WAS_UNLOCKED, stk::LockScheduler());
 }
 
 // a forced switch request of the lock holder which is NOT leaving the CPU keeps the lock
@@ -5248,7 +5281,7 @@ TEST(Kernel, ForceContextSwitchNotSleepingKeepsLock)
     kernel.AddTask(&task2);
     kernel.Start();
 
-    CHECK_EQUAL(LOCK_WAS_UNLOCKED, IKernelService::GetInstance()->LockScheduler());
+    CHECK_EQUAL(LOCK_WAS_UNLOCKED, stk::LockScheduler());
 
     CHECK_FALSE(kernel.CallForceContextSwitch(task1.GetTid(), idle, active));
     CHECK_EQUAL(IKernel::KSTATE_LOCKED, kernel.GetState());
@@ -5271,7 +5304,7 @@ TEST(Kernel, LockedSuspendSelfIsNoop)
     CHECK_TRUE(ktask1 != NULL);
     CHECK_EQUAL(&task1, ktask1->GetUserTask());
 
-    CHECK_EQUAL(LOCK_WAS_UNLOCKED, IKernelService::GetInstance()->LockScheduler());
+    CHECK_EQUAL(LOCK_WAS_UNLOCKED, stk::LockScheduler());
 
     // task1 is the running task and the lock holder
     CHECK_TRUE(LockCallAsserts([&]() { kernel.SuspendTask(&task1); }));
@@ -5287,7 +5320,7 @@ TEST(Kernel, LockedSuspendSelfIsNoop)
     CHECK_EQUAL_TEXT(0, g_CriticalSectionState, "critical section must be released");
 
     // the task was not left half-suspended: after Unlock() it is an ordinary runnable task
-    CHECK_EQUAL(LOCK_WAS_LOCKED, IKernelService::GetInstance()->UnlockScheduler());
+    CHECK_EQUAL(LOCK_WAS_LOCKED, stk::UnlockScheduler());
     CHECK_EQUAL(SUSPEND_DONE, kernel.SuspendTask(&task2)); // task2 can still be suspended, i.e. the kernel state is sane
 }
 
@@ -5304,13 +5337,13 @@ TEST(Kernel, LockedSuspendOtherTaskAllowed)
     kernel.AddTask(&task2);
     kernel.Start();
 
-    CHECK_EQUAL(LOCK_WAS_UNLOCKED, IKernelService::GetInstance()->LockScheduler());
+    CHECK_EQUAL(LOCK_WAS_UNLOCKED, stk::LockScheduler());
 
     CHECK_EQUAL(SUSPEND_DONE, kernel.SuspendTask(&task2));
     CHECK_EQUAL_TEXT(IKernel::KSTATE_LOCKED, kernel.GetState(), "suspending another task must not drop the lock");
     CHECK_EQUAL((Word)task1.GetStack(), active->SP);
 
-    CHECK_EQUAL(LOCK_WAS_LOCKED, IKernelService::GetInstance()->UnlockScheduler());
+    CHECK_EQUAL(LOCK_WAS_LOCKED, stk::UnlockScheduler());
 
     // task2 is suspended: task1 stays the only runnable task
     platform->ProcessTick();
@@ -5332,7 +5365,7 @@ TEST(Kernel, LockSuspendedKernel)
     kernel.AddTask(&task1);
     kernel.Start();
 
-    CHECK_EQUAL(LOCK_WAS_UNLOCKED, IKernelService::GetInstance()->LockScheduler());
+    CHECK_EQUAL(LOCK_WAS_UNLOCKED, stk::LockScheduler());
 
     platform->m_sleep_ticks = 9;
 
@@ -5341,8 +5374,8 @@ TEST(Kernel, LockSuspendedKernel)
     CHECK_EQUAL(IKernel::KSTATE_SUSPENDED, kernel.GetState());
 
     // KSTATE_SUSPENDED: Lock/Unlock are not available
-    CHECK_EQUAL(LOCK_FAIL, IKernelService::GetInstance()->LockScheduler());
-    CHECK_EQUAL(LOCK_FAIL, IKernelService::GetInstance()->UnlockScheduler());
+    CHECK_EQUAL(LOCK_FAIL, stk::LockScheduler());
+    CHECK_EQUAL(LOCK_FAIL, stk::UnlockScheduler());
 
     stk::IKernelService::GetInstance()->Resume(ticks);
 }
@@ -5363,7 +5396,7 @@ TEST(Kernel, LockedTimeSliceIsChargedButNotRotated)
 
     CHECK_EQUAL((Word)task1.GetStack(), active->SP);
 
-    CHECK_EQUAL(LOCK_WAS_UNLOCKED, IKernelService::GetInstance()->LockScheduler());
+    CHECK_EQUAL(LOCK_WAS_UNLOCKED, stk::LockScheduler());
 
     // 3 ticks > 2 tick quantum: the slice is expired but rotation is deferred while locked
     platform->ProcessTick();
@@ -5373,7 +5406,7 @@ TEST(Kernel, LockedTimeSliceIsChargedButNotRotated)
     CHECK_EQUAL((Word)task1.GetStack(), active->SP);
 
     // elapsed ticks were not lost: on the first tick after Unlock() the expired slice rotates the task
-    CHECK_EQUAL(LOCK_WAS_LOCKED, IKernelService::GetInstance()->UnlockScheduler());
+    CHECK_EQUAL(LOCK_WAS_LOCKED, stk::UnlockScheduler());
 
     platform->ProcessTick();
 
@@ -5393,12 +5426,12 @@ TEST(Kernel, LockedTimeSliceNotExpiredKeepsRunningAfterUnlock)
     kernel.AddTask(&task2);
     kernel.Start();
 
-    CHECK_EQUAL(LOCK_WAS_UNLOCKED, IKernelService::GetInstance()->LockScheduler());
+    CHECK_EQUAL(LOCK_WAS_UNLOCKED, stk::LockScheduler());
 
     platform->ProcessTick();
     platform->ProcessTick();
 
-    CHECK_EQUAL(LOCK_WAS_LOCKED, IKernelService::GetInstance()->UnlockScheduler());
+    CHECK_EQUAL(LOCK_WAS_LOCKED, stk::UnlockScheduler());
 
     // 2 of 4 ticks were consumed under the lock: 1 tick left after the next one, no rotation yet
     platform->ProcessTick();

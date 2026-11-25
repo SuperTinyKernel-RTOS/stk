@@ -193,6 +193,8 @@ bool PrepareTimeout(cy_time_t timeout_ms, stk::Timeout &out, cy_rslt_t &error)
 }
 
 // Maps the outcome of a wait. \a timeout_status is reported for NO_WAIT and for an expired timeout.
+// A wait released because the object was deinitialized meanwhile (WAIT_RESULT_DELETED) is reported as a
+// general error, like TX_DELETED in the ThreadX port; the object must not be touched afterwards.
 cy_rslt_t WaitResultToCy(stk::EWaitResult wr, cy_rslt_t timeout_status)
 {
     cy_rslt_t result;
@@ -211,6 +213,7 @@ cy_rslt_t WaitResultToCy(stk::EWaitResult wr, cy_rslt_t timeout_status)
         result = Fail(CY_RTOS_STK_ERR_WAIT_CANCELED);
         break;
 
+    case stk::WAIT_RESULT_DELETED: // object deinitialized while waiting
     case stk::WAIT_RESULT_FAIL:
     default:
         result = Fail(CY_RTOS_STK_ERR_WAIT_FAILED);
@@ -612,7 +615,11 @@ cy_rslt_t cy_rtos_thread_join(cy_thread_t *thread)
         }
 
         // a cancelled wait is harmless (the predicate is re-checked), a rejected one is an error
-        if (th->m_join.WaitEx(stk::WAIT_INFINITE) == stk::WAIT_RESULT_FAIL)
+        const stk::EWaitResult wr = th->m_join.WaitEx(stk::WAIT_INFINITE);
+
+        // WAIT_RESULT_DELETED: another joiner completed first and released the control block, which
+        // must not be read any more (double join is a usage error, but must not touch freed memory)
+        if ((wr == stk::WAIT_RESULT_FAIL) || (wr == stk::WAIT_RESULT_DELETED))
         {
             return Fail(CY_RTOS_STK_ERR_WAIT_FAILED);
         }
@@ -936,7 +943,7 @@ cy_rslt_t cy_rtos_mutex_deinit(cy_mutex_t *mutex)
     }
 
     mutex->id = 0U;
-    MutexOf(mutex)->~Mutex(); // STK contract: no thread may be waiting on it
+    MutexOf(mutex)->~Mutex(); // threads still waiting are released with an error
 
     return CY_RSLT_SUCCESS;
 }
@@ -1034,7 +1041,7 @@ cy_rslt_t cy_rtos_semaphore_deinit(cy_semaphore_t *semaphore)
     }
 
     semaphore->id = 0U;
-    SemOf(semaphore)->~Semaphore(); // STK contract: no thread may be waiting on it
+    SemOf(semaphore)->~Semaphore(); // threads still waiting are released with an error
 
     return CY_RSLT_SUCCESS;
 }
@@ -1172,7 +1179,7 @@ cy_rslt_t cy_rtos_event_deinit(cy_event_t *event)
     }
 
     event->id = 0U;
-    EventOf(event)->~EventFlags(); // STK contract: no thread may be waiting on it
+    EventOf(event)->~EventFlags(); // threads still waiting are released with an error
 
     return CY_RSLT_SUCCESS;
 }
@@ -1311,7 +1318,7 @@ cy_rslt_t cy_rtos_queue_deinit(cy_queue_t *queue)
     }
 
     queue->id = 0U;
-    QueueOf(queue)->~MessageQueue(); // STK contract: no thread may be waiting on it
+    QueueOf(queue)->~MessageQueue(); // threads still waiting are released with an error
     CY_RTOS_STK_FREE(queue->buffer);
     queue->buffer = nullptr;
 

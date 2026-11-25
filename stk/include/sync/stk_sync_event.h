@@ -78,14 +78,11 @@ public:
     {}
 
     /*! \brief     Destructor.
-        \note      If tasks are still waiting at destruction time it is considered a logical error
-                   (dangling waiters). An assertion is triggered in debug builds.
+        \note      Tasks still waiting at destruction time are woken with \c WAIT_RESULT_DELETED and must not
+                   access the object afterwards (see \c WaitEx()).
         \note      MISRA deviation: [STK-DEV-005] Rule 10-3-2.
     */
-    STK_VIRT_DTOR ~Event()
-    {
-        STK_ASSERT(m_wait_list.IsEmpty()); // API contract: must not be destroyed with waiting tasks
-    }
+    STK_VIRT_DTOR ~Event() = default;
 
     /*! \brief     Set event to signaled state.
         \return    \c true if state was changed from non-signaled to signaled,
@@ -117,6 +114,7 @@ public:
                    was not signaled and the timeout expired (or \a NO_WAIT was passed),
                    \c WAIT_RESULT_CANCELED if the wait was cancelled via IKernel::CancelTaskWait()
                    (the event state is not consumed), \c WAIT_RESULT_FAIL if the kernel rejected the wait.
+        \note      \c WAIT_RESULT_DELETED: the object was destroyed while waiting; it must not be accessed afterwards.
     */
     EWaitResult WaitEx(Timeout timeout_ticks = WAIT_INFINITE);
 

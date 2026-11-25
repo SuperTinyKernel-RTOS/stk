@@ -20,10 +20,10 @@ jobs:
       uses: actions/checkout@v6
 
     - name: Setup Docker Buildx
-      uses: docker/setup-buildx-action@v3
+      uses: docker/setup-buildx-action@v4
 
     - name: Docker build
-      uses: docker/build-push-action@v5
+      uses: docker/build-push-action@v7
       with:
         context: .
         file: build/test/qemu/Dockerfile.riscv32
@@ -34,7 +34,7 @@ jobs:
         outputs: type=docker,dest=/tmp/stk-qemu-riscv.tar
 
     - name: Upload Docker image artifact
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: stk-qemu-riscv-image
         path: /tmp/stk-qemu-riscv.tar
@@ -95,13 +95,13 @@ jobs:
 
     steps:
     - name: Checkout
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
       with:
         fetch-depth: 0
       
     - name: Cache xPacks
       id: cache-xpack
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: ~/.local/xPacks
         key: ${{ runner.os }}-xpack-riscv-${{ env.GCC_VERSION }}
@@ -134,7 +134,7 @@ jobs:
       run: cmake --build ${{github.workspace}}/build --config ${{env.BUILD_TYPE}} --parallel 4
 
     - name: Download Docker image artifact
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@v8
       with:
         name: stk-qemu-riscv-image
         path: /tmp

@@ -69,14 +69,16 @@ public:
     {}
 
     /*! \brief     Destructor.
-        \note      If tasks are still waiting at destruction time it is considered a logical error (dangling waiters).
-                   An assertion is triggered in debug builds.
+        \note      Tasks still waiting at destruction time are woken with \c WAIT_RESULT_DELETED (see
+                   \c TimedLockEx()) and must not access the object afterwards. A task blocked in the \c void
+                   \c Lock() cannot observe it and panics (KERNEL_PANIC_ASSERT), so use \c TimedLockEx() where
+                   the object may be destroyed while waited on.
+        \note      Destroying a mutex that is still owned is a logical error: the owner keeps any priority
+                   inherited through this mutex (the waiters cannot restore it once the object is gone),
+                   until it is restored by other means (e.g. a RestoreWeight() / the owner's next weight change).
         \note      MISRA deviation: [STK-DEV-005] Rule 10-3-2.
     */
-    STK_VIRT_DTOR ~Mutex()
-    {
-        STK_ASSERT(m_wait_list.IsEmpty()); // API contract: must not be destroyed with waiting tasks
-    }
+    STK_VIRT_DTOR ~Mutex() = default;
 
     /*! \brief     Acquire lock, preserving the full wait outcome.
         \param[in] timeout_ticks: Maximum time to wait (ticks).
@@ -88,6 +90,7 @@ public:
                    timeout expired (or \a NO_WAIT was passed), \c WAIT_RESULT_CANCELED if the wait
                    was cancelled via IKernel::CancelTaskWait(), \c WAIT_RESULT_FAIL if the kernel
                    rejected the wait.
+        \note      \c WAIT_RESULT_DELETED: the object was destroyed while waiting; it must not be accessed afterwards.
     */
     EWaitResult TimedLockEx(Timeout timeout_ticks);
 
@@ -207,7 +210,12 @@ inline EWaitResult Mutex::TimedLockEx(Timeout timeout_ticks)
         // mutex owned by another thread (slow path/blocking)
         result = svc->Wait(this, &cs_, timeout_ticks);
 
-        if (result != WAIT_RESULT_SIGNAL)
+        if (result == WAIT_RESULT_DELETED)
+        {
+            // the mutex was destroyed while waiting: 'this' is gone, no member may be read or written
+            // (the owner's inherited weight can not be restored through the object any more)
+        }
+        else if (result != WAIT_RESULT_SIGNAL)
         {
             // kernel invariant: a wait that did not end in a signal must not leave this thread as the
             // owner (Unlock() hands over ownership only together with a signal), otherwise the caller

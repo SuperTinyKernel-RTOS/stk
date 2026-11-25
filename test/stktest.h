@@ -57,6 +57,10 @@ extern int32_t g_CriticalSectionState;
 //! ISR state.
 extern bool g_InsideISR;
 
+//! One-shot hook run at the next hw::CriticalSection::Enter() (cleared before it runs), NULL if none. Lets a test
+//! change the state of an object between its unlocked check and the locked section which follows.
+extern void (*g_CriticalSectionEnterHook)();
+
 //! Panic value.
 extern EKernelPanicId g_PanicValue;
 
@@ -66,6 +70,15 @@ extern EKernelPanicId g_PanicValue;
 struct TestAssertPassed : public std::exception
 {
     const char *what() const noexcept { return "STK test suite exception (TestAssertPassed) thrown!"; }
+};
+
+/*! \class ScopedInsideISR
+    \brief Simulates "inside ISR" for hw::IsInsideISR(), restored on scope exit even if a check throws.
+*/
+struct ScopedInsideISR
+{
+    ScopedInsideISR()  { g_InsideISR = true; }
+    ~ScopedInsideISR() { g_InsideISR = false; }
 };
 
 /*! \class PlatformTestMock
@@ -271,6 +284,8 @@ public:
         m_tid            = 0;
         m_systimer_count = 0;
         m_systimer_freq  = 0;
+        m_wake_deleted_nr   = 0;
+        m_wake_deleted_sobj = nullptr;
     }
     virtual ~KernelServiceMock()
     {}
@@ -351,6 +366,12 @@ public:
         return TID_NONE;
     }
 
+    void WakeDeleted(ISyncObject *sobj) override
+    {
+        ++m_wake_deleted_nr;
+        m_wake_deleted_sobj = sobj;
+    }
+
     Timeout Suspend() override
     {
         return 1;
@@ -428,6 +449,8 @@ public:
     size_t   m_tid;
     uint64_t m_systimer_count;
     uint32_t m_systimer_freq;
+    uint32_t     m_wake_deleted_nr;   //!< number of WakeDeleted() calls
+    ISyncObject *m_wake_deleted_sobj; //!< object passed to the last WakeDeleted() call
 };
 
 /*! \class TaskMock

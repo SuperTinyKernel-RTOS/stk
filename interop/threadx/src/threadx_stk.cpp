@@ -134,6 +134,8 @@ __stk_forceinline stk::Weight ToStkWeight(UINT priority, UINT threshold)
 
 // Map the outcome of an STK wait to a ThreadX status; \a timeout_status is object-specific
 // (TX_NOT_AVAILABLE, TX_NO_INSTANCE, TX_QUEUE_EMPTY, ...), it is returned for both NO_WAIT and an expired timeout.
+// WAIT_RESULT_DELETED (the object was deleted while the thread was waiting on it) is reported as TX_DELETED, like
+// ThreadX does for the threads suspended on a deleted object; the object must not be accessed after it.
 __stk_forceinline UINT WaitResultToTx(stk::EWaitResult wr, UINT timeout_status)
 {
     UINT result;
@@ -150,6 +152,10 @@ __stk_forceinline UINT WaitResultToTx(stk::EWaitResult wr, UINT timeout_status)
 
     case stk::WAIT_RESULT_CANCELED:
         result = TX_WAIT_ABORTED;
+        break;
+
+    case stk::WAIT_RESULT_DELETED:
+        result = TX_DELETED;
         break;
 
     case stk::WAIT_RESULT_FAIL:
@@ -1185,7 +1191,7 @@ UINT tx_mutex_delete(TX_MUTEX *mutex_ptr)
     }
     else
     {
-        // API contract of STK: no thread may be waiting on the mutex (waiters are not resumed with TX_DELETED)
+        // threads still waiting on the mutex are woken by the destructor and get TX_DELETED from their blocking call
         mutex_ptr->tx_mutex_id = TX_CLEAR_ID;
         MutexOf(mutex_ptr)->~Mutex();
         result = TX_SUCCESS;
@@ -1361,7 +1367,7 @@ UINT tx_semaphore_delete(TX_SEMAPHORE *semaphore_ptr)
     }
     else
     {
-        // API contract of STK: no thread may be waiting on the semaphore (waiters are not resumed with TX_DELETED)
+        // threads still waiting on the semaphore are woken by the destructor and get TX_DELETED from their blocking call
         semaphore_ptr->tx_semaphore_id = TX_CLEAR_ID;
         SemOf(semaphore_ptr)->~StkSemaphore();
         result = TX_SUCCESS;
@@ -1575,7 +1581,7 @@ UINT tx_event_flags_delete(TX_EVENT_FLAGS_GROUP *group_ptr)
     }
     else
     {
-        // API contract of STK: no thread may be waiting on the group (waiters are not resumed with TX_DELETED)
+        // threads still waiting on the group are woken by the destructor and get TX_DELETED from their blocking call
         group_ptr->tx_event_flags_group_id = TX_CLEAR_ID;
         EfOf(group_ptr)->~EventFlagsT();
         result = TX_SUCCESS;
@@ -1809,7 +1815,7 @@ UINT tx_queue_delete(TX_QUEUE *queue_ptr)
     }
     else
     {
-        // API contract of STK: no thread may be waiting on the queue (waiters are not resumed with TX_DELETED)
+        // threads still waiting on the queue are woken by the destructor and get TX_DELETED from their blocking call
         queue_ptr->tx_queue_id = TX_CLEAR_ID;
         QueueOf(queue_ptr)->~MessageQueue();
         result = TX_SUCCESS;
@@ -2070,7 +2076,7 @@ UINT tx_block_pool_delete(TX_BLOCK_POOL *pool_ptr)
     }
     else
     {
-        // API contract of STK: no thread may be waiting on the pool (waiters are not resumed with TX_DELETED)
+        // threads still waiting on the pool are woken by the destructor and get TX_DELETED from their blocking call
         pool_ptr->tx_block_pool_id = TX_CLEAR_ID;
         BlockPoolOf(pool_ptr)->~BlockMemoryPool();
         result = TX_SUCCESS;
@@ -2367,7 +2373,7 @@ UINT tx_byte_pool_delete(TX_BYTE_POOL *pool_ptr)
     {
         StkBytePool *const p = BytePoolOf(pool_ptr);
 
-        // API contract of STK: no thread may be waiting on the pool (waiters are not resumed with TX_DELETED)
+        // threads still waiting on the pool are woken by the destructor and get TX_DELETED from their blocking call
         pool_ptr->tx_byte_pool_id = TX_CLEAR_ID;
 
         {

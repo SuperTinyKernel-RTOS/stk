@@ -34,6 +34,11 @@ STK_TEST_DECL_ASSERT;
 #define STK_TASK                 static
 #endif
 
+#ifndef _NEW
+inline void *operator new(std::size_t, void *ptr) noexcept { return ptr; }
+inline void operator delete(void *, void *) noexcept { /* nothing for placement delete */ }
+#endif
+
 namespace stk {
 namespace test {
 
@@ -1394,6 +1399,24 @@ static volatile int64_t g_VictimSleepElapsed = 0;            // ms spent in Slee
 // case. Set by main() before each RunTest() call.
 static volatile int32_t g_CancelParam        = 0;
 
+// Delete-with-waiter test state (see DeleteWithWaiterTask): a dedicated queue (with internal storage) which is destroyed
+// while tasks wait on it, g_Queue must stay untouched. The queue lives in raw storage which is overwritten after the
+// destruction: a waiter which wrote to the destroyed queue (a message stored by a putter, a changed index or count) would
+// leave a trace in it. The outcome of the waits on the destroyed queue is reported through g_VictimResult[] /
+// g_VictimElapsed[] / g_VictimValue[] / g_VictimRxIntact below (index 0: task 1, index 1: task 2).
+typedef stk::sync::MessageQueueT<_STK_MQ_CAPACITY, _STK_MQ_MSG_SIZE> DeleteQueueT;
+
+alignas(DeleteQueueT) static uint8_t        g_DeleteQueueObj[sizeof(DeleteQueueT)];
+static stk::sync::MessageQueue * volatile   g_DeleteQueue         = nullptr;
+static const uint8_t                        DELETED_FILL          = 0xDD;
+static ITask * volatile                     g_DeleteVictim2       = nullptr;      // second waiter (task 2), published right before it blocks
+static volatile int32_t                     g_DeleteCheckResult   = -100;         // EWaitResult of the follow-up wait of task 1 on g_Queue (-100 = not set)
+static volatile int64_t                     g_DeleteCheckElapsed  = 0;            // ms spent in that follow-up wait
+static volatile bool                        g_DeleteCheckIntact   = false;        // receive buffer of the follow-up wait left untouched
+
+// Scenario selector of DeleteWithWaiterTask, a global for the same reason as g_CancelParam
+static volatile int32_t                     g_DeleteParam         = 0;
+
 static const int32_t CW_GET_INFINITE        = 1;
 static const int32_t CW_GET_NOT_TIMEOUT     = 2;
 static const int32_t CW_PUT_FULL            = 3;
@@ -1714,6 +1737,290 @@ private:
 };
 
 // ---------------------------------------------------------------------------
+// Tests 29-35 – Destruction of a queue which tasks are blocked on (WAIT_RESULT_DELETED)
+// ---------------------------------------------------------------------------
+
+static const int32_t DW_GET         = 1; // a getter waits on an empty queue: GetEx()
+static const int32_t DW_PUT         = 2; // a putter waits on a full queue: PutEx()
+static const int32_t DW_PUT_FRONT   = 3; // a putter waits on a full queue: PutFrontEx()
+static const int32_t DW_PEEK        = 4; // a peeker waits on an empty queue: PeekEx()
+static const int32_t DW_PEEK_FRONT  = 5; // a peeker waits on an empty queue: PeekFrontEx()
+static const int32_t DW_GET_BOOL    = 6; // a getter in the boolean Get(): the destruction is reported as false
+static const int32_t DW_TWO_GETTERS = 7; // two getters wait on an empty queue, both must be released
+
+/*! \class DeleteWithWaiterTask
+    \brief Tests destruction of a MessageQueue which tasks are blocked on (WAIT_RESULT_DELETED).
+    \note  Task 0 creates a dedicated queue and destroys it while task 1 (and task 2 in the two-getters scenario) wait on it
+           with an infinite timeout: a getter or peeker on an empty queue, or a putter on a full one (task 0 fills it
+           first). Nobody puts or gets, so only the destruction can end the wait: the waiter must get WAIT_RESULT_DELETED
+           (neither SIGNAL, a timeout nor a cancellation) without touching the destroyed queue: no message is copied
+           into the receive buffer of a getter or peeker (the buffer is pre-filled and must stay intact), and a putter must
+           not store its message or touch an index or the count, which is checked on the storage of the queue (internal to
+           the object), overwritten after the destruction, so it must still hold that pattern when the waiters are back.
+           The internal condition variables are separate for consumers (queue empty) and producers (queue full); only one
+           kind of waiter can exist at a time. Afterwards the kernel and g_Queue must be fully usable: the victim repeats the
+           same call with a 20 tick timeout on g_Queue, which must run to its deadline and return WAIT_RESULT_TIMEOUT
+           (a stale wait entry would end it early), without copying anything; g_Queue itself must be unchanged (empty for the
+           reading scenarios, still holding 0..7 in order for the putting ones). The scenario is selected by g_DeleteParam
+           (DW_*). In DW_GET_BOOL the victim uses the boolean Get(), which reports the destruction as false: an infinite wait
+           can not time out, so false after ~50 ms identifies it. Task 2 is added by RunTest() but stays idle unless the
+           scenario is DW_TWO_GETTERS.
+*/
+template <EAccessMode _AccessMode>
+class DeleteWithWaiterTask : public Task<_STK_MQ_STACK_SIZE, _AccessMode>
+{
+    uint8_t m_task_id;
+    int32_t m_scenario;
+
+public:
+    DeleteWithWaiterTask(uint8_t task_id, int32_t) // scenario is taken from g_DeleteParam in Run(), see g_DeleteParam
+        : m_task_id(task_id), m_scenario(0)
+    {}
+
+private:
+    void Run() override
+    {
+        m_scenario = g_DeleteParam;
+
+        if (m_task_id == 0)
+            RunDestroyer();
+        else
+        if (m_task_id == 1)
+            RunVictim();
+        else
+            RunSecondWaiter();
+
+        ++g_InstancesDone;
+    }
+
+    // True if the victim waits for a free slot (the queue is full), false if it waits for a message (the queue is empty)
+    bool IsPutter() const
+    {
+        return (m_scenario == DW_PUT) || (m_scenario == DW_PUT_FRONT);
+    }
+
+    // Task 1: block on the dedicated queue, record how the wait ended
+    void RunVictim()
+    {
+        stk::Sleep(_STK_MQ_TEST_SHORT_SLEEP);
+
+        g_Victim    = static_cast<ITask *>(this);
+        g_VictimTid = stk::GetTid();
+
+        stk::sync::MessageQueue *const q = g_DeleteQueue; // created by task 0 before it went to sleep
+
+        uint8_t msg[_STK_MQ_MSG_SIZE];
+        uint8_t rx[_STK_MQ_MSG_SIZE];
+        uint8_t rx_ref[_STK_MQ_MSG_SIZE];
+
+        MakeMsg(msg, 999);
+        memset(rx, 0x5A, sizeof(rx));        // receive buffer filler: must survive the destruction
+        memcpy(rx_ref, rx, sizeof(rx_ref));
+
+        int32_t result = static_cast<int32_t>(WAIT_RESULT_FAIL);
+
+        const int64_t start = GetTimeNowMs();
+
+        // blocks until the queue is destroyed; nothing but the result is read afterwards
+        if (q != nullptr)
+        {
+            switch (m_scenario)
+            {
+                case DW_PUT:        result = static_cast<int32_t>(q->PutEx(msg, WAIT_INFINITE));       break;
+                case DW_PUT_FRONT:  result = static_cast<int32_t>(q->PutFrontEx(msg, WAIT_INFINITE));  break;
+                case DW_PEEK:       result = static_cast<int32_t>(q->PeekEx(rx, WAIT_INFINITE));      break;
+                case DW_PEEK_FRONT: result = static_cast<int32_t>(q->PeekFrontEx(rx, WAIT_INFINITE)); break;
+                case DW_GET_BOOL:   result = (q->Get(rx, WAIT_INFINITE) ? 1 : 0);                      break; // 1 = received / 0 = not
+                default:            result = static_cast<int32_t>(q->GetEx(rx, WAIT_INFINITE));       break;
+            }
+        }
+
+        g_VictimElapsed[0] = GetTimeNowMs() - start;
+        g_VictimRxIntact   = (memcmp(rx, rx_ref, sizeof(rx)) == 0);
+        g_VictimValue[0]   = (g_VictimRxIntact ? -1 : MsgValue(rx));
+        g_VictimResult[0]  = result;
+
+        // the kernel is in a sane state: the same call with a short timeout on another queue works, runs to its
+        // deadline and copies nothing (g_Queue is empty for the reading scenarios and full for the putting ones)
+        uint8_t rx2[_STK_MQ_MSG_SIZE];
+        uint8_t rx2_ref[_STK_MQ_MSG_SIZE];
+        memset(rx2, 0x5A, sizeof(rx2));
+        memcpy(rx2_ref, rx2, sizeof(rx2_ref));
+
+        EWaitResult r2;
+
+        const int64_t start2 = GetTimeNowMs();
+
+        switch (m_scenario)
+        {
+            case DW_PUT:        r2 = g_Queue->PutEx(msg, 20);       break;
+            case DW_PUT_FRONT:  r2 = g_Queue->PutFrontEx(msg, 20);  break;
+            case DW_PEEK:       r2 = g_Queue->PeekEx(rx2, 20);      break;
+            case DW_PEEK_FRONT: r2 = g_Queue->PeekFrontEx(rx2, 20); break;
+            default:            r2 = g_Queue->GetEx(rx2, 20);       break;
+        }
+
+        g_DeleteCheckElapsed = GetTimeNowMs() - start2;
+        g_DeleteCheckIntact  = (memcmp(rx2, rx2_ref, sizeof(rx2)) == 0);
+        g_DeleteCheckResult  = static_cast<int32_t>(r2);
+    }
+
+    // Task 2: second getter, queued behind task 1
+    void RunSecondWaiter()
+    {
+        if (m_scenario != DW_TWO_GETTERS)
+            return;
+
+        stk::Sleep(2 * _STK_MQ_TEST_SHORT_SLEEP); // block after task 1
+
+        g_DeleteVictim2 = static_cast<ITask *>(this);
+
+        stk::sync::MessageQueue *const q = g_DeleteQueue;
+
+        uint8_t rx[_STK_MQ_MSG_SIZE];
+        uint8_t rx_ref[_STK_MQ_MSG_SIZE];
+        memset(rx, 0x5A, sizeof(rx));
+        memcpy(rx_ref, rx, sizeof(rx_ref));
+
+        const int64_t start = GetTimeNowMs();
+        const EWaitResult r = ((q != nullptr) ? q->GetEx(rx, WAIT_INFINITE) : WAIT_RESULT_FAIL);
+
+        g_VictimElapsed[1] = GetTimeNowMs() - start;
+        g_VictimValue[1]   = ((memcmp(rx, rx_ref, sizeof(rx)) == 0) ? -1 : MsgValue(rx)); // -1 = nothing was copied
+        g_VictimResult[1]  = static_cast<int32_t>(r);
+    }
+
+    // True if the storage of the destroyed queue still holds the pattern written after the destruction
+    static bool StorageUntouched()
+    {
+        for (size_t i = 0; i < sizeof(g_DeleteQueueObj); ++i)
+        {
+            if (g_DeleteQueueObj[i] != DELETED_FILL)
+                return false;
+        }
+
+        return true;
+    }
+
+    // Drain g_Queue without blocking and verify it held exactly the values 0..n-1 in FIFO order
+    static bool DrainAndExpectSequence(size_t n)
+    {
+        bool ok = true;
+
+        for (size_t i = 0; i < n; ++i)
+        {
+            uint8_t rx[_STK_MQ_MSG_SIZE];
+            if (!g_Queue->TryGet(rx) || (MsgValue(rx) != (int32_t)i))
+                ok = false;
+        }
+
+        return ok && g_Queue->IsEmpty();
+    }
+
+    // Task 0: create, fill if needed, destroy and verify
+    void RunDestroyer()
+    {
+        DeleteQueueT *const q = ::new (g_DeleteQueueObj) DeleteQueueT();
+        g_DeleteQueue = q;
+
+        // putters wait only on a full queue: fill the dedicated queue before the victim blocks (at ~10 ms)
+        bool prepared = q->IsStorageValid();
+        if (IsPutter())
+        {
+            for (size_t i = 0; i < _STK_MQ_CAPACITY; ++i)
+            {
+                uint8_t m[_STK_MQ_MSG_SIZE];
+                MakeMsg(m, (int32_t)i);
+                prepared &= q->TryPut(m);
+            }
+            prepared &= q->IsFull();
+        }
+        else
+        {
+            prepared &= q->IsEmpty();
+        }
+
+        stk::Sleep(60); // task 1 (and task 2) block on it in the meantime
+
+        // destroy the queue which is waited on: the waiters are released by the destructors of its condition variables
+        q->~DeleteQueueT();
+        memset(g_DeleteQueueObj, DELETED_FILL, sizeof(g_DeleteQueueObj));
+        g_DeleteQueue = nullptr;
+
+        // putters repeat the call on g_Queue: make it full so that the follow-up put has to wait for its deadline
+        if (IsPutter())
+        {
+            for (size_t i = 0; i < _STK_MQ_CAPACITY; ++i)
+                TryPutVal((int32_t)i);
+        }
+
+        stk::Sleep(_STK_MQ_TEST_SHORT_SLEEP * 4); // let the waiters resume and task 1 finish its check on g_Queue
+
+        // safety net: if a waiter was not released it would block forever and the kernel would never stop,
+        // cancel it so that the test fails instead of hanging
+        const bool released = (g_VictimResult[0] != -100) &&
+                              ((m_scenario != DW_TWO_GETTERS) || (g_VictimResult[1] != -100));
+        if (!released)
+        {
+            ITask *const victim1 = g_Victim;
+            ITask *const victim2 = g_DeleteVictim2;
+
+            if (victim1 != nullptr)
+                g_Kernel.CancelTaskWait(victim1);
+            if (victim2 != nullptr)
+                g_Kernel.CancelTaskWait(victim2);
+
+            stk::Sleep(_STK_MQ_TEST_SHORT_SLEEP * 5);
+        }
+
+        const bool untouched = StorageUntouched();
+
+        // g_Queue must be unchanged: still empty (reading scenarios) or still holding 0..7 in order (putting ones)
+        const bool queue_ok = (IsPutter() ? DrainAndExpectSequence(_STK_MQ_CAPACITY) : g_Queue->IsEmpty());
+
+        printf("delete with waiter (scenario=%d): first=%d elapsed=%d ms intact=%d, second=%d elapsed=%d ms value=%d, "
+            "g_Queue wait: result=%d elapsed=%d ms intact=%d, queue_ok=%d storage_untouched=%d\n",
+            (int)m_scenario,
+            (int)g_VictimResult[0], (int)g_VictimElapsed[0], (int)g_VictimRxIntact,
+            (int)g_VictimResult[1], (int)g_VictimElapsed[1], (int)g_VictimValue[1],
+            (int)g_DeleteCheckResult, (int)g_DeleteCheckElapsed, (int)g_DeleteCheckIntact,
+            (int)queue_ok, (int)untouched);
+
+        // task 1 started waiting at ~10 ms, task 2 at ~20 ms, the queue was destroyed at ~60 ms
+        bool pass = prepared && released && (g_VictimElapsed[0] >= 35) && (g_VictimElapsed[0] <= 75);
+
+        if (m_scenario == DW_GET_BOOL)
+        {
+            // false, and an infinite wait can not time out: it was the destruction that ended it
+            pass = pass && (g_VictimResult[0] == 0);
+        }
+        else
+        {
+            pass = pass && (g_VictimResult[0] == WAIT_RESULT_DELETED);
+        }
+
+        // a getter or peeker copies nothing into its receive buffer
+        if (!IsPutter())
+            pass = pass && g_VictimRxIntact;
+
+        if (m_scenario == DW_TWO_GETTERS)
+        {
+            pass = pass && (g_VictimResult[1] == WAIT_RESULT_DELETED) && (g_VictimValue[1] == -1) &&
+                   (g_VictimElapsed[1] >= 25) && (g_VictimElapsed[1] <= 65);
+        }
+
+        // the other queue was not affected: the 20 ms attempt on it ran to its deadline (a stale wait entry would cut
+        // it short) and copied nothing, and it holds what it held before; the destroyed queue was not written to
+        pass = pass &&
+               (g_DeleteCheckResult == WAIT_RESULT_TIMEOUT) && (g_DeleteCheckElapsed >= 15) && g_DeleteCheckIntact &&
+               queue_ok && untouched;
+
+        if (pass)
+            g_TestResult = 1;
+    }
+};
+
+// ---------------------------------------------------------------------------
 // Helper – reset shared state between tests
 // ---------------------------------------------------------------------------
 
@@ -1727,6 +2034,12 @@ static void ResetTestState()
     g_VictimTid          = TID_NONE;
     g_VictimRxIntact     = false;
     g_VictimSleepElapsed = 0;
+
+    g_DeleteQueue        = nullptr;
+    g_DeleteVictim2      = nullptr;
+    g_DeleteCheckResult  = -100;
+    g_DeleteCheckElapsed = 0;
+    g_DeleteCheckIntact  = false;
 
     for (int32_t i = 0; i < 2; ++i)
     {
@@ -1762,11 +2075,13 @@ static bool NeedsOnlyOneTask(const char *test_name)
 }
 
 /*! \fn    NeedsThreeTasks
-    \brief Returns true if the test uses tasks 0-2 (the cancellation tests: canceller, victim, second waiter).
+    \brief Returns true if the test uses tasks 0-2 (the cancellation and delete-with-waiter tests: canceller or
+           destroyer, victim, second waiter).
 */
 static bool NeedsThreeTasks(const char *test_name)
 {
-    return (strncmp(test_name, "Cancel", 6) == 0);
+    return (strncmp(test_name, "Cancel", 6) == 0) ||
+           (strncmp(test_name, "DeleteWithWaiter", 16) == 0);
 }
 
 /*! \fn    NeedsAllTasks
@@ -1948,6 +2263,35 @@ int main(int argc, char **argv)
             g_CancelParam = cases[i].param;
 
             if (RunTest<CancelWaitTask<ACCESS_PRIVILEGED>>(cases[i].name, cases[i].param)
+                    != TestContext::SUCCESS_EXIT_CODE)
+                total_failures++;
+            else
+                total_success++;
+        }
+    }
+
+    // Tests 29-35: queue destroyed while tasks wait on it (WAIT_RESULT_DELETED, tasks 0-2 only)
+    {
+        using namespace stk::test::msgqueue;
+
+        struct DeleteCase { const char *name; int32_t param; };
+
+        static const DeleteCase cases[] =
+        {
+            { "DeleteWithWaiter_Get",        DW_GET         },
+            { "DeleteWithWaiter_Put",        DW_PUT         },
+            { "DeleteWithWaiter_PutFront",   DW_PUT_FRONT   },
+            { "DeleteWithWaiter_Peek",       DW_PEEK        },
+            { "DeleteWithWaiter_PeekFront",  DW_PEEK_FRONT  },
+            { "DeleteWithWaiter_GetBool",    DW_GET_BOOL    },
+            { "DeleteWithWaiter_TwoGetters", DW_TWO_GETTERS }
+        };
+
+        for (size_t i = 0; i < (sizeof(cases) / sizeof(cases[0])); ++i)
+        {
+            g_DeleteParam = cases[i].param;
+
+            if (RunTest<DeleteWithWaiterTask<ACCESS_PRIVILEGED>>(cases[i].name, cases[i].param)
                     != TestContext::SUCCESS_EXIT_CODE)
                 total_failures++;
             else

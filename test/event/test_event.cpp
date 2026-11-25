@@ -58,6 +58,11 @@ static Kernel<KERNEL_DYNAMIC | KERNEL_SYNC, _STK_EVT_TEST_TASKS_MAX, sched::Swit
 // Test event (re-constructed per test via ResetTestState)
 static sync::Event g_TestEvent;
 
+// Delete-with-waiter test state (see DeleteWithWaiterTask): a dedicated event which is destroyed while a task waits
+// for it, g_TestEvent must stay untouched
+alignas(sync::Event) static uint8_t g_DeleteEventStorage[sizeof(sync::Event)];
+static sync::Event *volatile        g_DeleteEvent = nullptr;
+
 // Cancellation test state (see CancelWaitTask)
 static ITask * volatile g_Victim                 = nullptr;     // task whose wait gets cancelled (task 1)
 static volatile TId     g_VictimTid              = TID_NONE;    // same, as TId (for SleepCancel)
@@ -701,6 +706,94 @@ private:
     }
 };
 
+/*! \class DeleteWithWaiterTask
+    \brief Tests destruction of an event which a task is blocked on (WAIT_RESULT_DELETED).
+    \note  Task 0 creates a dedicated event and destroys it while task 1 waits for it without a timeout. Only the
+           destruction can end that wait: task 1 must get WAIT_RESULT_DELETED (neither a signal, a timeout nor a
+           cancellation) without touching the destroyed object. The storage of the object is overwritten after the
+           destruction, so a stray access by the woken waiter would read garbage. Afterwards the kernel and
+           g_TestEvent must be fully usable: the stale wait entry must not be left behind, which is checked by a timed
+           wait on g_TestEvent that must run to its deadline. Task 2 is added by RunTest() but stays idle.
+*/
+template <EAccessMode _AccessMode>
+class DeleteWithWaiterTask : public Task<_STK_EVT_STACK_SIZE, _AccessMode>
+{
+    uint8_t m_task_id;
+
+public:
+    DeleteWithWaiterTask(uint8_t task_id, int32_t) : m_task_id(task_id)
+    {}
+
+private:
+    void Run()
+    {
+        if (m_task_id == 0)
+        {
+            sync::Event *const evt = ::new (g_DeleteEventStorage) sync::Event(false, false);
+            g_DeleteEvent = evt;
+
+            stk::Sleep(60); // task 1 blocks on it (at ~10 ms) in the meantime
+
+            // destroy the event which is waited for: the waiter is released by the destructor
+            evt->~Event();
+            memset(g_DeleteEventStorage, 0xDD, sizeof(g_DeleteEventStorage));
+            g_DeleteEvent = nullptr;
+
+            stk::Sleep(_STK_EVT_TEST_SHORT_SLEEP * 4); // let task 1 resume and finish its check on g_TestEvent
+
+            // safety net: if the waiter was not released it would block forever and the kernel would never stop,
+            // cancel it so that the test fails instead of hanging
+            const bool released = (g_VictimResult[0] != -100);
+            if (!released)
+            {
+                ITask *const victim = g_Victim;
+                if (victim != nullptr)
+                    g_Kernel.CancelTaskWait(victim);
+
+                stk::Sleep(_STK_EVT_TEST_SHORT_SLEEP * 5);
+            }
+
+            printf("delete with waiter: result=%d elapsed=%d ms, g_TestEvent wait: result=%d elapsed=%d ms\n",
+                (int)g_VictimResult[0], (int)g_VictimElapsed[0], (int)g_VictimResult[1], (int)g_VictimElapsed[1]);
+
+            // started waiting at ~10 ms, destroyed at ~60 ms; the other event was not affected: a 20 ms wait on it
+            // still runs to its deadline (a stale wait entry would cut it short)
+            const bool pass = released &&
+                              (g_VictimResult[0] == WAIT_RESULT_DELETED) &&
+                              (g_VictimElapsed[0] >= 35) && (g_VictimElapsed[0] <= 75) &&
+                              (g_VictimResult[1] == WAIT_RESULT_TIMEOUT) && (g_VictimElapsed[1] >= 15) &&
+                              !g_TestEvent.TryWait();
+
+            if (pass)
+                g_TestResult = 1;
+        }
+        else
+        if (m_task_id == 1)
+        {
+            stk::Sleep(_STK_EVT_TEST_SHORT_SLEEP);
+
+            g_Victim = static_cast<ITask *>(this);
+
+            sync::Event *const evt = g_DeleteEvent; // created by task 0 before it went to sleep
+
+            const int64_t start = GetTimeNowMs();
+
+            // blocks until the event is destroyed; nothing but the result is read afterwards
+            const EWaitResult r = (evt != nullptr ? evt->WaitEx(WAIT_INFINITE) : WAIT_RESULT_FAIL);
+
+            g_VictimElapsed[0] = GetTimeNowMs() - start;
+            g_VictimResult[0]  = static_cast<int32_t>(r);
+
+            // the kernel is in a sane state: a wait on another event works and the task is not stuck in a wait
+            const int64_t start2 = GetTimeNowMs();
+            const EWaitResult r2 = g_TestEvent.WaitEx(20);
+
+            g_VictimElapsed[1] = GetTimeNowMs() - start2;
+            g_VictimResult[1]  = static_cast<int32_t>(r2);
+        }
+    }
+};
+
 // Helper function to reset test state
 static void ResetTestState(bool manual_reset = false, bool initial_state = false)
 {
@@ -737,6 +830,7 @@ static bool NeedsExtendedTasks(const char *test_name)
             (strcmp(test_name, "TimeoutWait")   != 0) &&
             (strcmp(test_name, "TryWait")       != 0) &&
             (strcmp(test_name, "ResetManual")   != 0) &&
+            (strcmp(test_name, "DeleteWithWaiter") != 0) &&
             (strncmp(test_name, "CancelWait", 10) != 0); // cancel tests use tasks 0-2 only
 }
 
@@ -880,6 +974,12 @@ int main(int argc, char **argv)
                 total_success++;
         }
     }
+
+    // Test 19: Event destroyed while a task waits for it (WAIT_RESULT_DELETED, tasks 0-2 only, task 2 idle)
+    if (RunTest<DeleteWithWaiterTask<ACCESS_PRIVILEGED>>("DeleteWithWaiter") != TestContext::SUCCESS_EXIT_CODE)
+        total_failures++;
+    else
+        total_success++;
 
 #endif // __ARM_ARCH_6M__
 

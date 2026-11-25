@@ -29,8 +29,8 @@ stk::sync::RWMutex g_SettingsLock;  // zero readers, zero writers initially
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `ReadLock` | `void ReadLock()` | Acquires shared read lock. Blocks if a writer is active or if writers are waiting (writer preference). **Not cancelable:** a cancellation (`IKernel::CancelTaskWait()` / `SleepCancel()`) is absorbed and the wait retried; use `TimedReadLockEx()` to observe it. ISR-unsafe. |
-| `TimedReadLockEx` | `EWaitResult TimedReadLockEx(Timeout timeout)` | Same as `TimedReadLock()`, but preserves the full outcome: `WAIT_RESULT_SIGNAL` (lock acquired), `WAIT_RESULT_TIMEOUT` (timeout expired, or `NO_WAIT` on a busy lock), `WAIT_RESULT_CANCELED` (wait cancelled via `IKernel::CancelTaskWait()` or `SleepCancel()`; the lock is **not** taken and the reader count is unchanged), `WAIT_RESULT_FAIL` (kernel rejected the wait). ISR-safe only with `NO_WAIT`. |
+| `ReadLock` | `void ReadLock()` | Acquires shared read lock. Blocks if a writer is active or if writers are waiting (writer preference). **Not cancelable:** a cancellation (`IKernel::CancelTaskWait()` / `SleepCancel()`) is absorbed and the wait retried; use `TimedReadLockEx()` to observe it. Panics (`KERNEL_PANIC_ASSERT`) if the lock is destroyed while waiting. ISR-unsafe. |
+| `TimedReadLockEx` | `EWaitResult TimedReadLockEx(Timeout timeout)` | Same as `TimedReadLock()`, but preserves the full outcome: `WAIT_RESULT_SIGNAL` (lock acquired), `WAIT_RESULT_TIMEOUT` (timeout expired, or `NO_WAIT` on a busy lock), `WAIT_RESULT_CANCELED` (wait cancelled via `IKernel::CancelTaskWait()` or `SleepCancel()`; the lock is **not** taken and the reader count is unchanged), `WAIT_RESULT_DELETED` (the lock was destroyed while waiting; it must not be accessed afterwards, see Destruction behavior), `WAIT_RESULT_FAIL` (kernel rejected the wait). ISR-safe only with `NO_WAIT`. |
 | `TimedReadLock` | `bool TimedReadLock(Timeout timeout)` | Acquires shared read lock with timeout. Returns `true` if acquired, `false` otherwise (timeout, cancellation, or `NO_WAIT` on a busy lock); use `TimedReadLockEx()` to tell these apart. Blocks if a writer is active or waiting. ISR-unsafe. |
 | `TryReadLock` | `bool TryReadLock()` | Non-blocking attempt to acquire read lock. Returns `true` if acquired immediately, `false` if a writer is active or waiting. Equivalent to `TimedReadLock(NO_WAIT)`. ISR-unsafe. |
 | `ReadUnlock` | `void ReadUnlock()` | Releases shared read lock. Decrements reader count. If this was the last reader, wakes one waiting writer via `m_cv_writers.NotifyOne()`. ISR-unsafe. |
@@ -39,8 +39,8 @@ stk::sync::RWMutex g_SettingsLock;  // zero readers, zero writers initially
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `Lock` | `void Lock()` | Acquires exclusive write lock. Blocks until all active readers have released and no other writer is active. **Not cancelable:** a cancellation is absorbed and the wait retried (this also keeps the mutex re-acquisition at the end of `ConditionVariable::Wait()` reliable); use `TimedLockEx()` to observe it. ISR-unsafe. Implements `IMutex` interface. |
-| `TimedLockEx` | `EWaitResult TimedLockEx(Timeout timeout)` | Same as `TimedLock()`, but preserves the full outcome (`WAIT_RESULT_SIGNAL`, `WAIT_RESULT_TIMEOUT`, `WAIT_RESULT_CANCELED`, `WAIT_RESULT_FAIL`, as for `TimedReadLockEx()`). On any result other than `SIGNAL` the writer withdraws from the waiting-writers queue (see Cancellation behavior). ISR-safe only with `NO_WAIT`. |
+| `Lock` | `void Lock()` | Acquires exclusive write lock. Blocks until all active readers have released and no other writer is active. **Not cancelable:** a cancellation is absorbed and the wait retried (this also keeps the mutex re-acquisition at the end of `ConditionVariable::Wait()` reliable); use `TimedLockEx()` to observe it. Panics (`KERNEL_PANIC_ASSERT`) if the lock is destroyed while waiting. ISR-unsafe. Implements `IMutex` interface. |
+| `TimedLockEx` | `EWaitResult TimedLockEx(Timeout timeout)` | Same as `TimedLock()`, but preserves the full outcome (`WAIT_RESULT_SIGNAL`, `WAIT_RESULT_TIMEOUT`, `WAIT_RESULT_CANCELED`, `WAIT_RESULT_DELETED`, `WAIT_RESULT_FAIL`, as for `TimedReadLockEx()`). On any result other than `SIGNAL` or `DELETED` the writer withdraws from the waiting-writers queue (see Cancellation behavior); on `DELETED` nothing is touched (see Destruction behavior). ISR-safe only with `NO_WAIT`. |
 | `TimedLock` | `bool TimedLock(Timeout timeout)` | Acquires exclusive write lock with timeout. Returns `true` if acquired, `false` otherwise (timeout, cancellation, or `NO_WAIT` on a busy lock); use `TimedLockEx()` to tell these apart. Blocks until readers drain and no writer is active. ISR-unsafe. |
 | `TryLock` | `bool TryLock()` | Non-blocking attempt to acquire write lock. Returns `true` if acquired immediately (no readers, no active writer), `false` otherwise. Equivalent to `TimedLock(NO_WAIT)`. ISR-unsafe. |
 | `Unlock` | `void Unlock()` | Releases exclusive write lock. Wakes one waiting writer if any exist (`m_cv_writers.NotifyOne()`), otherwise wakes all waiting readers (`m_cv_readers.NotifyAll()`). ISR-unsafe. Implements `IMutex` interface. |
@@ -76,6 +76,13 @@ stk::sync::RWMutex g_SettingsLock;  // zero readers, zero writers initially
 - If a release reaches a waiter before a cancel does, the signal wins: the waiter is granted the lock (`WAIT_RESULT_SIGNAL`) and the cancel is a no-op.
 - Cancellation is distinct from a timeout: `WaitEx()` underneath reports `WAIT_RESULT_CANCELED`, not `WAIT_RESULT_TIMEOUT`.
 
+**Destruction behavior** (`WAIT_RESULT_DELETED`, the lock is destroyed while tasks wait for it):
+- A task can wait only for a *held* lock (a writer is active, or readers are active and a writer or reader waits), so destroying a lock with waiters means destroying it while it is held. The destructor allows exactly that: it asserts in debug builds if the lock is held and **nobody** is waiting for it (a logic error: dangling state), and accepts it when tasks are waiting. The holder must not unlock the destroyed lock.
+- The destructors of the two internal condition variables release **all** waiters, the writers and the readers, with `WAIT_RESULT_DELETED`. The released waiters neither acquire the lock nor time out.
+- `TimedReadLockEx()` and `TimedLockEx()` return `WAIT_RESULT_DELETED` without reading or writing any member of the destroyed lock: `m_readers` is not incremented, and a writer does **not** withdraw from `m_writers_waiting` or notify anybody, as it does on a timeout or a cancellation (there is nothing left to repair).
+- `ScopedTimedLock` and `ScopedTimedReadMutex` report it through `GetResult()`; `IsLocked()` is `false`, so their destructors do not touch the destroyed lock.
+- The void `ReadLock()` and `Lock()` cannot report it and panic (`KERNEL_PANIC_ASSERT`): use the timed variants where the lock may be destroyed while waited for.
+
 ---
 
 ## Test Configuration
@@ -103,11 +110,27 @@ The cancellation tests (11–24) additionally use a small amount of shared state
 
 The helper `CancelVictim(use_sleep_cancel)` cancels the victim either with `g_Kernel.CancelTaskWait(g_Victim)` or with `stk::SleepCancel(g_VictimTid)`. The helper `IsLockPristine()` checks that the lock ended up free with consistent counters: `TryReadLock()` must succeed (a stale waiting writer would block it through writer preference) and so must `TryLock()` (a stale reader or active writer would block it).
 
+The delete-with-waiter tests (25–27) destroy a **separate** lock: `g_DeleteRW` points to an `RWMutex` constructed
+with placement-new in the static `g_DeleteRWStorage`, so `g_TestRWMutex` is never destroyed by the test itself.
+Task 0 holds the dedicated lock (a read lock, or the write lock in test 26) while it destroys it, because only a held
+lock can have waiters. After the destruction the storage is overwritten with the byte `DELETED_FILL` (`0xDD`), and task 0
+checks at the end that every byte still holds it: a woken waiter that wrote to the destroyed lock (for instance by
+withdrawing from `m_writers_waiting`, as a timed-out writer does) would leave a trace. The tests reuse `g_Victim`,
+`g_VictimTid`, `g_VictimResult[]` and `g_VictimElapsed[]` (index 0: task 1; index 1: task 2, the second waiter of test
+27 only, unlike the cancellation tests, where it is task 3), `IsLockPristine()`, and add:
+
+| Variable | Purpose |
+|----------|---------|
+| `g_DeleteRW` | Pointer to the dedicated lock; set back to `nullptr` right after the destruction |
+| `g_DeleteVictim2` | Task 2 (second waiter), published right before it blocks; used by the safety net |
+| `g_DeleteCheckResult` / `g_DeleteCheckElapsed` | `EWaitResult` and milliseconds of the follow-up timed lock (20 ticks) of task 1 on `g_TestRWMutex` (`-100` = not set) |
+| `g_DeleteParam` | Scenario selector (`DW_WRITER = 1`, `DW_READER = 2`, `DW_BOTH = 3`); a global for the same reason as `g_CancelParam` |
+
 ---
 
 ## Platform Notes
 
-On **Cortex-M0** (`__ARM_ARCH_6M__`) the device has insufficient RAM to link all eleven distinct task class templates simultaneously. Tests 1–9 and the cancellation tests 11–24 are skipped on M0 and only `StressTest` (test 10) runs, under `#ifndef __ARM_ARCH_6M__`. `CancelWaitTask` is one more template, shared by all fourteen cancellation tests.
+On **Cortex-M0** (`__ARM_ARCH_6M__`) the device has insufficient RAM to link all twelve distinct task class templates simultaneously. Tests 1–9, the cancellation tests 11–24 and the delete-with-waiter tests 25–27 are skipped on M0 and only `StressTest` (test 10) runs, under `#ifndef __ARM_ARCH_6M__`. `CancelWaitTask` is one more template, shared by all fourteen cancellation tests, and `DeleteWithWaiterTask` another, shared by the three delete-with-waiter tests.
 
 `StressTest` runs on M0 because it uses a single task class template (`StressTestTask`) instantiated for all five task slots, fitting within the available memory.
 
@@ -236,7 +259,7 @@ Common timeline (ticks; deviations are noted per test):
 | 2 | holder | takes the lock at 0 (read or write, depending on the test) and releases it at ~150 |
 | 3 | second waiter | writer or reader queued at ~5 or ~20 depending on the test; records result and elapsed time |
 
-`StressTest` keeps the number 10 but runs last in `main()`, after the cancellation tests.
+`StressTest` keeps the number 10 but runs last in `main()`, after the cancellation tests and the delete-with-waiter tests (25–27).
 
 > **Safety net:** if a cancel does not work, a waiter could stay blocked forever (for instance readers that are never woken after the withdrawal of a waiting writer) and the kernel would never stop. On failure task 0 therefore takes and drops the write lock twice with `TimedLock()` + `Unlock()`, which wakes all waiting readers (or the next writer), so a broken cancel is reported as a test failure rather than a hang.
 
@@ -370,6 +393,56 @@ Test 17 using `SleepCancel()`. The task is no longer waiting but is still marked
 
 ---
 
+### Tests 25–27 — `DeleteWithWaiter*`
+**Tasks:** 0–2 used (tasks 3 and 4 are added by `RunTest()` but return immediately) &nbsp;|&nbsp; **Task class:** `DeleteWithWaiterTask` &nbsp;|&nbsp; **Runs on M0: no**
+
+Verify that destroying an `RWMutex` which tasks are blocked on releases **all** waiters, the writers and the readers (the lock
+has two internal condition variables), with `WAIT_RESULT_DELETED`, without acquiring the lock and without touching the destroyed
+object. Only a held lock can have waiters, so task 0 constructs a dedicated lock (`g_DeleteRW`, placement-new into
+`g_DeleteRWStorage`), **holds** it, sleeps 60 ticks and destroys it while it is still held. Nobody ever releases the lock,
+so only its destruction can end the waits. Task 0 then overwrites the storage with `0xDD`, so that any access to the destroyed
+lock by a woken waiter would read garbage, and any write would be detected. Task 1 sleeps `_STK_RWMUTEX_TEST_SHORT_SLEEP`,
+publishes its `ITask` pointer in `g_Victim` and blocks on the lock with `WAIT_INFINITE`, then records the result and the
+elapsed time without touching the destroyed lock. It then performs a timed lock of the same kind (20 ticks) on `g_TestRWMutex`,
+which task 0 has write-locked right after the destruction: the attempt must run to its deadline and return
+`WAIT_RESULT_TIMEOUT`; a stale wait entry left behind would end it early or with another result, and the writer's or reader's
+withdrawal must leave `g_TestRWMutex` pristine. Task 0 releases `g_TestRWMutex` at about tick 100 and checks the outcome at
+about tick 140. If a waiter was not released, task 0 cancels its wait with `g_Kernel.CancelTaskWait()`, so the test fails
+instead of hanging the kernel.
+
+**Common pass condition:** task 1's first result is `WAIT_RESULT_DELETED` (not `WAIT_RESULT_SIGNAL`, a timeout or a cancellation)
+with elapsed time in `[35, 75]` ms (waiting from ~10 ms, destroyed at ~60 ms); the follow-up timed lock on `g_TestRWMutex`
+returned `WAIT_RESULT_TIMEOUT` after at least 15 ms; `IsLockPristine()` holds for `g_TestRWMutex`; every byte of the
+storage of the destroyed lock still holds `0xDD`
+
+#### Test 25 — `DeleteWithWaiterWriter`
+**Param:** `DW_WRITER`
+
+Task 0 holds a **read** lock; task 1 blocks in `TimedLockEx(WAIT_INFINITE)` (`m_writers_waiting == 1`, the writer waits on
+`m_cv_writers`).
+
+**Pass condition:** common
+
+#### Test 26 — `DeleteWithWaiterReader`
+**Param:** `DW_READER`
+
+Task 0 holds the **write** lock; task 1 blocks in `TimedReadLockEx(WAIT_INFINITE)` (the reader waits on `m_cv_readers`). The
+destructor accepts the lock because the reader wait list is not empty.
+
+**Pass condition:** common
+
+#### Test 27 — `DeleteWithWaiterBoth`
+**Param:** `DW_BOTH`
+
+Task 0 holds a read lock. Task 1 blocks as a writer, task 2 as a reader at about tick 20, only because of the waiting writer's
+preference. Both use the RAII guards (`ScopedTimedLock`, `ScopedTimedReadMutex`) with `WAIT_INFINITE`: the destruction must release
+the waiters of both internal condition variables, `GetResult()` must report `WAIT_RESULT_DELETED`, and the guard destructors,
+which run after the destruction, must not unlock the destroyed lock (`IsLocked()` is `false`).
+
+**Pass condition:** common, and task 2 also gets `WAIT_RESULT_DELETED` with elapsed time in `[25, 65]` ms (waiting from ~20 ms)
+
+---
+
 ## Summary Table
 
 | # | Test | Tasks | Pass condition | What it verifies |
@@ -398,3 +471,6 @@ Test 17 using `SleepCancel()`. The task is no longer waiting but is still marked
 | 22 | `CancelWait_SleepCancelPreference` | 0–3 | as test 15 | `SleepCancel()` leaves no stale entry and still releases the readers held back by the writer |
 | 23 | `CancelWait_SleepCancelTwoWriters` | 0–3 | as test 16 | `SleepCancel()` keeps the wait list intact |
 | 24 | `CancelWait_SleepCancelSignal` | 0–3 | as test 17 | `SleepCancel()` after a release is a harmless no-op |
+| 25 | `DeleteWithWaiterWriter` | 0–2 | `DELETED`, elapsed `[35, 75]` ms, follow-up timed lock on `g_TestRWMutex` times out `>= 15` ms, lock pristine, storage untouched | Destroying a lock held by a reader releases a waiting writer with `WAIT_RESULT_DELETED`; the writer does not withdraw from `m_writers_waiting` of the destroyed lock and leaves no stale wait entry |
+| 26 | `DeleteWithWaiterReader` | 0–2 | as test 25 | Destroying a lock held by a writer releases a waiting reader with `WAIT_RESULT_DELETED`; `m_readers` of the destroyed lock is not touched |
+| 27 | `DeleteWithWaiterBoth` | 0–2 | as test 25, and the reader `DELETED` with elapsed `[25, 65]` ms | The destruction releases the waiters of both internal condition variables; the RAII guards report `DELETED` and do not unlock the destroyed lock |

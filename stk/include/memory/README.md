@@ -90,11 +90,11 @@ Allocates the storage via `MemoryAllocator::AllocateAligned` (non-throwing, over
 
 | Method | Blocking | ISR-safe | Description |
 |---|---|---|---|
-| `Alloc()` | Yes — indefinite | No | Blocks until a block is available. Returns `nullptr` only if the wait is cancelled or the pool is invalid. |
+| `Alloc()` | Yes — indefinite | No | Blocks until a block is available. Returns `nullptr` only if the wait is cancelled, the pool is invalid or the pool is destroyed while waiting. |
 | `AllocT<T>()` | Yes — indefinite | No | Typed `Alloc()`. Returns `nullptr` if `T` does not fit the block size or alignment. |
-| `TimedAlloc(timeout)` | Yes — until timeout | Only with `NO_WAIT` | Blocks up to `timeout` ticks. Returns `nullptr` on timeout. |
+| `TimedAlloc(timeout)` | Yes — until timeout | Only with `NO_WAIT` | Blocks up to `timeout` ticks. Returns `nullptr` on timeout, cancellation or deletion of the pool. |
 | `TimedAllocT<T>(timeout)` | Yes — until timeout | Only with `NO_WAIT` | Typed `TimedAlloc()`. |
-| `TimedAllocEx(&block, timeout)` | Yes — until timeout | Only with `NO_WAIT` | Returns the full `EWaitResult` so timeout and cancellation can be told apart. |
+| `TimedAllocEx(&block, timeout)` | Yes — until timeout | Only with `NO_WAIT` | Returns the full `EWaitResult` so timeout, cancellation and deletion of the pool (`WAIT_RESULT_DELETED`, with `*block` set to `nullptr`) can be told apart. |
 | `TryAlloc()` | No | Yes | Returns a block or `nullptr` immediately. Never suspends and never touches the condition variable. |
 | `TryAllocT<T>()` | No | Yes | Typed `TryAlloc()`. |
 
@@ -181,11 +181,11 @@ m_first                                                    m_end
 
 | Method | Blocking | ISR-safe | Description |
 |---|---|---|---|
-| `Alloc(size)` | Yes — indefinite | No | Blocks until `size` bytes are available. Returns `nullptr` only on cancellation or an invalid request. |
+| `Alloc(size)` | Yes — indefinite | No | Blocks until `size` bytes are available. Returns `nullptr` only on cancellation, deletion of the pool while waiting, or an invalid request. |
 | `AllocT<T>()` | Yes — indefinite | No | Typed `Alloc()` for `sizeof(T)` bytes (`alignof(T) <= BLOCK_ALIGN`, checked at compile time). |
-| `TimedAlloc(size, timeout)` | Yes — until timeout | Only with `NO_WAIT` | Blocks up to `timeout` ticks. Returns `nullptr` on timeout. |
+| `TimedAlloc(size, timeout)` | Yes — until timeout | Only with `NO_WAIT` | Blocks up to `timeout` ticks. Returns `nullptr` on timeout, cancellation or deletion of the pool. |
 | `TimedAllocT<T>(timeout)` | Yes — until timeout | Only with `NO_WAIT` | Typed `TimedAlloc()`. |
-| `TimedAllocEx(&block, size, timeout)` | Yes — until timeout | Only with `NO_WAIT` | Returns the full `EWaitResult` so timeout and cancellation can be told apart. |
+| `TimedAllocEx(&block, size, timeout)` | Yes — until timeout | Only with `NO_WAIT` | Returns the full `EWaitResult` so timeout, cancellation and deletion of the pool (`WAIT_RESULT_DELETED`, with `*block` set to `nullptr`) can be told apart. |
 | `TryAlloc(size)` | No | Yes | Returns a block or `nullptr` immediately. |
 | `TryAllocT<T>()` | No | Yes | Typed `TryAlloc()`. |
 
@@ -690,7 +690,7 @@ stk::memory::StaticBlockPool<64, 8> g_LogPool("log", stk::WAIT_ORDER_FIFO);  // 
 
 ## Notes and Caveats
 
-- **Lifetime**: Destroying a pool while tasks are blocked inside `Alloc()` or `TimedAlloc()` is a logical error. An assertion is triggered in debug builds by the internal `ConditionVariable` destructor. Destroying a pool with outstanding blocks is also asserted.
+- **Lifetime**: Tasks blocked inside `Alloc()`, `TimedAlloc()` or `TimedAllocEx()` when the pool is destroyed are woken by the internal `ConditionVariable` destructor: `TimedAllocEx()` returns `WAIT_RESULT_DELETED`, the other variants return `nullptr`, and no block is allocated. Woken tasks must not access the pool afterwards (they must not call `Free()`, query it or retry on it). Destroying a pool with outstanding blocks is asserted in debug builds unless tasks are waiting: a task can only wait on an exhausted pool, so the destructor accepts outstanding blocks (`GetUsedCount() != 0` / allocated bytes != 0) when the wait list is not empty. The owner remains responsible for blocks that are still in use: they are not reclaimed, and returning them to the destroyed pool is undefined. On ARM TrustZone Non-Secure builds the waiters are released through `IKernelService::WakeDeleted()`; see the [sync README](../sync/README.md).
 - **Double-free**: See the detection table under `BlockMemoryPool::Free()` and the `BytePool` description. Null pointers after `Free()` to avoid silent corruption.
 - **Blocking paths require `KERNEL_SYNC`**: `Alloc()` and `TimedAlloc()` (with a non-zero timeout) depend on the `ConditionVariable` primitive and require the kernel to be compiled with `KERNEL_SYNC`. `TryAlloc()` and `Free()` are always available regardless of kernel mode.
 - **Non-copyable**: `BlockMemoryPool` and `BytePool` are non-copyable and non-movable.
@@ -715,3 +715,4 @@ Behavior that differs from earlier versions of this module:
 - **`BytePool::BLOCK_ALIGN`** is public and configurable (default 8, 16 on RISC-V); `HEADER_SIZE` is `max(8, BLOCK_ALIGN)`.
 - **Heap-storage constructors** are removed when `STK_MEMORY_NO_HEAP=1`.
 - **Wait order**: tasks blocked in `BlockMemoryPool::Alloc()` / `TimedAlloc()` are now served by the default `EWaitOrder` of the kernel (priority order with priority-based strategies) instead of strictly FIFO; pass `stk::WAIT_ORDER_FIFO` to the constructor (or define `STK_SYNC_WAIT_ORDER_DEFAULT` as `stk::WAIT_ORDER_FIFO`) to restore the old behavior. `BlockMemoryPool` / `StaticBlockPool` constructors gained a trailing `EWaitOrder` parameter (source-compatible). `GetNextWaiter()` is new (replaces `GetFirstWaiterTid()`), see [Wait order of blocked allocators](#wait-order-of-blocked-allocators).
+- **Deleting a pool with waiters**: tasks blocked in `Alloc()` / `TimedAlloc()` / `TimedAllocEx()` are released with `WAIT_RESULT_DELETED` (`TimedAllocEx()` reports it, the others return `nullptr`) instead of the destructor asserting. The destructor assertion that all blocks were returned (`BlockMemoryPool`: `used == 0`, `BytePool`: `allocated == 0`) is relaxed to allow outstanding blocks while tasks are waiting. See [Notes and Caveats](#notes-and-caveats).

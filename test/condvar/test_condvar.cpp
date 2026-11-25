@@ -75,6 +75,19 @@ static volatile int64_t g_VictimSleepElapsed     = 0;            // ms spent in 
 // Set by main() before each RunTest() call.
 static volatile int32_t g_CancelParam            = 0;
 
+// Delete-with-waiter test state (see DeleteWithWaiterTask): a dedicated condition variable which is destroyed while
+// tasks wait on it, g_TestCond and g_TestMutex must stay untouched. The outcome of the waits on the destroyed object is
+// reported through g_VictimResult[] / g_VictimElapsed[] / g_VictimOwnsMutex[] above (index 0: task 1, index 1: task 2).
+alignas(sync::ConditionVariable) static uint8_t g_DeleteCondStorage[sizeof(sync::ConditionVariable)];
+static sync::ConditionVariable *volatile        g_DeleteCond    = nullptr;
+static ITask * volatile                         g_DeleteVictim2 = nullptr;      // second waiter (task 2), published right before it blocks
+static volatile int32_t g_DeleteCheckResult      = -100;                        // EWaitResult of the follow-up wait of task 1 on g_TestCond (-100 = not set)
+static volatile int64_t g_DeleteCheckElapsed     = 0;                           // ms spent in that follow-up wait
+static volatile int32_t g_DeleteCheckOwns        = 0;                           // 1 if task 1 owned g_TestMutex after the follow-up wait
+
+// Scenario selector of DeleteWithWaiterTask, a global for the same reason as g_CancelParam
+static volatile int32_t g_DeleteParam            = 0;
+
 // Cancel the wait of g_Victim either via IKernel::CancelTaskWait() or via stk::SleepCancel()
 static void CancelVictim(bool use_sleep_cancel)
 {
@@ -799,6 +812,194 @@ private:
     }
 };
 
+static const int32_t DW_BASIC       = 1; // one waiter, mutex free
+static const int32_t DW_MUTEX_HELD  = 2; // one waiter, the mutex is held by the destroyer across the destruction
+static const int32_t DW_TWO_WAITERS = 3; // two waiters, both must be released
+
+/*! \class DeleteWithWaiterTask
+    \brief Tests destruction of a condition variable which tasks are blocked on (WAIT_RESULT_DELETED).
+    \note  Task 0 creates a dedicated condition variable and destroys it while task 1 (and task 2 in the two-waiters
+           scenario) wait on it with WaitEx(WAIT_INFINITE). Nobody notifies it, so only the destruction can end the waits:
+           the waiters must get WAIT_RESULT_DELETED (neither a signal, a timeout nor a cancellation) without touching the
+           destroyed object. The storage of the object is overwritten after the destruction, so a stray access by a woken
+           waiter would read garbage. The mutex is a separate object and stays valid: it must be re-acquired before
+           WaitEx() returns, exactly as on the other paths. Afterwards the kernel and g_TestCond must be fully usable: the
+           stale wait entry must not be left behind, which is checked by a timed wait on g_TestCond that must run to its
+           deadline. The scenario is selected by g_DeleteParam: 1 = a single waiter, 2 = the destroyer holds the mutex
+           across the destruction (the woken waiter must stay blocked re-acquiring it until it is released), 3 = two waiters
+           are both released by the destruction.
+*/
+template <EAccessMode _AccessMode>
+class DeleteWithWaiterTask : public Task<_STK_CV_STACK_SIZE, _AccessMode>
+{
+    uint8_t m_task_id;
+    int32_t m_scenario;
+
+public:
+    DeleteWithWaiterTask(uint8_t task_id, int32_t) // scenario is taken from g_DeleteParam in Run(), see g_DeleteParam
+        : m_task_id(task_id), m_scenario(0)
+    {}
+
+private:
+    void Run()
+    {
+        m_scenario = g_DeleteParam;
+
+        if (m_task_id == 0)
+            RunDestroyer();
+        else
+        if (m_task_id == 1)
+            RunVictim();
+        else
+            RunSecondWaiter();
+    }
+
+    // Task 1: block on the dedicated condition variable, record how the wait ended
+    void RunVictim()
+    {
+        stk::Sleep(_STK_CV_TEST_SHORT_SLEEP);
+
+        g_Victim    = static_cast<ITask *>(this);
+        g_VictimTid = stk::GetTid();
+
+        sync::ConditionVariable *const cond = g_DeleteCond; // created by task 0 before it went to sleep
+
+        g_TestMutex.Lock();
+
+        const int64_t start = GetTimeNowMs();
+
+        // blocks until the condition variable is destroyed; the mutex is re-acquired, nothing else is read afterwards
+        const EWaitResult r = (cond != nullptr ? cond->WaitEx(g_TestMutex, WAIT_INFINITE) : WAIT_RESULT_FAIL);
+
+        g_VictimElapsed[0]   = GetTimeNowMs() - start;
+        g_VictimOwnsMutex[0] = (g_TestMutex.GetOwner() == g_VictimTid ? 1 : 0);
+        g_VictimResult[0]    = static_cast<int32_t>(r);
+
+        // the kernel is in a sane state: a wait on another condition variable works and the task is not stuck in a wait
+        const int64_t start2 = GetTimeNowMs();
+        const EWaitResult r2 = g_TestCond.WaitEx(g_TestMutex, 20);
+
+        g_DeleteCheckElapsed = GetTimeNowMs() - start2;
+        g_DeleteCheckOwns    = (g_TestMutex.GetOwner() == g_VictimTid ? 1 : 0);
+        g_DeleteCheckResult  = static_cast<int32_t>(r2);
+
+        g_TestMutex.Unlock();
+    }
+
+    // Task 2: second waiter, queued behind task 1
+    void RunSecondWaiter()
+    {
+        if (m_scenario != DW_TWO_WAITERS)
+            return;
+
+        stk::Sleep(2 * _STK_CV_TEST_SHORT_SLEEP); // block after task 1
+
+        g_DeleteVictim2 = static_cast<ITask *>(this);
+
+        sync::ConditionVariable *const cond = g_DeleteCond;
+
+        g_TestMutex.Lock();
+
+        const int64_t start = GetTimeNowMs();
+        const EWaitResult r = (cond != nullptr ? cond->WaitEx(g_TestMutex, WAIT_INFINITE) : WAIT_RESULT_FAIL);
+
+        g_VictimElapsed[1]   = GetTimeNowMs() - start;
+        g_VictimOwnsMutex[1] = (g_TestMutex.GetOwner() == stk::GetTid() ? 1 : 0);
+        g_VictimResult[1]    = static_cast<int32_t>(r);
+
+        g_TestMutex.Unlock();
+    }
+
+    // Task 0: create, destroy and verify
+    void RunDestroyer()
+    {
+        sync::ConditionVariable *const cond = ::new (g_DeleteCondStorage) sync::ConditionVariable();
+        g_DeleteCond = cond;
+
+        stk::Sleep(60); // task 1 (and task 2) block on it in the meantime
+
+        bool still_blocked = true;
+        bool owner_is_me   = true;
+
+        if (m_scenario == DW_MUTEX_HELD)
+        {
+            // the mutex is free (the waiter released it inside WaitEx()): hold it across the destruction
+            g_TestMutex.Lock();
+        }
+
+        // destroy the condition variable which is waited on: the waiters are released by the destructor
+        cond->~ConditionVariable();
+        memset(g_DeleteCondStorage, 0xDD, sizeof(g_DeleteCondStorage));
+        g_DeleteCond = nullptr;
+
+        if (m_scenario == DW_MUTEX_HELD)
+        {
+            // the waiter is woken as DELETED but must stay blocked re-acquiring the mutex until it is released
+            stk::Sleep(_STK_CV_TEST_SHORT_SLEEP);
+
+            still_blocked = (g_VictimResult[0] == -100);
+            owner_is_me   = (g_TestMutex.GetOwner() == stk::GetTid());
+
+            g_TestMutex.Unlock(); // hands the mutex over to the waiter
+        }
+
+        stk::Sleep(_STK_CV_TEST_SHORT_SLEEP * 4); // let the waiters resume and task 1 finish its check on g_TestCond
+
+        // safety net: if a waiter was not released it would block forever and the kernel would never stop,
+        // cancel it so that the test fails instead of hanging
+        const bool released = (g_VictimResult[0] != -100) &&
+                              ((m_scenario != DW_TWO_WAITERS) || (g_VictimResult[1] != -100));
+        if (!released)
+        {
+            ITask *const victim1 = g_Victim;
+            ITask *const victim2 = g_DeleteVictim2;
+
+            if (victim1 != nullptr)
+                g_Kernel.CancelTaskWait(victim1);
+            if (victim2 != nullptr)
+                g_Kernel.CancelTaskWait(victim2);
+
+            stk::Sleep(_STK_CV_TEST_SHORT_SLEEP * 5);
+        }
+
+        printf("delete with waiter (scenario=%d): first=%d elapsed=%d ms owns=%d, second=%d elapsed=%d ms owns=%d, "
+            "g_TestCond wait: result=%d elapsed=%d ms owns=%d, still_blocked=%d owner_is_me=%d\n",
+            (int)m_scenario,
+            (int)g_VictimResult[0], (int)g_VictimElapsed[0], (int)g_VictimOwnsMutex[0],
+            (int)g_VictimResult[1], (int)g_VictimElapsed[1], (int)g_VictimOwnsMutex[1],
+            (int)g_DeleteCheckResult, (int)g_DeleteCheckElapsed, (int)g_DeleteCheckOwns,
+            (int)still_blocked, (int)owner_is_me);
+
+        // task 1 started waiting at ~10 ms, task 2 at ~20 ms, the condition variable was destroyed at ~60 ms
+        // (the mutex-held scenario returns to the waiter only when the mutex is handed over at ~70 ms)
+        const int64_t lo = (m_scenario == DW_MUTEX_HELD ? 45 : 35);
+        const int64_t hi = (m_scenario == DW_MUTEX_HELD ? 90 : 75);
+
+        bool pass = released &&
+                    (g_VictimResult[0] == WAIT_RESULT_DELETED) && (g_VictimOwnsMutex[0] == 1) &&
+                    (g_VictimElapsed[0] >= lo) && (g_VictimElapsed[0] <= hi);
+
+        if (m_scenario == DW_MUTEX_HELD)
+            pass = pass && still_blocked && owner_is_me;
+
+        if (m_scenario == DW_TWO_WAITERS)
+        {
+            pass = pass &&
+                   (g_VictimResult[1] == WAIT_RESULT_DELETED) && (g_VictimOwnsMutex[1] == 1) &&
+                   (g_VictimElapsed[1] >= 25) && (g_VictimElapsed[1] <= 65);
+        }
+
+        // the other condition variable was not affected: a 20 ms wait on it still runs to its deadline (a stale
+        // wait entry would cut it short) and re-acquires the mutex; the mutex is free at the end
+        pass = pass &&
+               (g_DeleteCheckResult == WAIT_RESULT_TIMEOUT) && (g_DeleteCheckElapsed >= 15) && (g_DeleteCheckOwns == 1) &&
+               !g_TestMutex.IsLocked();
+
+        if (pass)
+            g_TestResult = 1;
+    }
+};
+
 // Helper function to reset test state
 static void ResetTestState()
 {
@@ -814,6 +1015,11 @@ static void ResetTestState()
     g_Victim             = nullptr;
     g_VictimTid          = TID_NONE;
     g_VictimSleepElapsed = 0;
+
+    g_DeleteVictim2      = nullptr;
+    g_DeleteCheckResult  = -100;
+    g_DeleteCheckElapsed = 0;
+    g_DeleteCheckOwns    = 0;
 
     for (int32_t i = 0; i < 2; ++i)
     {
@@ -839,7 +1045,8 @@ static bool NeedsExtendedTasks(const char *test_name)
     return  (strcmp(test_name, "TimeoutExpires")   != 0) &&
             (strcmp(test_name, "MutexReacquired")  != 0) &&
             (strcmp(test_name, "NoWaitTimeout")    != 0) &&
-            (strncmp(test_name, "CancelWait", 10)  != 0); // cancel tests use tasks 0-2 only
+            (strncmp(test_name, "CancelWait", 10)  != 0) && // cancel tests use tasks 0-2 only
+            (strncmp(test_name, "DeleteWithWaiter", 16) != 0); // delete tests use tasks 0-2 only (task 2 is idle in the single-waiter ones)
 }
 
 /*! \fn    RunTest
@@ -970,6 +1177,29 @@ int main(int argc, char **argv)
             g_CancelParam = cases[i].param;
 
             if (RunTest<CancelWaitTask<ACCESS_PRIVILEGED>>(cases[i].name, cases[i].param)
+                != TestContext::SUCCESS_EXIT_CODE)
+                total_failures++;
+            else
+                total_success++;
+        }
+    }
+
+    // Tests 20-22: condition variable destroyed while tasks wait on it (WAIT_RESULT_DELETED, tasks 0-2 only)
+    {
+        struct DeleteCase { const char *name; int32_t param; };
+
+        static const DeleteCase cases[] =
+        {
+            { "DeleteWithWaiter",           DW_BASIC       },
+            { "DeleteWithWaiterMutexHeld",  DW_MUTEX_HELD  },
+            { "DeleteWithWaiterTwo",        DW_TWO_WAITERS }
+        };
+
+        for (size_t i = 0; i < (sizeof(cases) / sizeof(cases[0])); ++i)
+        {
+            g_DeleteParam = cases[i].param;
+
+            if (RunTest<DeleteWithWaiterTask<ACCESS_PRIVILEGED>>(cases[i].name, cases[i].param)
                 != TestContext::SUCCESS_EXIT_CODE)
                 total_failures++;
             else

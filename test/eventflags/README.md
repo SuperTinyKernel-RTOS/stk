@@ -36,12 +36,12 @@ stk::sync::EventFlags g_Flags(FLAG_A);  // constructed with FLAG_A pre-set
 | `Get` | `uint32_t Get() const` | Non-destructive point-in-time snapshot of the flags word. Never blocks or modifies state. ISR-safe. |
 | `Wait` | `uint32_t Wait(uint32_t flags, uint32_t options = OPT_WAIT_ANY, Timeout timeout = WAIT_INFINITE)` | Blocks until the flag condition is satisfied or the timeout expires. On success, clears matched bits unless `OPT_NO_CLEAR` is set. Returns the matched bitmask on success, or an `ERROR_*` sentinel on failure. ISR-safe only with `timeout = NO_WAIT`. |
 | `TryWait` | `uint32_t TryWait(uint32_t flags, uint32_t options = OPT_WAIT_ANY)` | Non-blocking poll; equivalent to `Wait(flags, options, NO_WAIT)`. Returns matched bitmask on success, or `ERROR_TIMEOUT` immediately if the condition is not met. Never blocks. ISR-safe. |
-| `WaitEx` | `EWaitResult WaitEx(uint32_t flags, uint32_t options, Timeout timeout, uint32_t &actual_flags)` | Same wait semantics, but the status and the flags are reported separately: returns `WAIT_RESULT_SIGNAL` / `WAIT_RESULT_TIMEOUT` / `WAIT_RESULT_CANCELED` / `WAIT_RESULT_FAIL`, and `actual_flags` receives the **entire** flags word taken when the call completed, **before** any auto-clear (also on timeout, cancel and failure). Invalid arguments (`flags` is 0 or has bit 31 set) and a blocking call from an ISR return `WAIT_RESULT_FAIL` without waiting. ISR-safe only with `timeout = NO_WAIT`. |
+| `WaitEx` | `EWaitResult WaitEx(uint32_t flags, uint32_t options, Timeout timeout, uint32_t &actual_flags)` | Same wait semantics, but the status and the flags are reported separately: returns `WAIT_RESULT_SIGNAL` / `WAIT_RESULT_TIMEOUT` / `WAIT_RESULT_CANCELED` / `WAIT_RESULT_DELETED` (the object was destroyed while waiting; it must not be accessed afterwards) / `WAIT_RESULT_FAIL`, and `actual_flags` receives the **entire** flags word taken when the call completed, **before** any auto-clear (also on timeout, cancel and failure; on `WAIT_RESULT_DELETED` it is `0`, the flags word of the destroyed object can not be read). Invalid arguments (`flags` is 0 or has bit 31 set) and a blocking call from an ISR return `WAIT_RESULT_FAIL` without waiting. ISR-safe only with `timeout = NO_WAIT`. |
 | `TryWaitEx` | `EWaitResult TryWaitEx(uint32_t flags, uint32_t options, uint32_t &actual_flags)` | Non-blocking form of `WaitEx()`. ISR-safe. |
-| `Sync` | `EWaitResult Sync(SyncContext &ctx, uint32_t set_flags, uint32_t wait_flags, Timeout timeout, uint32_t &actual_flags)` | Multi-task rendezvous (equivalent of FreeRTOS `xEventGroupSync()`): sets `set_flags` (may be 0), then waits until **all** `wait_flags` are set. The task which completes the condition clears `wait_flags` once and **every** task blocked on the same `ctx` is released. `actual_flags` is the whole word before that clear. Flags set by a task which times out stay set. Invalid arguments (`wait_flags` is 0, bit 31 in either mask) and a blocking call from an ISR return `WAIT_RESULT_FAIL` and set nothing. ISR-safe only with `timeout = NO_WAIT`. |
+| `Sync` | `EWaitResult Sync(SyncContext &ctx, uint32_t set_flags, uint32_t wait_flags, Timeout timeout, uint32_t &actual_flags)` | Multi-task rendezvous (equivalent of FreeRTOS `xEventGroupSync()`): sets `set_flags` (may be 0), then waits until **all** `wait_flags` are set. The task which completes the condition clears `wait_flags` once and **every** task blocked on the same `ctx` is released. `actual_flags` is the whole word before that clear (`0` on `WAIT_RESULT_DELETED`, the object was destroyed while waiting). Flags set by a task which times out stay set. Invalid arguments (`wait_flags` is 0, bit 31 in either mask) and a blocking call from an ISR return `WAIT_RESULT_FAIL` and set nothing. ISR-safe only with `timeout = NO_WAIT`. |
 | `SyncContext` | `struct EventFlags::SyncContext` | State of one rendezvous group (generation counter and flags snapshot), supplied by the caller and shared by all participants of the group. Independent groups on one object use separate contexts. All participants sharing a context must pass the same `wait_flags`. |
 | `IsError` | `static bool IsError(uint32_t result)` | Returns `true` if the return value carries an error sentinel (bit 31 set). Use after every `Set()`, `Clear()`, and `Wait()` call. |
-| `~EventFlags` | (destructor) | Asserts no dangling waiters via the internal `Mutex` and `ConditionVariable` destructors in debug builds. |
+| `~EventFlags` | (destructor) | Wakes all tasks still waiting (in `Wait()`, `WaitEx()` or `Sync()`) with `WAIT_RESULT_DELETED` / `ERROR_DELETED`, done by the destructor of the internal `ConditionVariable`; they must not access the object afterwards. |
 
 **Options bitmask (passed to `Wait()` / `TryWait()`):**
 
@@ -62,6 +62,7 @@ Options may be combined: `OPT_WAIT_ALL | OPT_NO_CLEAR`.
 | `ERROR_ISR` | `0x80000004` | `Wait()` called from an ISR with a blocking timeout |
 | `ERROR_CANCELED` | `0x80000008` | Wait was cancelled via `IKernel::CancelTaskWait()` or `stk::SleepCancel()` before the flag condition was met; never reported as `ERROR_TIMEOUT` |
 | `ERROR_FAIL` | `0x80000010` | Kernel rejected the wait (e.g. `KERNEL_SYNC` mode not enabled) |
+| `ERROR_DELETED` | `0x80000020` | The `EventFlags` object was destroyed while the task was waiting (`WAIT_RESULT_DELETED`); the object must not be accessed afterwards |
 | `ERROR_MASK` | `0x80000000` | Mask for testing any error; bit 31 set means error |
 
 **Behavior by option:**
@@ -76,6 +77,7 @@ Options may be combined: `OPT_WAIT_ALL | OPT_NO_CLEAR`.
 | `Set()` with no waiters | Bits stay set; next `Wait()` fast-paths | Same |
 | `Clear()` | Returns pre-clear word; blocked `OPT_WAIT_ANY` waiters for cleared bits will time out | Same |
 | Wait cancelled | Returns `ERROR_CANCELED`; flags word untouched | Same; bits set by a partial `Set()` stay set |
+| Object destroyed while waiting | Returns `ERROR_DELETED`; nothing is cleared | Same |
 
 **Key invariants:**
 
@@ -103,9 +105,11 @@ Options may be combined: `OPT_WAIT_ALL | OPT_NO_CLEAR`.
   generation change instead of re-evaluating the (already cleared) condition. This is what
   `Set()` followed by `Wait(OPT_WAIT_ALL)` cannot do. Rendezvous groups with separate contexts do not
   release each other.
-- Destroying an `EventFlags` object while tasks are waiting is a logic error; an
-  assertion fires in debug builds via the internal `Mutex` and `ConditionVariable`
-  destructors.
+- Destroying an `EventFlags` object while tasks are waiting releases them with `ERROR_DELETED`
+  (`Wait()`) or `WAIT_RESULT_DELETED` (`WaitEx()`, `Sync()`): the waiters neither consume flags nor
+  time out, and no member of the destroyed object is read or written afterwards. The flags snapshot
+  is not available then, so `actual_flags` is `0`; the `SyncContext` (which lives outside the object)
+  is not touched either.
 
 ---
 
@@ -121,7 +125,7 @@ Options may be combined: `OPT_WAIT_ALL | OPT_NO_CLEAR`.
 
 `g_Flags` is **reconstructed in-place** via placement-new inside `ResetTestState()`
 before each test. `ResetTestState()` accepts an `initial_flags` parameter forwarded
-directly to the `EventFlags` constructor, so the same helper serves all 31 tests
+directly to the `EventFlags` constructor, so the same helper serves all 34 tests
 without any additional per-test setup code. It also resets the cancellation state
 (see below) and the rendezvous contexts.
 
@@ -143,6 +147,14 @@ switches the cancel path to `stk::SleepCancel()`.
 Rendezvous tests (15–17) use `g_SyncCtx[2]`, two `EventFlags::SyncContext` objects (one per
 rendezvous group) that `ResetTestState()` re-initializes before every test.
 
+The delete-with-waiter tests (32–34) destroy a **separate** object: `g_DeleteFlags` points to an `EventFlags`
+constructed (all flags clear) with placement-new in the static `g_DeleteFlagsStorage`, so `g_Flags` is never
+destroyed by the test itself. They reuse `g_Victim`, `g_VictimResult[]`, `g_VictimEx`, `g_VictimActual` and
+`g_VictimElapsed[]` (see above): index 0 holds how the wait on the destroyed object ended, index 1 the outcome
+of the follow-up wait on `g_Flags`. The scenario is selected by `g_DeleteParam` (`DW_WAIT = 1`,
+`DW_WAIT_EX = 2`, `DW_SYNC = 3`), a global for the same reason as `g_CancelParam`. `g_DeleteFlags` is set
+back to `nullptr` right after the destruction.
+
 Shared flag bit definitions used across all tests:
 
 ```cpp
@@ -156,14 +168,14 @@ static const uint32_t FLAG_D = (1U << 3);
 
 ## Platform Notes
 
-On **Cortex-M0** (`__ARM_ARCH_6M__`) the device has insufficient RAM to link eighteen
+On **Cortex-M0** (`__ARM_ARCH_6M__`) the device has insufficient RAM to link nineteen
 distinct task class templates simultaneously. Test 1 (`SetWaitAny`) runs on all
-platforms; tests 2–31 are skipped on M0 under `#ifndef __ARM_ARCH_6M__`.
+platforms; tests 2–34 are skipped on M0 under `#ifndef __ARM_ARCH_6M__`.
 
 `SetWaitAny` runs on M0 because it uses a single task class template
 (`SetWaitAnyTask`) instantiated for all five task slots, fitting within the available
-memory. Tests 2–31 introduce distinct task class templates (tests 18–31 share one,
-`CancelWaitTask`), multiplying the
+memory. Tests 2–34 introduce distinct task class templates (tests 18–31 share one,
+`CancelWaitTask`, and tests 32–34 share another, `DeleteWithWaiterTask`), multiplying the
 static memory footprint beyond what M0 can accommodate.
 
 | Platform | `_STK_EF_STACK_SIZE` |
@@ -517,6 +529,48 @@ Test 30 cancelled through `stk::SleepCancel(tid)`.
 
 ---
 
+### Tests 32–34 — `DeleteWithWaiter*`
+**Tasks:** 0–1 active, task 2 added but idle (`"DeleteWithWaiter*"` names are excluded from the extended task set) &nbsp;|&nbsp; **Task class:** `DeleteWithWaiterTask` &nbsp;|&nbsp; **Runs on M0: no**
+
+Verify that destroying an `EventFlags` object which a task is blocked on releases the waiter with
+`ERROR_DELETED` / `WAIT_RESULT_DELETED`, for each of the three ways to wait. Task 0 constructs a dedicated
+object (`g_DeleteFlags`, placement-new into `g_DeleteFlagsStorage`, all flags clear) and sleeps 60 ticks.
+Task 1 sleeps `_STK_EF_TEST_SHORT_SLEEP`, publishes its `ITask` pointer in `g_Victim` and blocks on that object
+with an infinite timeout: nobody sets the requested flags, so only its destruction can end the wait. Task 0
+then destroys the object while it is waited for, and overwrites its storage with `0xDD`, so that reading the
+flags word of the destroyed object would be visible. Task 1 records the result and the elapsed time without
+touching the destroyed object, then performs a `Wait(FLAG_A, OPT_WAIT_ANY, 20)` on `g_Flags` to show that the
+task and the kernel are in a sane state: nobody sets `FLAG_A` on `g_Flags`, so the wait must run to its
+deadline and return `ERROR_TIMEOUT`; a stale wait entry left behind would end it early or with another result.
+Task 0 sleeps 40 more ticks and checks the outcome. If the waiter was not released, task 0 cancels its wait
+with `g_Kernel.CancelTaskWait()`, so the test fails instead of hanging the kernel.
+
+**Common pass condition:** elapsed time of the first wait is in `[35, 75]` ms (started at ~10 ms, destroyed at
+~60 ms); the follow-up `Wait(FLAG_A, ..., 20)` on `g_Flags` returned `ERROR_TIMEOUT` after at least 15 ms;
+`g_Flags.Get() == 0` at the end.
+
+#### Test 32 — `DeleteWithWaiter`
+Task 1 blocks in `Wait(FLAG_A, OPT_WAIT_ANY, WAIT_INFINITE)` (legacy API).
+
+**Pass condition:** common, and the result is `ERROR_DELETED`.
+
+#### Test 33 — `DeleteWithWaiterEx`
+Task 1 blocks in `WaitEx(FLAG_A, OPT_WAIT_ANY, WAIT_INFINITE, actual_flags)`, with a sentinel preloaded into
+`actual_flags`.
+
+**Pass condition:** common, and the result is `WAIT_RESULT_DELETED` (not a timeout, a cancellation or a
+signal) and `actual_flags == 0`: the sentinel was overwritten, and the flags word of the destroyed object
+(`0xDDDDDDDD` after the overwrite) was not read.
+
+#### Test 34 — `DeleteWithWaiterSync`
+Task 1 blocks in `Sync(g_SyncCtx[0], FLAG_A, FLAG_A | FLAG_B, WAIT_INFINITE, actual_flags)`. It sets `FLAG_A` on
+entry (on the object that is later destroyed), `FLAG_B` never arrives, so the rendezvous can not complete.
+
+**Pass condition:** common, and the result is `WAIT_RESULT_DELETED` and `actual_flags == 0`. The rendezvous
+context lives outside the destroyed object and is not touched; the generation is not advanced.
+
+---
+
 ## Summary Table
 
 | # | Test | Tasks | Options | Pass condition | What it verifies |
@@ -552,3 +606,6 @@ Test 30 cancelled through `stk::SleepCancel(tid)`.
 | 29 | `CancelWait_SleepCancelAllPartial` | 0–2 | `OPT_WAIT_ALL` | as test 24 | Test 24 via `stk::SleepCancel()` |
 | 30 | `CancelWait_ExCanceled` | 0–2 | `OPT_WAIT_ANY` | `WAIT_RESULT_CANCELED`, `actual_flags == FLAG_B`, elapsed `[35, 75]` ms | Cancel of `WaitEx()` reports `WAIT_RESULT_CANCELED` and still writes the flags snapshot; flags word untouched |
 | 31 | `CancelWait_SleepCancelEx` | 0–2 | `OPT_WAIT_ANY` | as test 30 | Test 30 via `stk::SleepCancel()` |
+| 32 | `DeleteWithWaiter` | 0–1 (+ idle 2) | `OPT_WAIT_ANY` | `ERROR_DELETED`, elapsed `[35, 75]` ms, follow-up wait on `g_Flags` times out `>= 15` ms | Destroying an `EventFlags` object which a task waits on in `Wait()` releases it with `ERROR_DELETED`; no stale wait entry is left behind |
+| 33 | `DeleteWithWaiterEx` | 0–1 (+ idle 2) | `OPT_WAIT_ANY` | `WAIT_RESULT_DELETED`, `actual_flags == 0`, elapsed `[35, 75]` ms, as test 32 | Same for `WaitEx()`; the flags snapshot of the destroyed object is not read |
+| 34 | `DeleteWithWaiterSync` | 0–1 (+ idle 2) | — | `WAIT_RESULT_DELETED`, `actual_flags == 0`, elapsed `[35, 75]` ms, as test 32 | Same for a task blocked in `Sync()`; the caller's `SyncContext` is not touched |
