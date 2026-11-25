@@ -30,7 +30,7 @@ jobs:
         tags: stk-qemu-riscv:latest
         load: false
         cache-from: type=gha
-        cache-to: type=gha,mode=max
+        cache-to: ${{ github.event_name == 'push' && 'type=gha,mode=max,ignore-error=true' || '' }}
         outputs: type=docker,dest=/tmp/stk-qemu-riscv.tar
 
     - name: Upload Docker image artifact

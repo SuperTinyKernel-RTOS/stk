@@ -54,7 +54,7 @@ jobs:
         tags: stk-qemu-arm:latest
         load: true
         cache-from: type=gha
-        cache-to: type=gha,mode=max
+        cache-to: ${{ github.event_name == 'push' && 'type=gha,mode=max,ignore-error=true' || '' }}
 
     - name: Prepare
       run: chmod +x build/test/qemu/stk-qemu.sh && chmod +x build/test/qemu/test.sh
