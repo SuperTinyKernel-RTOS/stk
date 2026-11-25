@@ -49,7 +49,7 @@ jobs:
     # Push to main: report and enforce threshold here (no fork code involved)
     - name: Report Code Coverage with Pass Threshold - ${{env.PASS_THRESHOLD}}%
       if: github.event_name == 'push'
-      uses: zgosalvez/github-actions-report-lcov@v4
+      uses: zgosalvez/github-actions-report-lcov@v7
       with:
         coverage-files: ${{github.workspace}}/cov-build/coverage.info
         minimum-coverage: ${{env.PASS_THRESHOLD}}
