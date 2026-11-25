@@ -4530,6 +4530,49 @@ TEST(Sync, RWMutex_Writer_Timeout_WhileWriterActive)
     rw.ReadUnlock();
 }
 
+// a writer which gives up while another writer still waits and the lock is already free of readers: the withdrawing
+// writer may have consumed the wake-up meant for the next writer, so it passes the wake-up on
+TEST(Sync, RWMutex_Writer_Timeout_PassesWakeToNextWriter)
+{
+    MtxFixture f;
+    sync::RWMutex rw;
+
+    CHECK_TRUE(rw.TryReadLock());
+
+    EWaitResult result_b = WAIT_RESULT_SIGNAL;
+
+    // wait #1: writer A (stays waiting, finally woken), wait #2: writer B (nested, gives up with a timeout)
+    f.fake.Script(WAIT_RESULT_SIGNAL, WAIT_RESULT_TIMEOUT);
+    f.fake.on_wait = [&](uint32_t call)
+    {
+        if (call == 1)
+        {
+            // while A is blocked, writer B arrives and waits as well
+            result_b = rw.TimedLockEx(10);
+        }
+        else
+        {
+            // the last reader leaves while B is blocked: no active readers or writer, A is still waiting
+            rw.ReadUnlock();
+        }
+    };
+
+    const EWaitResult result_a = rw.TimedLockEx(WAIT_INFINITE);
+
+    CHECK_EQUAL(WAIT_RESULT_TIMEOUT, result_b);
+    CHECK_EQUAL(WAIT_RESULT_SIGNAL, result_a);
+    CHECK_EQUAL(2, f.fake.wait_calls);
+
+    // A owns the lock exclusively
+    CHECK_FALSE(rw.TryReadLock());
+    CHECK_FALSE(rw.TryLock());
+    rw.Unlock();
+
+    CHECK_TRUE(rw.TryLock());
+    rw.Unlock();
+    CHECK_EQUAL(0, test::g_CriticalSectionState);
+}
+
 // the object was destroyed while waiting: nothing is touched, the result is reported as is
 TEST(Sync, RWMutex_Reader_Deleted)
 {
