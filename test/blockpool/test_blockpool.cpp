@@ -1146,19 +1146,22 @@ private:
             drained &= (pool->TryAlloc() != nullptr);
         drained &= pool->IsFull();
 
-        stk::Sleep(60); // task 1 (and task 2) block on it in the meantime
+        // make the follow-up allocation of task 1 block: it must wait on g_Pool until its deadline.
+        // g_Pool is drained BEFORE the destruction: task 1 is runnable as soon as the destructor wakes it, and a
+        // context switch (e.g. a tick on a slow/irregular target such as QEMU RISC-V) may run it before task 0
+        // gets to drain g_Pool afterwards, in which case its follow-up wait would get a block immediately
+        void *blocks[_STK_POOL_CAPACITY] = {};
+        for (size_t i = 0; i < _STK_POOL_CAPACITY; ++i)
+            blocks[i] = g_Pool->TryAlloc();
+
+        stk::Sleep(60); // task 1 (and task 2) block on the dedicated pool in the meantime
 
         // destroy the pool which is waited on: the waiters are released by the destructor of its condition variable
         pool->~BlockMemoryPool();
         memset(g_DeletePoolObj, DELETED_FILL, sizeof(g_DeletePoolObj));
         g_DeletePool = nullptr;
 
-        // make the follow-up allocation of task 1 block: it must wait on g_Pool until its deadline
-        void *blocks[_STK_POOL_CAPACITY] = {};
-        for (size_t i = 0; i < _STK_POOL_CAPACITY; ++i)
-            blocks[i] = g_Pool->TryAlloc();
-
-        stk::Sleep(40);
+        stk::Sleep(40); // task 1's 20 ms wait on the drained g_Pool runs to its deadline in the meantime
 
         for (size_t i = 0; i < _STK_POOL_CAPACITY; ++i)
         {
