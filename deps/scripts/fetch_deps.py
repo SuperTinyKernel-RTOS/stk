@@ -17,6 +17,10 @@ Clones each repository if it does not exist, or updates it if already present.
 Falls back from 'main' to 'master' (or vice versa) if the branch is not found.
 A pinned 'revision' (commit hash, tag or branch) takes precedence over 'branch'.
 Initializes/updates submodules automatically if .gitmodules is present.
+A name may also be a 'group' (see deps.py), e.g. "stm32-f4" fetches every dependency of that group.
+A dependency with 'depth' is cloned shallow (git clone --depth N), which keeps large repositories small.
+A dependency with 'sparse' (list of directories) additionally checks out only those directories (blobs of the
+other directories are never downloaded).
 With no names given, all dependencies are fetched.
 
 One-off overrides (not written back to deps.py):
@@ -85,6 +89,12 @@ def run_cmd(cmd: list[str], cwd: Path | None = None) -> bool:
         return False
 
 
+def groups_of(dep: dict) -> set[str]:
+    """Groups a dependency belongs to ('group' in deps.py is a name or a list of names)."""
+    g = dep.get("group") or []
+    return {g} if isinstance(g, str) else set(g)
+
+
 def other_branch(branch: str) -> str | None:
     """Return the main/master counterpart of a branch name, if any."""
     return {"main": "master", "master": "main"}.get(branch)
@@ -98,11 +108,24 @@ def update_submodules(dest: Path) -> bool:
     return True
 
 
-def clone_repo(url: str, dest: Path, branch: str, revision: str | None) -> bool:
+def apply_sparse(dest: Path, sparse: list[str]) -> bool:
+    """Restrict the working tree of an existing clone to the given directories and (re)populate it."""
+    return (run_cmd(["git", "sparse-checkout", "set", "--cone", *sparse], cwd=dest) and
+            run_cmd(["git", "checkout"], cwd=dest))
+
+
+def clone_repo(url: str, dest: Path, branch: str, revision: str | None, depth: int | None = None,
+               sparse: list[str] | None = None) -> bool:
     """Clone the repository, checking out the given revision or branch."""
+    shallow = ["--depth", str(depth)] if depth else []
+    if sparse:
+        # blobless + no checkout: only the blobs of the sparse directories are downloaded afterwards
+        shallow += ["--filter=blob:none", "--no-checkout"]
     if revision:
         print(f"Cloning repository (revision/branch: {revision})...")
-        if run_cmd(["git", "clone", "--branch", revision, url, str(dest)]):
+        if run_cmd(["git", "clone", *shallow, "--branch", revision, url, str(dest)]):
+            if sparse and not apply_sparse(dest, sparse):
+                return False
             return update_submodules(dest)
         log_err(f"direct clone with '{revision}' failed (may be a commit hash), "
                 "attempting standard clone...")
@@ -117,14 +140,33 @@ def clone_repo(url: str, dest: Path, branch: str, revision: str | None) -> bool:
         candidates.append(alt)
     for b in candidates:
         print(f"Cloning repository (branch: {b})...")
-        if run_cmd(["git", "clone", "--branch", b, url, str(dest)]):
+        if run_cmd(["git", "clone", *shallow, "--branch", b, url, str(dest)]):
+            if sparse and not apply_sparse(dest, sparse):
+                return False
             return update_submodules(dest)
         log_err(f"branch '{b}' not found or clone failed, trying alternatives...")
     return False
 
 
-def update_repo(dest: Path, branch: str, revision: str | None) -> bool:
+def update_shallow_repo(dest: Path, branch: str, revision: str | None, depth: int,
+                        sparse: list[str] | None = None) -> bool:
+    """Update an existing shallow clone: fetch only the wanted revision (tag, branch or commit)."""
+    target = revision or branch
+    print(f"Shallow repository already exists. Fetching {target} (depth {depth})...")
+    if not run_cmd(["git", "fetch", "--depth", str(depth), "origin", target], cwd=dest):
+        return False
+    if not run_cmd(["git", "checkout", "--detach", "FETCH_HEAD"], cwd=dest):
+        return False
+    if sparse and not apply_sparse(dest, sparse):
+        return False
+    return update_submodules(dest)
+
+
+def update_repo(dest: Path, branch: str, revision: str | None, depth: int | None = None,
+                sparse: list[str] | None = None) -> bool:
     """Update an existing clone to the given revision or latest branch state."""
+    if depth:
+        return update_shallow_repo(dest, branch, revision, depth, sparse)
     print("Repository already exists. Updating latest changes...")
     if not run_cmd(["git", "fetch", "origin"], cwd=dest):
         return False
@@ -156,15 +198,17 @@ def fetch_dep(dep: dict) -> bool:
     dest = (FETCH_ROOT / dep["dest"]).resolve()
     branch = dep.get("branch") or "main"
     revision = dep.get("revision") or None
+    depth = dep.get("depth") or None
+    sparse = list(dep.get("sparse") or []) or None
 
     pin = f" @ {revision}" if revision else f" (branch {branch})"
     print(f"[{name}] Fetching {url}{pin} -> {dest}")
 
     if (dest / ".git").exists():
-        ok = update_repo(dest, branch, revision)
+        ok = update_repo(dest, branch, revision, depth, sparse)
     else:
         dest.parent.mkdir(parents=True, exist_ok=True)
-        ok = clone_repo(url, dest, branch, revision)
+        ok = clone_repo(url, dest, branch, revision, depth, sparse)
 
     if ok:
         print(f"[{name}] Successfully fetched/updated.")
@@ -220,16 +264,18 @@ def main() -> int:
     if args.list:
         for d in deps:
             print(f"{d['name']:<20} {d['url']}  rev={d.get('revision') or '-'}  "
-                  f"branch={d.get('branch') or 'main'}  dest={d['dest']}")
+                  f"branch={d.get('branch') or 'main'}  dest={d['dest']}"
+                  + (f"  groups={','.join(sorted(groups_of(d)))}" if groups_of(d) else ""))
         return 0
 
     if args.names:
-        unknown = [n for n in args.names if n not in known]
+        groups = set().union(*(groups_of(d) for d in deps))
+        unknown = [n for n in args.names if n not in known and n not in groups]
         if unknown:
             log_err(f"unknown dependencies: {', '.join(unknown)} "
-                    f"(available: {', '.join(sorted(known))})")
+                    f"(available: {', '.join(sorted(known))}; groups: {', '.join(sorted(groups))})")
             return 2
-        deps = [d for d in deps if d["name"] in args.names]
+        deps = [d for d in deps if d["name"] in args.names or groups_of(d) & set(args.names)]
 
     failed = []
     for dep in deps:

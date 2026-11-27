@@ -43,109 +43,11 @@ path = [
     "deps/scripts/**",
     "deps/target/CMakeLists.txt",
     "deps/target/PostBuild.cmake",
-    "deps/target/stm32fx/**",
+    "deps/target/stm32/**",
     "deps/target/risc-v/**",
     "deps/segger/CMakeLists.txt",
     "deps/cpputest/CMakeLists.txt",
     "deps/segger/SEGGER_SYSVIEW_Conf.h"
-]
-SPDX-FileCopyrightText = "2022-2026 Neutron Code Limited <stk@neutroncode.com>"
-SPDX-License-Identifier = "MIT"
-
-# ------------------------------------------------------------------------------------------------------------------
-# Third-party: STM32 target (deps/target/stm32fx)
-# ------------------------------------------------------------------------------------------------------------------
-
-# STMicroelectronics HAL drivers and CMSIS device files, BSD-3-Clause (stated in the file headers).
-# Versions: see README-DEVICE.md in each folder (STM32Cube F0 1.11.1, F1 1.8.3, F4 1.25.2).
-[[annotations]]
-path = [
-    "deps/target/stm32fx/include/stm32f0-hal/**",
-    "deps/target/stm32fx/include/stm32f1-hal/**",
-    "deps/target/stm32fx/include/stm32f4-hal/**",
-    "deps/target/stm32fx/src/stm32f0-hal/**",
-    "deps/target/stm32fx/src/stm32f1-hal/**",
-    "deps/target/stm32fx/src/stm32f4-hal/**",
-    "deps/target/stm32fx/src/stm32f0-cmsis/system_stm32f0xx.c",
-    "deps/target/stm32fx/src/stm32f1-cmsis/system_stm32f1xx.c",
-    "deps/target/stm32fx/src/stm32f4-cmsis/system_stm32f4xx.c",
-    "deps/target/stm32fx/include/cmsis/stm32f051x8.h",
-    "deps/target/stm32fx/include/cmsis/stm32f0xx.h",
-    "deps/target/stm32fx/include/cmsis/stm32f103xb.h",
-    "deps/target/stm32fx/include/cmsis/stm32f1xx.h",
-    "deps/target/stm32fx/include/cmsis/stm32f407xx.h",
-    "deps/target/stm32fx/include/cmsis/stm32f4xx.h",
-    "deps/target/stm32fx/include/cmsis/system_stm32f0xx.h",
-    "deps/target/stm32fx/include/cmsis/system_stm32f1xx.h",
-    "deps/target/stm32fx/include/cmsis/system_stm32f4xx.h",
-]
-SPDX-FileCopyrightText = "STMicroelectronics"
-SPDX-License-Identifier = "BSD-3-Clause"
-
-# ...except the STK-written provenance notes that sit next to them
-[[annotations]]
-path = "deps/target/stm32fx/**/README-DEVICE.md"
-SPDX-FileCopyrightText = "2022-2026 Neutron Code Limited <stk@neutroncode.com>"
-SPDX-License-Identifier = "MIT"
-
-# Arm CMSIS-DSP headers (old BSD-3-Clause style notice, 2010-2015)
-[[annotations]]
-path = [
-    "deps/target/stm32fx/include/cmsis/arm_common_tables.h",
-    "deps/target/stm32fx/include/cmsis/arm_const_structs.h",
-    "deps/target/stm32fx/include/cmsis/arm_math.h",
-]
-SPDX-FileCopyrightText = "2010-2015 ARM Limited"
-SPDX-License-Identifier = "BSD-3-Clause"
-
-# Arm CMSIS 5 README (the CMSIS_5 repository is Apache-2.0, see include/cmsis/LICENSE.txt)
-[[annotations]]
-path = "deps/target/stm32fx/include/cmsis/README.md"
-SPDX-FileCopyrightText = "Arm Limited"
-SPDX-License-Identifier = "Apache-2.0"
-
-# µOS++ (Liviu Ionescu) startup code, newlib glue, trace, linker scripts: MIT (stated in the file headers)
-[[annotations]]
-path = [
-    "deps/target/stm32fx/include/arm/semihosting.h",
-    "deps/target/stm32fx/include/cmsis/cmsis_device.h",
-    "deps/target/stm32fx/include/cortexm/exception-handlers.h",
-    "deps/target/stm32fx/include/diag/trace.h",
-    "deps/target/stm32fx/include/stm32_assert.h",
-    "deps/target/stm32fx/src/cortexm/exception-handlers.c",
-    "deps/target/stm32fx/src/cortexm/initialize-hardware.c",
-    "deps/target/stm32fx/src/cortexm/reset-hardware.c",
-    "deps/target/stm32fx/src/diag/trace-impl.c",
-    "deps/target/stm32fx/src/diag/trace.c",
-    "deps/target/stm32fx/src/initialize-hardware.c",
-    "deps/target/stm32fx/src/newlib/assert.c",
-    "deps/target/stm32fx/src/newlib/cxx.cpp",
-    "deps/target/stm32fx/src/newlib/exit.c",
-    "deps/target/stm32fx/src/newlib/sbrk.c",
-    "deps/target/stm32fx/src/newlib/startup.c",
-    "deps/target/stm32fx/src/newlib/syscalls.c",
-    "deps/target/stm32fx/src/stm32f0-cmsis/vectors_stm32f051x8.c",
-    "deps/target/stm32fx/src/stm32f0-ld/mem.ld",
-    "deps/target/stm32fx/src/stm32f0-ld/sections.ld",
-    "deps/target/stm32fx/src/stm32f1-cmsis/vectors_stm32f103xb.c",
-    "deps/target/stm32fx/src/stm32f1-ld/mem.ld",
-    "deps/target/stm32fx/src/stm32f1-ld/sections.ld",
-    "deps/target/stm32fx/src/stm32f4-cmsis/vectors_stm32f407xx.c",
-    "deps/target/stm32fx/src/stm32f4-ld/mem.ld",
-    "deps/target/stm32fx/src/stm32f4-ld/sections.ld",
-    "deps/target/stm32fx/src/write.c",
-]
-SPDX-FileCopyrightText = "2014 Liviu Ionescu"
-SPDX-License-Identifier = "MIT"
-
-# ------------------------------------------------------------------------------------------------------------------
-# First-party: RISC-V target (deps/target/risc-v)
-# ------------------------------------------------------------------------------------------------------------------
-
-# RISC-V startup code, vector table and linker script
-[[annotations]]
-path = [
-    "deps/target/risc-v/**",
 ]
 SPDX-FileCopyrightText = "2022-2026 Neutron Code Limited <stk@neutroncode.com>"
 SPDX-License-Identifier = "MIT"

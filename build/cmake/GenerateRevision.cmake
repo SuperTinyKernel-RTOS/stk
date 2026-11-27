@@ -41,29 +41,29 @@ function(stk_generate_revision TARGET)
         return()
     endif()
 
-    set(rev_dir    ${CMAKE_CURRENT_BINARY_DIR}/../include)
-    set(rev_header ${rev_dir}/stk_revision.h)
-    set(rev_target ${TARGET}_revision)
+    set(_rev_dir    ${CMAKE_CURRENT_BINARY_DIR}/../include)
+    set(_rev_header ${_rev_dir}/stk_revision.h)
+    set(_rev_target ${TARGET}_revision)
 
     # Generate once at configure time so the file exists before the first compile.
     execute_process(
-        COMMAND ${Python3_EXECUTABLE} ${_STK_GEN_REVISION_SCRIPT} --output ${rev_header} --root ${ARG_ROOT}
-        RESULT_VARIABLE rev_result)
-    if (NOT rev_result EQUAL 0)
-        message(WARNING "stk: gen_revision.py failed, revision will be 0")
+        COMMAND ${Python3_EXECUTABLE} ${_STK_GEN_REVISION_SCRIPT} --output ${_rev_header} --root ${ARG_ROOT}
+        RESULT_VARIABLE _rev_result)
+    if (NOT _rev_result EQUAL 0)
+        message(WARNING "REVISION: gen_revision.py failed, revision will be 0")
     endif()
 
     # Refresh on every build (the script rewrites the header only if its content changed,
     # so an unchanged revision does not trigger a rebuild).
-    add_custom_target(${rev_target}
-        COMMAND ${Python3_EXECUTABLE} ${_STK_GEN_REVISION_SCRIPT} --output ${rev_header} --root ${ARG_ROOT}
-        BYPRODUCTS ${rev_header}
-        COMMENT "stk: updating revision header"
+    add_custom_target(${_rev_target}
+        COMMAND ${Python3_EXECUTABLE} ${_STK_GEN_REVISION_SCRIPT} --output ${_rev_header} --root ${ARG_ROOT}
+        BYPRODUCTS ${_rev_header}
+        COMMENT "REVISION: updating header"
         VERBATIM)
-    add_dependencies(${TARGET} ${rev_target})
+    add_dependencies(${TARGET} ${_rev_target})
 
-    target_include_directories(${TARGET} PUBLIC $<BUILD_INTERFACE:${rev_dir}>)
+    target_include_directories(${TARGET} PUBLIC $<BUILD_INTERFACE:${_rev_dir}>)
     target_compile_definitions(${TARGET} PUBLIC STK_REVISION_HEADER)
 
-    message(STATUS "STK_REVISION_HEADER: ${rev_header}")
+    message(STATUS "STK_REVISION_HEADER: ${_rev_header}")
 endfunction()
