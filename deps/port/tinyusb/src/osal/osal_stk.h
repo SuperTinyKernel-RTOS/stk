@@ -97,7 +97,7 @@ typedef uint8_t osal_spinlock_t;
 
 /* Sized to fit a placement-constructed stk::sync::Semaphore - see the file-level note above. */
 #ifndef OSAL_STK_SEMAPHORE_STORAGE_WORDS
-#define OSAL_STK_SEMAPHORE_STORAGE_WORDS (8U + (CFG_TUH_OSAL_STK_SYNC_DEBUG_NAMES ? 1U : 0U))
+#define OSAL_STK_SEMAPHORE_STORAGE_WORDS (9U + (CFG_TUH_OSAL_STK_SYNC_DEBUG_NAMES ? 1U : 0U))
 #endif
 
 typedef struct {
@@ -112,7 +112,7 @@ typedef osal_semaphore_def_t *osal_semaphore_t;
 /* Sized to fit a placement-constructed stk::sync::FastMutex (non-recursive) - see the file-level
  * note above. Matches STK_FASTMUTEX_IMPL_SIZE of stk_c.h. */
 #ifndef OSAL_STK_MUTEX_STORAGE_WORDS
-#define OSAL_STK_MUTEX_STORAGE_WORDS (9U + (CFG_TUH_OSAL_STK_SYNC_DEBUG_NAMES ? 1U : 0U))
+#define OSAL_STK_MUTEX_STORAGE_WORDS (10U + (CFG_TUH_OSAL_STK_SYNC_DEBUG_NAMES ? 1U : 0U))
 #endif
 
 typedef struct {

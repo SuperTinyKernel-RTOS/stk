@@ -10,7 +10,7 @@
 project(target)
 
 if (VENDOR_STM32)
-    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/stm32fx)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/stm32)
 endif()
 
 if (RISCV AND NOT VENDOR_RPI)

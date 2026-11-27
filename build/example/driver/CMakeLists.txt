@@ -22,7 +22,7 @@ else()
 
     include_directories(${ROOT_DIR}/stk/include ${CMAKE_CURRENT_SOURCE_DIR})
     if (VENDOR_STM32)
-        include(${ROOT_DIR}/deps/target/stm32fx/ProjectInclude.cmake)
+        include(${ROOT_DIR}/deps/target/stm32/ProjectInclude.cmake)
     elseif (RISCV AND NOT VENDOR_RPI)
         include(${ROOT_DIR}/deps/target/risc-v/ProjectInclude.cmake)
     endif()

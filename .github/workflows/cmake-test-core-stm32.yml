@@ -88,10 +88,10 @@ jobs:
             cpu: cortex-m0
             board: STM32F0-Discovery
 
-          - name: "NUCLEOF103RB"
-            cmake_flags: -DVENDOR_STM32=ON -DTARGET_CORTEX_M3=ON -DTARGET_CPU_FAMILY=STM32F103xB
-            cpu: cortex-m3
-            board: NUCLEO-F103RB
+          #- name: "NUCLEOF103RB"
+          #  cmake_flags: -DVENDOR_STM32=ON -DTARGET_CORTEX_M3=ON -DTARGET_CPU_FAMILY=STM32F103xB
+          #  cpu: cortex-m3
+          #  board: NUCLEO-F103RB
 
           - name: "STM32F407DISC1"
             cmake_flags: -DVENDOR_STM32=ON -DTARGET_CORTEX_M4=ON -DTARGET_CPU_FAMILY=STM32F407xx

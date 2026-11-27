@@ -176,6 +176,21 @@
 			<locationURI>PARENT-4-PROJECT_LOC/test/generic/stktest_kernelservice.cpp</locationURI>
 		</link>
 		<link>
+			<name>src/test/generic/stktest_memory.cpp</name>
+			<type>1</type>
+			<locationURI>PARENT-4-PROJECT_LOC/test/generic/stktest_memory.cpp</locationURI>
+		</link>
+		<link>
+			<name>src/test/generic/stktest_memory_backend.h</name>
+			<type>1</type>
+			<locationURI>PARENT-4-PROJECT_LOC/test/generic/stktest_memory_backend.h</locationURI>
+		</link>
+		<link>
+			<name>src/test/generic/stktest_memory_newdelete.cpp</name>
+			<type>1</type>
+			<locationURI>PARENT-4-PROJECT_LOC/test/generic/stktest_memory_newdelete.cpp</locationURI>
+		</link>
+		<link>
 			<name>src/test/generic/stktest_misc.cpp</name>
 			<type>1</type>
 			<locationURI>PARENT-4-PROJECT_LOC/test/generic/stktest_misc.cpp</locationURI>

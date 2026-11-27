@@ -3473,6 +3473,7 @@ public:
     void SwitchToNext() override;
     stk::EWaitResult Wait(stk::ISyncObject *sobj, stk::IMutex *mutex, stk::Timeout timeout) override;
     stk::TId Wake(stk::ISyncObject *sobj, bool all) override;
+    void WakeDeleted(ISyncObject *sobj) override;
     stk::Timeout Suspend() override;
     void Resume(stk::Timeout elapsed_ticks) override;
     stk::Weight GetWeight(stk::TId tid) const override;
@@ -3609,6 +3610,13 @@ stk::TId KernelServiceSvcProxy::Wake(stk::ISyncObject *sobj, bool all)
 {
     const ScopedPrivilegeBoost pb;
     return GetContext().m_service->Wake(sobj, all);
+}
+
+STK_MPU_SHARED_CODE_SECTION
+void KernelServiceSvcProxy::WakeDeleted(stk::ISyncObject *sobj)
+{
+    const ScopedPrivilegeBoost pb;
+    return GetContext().m_service->WakeDeleted(sobj);
 }
 
 STK_MPU_SHARED_CODE_SECTION

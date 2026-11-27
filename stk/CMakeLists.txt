@@ -19,7 +19,7 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 # STM32 specific includes
 if (VENDOR_STM32)
     set(ROOT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/..)
-    include(${CMAKE_CURRENT_SOURCE_DIR}/../deps/target/stm32fx/ProjectInclude.cmake)
+    include(${CMAKE_CURRENT_SOURCE_DIR}/../deps/target/stm32/ProjectInclude.cmake)
 # Raspberry Pico SDK
 elseif (VENDOR_RPI)
     if (RISCV)

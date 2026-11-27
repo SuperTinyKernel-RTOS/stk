@@ -505,31 +505,43 @@
     #define __stk_constexpr_cpp17
 #endif
 
-/*! \def   STK_ASSERT
-    \brief Runtime assertion. Halts execution if the expression \a e evaluates to false.
-    \note  Behaviour depends on build configuration:
-           - If \c _STK_ASSERT_REDIRECT is defined: always redirects to the custom handler
-             \c STK_ASSERT_HANDLER (regardless of debug/release build type). Signature:
-             \code void STK_ASSERT_HANDLER(const char *expr, const char *file, int32_t line); \endcode
-             Use this on embedded targets where the standard assert handler is unavailable,
-             or where a custom fault logger or LED indicator is preferred.
-           - Else if \c DEBUG or \c _DEBUG is defined (debug build): maps to the standard
-             \c assert() macro from \c <assert.h>, which halts execution on failure.
-           - Else (release build): expands to nothing. The expression \a e is completely
-             elided, including any side effects. Do not rely on side effects inside STK_ASSERT.
-    \warning In release builds without \c _STK_ASSERT_REDIRECT, all assertions are silently
-             removed. Safety-critical applications (ISO 26262, IEC 61508) should define
-             \c _STK_ASSERT_REDIRECT to retain fault detection in all build configurations.
-*/
+#include <cstdint>
+
+    /*! \def   STK_ASSERT
+        \brief Runtime assertion. Halts execution if the expression \a e evaluates to false.
+        \note  Behaviour depends on build configuration:
+               - If \c _STK_ASSERT_REDIRECT is defined: always redirects to the custom handler
+                 \c STK_ASSERT_HANDLER (regardless of debug/release build type). Signature:
+                 \code void STK_ASSERT_HANDLER(const char *expr, const char *file, int32_t line); \endcode
+                 Use this on embedded targets where the standard assert handler is unavailable,
+                 or where a custom fault logger or LED indicator is preferred.
+               - Else if \c DEBUG or \c _DEBUG is defined (debug build): maps to the standard
+                 \c assert() macro from \c <cassert>, which halts execution on failure.
+               - Else (release build): expands to nothing. The expression \a e is completely
+                 elided, including any side effects. Do not rely on side effects inside STK_ASSERT.
+        \warning In release builds without \c _STK_ASSERT_REDIRECT, all assertions are silently
+                 removed. Safety-critical applications (ISO 26262, IEC 61508) should define
+                 \c _STK_ASSERT_REDIRECT to retain fault detection in all build configurations.
+    */
+#if defined(_STK_ASSERT_REDIRECT) || defined(DEBUG) || defined(_DEBUG)
+    extern "C" void STK_ASSERT_HANDLER(const char *expr, const char *file, int32_t line);
+    namespace stk { namespace detail {
+        inline bool assert_cond(bool cond) noexcept { return cond; } // accept only boolean expressions
+        template <typename T> bool assert_cond(T) = delete; // fail on non-bool expressions
+    } }
+#endif
 #ifdef _STK_ASSERT_REDIRECT
-    extern void STK_ASSERT_HANDLER(const char *, const char *, int32_t);
-    #define STK_ASSERT(e) ((e) ? (void)0 : STK_ASSERT_HANDLER(#e, __FILE__, __LINE__))
+    extern "C" void STK_ASSERT_HANDLER(const char *expr, const char *file, int32_t line);
+    #define STK_ASSERT(e) \
+        (::stk::detail::assert_cond(e) \
+            ? static_cast<void>(0) \
+            : STK_ASSERT_HANDLER(#e, __FILE__, static_cast<int32_t>(__LINE__)))
 #else
     #if defined(DEBUG) || defined(_DEBUG)
         #include <cassert>
-        #define STK_ASSERT(e) assert(e)
+        #define STK_ASSERT(e) assert(::stk::detail::assert_cond(e))
     #else
-        #define STK_ASSERT(e)
+        #define STK_ASSERT(e) static_cast<void>(0)
     #endif
 #endif
 
@@ -643,7 +655,11 @@
         #endif
     #else
         // ARM Cortex-M and other architectures
-        #define STK_STACK_SIZE_MIN (36U)
+        #if STK_SEGGER_SYSVIEW
+            #define STK_STACK_SIZE_MIN 64U
+        #else
+            #define STK_STACK_SIZE_MIN 64U
+        #endif
     #endif
 #endif
 

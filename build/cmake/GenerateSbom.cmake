@@ -27,7 +27,7 @@ set(_STK_GEN_SBOM_SCRIPT ${CMAKE_CURRENT_LIST_DIR}/gen_sbom.py)
 # CMake variables which describe the configuration, matched by the "when" conditions of build/sbom/components.json
 set(_STK_SBOM_VARIABLES
     VENDOR_STM32 VENDOR_RPI ARM RISCV WIN32
-    TARGET_CORTEX_M0 TARGET_CORTEX_M3 TARGET_CORTEX_M4 TARGET_RV32I TARGET_RV32E TARGET_CPU_FAMILY
+    TARGET_CORTEX_M0 TARGET_CORTEX_M3 TARGET_CORTEX_M4 TARGET_CORTEX_M7 TARGET_RV32I TARGET_RV32E TARGET_CPU_FAMILY
     BUILD_C_IFACE ENABLE_SEGGER_SYSVIEW ENABLE_TICKLESS ENABLE_TLS ENABLE_MPU ENABLE_MPU_STACK_GUARD
     ENABLE_STRICT_COMPLIANCY)
 
@@ -46,45 +46,45 @@ function(stk_generate_sbom TARGET)
 
     find_package(Python3 COMPONENTS Interpreter)
     if (NOT Python3_FOUND)
-        message(FATAL_ERROR "stk: ENABLE_SBOM requires Python3")
+        message(FATAL_ERROR "SBOM: ENABLE_SBOM requires Python3")
     endif()
 
-    set(sbom_dir    ${CMAKE_BINARY_DIR}/sbom)
-    set(sbom_file   ${sbom_dir}/stk.spdx.json)
-    set(sbom_target ${TARGET}_sbom)
+    set(_sbom_dir    ${CMAKE_BINARY_DIR}/sbom)
+    set(_sbom_file   ${_sbom_dir}/stk.spdx.json)
+    set(_sbom_target ${TARGET}_sbom)
 
     # Configuration, as --define NAME=VALUE (only variables which are defined)
-    set(sbom_args --output ${sbom_file} --root ${ARG_ROOT})
+    set(_sbom_args --output ${_sbom_file} --root ${ARG_ROOT})
     foreach(var IN LISTS _STK_SBOM_VARIABLES)
         if (DEFINED ${var})
-            list(APPEND sbom_args --define "${var}=${${var}}")
+            list(APPEND _sbom_args --define "${var}=${${var}}")
         endif()
     endforeach()
 
     # Generate once at configure time so the file exists right after configuration.
     execute_process(
-        COMMAND ${Python3_EXECUTABLE} ${_STK_GEN_SBOM_SCRIPT} ${sbom_args}
-        RESULT_VARIABLE sbom_result
-        OUTPUT_VARIABLE sbom_output
-        ERROR_VARIABLE  sbom_error
+        COMMAND ${Python3_EXECUTABLE} ${_STK_GEN_SBOM_SCRIPT} ${_sbom_args}
+        RESULT_VARIABLE _sbom_result
+        OUTPUT_VARIABLE _sbom_output
+        ERROR_VARIABLE  _sbom_error
         OUTPUT_STRIP_TRAILING_WHITESPACE
         ERROR_STRIP_TRAILING_WHITESPACE)
-    if (NOT sbom_result EQUAL 0)
-        message(FATAL_ERROR "stk: SBOM generation failed: ${sbom_error}")
+    if (NOT _sbom_result EQUAL 0)
+        message(FATAL_ERROR "SBOM: generation failed: ${_sbom_error}")
     endif()
-    if (sbom_output MATCHES "^SKIPPED: (.*)")
-        message(STATUS "STK SBOM: skipped, ${CMAKE_MATCH_1}")
+    if (_sbom_output MATCHES "^SKIPPED: (.*)")
+        message(STATUS "SBOM: skipped, ${CMAKE_MATCH_1}")
         return()
     endif()
 
     # Refresh on every build (the script rewrites the file only if its content changed).
-    add_custom_target(${sbom_target} ALL
-        COMMAND ${Python3_EXECUTABLE} ${_STK_GEN_SBOM_SCRIPT} ${sbom_args}
-        BYPRODUCTS ${sbom_file}
-        COMMENT "stk: updating SPDX SBOM"
+    add_custom_target(${_sbom_target} ALL
+        COMMAND ${Python3_EXECUTABLE} ${_STK_GEN_SBOM_SCRIPT} ${_sbom_args}
+        BYPRODUCTS ${_sbom_file}
+        COMMENT "SBOM: updating SPDX SBOM"
         VERBATIM)
 
-    install(FILES ${sbom_file} DESTINATION ${LIBRARY_OUTPUT_PATH}/sbom OPTIONAL)
+    install(FILES ${_sbom_file} DESTINATION ${LIBRARY_OUTPUT_PATH}/sbom OPTIONAL)
 
-    message(STATUS "STK SBOM: ${sbom_file}")
+    message(STATUS "SBOM: ${_sbom_file}")
 endfunction()

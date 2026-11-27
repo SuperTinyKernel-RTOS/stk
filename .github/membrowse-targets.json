@@ -6,7 +6,7 @@
     "setup_cmd": "sudo apt-get update && sudo apt-get install -y gcc-arm-none-eabi libnewlib-arm-none-eabi",
     "build_cmd": "cmake -G 'Unix Makefiles' -B build -DCMAKE_TOOLCHAIN_FILE=build/cmake/toolchain/arm-none-eabi-gcc.cmake -DVENDOR_STM32=ON -DTARGET_CORTEX_M0=ON -DTARGET_CPU_FAMILY=STM32F051x8 -DENABLE_LTO=ON -DENABLE_SMALL=ON -DBUILD_LIB=ON -DBUILD_TESTS=ON -DTEST_GENERIC=OFF -DTEST_SLEEP=ON && cmake --build build --config Release --parallel 4",
     "elf": "build/test/sleep/test-sleep.elf",
-    "ld": "deps/target/stm32fx/src/stm32f0-ld/mem.ld deps/target/stm32fx/src/stm32f0-ld/libs.ld deps/target/stm32fx/src/stm32f0-ld/sections.ld",
+    "ld": "deps/target/stm32/src/ld/stm32f0/mem.ld deps/target/stm32/src/ld/sections.ld",
     "linker_vars": ""
   },
   {
@@ -16,7 +16,7 @@
     "setup_cmd": "sudo apt-get update && sudo apt-get install -y gcc-arm-none-eabi libnewlib-arm-none-eabi",
     "build_cmd": "cmake -G 'Unix Makefiles' -B build -DCMAKE_TOOLCHAIN_FILE=build/cmake/toolchain/arm-none-eabi-gcc.cmake -DVENDOR_STM32=ON -DTARGET_CORTEX_M3=ON -DTARGET_CPU_FAMILY=STM32F103xB -DENABLE_LTO=ON -DENABLE_SMALL=ON -DBUILD_LIB=ON -DBUILD_TESTS=ON -DTEST_GENERIC=OFF -DTEST_SLEEP=ON && cmake --build build --config Release --parallel 4",
     "elf": "build/test/sleep/test-sleep.elf",
-    "ld": "deps/target/stm32fx/src/stm32f1-ld/mem.ld deps/target/stm32fx/src/stm32f1-ld/libs.ld deps/target/stm32fx/src/stm32f1-ld/sections.ld",
+    "ld": "deps/target/stm32/src/ld/stm32f1/mem.ld deps/target/stm32/src/ld/sections.ld",
     "linker_vars": ""
   },
   {
@@ -26,7 +26,7 @@
     "setup_cmd": "sudo apt-get update && sudo apt-get install -y gcc-arm-none-eabi libnewlib-arm-none-eabi",
     "build_cmd": "cmake -G 'Unix Makefiles' -B build -DCMAKE_TOOLCHAIN_FILE=build/cmake/toolchain/arm-none-eabi-gcc.cmake -DVENDOR_STM32=ON -DTARGET_CORTEX_M4=ON -DTARGET_CPU_FAMILY=STM32F407xx -DENABLE_LTO=ON -DENABLE_SMALL=ON -DBUILD_LIB=ON -DBUILD_TESTS=ON -DTEST_GENERIC=OFF -DTEST_SLEEP=ON && cmake --build build --config Release --parallel 4",
     "elf": "build/test/sleep/test-sleep.elf",
-    "ld": "deps/target/stm32fx/src/stm32f4-ld/mem.ld deps/target/stm32fx/src/stm32f4-ld/libs.ld deps/target/stm32fx/src/stm32f4-ld/sections.ld",
+    "ld": "deps/target/stm32/src/ld/stm32f4/mem.ld deps/target/stm32/src/ld/sections.ld",
     "linker_vars": ""
   }
 ]

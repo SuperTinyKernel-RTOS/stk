@@ -114,7 +114,7 @@ def condition_holds(cond, defs):
 def platform_name(defs):
     if is_true(defs.get("VENDOR_STM32")):
         for flag, name in (("TARGET_CORTEX_M0", "stm32f0"), ("TARGET_CORTEX_M3", "stm32f1"),
-                           ("TARGET_CORTEX_M4", "stm32f4")):
+                           ("TARGET_CORTEX_M4", "stm32f4"), ("TARGET_CORTEX_M7", "stm32f7")):
             if is_true(defs.get(flag)):
                 return name
         return "stm32"

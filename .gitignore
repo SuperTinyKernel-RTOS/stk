@@ -14,3 +14,4 @@ deps/mbedtls
 deps/segger/rtt
 deps/segger/systemview
 deps/tinyusb
+deps/stm32

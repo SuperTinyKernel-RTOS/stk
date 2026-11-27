@@ -199,14 +199,17 @@ macro(stk_add_example _EX_NAME)
         # Sources: STM32 HAL modules used by the LED driver/examples which are not part of the stm32fx library
         if (VENDOR_STM32 AND NOT _EX_NO_DRIVER OR _EX_STM32_HAL)
             if (TARGET_CORTEX_M0)
-                set(_EX_HAL_DIR ${ROOT_DIR}/deps/target/stm32fx/src/stm32f0-hal)
+                set(_EX_HAL_DIR ${ROOT_DIR}/deps/stm32/f0/hal/Src)
                 set(_EX_HAL_PFX stm32f0xx_hal_)
             elseif (TARGET_CORTEX_M3)
-                set(_EX_HAL_DIR ${ROOT_DIR}/deps/target/stm32fx/src/stm32f1-hal)
+                set(_EX_HAL_DIR ${ROOT_DIR}/deps/stm32/f1/hal/Src)
                 set(_EX_HAL_PFX stm32f1xx_hal_)
-            else()
-                set(_EX_HAL_DIR ${ROOT_DIR}/deps/target/stm32fx/src/stm32f4-hal)
+            elseif (TARGET_CORTEX_M4)
+                set(_EX_HAL_DIR ${ROOT_DIR}/deps/stm32/f4/hal/Src)
                 set(_EX_HAL_PFX stm32f4xx_hal_)
+            else()
+                set(_EX_HAL_DIR ${ROOT_DIR}/deps/stm32/f7/hal/Src)
+                set(_EX_HAL_PFX stm32f7xx_hal_)
             endif()
             foreach (_EX_HAL gpio ${_EX_STM32_HAL})
                 list(APPEND TEST_SRC ${_EX_HAL_DIR}/${_EX_HAL_PFX}${_EX_HAL}.c)
@@ -287,18 +290,6 @@ macro(stk_add_example _EX_NAME)
                     target_link_libraries(${TARGET_BINARY} ${_EX_LIB})
                 endif()
             endforeach()
-        endif()
-        
-        # Define a custom build target for flashing
-        if (VENDOR_STM32)
-            add_custom_target(flash_${_EX_NAME}
-                COMMAND ${Python3_EXECUTABLE} "${ROOT_DIR}/build/scripts/flash_stm32.py"
-                        $<TARGET_FILE:${TARGET_BINARY}>
-                        --jlink "C:/Program Files (x86)/SEGGER/JLink/JLink.exe"
-                DEPENDS ${TARGET_BINARY}
-                COMMENT "Flashing ${TARGET_BINARY} to the STM32 board..."
-                WORKING_DIRECTORY "${ROOT_DIR}"
-            )
         endif()
         
     endif()

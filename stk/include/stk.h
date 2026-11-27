@@ -2320,7 +2320,7 @@ protected:
             ExitTrapStackMemory wrapper(&exit.memory);
             exit.stack.access_mode = ACCESS_PRIVILEGED;
         #if STK_STACK_NEEDS_TASK_ID
-            exit.stack.tid  = SYS_TASK_ID_EXIT;
+            exit.stack.tid = SYS_TASK_ID_EXIT;
         #endif
 
             STK_UNUSED(m_platform.InitStack(STACK_EXIT_TRAP, &exit.stack, &wrapper, nullptr));
@@ -3561,13 +3561,19 @@ protected:
     {
         STK_ASSERT(task->IsBusy());
 
+        const IStackMemory *stack_mem = task->GetUserTask();
+        const size_t total_words = stack_mem->GetStackSize();
+        const size_t free_words = stack_mem->GetStackSpace();
+        const size_t used_words = total_words - free_words;
+
         const SEGGER_SYSVIEW_TASKINFO info =
         {
-            .TaskID    = task->GetUserStackPtr()->tid,
-            .sName     = task->GetUserTask()->GetTraceName(),
-            .Prio      = static_cast<U32>(task->GetWeight()),
-            .StackBase = hw::PtrToWord(task->GetUserTask()->GetStack()),
-            .StackSize = (task->GetUserTask()->GetStackSize() * sizeof(Word))
+            .TaskID     = task->GetUserStackPtr()->tid,
+            .sName      = task->GetUserTask()->GetTraceName(),
+            .Prio       = static_cast<U32>(task->GetWeight()),
+            .StackBase  = hw::PtrToWord(stack_mem->GetStack()),
+            .StackSize  = static_cast<U32>(total_words * sizeof(Word)),
+            .StackUsage = static_cast<U32>(used_words * sizeof(Word))
         };
         SEGGER_SYSVIEW_SendTaskInfo(&info);
     }
